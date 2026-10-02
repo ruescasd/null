@@ -14,6 +14,8 @@ pub struct BotState {
     last_log: f32,
     /// Height of the ledge top the step test runs onto.
     step_target: Option<f32>,
+    /// When the tether test started its drop, and from what height.
+    tether_drop: Option<(f32, f32)>,
 }
 
 pub fn drive(
@@ -41,7 +43,8 @@ pub fn drive(
         t if t < 3.0 => "run",
         t if t < 11.0 => "strafe jump",
         t if t < 14.0 => "thrust down",
-        t if t < 16.0 => "step up",
+        t if t < 16.5 => "tether down",
+        t if t < 18.5 => "step up",
         _ => {
             exit.write(AppExit::Success);
             return;
@@ -73,6 +76,19 @@ pub fn drive(
             fly.pitch = -1.5;
             input.fire = true;
         }
+        "tether down" => {
+            // From 40 m up and at rest, tether straight down.
+            if state.tether_drop.is_none() {
+                let p = transform.translation;
+                let ground = world.ground_height(p.x, p.z);
+                transform.translation.y = ground + 40.0 + super::EYE;
+                player.velocity = Vec3::ZERO;
+                state.tether_drop = Some((t, ground));
+                info!("bot tether down: 40 m above ground at {ground:.2}");
+            }
+            fly.pitch = -1.55;
+            input.tether = true;
+        }
         "step up" => {
             if state.step_target.is_none() {
                 // Find a ledge 0.2-0.55 m high with flat ground before it, put
@@ -102,16 +118,22 @@ pub fn drive(
         }
     }
 
-    if now - state.last_log >= if phase == "run" { 0.25 } else { 0.5 } {
+    if now - state.last_log >= if matches!(phase, "run" | "tether down") { 0.25 } else { 0.5 } {
         state.last_log = now;
         let p = transform.translation;
         info!(
-            "bot t={t:4.1} {phase:12} speed {speed:5.2} m/s ({:4.0} ups)  vy {:6.2}  y {:7.2}  grounded {}  energy {:3.0}  pos {:.0},{:.0}",
+            "bot t={t:4.1} {phase:12} speed {speed:5.2} m/s ({:4.0} ups)  vy {:6.2}  y {:7.2}  grounded {}  energy {:3.0}  tether {}  pos {:.0},{:.0}",
             speed / 0.032,
             player.velocity.y,
             p.y,
             player.grounded,
             player.energy,
+            match player.tether {
+                super::Tether::Idle => "idle",
+                super::Tether::Flying { .. } => "flying",
+                super::Tether::Anchored { .. } => "anchored",
+                super::Tether::Missed => "released",
+            },
             p.x,
             p.z,
         );

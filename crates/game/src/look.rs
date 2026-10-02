@@ -182,9 +182,9 @@ fn setup(
             },
             ColorGrading {
                 global: ColorGradingGlobal { post_saturation: 0.0, ..default() },
-                shadows: ColorGradingSection { contrast: 1.1, ..default() },
-                midtones: ColorGradingSection { contrast: 1.1, ..default() },
-                highlights: ColorGradingSection::default(),
+                shadows: ColorGradingSection { contrast: args.num("contrast", 1.1), ..default() },
+                midtones: ColorGradingSection { contrast: args.num("contrast", 1.1), ..default() },
+                highlights: ColorGradingSection { contrast: args.num("contrast", 1.1), ..default() },
             },
         ))
         .id();
@@ -432,6 +432,7 @@ fn hud(
         "{fps:.0} fps\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}{}\n\n\
          click: capture mouse  esc: release  f1: this help  f12: screenshot\n\
          wasd: move  space or mouse 2 (hold): jump / bunny hop  mouse 1: thrust beam (recoil pushes you away)\n\
+         e or mouse 4/5 (hold): tether - roots where you aim and pulls you in; let go to keep the momentum\n\
          v: noclip fly (space/ctrl: up/down, shift: fast, wheel: speed)\n\
          t: pause time  left/right: scrub time  up/down: time speed  p: soft shadows",
         t.translation.x,

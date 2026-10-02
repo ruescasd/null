@@ -15,6 +15,7 @@ Click to capture the mouse, Esc to release. F1 toggles the help overlay.
 | WASD | move (Quake 3 physics: strafe jumping gains speed) |
 | Space or Mouse 2 (hold) | jump; holding it bunny hops on landing |
 | Mouse 1 | thrust beam: its recoil pushes you away from where you aim. Aim at your feet to lift off. Energy recharges on the ground |
+| E or Mouse 4/5 (hold) | tether: a spike flies out (60 m), roots where it hits and pulls you towards it; release to keep the momentum. The crosshair grows when a surface is in reach |
 | V | noclip fly: Space/E and Ctrl/Q up/down, Shift fast, wheel speed |
 | T | pause / resume the suns |
 | Left / Right | scrub time |
@@ -29,7 +30,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --seed n                                  world seed
     --shot path.png                           render once the view has loaded, save, exit
     --opt bot                                 scripted movement test: logs speed/height and exits
-    --opt noclip|beam                         start flying / force the beam on (for captures)
+    --opt noclip|beam|tether                  start flying / force the beam or tether on (for captures)
     --opt voxel                               the earlier organic voxel terrain
     --opt flat|hard|noao|nossao|nocontact|notaa|nolandmarks   switch features off
     --set ev=11.2 --set bounce=2 --set fill=6000 --set soft0=1 --set soft1=1   tuning numbers
@@ -48,7 +49,8 @@ crashed the GPU driver.
   horizon and AO shaders (`*.wgsl`), suns / stars / bounce and fill light and
   grading (`look.rs`), landmarks kept at their nearest wrapped copy
   (`landmarks.rs`), Quake-style movement, thrust beam and HUD (`player.rs`,
-  tuning constants at the top; `player/bot.rs` is the scripted test pilot),
+  tuning constants at the top; `player/tether.rs` is the grappling tether's
+  state and look; `player/bot.rs` is the scripted test pilot),
   mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`).
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 

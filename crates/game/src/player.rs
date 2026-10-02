@@ -9,6 +9,10 @@
 //! from where it is aimed. Its thrust beats gravity, so aiming at your feet
 //! lifts you, and angling it gives flight; it drains energy that only
 //! recharges on the ground.
+//!
+//! The tether (see `tether.rs`) is a grappling hook: it flies out, roots
+//! itself in whatever it hits, and while held pulls the player towards that
+//! point by adding acceleration, so letting go keeps the momentum.
 
 use std::time::Duration;
 
@@ -22,8 +26,10 @@ use worldgen::noise::hash01;
 use crate::{Args, camera::FlyCam, terrain::Streamer, terrain::WorldGen};
 
 pub use bot::drive as bot_drive;
+use tether::Tether;
 
 mod bot;
+mod tether;
 
 pub struct PlayerPlugin;
 
@@ -34,7 +40,11 @@ impl Plugin for PlayerPlugin {
             .add_systems(Startup, (setup_beam, setup_hud))
             .add_systems(Update, update_hud)
             .add_systems(PostStartup, add_player)
-            .add_systems(PostUpdate, draw_beam.before(TransformSystems::Propagate));
+            .add_systems(Startup, tether::setup)
+            .add_systems(
+                PostUpdate,
+                (draw_beam, tether::draw).before(TransformSystems::Propagate),
+            );
     }
 }
 
@@ -75,6 +85,20 @@ const ENERGY_DRAIN: f32 = 22.0;
 const ENERGY_RECHARGE: f32 = 45.0;
 const BEAM_RANGE: f32 = 30.0;
 
+/// How far the tether reaches, and how fast its tip travels.
+const TETHER_RANGE: f32 = 60.0;
+const TETHER_SPEED: f32 = 160.0;
+/// Pull towards the anchor, in m/s², applied until the speed along the line
+/// reaches `TETHER_MAX_PULL_SPEED` (about 1000 units/s).
+const TETHER_PULL: f32 = 55.0;
+const TETHER_MAX_PULL_SPEED: f32 = 32.0;
+/// The tether lets go by itself when the player's middle gets this close to
+/// its anchor (an anchor underfoot is about 0.9 m away).
+const TETHER_DETACH: f32 = 1.4;
+/// When checking whether the line is blocked, this much of it next to the
+/// anchor is ignored, so the surface the spike is rooted in does not count.
+const TETHER_SEVER_MARGIN: f32 = 0.4;
+
 #[derive(Component)]
 pub struct Player {
     pub velocity: Vec3,
@@ -82,6 +106,9 @@ pub struct Player {
     ground_normal: Vec3,
     pub energy: f32,
     pub firing: bool,
+    pub tether: Tether,
+    /// The tether button must be released before the tether fires again.
+    tether_held: bool,
     /// Movement waits until the terrain around the spawn point has loaded.
     pub ready: bool,
 }
@@ -93,6 +120,8 @@ fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
         ground_normal: Vec3::Y,
         energy: ENERGY_MAX,
         firing: false,
+        tether: Tether::Idle,
+        tether_held: false,
         ready: false,
     });
 }
@@ -201,10 +230,12 @@ pub struct MoveInput {
     pub wish: Vec2,
     pub jump: bool,
     pub fire: bool,
+    pub tether: bool,
 }
 
 pub fn gather_input(
     args: Res<Args>,
+    streamer: Res<Streamer>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     cursor: Single<&CursorOptions>,
@@ -218,6 +249,11 @@ pub fn gather_input(
         // Mouse 2 as well as Space, for easier testing until input is configurable.
         jump: pressed(KeyCode::Space) || (captured && mouse.pressed(MouseButton::Right)),
         fire: args.opt("beam") || (captured && mouse.pressed(MouseButton::Left)),
+        // (Forced on for captures once there is terrain to anchor to.)
+        tether: (args.opt("tether") && streamer.settled)
+            || pressed(KeyCode::KeyE)
+            || (captured
+                && (mouse.pressed(MouseButton::Back) || mouse.pressed(MouseButton::Forward))),
     };
 }
 
@@ -239,6 +275,41 @@ pub fn walk(
         player.velocity = Vec3::ZERO;
     }
     player.firing = input.fire && player.energy > 0.0;
+    // Fire, fly and release the tether (once per frame; the pull itself is
+    // integrated with the movement steps below).
+    let aim = fly.rotation() * Vec3::NEG_Z;
+    let eye = transform.translation;
+    if !input.tether {
+        player.tether = Tether::Idle;
+    } else if !player.tether_held {
+        player.tether = Tether::Flying { tip: eye, dir: aim, travelled: 0.0 };
+    }
+    player.tether_held = input.tether;
+    if let Tether::Flying { tip, dir, travelled } = player.tether {
+        let step = (TETHER_SPEED * time.delta_secs()).min(TETHER_RANGE - travelled);
+        let ray = Dir3::new(dir).unwrap_or(Dir3::NEG_Z);
+        player.tether = match move_and_slide.spatial_query.cast_ray(tip, ray, step, true, &default()) {
+            Some(hit) => Tether::Anchored { point: tip + dir * hit.distance, normal: hit.normal },
+            None if travelled + step >= TETHER_RANGE => Tether::Missed,
+            None => Tether::Flying { tip: tip + dir * step, dir, travelled: travelled + step },
+        };
+    }
+    // Anything coming between the player and the anchor severs the tether.
+    // (The last bit of the line is ignored: that is the anchor's own surface.)
+    if let Tether::Anchored { point, .. } = player.tether {
+        let line = point - eye;
+        let length = line.length();
+        if let Ok(ray) = Dir3::new(line)
+            && length > TETHER_SEVER_MARGIN
+            && move_and_slide
+                .spatial_query
+                .cast_ray(eye, ray, length - TETHER_SEVER_MARGIN, true, &default())
+                .is_some()
+        {
+            player.tether = Tether::Missed;
+        }
+    }
+
     if fly.noclip {
         return;
     }
@@ -286,13 +357,31 @@ pub fn walk(
             player.velocity.y = JUMP_SPEED;
             player.grounded = false;
         }
+        let tethered = matches!(player.tether, Tether::Anchored { .. });
         if player.grounded {
-            friction(&mut player.velocity, dt);
+            // The pull drags you along the ground rather than fighting friction.
+            if !tethered {
+                friction(&mut player.velocity, dt);
+            }
             accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
             player.velocity = clip(player.velocity, player.ground_normal);
         } else {
             accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
             player.velocity.y -= GRAVITY * dt;
+        }
+
+        if let Tether::Anchored { point, .. } = player.tether {
+            let to_anchor = point - center;
+            let dist = to_anchor.length();
+            if dist < TETHER_DETACH {
+                player.tether = Tether::Missed;
+            } else {
+                let dir = to_anchor / dist;
+                let along = player.velocity.dot(dir);
+                if along < TETHER_MAX_PULL_SPEED {
+                    player.velocity += dir * (TETHER_PULL * dt).min(TETHER_MAX_PULL_SPEED - along);
+                }
+            }
         }
 
         if player.firing {
@@ -379,6 +468,10 @@ fn draw_beam(
 #[derive(Component)]
 struct Readout;
 
+/// The crosshair grows when the tether can reach what it points at.
+#[derive(Component)]
+struct Crosshair;
+
 fn setup_hud(mut commands: Commands, args: Res<Args>) {
     if args.shot.is_some() {
         return;
@@ -394,6 +487,7 @@ fn setup_hud(mut commands: Commands, args: Res<Args>) {
             ..default()
         })
         .with_child((
+            Crosshair,
             Node { width: px(4), height: px(4), ..default() },
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
         ));
@@ -415,8 +509,19 @@ fn setup_hud(mut commands: Commands, args: Res<Args>) {
         ));
 }
 
-fn update_hud(player: Single<(&Player, &FlyCam)>, mut readout: Single<&mut Text, With<Readout>>) {
-    let (player, fly) = *player;
+fn update_hud(
+    spatial: SpatialQuery,
+    player: Single<(&Transform, &Player, &FlyCam)>,
+    mut readout: Single<&mut Text, With<Readout>>,
+    mut crosshair: Single<(&mut Node, &mut BackgroundColor), With<Crosshair>>,
+) {
+    let (transform, player, fly) = *player;
+    let aim = Dir3::new(fly.rotation() * Vec3::NEG_Z).unwrap_or(Dir3::NEG_Z);
+    let reachable = spatial.cast_ray(transform.translation, aim, TETHER_RANGE, true, &default()).is_some();
+    let (node, color) = &mut *crosshair;
+    let size = if reachable { 7.0 } else { 4.0 };
+    (node.width, node.height) = (px(size), px(size));
+    color.0 = Color::srgba(1.0, 1.0, 1.0, if reachable { 0.95 } else { 0.5 });
     if fly.noclip {
         readout.0 = "noclip".into();
         return;

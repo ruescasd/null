@@ -97,9 +97,21 @@ fn fly(
 
 /// Keep the camera inside [0, size) on x and z. Terrain instances are placed
 /// relative to the camera, so the jump is invisible.
-fn wrap_position(world: Res<WorldGen>, mut cam: Single<&mut Transform, With<FlyCam>>) {
+fn wrap_position(
+    world: Res<WorldGen>,
+    cam: Single<(&mut Transform, Option<&mut crate::player::Player>), With<FlyCam>>,
+) {
+    let (mut transform, player) = cam.into_inner();
     let size = world.size();
-    let t = &mut cam.translation;
+    let before = transform.translation;
+    let t = &mut transform.translation;
     t.x = t.x.rem_euclid(size);
     t.z = t.z.rem_euclid(size);
+    // Anything held in world space moves with the camera's jump.
+    let shift = *t - before;
+    if shift != Vec3::ZERO
+        && let Some(mut player) = player
+    {
+        player.tether.shift(shift);
+    }
 }
