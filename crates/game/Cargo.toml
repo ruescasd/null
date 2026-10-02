@@ -1,0 +1,9 @@
+[package]
+name = "game"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+worldgen.workspace = true
+bevy.workspace = true
+avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel"] }
