@@ -14,6 +14,9 @@ pub struct BotState {
     last_log: f32,
     /// Height of the ledge top the step test runs onto.
     step_target: Option<f32>,
+    /// Height of the ledge top the mantle test climbs onto.
+    mantle_target: Option<f32>,
+    saw_mantle: bool,
     /// When the tether test started its drop, and from what height.
     tether_drop: Option<(f32, f32)>,
 }
@@ -45,6 +48,7 @@ pub fn drive(
         t if t < 14.0 => "thrust down",
         t if t < 16.5 => "tether down",
         t if t < 18.5 => "step up",
+        t if t < 21.0 => "mantle",
         _ => {
             exit.write(AppExit::Success);
             return;
@@ -76,6 +80,25 @@ pub fn drive(
             fly.pitch = -1.5;
             input.fire = true;
         }
+        "mantle" => {
+            if state.mantle_target.is_none() {
+                // A ledge above plain jump height: needs a jump and a mantle.
+                let Some((start, yaw, top)) = find_ledge(&world, transform.translation, 1.6, 2.3, 3.5)
+                else {
+                    info!("bot mantle: no suitable ledge nearby");
+                    state.mantle_target = Some(f32::NAN);
+                    return;
+                };
+                transform.translation = start;
+                player.velocity = Vec3::ZERO;
+                fly.yaw = yaw;
+                fly.pitch = 0.0;
+                state.mantle_target = Some(top);
+                info!("bot mantle: ledge top at {top:.2}, {:.2} above the feet", top - (start.y - super::EYE));
+            }
+            input.wish = Vec2::Y;
+            input.jump = true;
+        }
         "tether down" => {
             // From 40 m up and at rest, tether straight down.
             if state.tether_drop.is_none() {
@@ -93,7 +116,8 @@ pub fn drive(
             if state.step_target.is_none() {
                 // Find a ledge 0.2-0.55 m high with flat ground before it, put
                 // the bot 3 m in front of it and run at it.
-                let Some((start, yaw, top)) = find_ledge(&world, transform.translation) else {
+                let Some((start, yaw, top)) = find_ledge(&world, transform.translation, 0.2, 0.55, 3.0)
+                else {
                     info!("bot step up: no suitable ledge nearby");
                     state.step_target = Some(f32::NAN);
                     return;
@@ -118,7 +142,21 @@ pub fn drive(
         }
     }
 
-    if now - state.last_log >= if matches!(phase, "run" | "tether down") { 0.25 } else { 0.5 } {
+    if phase == "mantle" && player.mantle.is_some() && !state.saw_mantle {
+        state.saw_mantle = true;
+        info!("bot mantle: climbing");
+    }
+    if phase == "mantle" && let Some(top) = state.mantle_target {
+        // A plain jump from the start peaks below the top, so feet above it
+        // mean the bot got up.
+        let feet = transform.translation.y - super::EYE;
+        if feet > top && !top.is_nan() {
+            info!("bot mantle: OK, climbed onto {top:.2} (feet at {feet:.2})");
+            state.mantle_target = Some(f32::NAN);
+        }
+    }
+
+    if now - state.last_log >= if matches!(phase, "run" | "tether down" | "mantle") { 0.25 } else { 0.5 } {
         state.last_log = now;
         let p = transform.translation;
         info!(
@@ -140,8 +178,10 @@ pub fn drive(
     }
 }
 
-/// A spot in front of a small ledge: (eye position, yaw facing it, ledge top).
-fn find_ledge(world: &WorldGen, around: Vec3) -> Option<(Vec3, f32, f32)> {
+/// A spot `run_up` metres in front of a ledge between `min` and `max` high,
+/// with flat ground before and on top of it: (eye position, yaw facing it,
+/// ledge top).
+fn find_ledge(world: &WorldGen, around: Vec3, min: f32, max: f32, run_up: f32) -> Option<(Vec3, f32, f32)> {
     for ring in 1..30 {
         for k in 0..ring * 8 {
             let a = k as f32 / (ring * 8) as f32 * std::f32::consts::TAU;
@@ -151,10 +191,11 @@ fn find_ledge(world: &WorldGen, around: Vec3) -> Option<(Vec3, f32, f32)> {
                 let h = |q: Vec2| world.ground_height(q.x, q.y);
                 let h0 = h(p);
                 let rise = h(p + dir * 1.0) - h0;
-                let runway = (0..=6).all(|i| (h(p - dir * (i as f32 * 0.5)) - h0).abs() < 0.01);
+                let steps = (run_up / 0.5).ceil() as i32 + 1;
+                let runway = (0..=steps).all(|i| (h(p - dir * (i as f32 * 0.5)) - h0).abs() < 0.01);
                 let landing = (1..=4).all(|i| (h(p + dir * (1.0 + i as f32 * 0.5)) - h0 - rise).abs() < 0.01);
-                if rise > 0.2 && rise < 0.55 && runway && landing {
-                    let start = p - dir * 3.0;
+                if rise > min && rise < max && runway && landing {
+                    let start = p - dir * run_up;
                     // Forward is (-sin yaw, -cos yaw) in x, z.
                     let yaw = (-dir.x).atan2(-dir.y);
                     return Some((Vec3::new(start.x, h0 + super::EYE + 0.02, start.y), yaw, h0 + rise));

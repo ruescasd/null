@@ -71,6 +71,15 @@ const MIN_WALK_NORMAL: f32 = 0.7;
 /// strafe jumping behaves the same at any frame rate.
 const STEP_DT: f32 = 1.0 / 125.0;
 
+/// Ledges whose top is at most this far above the feet can be climbed onto
+/// from the air: with a jump, ledges up to about 2.5 m.
+const MANTLE_REACH: f32 = 1.1;
+const MANTLE_TIME: f32 = 0.2;
+/// Least horizontal speed when coming out of a mantle.
+const MANTLE_EXIT_SPEED: f32 = 6.0;
+/// How far sideways the player may be nudged past an edge they clipped.
+const SLIP: f32 = 0.24;
+
 /// Half the player's width (Quake: 15 units).
 const HALF_WIDTH: f32 = 0.45;
 const HEIGHT: f32 = 1.8;
@@ -107,6 +116,7 @@ pub struct Player {
     pub energy: f32,
     pub firing: bool,
     pub tether: Tether,
+    pub mantle: Option<Mantle>,
     /// The tether button must be released before the tether fires again.
     tether_held: bool,
     /// Movement waits until the terrain around the spawn point has loaded.
@@ -121,6 +131,7 @@ fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
         energy: ENERGY_MAX,
         firing: false,
         tether: Tether::Idle,
+        mantle: None,
         tether_held: false,
         ready: false,
     });
@@ -194,32 +205,100 @@ impl Mover<'_, '_, '_> {
             .map(|hit| (hit.distance, hit.normal1))
     }
 
-    /// Quake's PM_StepSlideMove: slide, and if a ledge blocked the way while
-    /// on the ground, try again from `STEP_HEIGHT` higher and settle down.
-    fn step_slide(&self, center: Vec3, velocity: Vec3, dt: f32, grounded: bool) -> (Vec3, Vec3) {
+    /// Quake's PM_StepSlideMove, plus two forgiveness rules so that small
+    /// things never stop you dead: stepping up also works in the air (while
+    /// falling or near the top of a jump), and when still blocked the player
+    /// may slip a hand's width sideways past an edge they only clipped.
+    fn step_slide(&self, center: Vec3, velocity: Vec3, dt: f32, can_step: bool) -> (Vec3, Vec3) {
         let (moved, slid) = self.slide(center, velocity, dt);
-        if !grounded {
+        let flat = Vec3::new(velocity.x, 0.0, velocity.z);
+        let wanted = flat.length() * dt;
+        if wanted < 1e-4 {
             return (moved, slid);
         }
-        let wanted = Vec2::new(velocity.x, velocity.z).length() * dt;
-        let got = Vec2::new(moved.x - center.x, moved.z - center.z).length();
-        if got >= wanted * 0.95 {
+        let dir = flat / flat.length();
+        let progress = |p: Vec3| (p - center).dot(dir);
+        let mut best = (moved, slid, progress(moved));
+        if best.2 >= wanted * 0.95 {
             return (moved, slid);
         }
+        if can_step && let Some((p, v)) = self.step_up(center, velocity, dt) {
+            if progress(p) > best.2 + 1e-3 {
+                best = (p, v, progress(p));
+            }
+        }
+        if best.2 < wanted * 0.5 && let Some((p, v)) = self.slip(center, velocity, dt, dir) {
+            if progress(p) > best.2 + 1e-3 {
+                best = (p, v, progress(p));
+            }
+        }
+        (best.0, best.1)
+    }
+
+    /// The step part of PM_StepSlideMove: from `STEP_HEIGHT` higher, move,
+    /// then settle down onto walkable ground.
+    fn step_up(&self, center: Vec3, velocity: Vec3, dt: f32) -> Option<(Vec3, Vec3)> {
         let up = self.sweep(center, Vec3::Y * STEP_HEIGHT).map_or(STEP_HEIGHT, |(d, _)| d);
         let flat = Vec3::new(velocity.x, 0.0, velocity.z);
         let (stepped, step_vel) = self.slide(center + Vec3::Y * up, flat, dt);
-        let Some((down, normal)) = self.sweep(stepped, Vec3::NEG_Y * (up + 0.05)) else {
-            return (moved, slid);
-        };
-        let landed = stepped - Vec3::Y * down;
-        let further = Vec2::new(landed.x - center.x, landed.z - center.z).length() > got + 1e-3;
-        if normal.y >= MIN_WALK_NORMAL && further {
-            (landed, Vec3::new(step_vel.x, 0.0, step_vel.z))
-        } else {
-            (moved, slid)
-        }
+        let (down, normal) = self.sweep(stepped, Vec3::NEG_Y * (up + 0.05))?;
+        (normal.y >= MIN_WALK_NORMAL)
+            .then(|| (stepped - Vec3::Y * down, Vec3::new(step_vel.x, 0.0, step_vel.z)))
     }
+
+    /// Corner correction: try the move again from up to `SLIP` to either side.
+    fn slip(&self, center: Vec3, velocity: Vec3, dt: f32, dir: Vec3) -> Option<(Vec3, Vec3)> {
+        let side = Vec3::new(-dir.z, 0.0, dir.x);
+        let mut best: Option<(Vec3, Vec3, f32)> = None;
+        for offset in [SLIP * 0.5, -SLIP * 0.5, SLIP, -SLIP] {
+            let shift = side * offset;
+            if self.sweep(center, shift).is_some() {
+                continue;
+            }
+            let (p, v) = self.slide(center + shift, velocity, dt);
+            let progress = (p - center).dot(dir);
+            if best.is_none_or(|(_, _, b)| progress > b) {
+                best = Some((p, v, progress));
+            }
+        }
+        best.map(|(p, v, _)| (p, v))
+    }
+
+    /// Where the hull would end up mantling onto a ledge ahead along `dir`,
+    /// if there is a wall right in front whose top is within `MANTLE_REACH` of
+    /// the feet and room to climb onto it.
+    fn find_mantle(&self, center: Vec3, dir: Vec3) -> Option<Vec3> {
+        let (to_wall, normal) = self.sweep(center, dir * 0.35)?;
+        if normal.y.abs() > 0.3 || normal.dot(dir) > -0.5 {
+            return None;
+        }
+        // Room to rise alongside the wall...
+        let rise = MANTLE_REACH + 0.05;
+        if self.sweep(center, Vec3::Y * rise).is_some() {
+            return None;
+        }
+        let raised = center + Vec3::Y * rise;
+        // ...to move over the lip...
+        let over_by = to_wall + HALF_WIDTH * 1.6;
+        if self.sweep(raised, dir * over_by).is_some() {
+            return None;
+        }
+        let over = raised + dir * over_by;
+        // ...and walkable ground to settle onto that is higher than a step.
+        let (down, normal) = self.sweep(over, Vec3::NEG_Y * (rise + 0.1))?;
+        let target = over - Vec3::Y * down;
+        (normal.y >= MIN_WALK_NORMAL && target.y - center.y > STEP_HEIGHT * 0.5).then_some(target)
+    }
+}
+
+/// A climb onto a ledge in progress: the hull moves from `from` to `to`
+/// (rising first, then over the lip) and leaves with `exit` velocity.
+#[derive(Clone, Copy, Debug)]
+pub struct Mantle {
+    from: Vec3,
+    to: Vec3,
+    t: f32,
+    exit: Vec3,
 }
 
 /// What the player is asking for this frame, from the keyboard and mouse or
@@ -341,6 +420,25 @@ pub fn walk(
     let steps = (total / STEP_DT).ceil().max(1.0) as u32;
     let dt = total / steps as f32;
     for _ in 0..steps {
+        if let Some(mantle) = &mut player.mantle {
+            // Rise over the first two thirds, move over the lip in the last two.
+            mantle.t = (mantle.t + dt / MANTLE_TIME).min(1.0);
+            let ease = |x: f32| x * x * (3.0 - 2.0 * x);
+            let rise = ease((mantle.t / 0.66).min(1.0));
+            let over = ease(((mantle.t - 0.33) / 0.67).clamp(0.0, 1.0));
+            let (from, to) = (mantle.from, mantle.to);
+            center = Vec3::new(
+                from.x + (to.x - from.x) * over,
+                from.y + (to.y - from.y) * rise,
+                from.z + (to.z - from.z) * over,
+            );
+            if mantle.t >= 1.0 {
+                player.velocity = mantle.exit;
+                player.mantle = None;
+            }
+            continue;
+        }
+
         let ground = if player.velocity.y > 1.0 {
             None
         } else {
@@ -391,7 +489,18 @@ pub fn walk(
             player.energy = (player.energy + ENERGY_RECHARGE * dt).min(ENERGY_MAX);
         }
 
-        let (moved, velocity) = mover.step_slide(center, player.velocity, dt, player.grounded);
+        // Airborne and pushing into a wall: climb it if its top is in reach.
+        if !player.grounded && !tethered && wishdir != Vec3::ZERO && player.velocity.y < 5.0
+            && let Some(target) = mover.find_mantle(center, wishdir)
+        {
+            let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
+            let exit = wishdir * speed.max(MANTLE_EXIT_SPEED);
+            player.mantle = Some(Mantle { from: center, to: target, t: 0.0, exit });
+            continue;
+        }
+
+        let can_step = player.grounded || player.velocity.y < 2.0;
+        let (moved, velocity) = mover.step_slide(center, player.velocity, dt, can_step);
         center = moved;
         player.velocity = velocity;
     }
