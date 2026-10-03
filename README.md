@@ -31,7 +31,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --seed n                                  world seed
     --shot path.png                           render once the view has loaded, save, exit
     --opt bot                                 scripted movement test: logs speed/height and exits
-    --opt noclip|beam|tether                  start flying / force the beam or tether on (for captures)
+    --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
     --opt voxel                               the earlier organic voxel terrain
     --opt flat|hard|noao|nossao|nocontact|notaa|nolandmarks|nograin   switch features off
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1

@@ -62,6 +62,7 @@ fn grab_cursor(
 
 fn fly(
     time: Res<Time>,
+    args: Res<crate::Args>,
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
@@ -69,6 +70,10 @@ fn fly(
     mut cam: Single<(&mut Transform, &mut FlyCam)>,
 ) {
     let (transform, fly) = &mut *cam;
+    // `--opt spin` turns the camera steadily, to check how things look in motion.
+    if args.opt("spin") {
+        fly.yaw += 0.8 * time.delta_secs();
+    }
     if cursor.grab_mode != CursorGrabMode::None {
         let sensitivity = 0.0022;
         fly.yaw -= motion.delta.x * sensitivity;

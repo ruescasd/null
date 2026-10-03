@@ -379,17 +379,29 @@ fn cube_dir(face: u32, u: f32, v: f32) -> Vec3 {
 }
 
 fn cubemap(images: &mut Assets<Image>, size: u32, texel: impl Fn(u32, u32, u32, Vec3) -> f32) -> Handle<Image> {
-    let mut data = Vec::with_capacity((size * size * 6 * 4) as usize);
+    let mut values = Vec::with_capacity((size * size * 6) as usize);
     for face in 0..6 {
         for y in 0..size {
             for x in 0..size {
                 let u = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
                 let v = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
-                let value = (texel(face, x, y, cube_dir(face, u, v)).clamp(0.0, 1.0) * 255.0).round() as u8;
-                data.extend_from_slice(&[value, value, value, 255]);
+                values.push(texel(face, x, y, cube_dir(face, u, v)));
             }
         }
     }
+    cubemap_image(images, size, &values)
+}
+
+/// A greyscale cube texture from per-texel values (face, then row, then
+/// column), clamped to 0..1.
+fn cubemap_image(images: &mut Assets<Image>, size: u32, values: &[f32]) -> Handle<Image> {
+    let data = values
+        .iter()
+        .flat_map(|v| {
+            let value = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            [value, value, value, 255]
+        })
+        .collect();
     let mut image = Image::new(
         Extent3d { width: size, height: size, depth_or_array_layers: 6 },
         TextureDimension::D2,
@@ -414,21 +426,46 @@ fn bounce_cubemap(images: &mut Assets<Image>) -> Handle<Image> {
     })
 }
 
-/// A field of stars with a faint band across the sky.
+/// A field of stars with a faint band across the sky. Each star is a small
+/// soft blob a few texels wide rather than a single texel: temporal
+/// anti-aliasing treats one-pixel features as noise and erases them as soon
+/// as the camera moves.
 fn star_cubemap(images: &mut Assets<Image>) -> Handle<Image> {
+    const SIZE: u32 = 1024;
+    const SIGMA: f32 = 1.0;
     let band_normal = Vec3::new(0.3, 0.55, -0.78).normalize();
-    cubemap(images, 1024, |face, x, y, dir| {
-        let band = (-(dir.dot(band_normal) / 0.18).powi(2)).exp();
-        let r = hash01(x as i32, y as i32, face as i32, 0x5747);
-        let density = 0.0012 * (1.0 + 5.0 * band);
-        let glow = band * 0.012;
-        if r < density {
-            let b = hash01(x as i32, y as i32, face as i32, 0x9157);
-            glow + 0.15 + 0.85 * b.powf(6.0)
-        } else {
-            glow
+    let n = SIZE as usize;
+    let mut values = vec![0.0f32; n * n * 6];
+    for face in 0..6u32 {
+        let base = face as usize * n * n;
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let u = (x as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
+                let v = (y as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
+                let band = (-(cube_dir(face, u, v).dot(band_normal) / 0.18).powi(2)).exp();
+                let i = base + y as usize * n + x as usize;
+                values[i] += band * 0.012;
+                let r = hash01(x as i32, y as i32, face as i32, 0x5747);
+                if r >= 0.0009 * (1.0 + 5.0 * band) {
+                    continue;
+                }
+                // Splat a small Gaussian (clipped at the face edge).
+                let b = hash01(x as i32, y as i32, face as i32, 0x9157);
+                let peak = 0.3 + 0.7 * b.powf(5.0);
+                for dy in -2i32..=2 {
+                    for dx in -2i32..=2 {
+                        let (sx, sy) = (x as i32 + dx, y as i32 + dy);
+                        if sx < 0 || sy < 0 || sx >= SIZE as i32 || sy >= SIZE as i32 {
+                            continue;
+                        }
+                        let w = (-((dx * dx + dy * dy) as f32) / (2.0 * SIGMA * SIGMA)).exp();
+                        values[base + sy as usize * n + sx as usize] += peak * w;
+                    }
+                }
+            }
         }
-    })
+    }
+    cubemap_image(images, SIZE, &values)
 }
 
 fn hud(
