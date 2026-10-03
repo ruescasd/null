@@ -18,11 +18,21 @@
 //   Column(width: 0.3)           a full-height square column
 //   Fin(thickness: 0.1)          a full-height plate; add axis: Z to turn it
 //   Frame(bar: 0.1)              the cell's twelve edges as bars
-//   Ramp                         a wedge rising towards +x
-//   Stairs(steps: 6)             steps rising towards +x
+//   Ramp                         a wedge rising towards +x; only where it is
+//                                walkable (45 degrees or less), otherwise it
+//                                becomes stairs
+//   Stairs(rise: 0.45)           steps rising towards +x, each at most `rise`
+//                                metres high (0.58 is the most you can step
+//                                up without jumping); as many as the cell's
+//                                height needs
 //   Group([ (min: (x, y, z), max: (x, y, z), module: "name", turn: 1), ... ])
 //                                parts inside the cell, each a sub-box filled
 //                                by another module; turn = quarter turns
+//   Structure(style: "name", height: (0.5, 1.0))
+//                                a whole structure of that style built in the
+//                                cell, standing on its floor, a random
+//                                fraction of the cell's height; for regions
+//                                of plots (nests up to three deep)
 //
 // STYLES
 //   divisions: (x, y, z)   cells per axis at each split
@@ -54,7 +64,7 @@
         "blade": Fin(thickness: 0.08),
         "blade_z": Fin(thickness: 0.08, axis: Z),
         "cage": Frame(bar: 0.08),
-        "steps": Stairs(steps: 6),
+        "steps": Stairs(rise: 0.45),
 
         // A low block with a ramp running up from its top.
         "terrace": Group([
@@ -82,6 +92,16 @@
             (min: (-1, -1, 0.7), max: (-0.7, 0.6, 1), module: "box"),
             (min: (0.7, -1, 0.7), max: (1, 0.6, 1), module: "box"),
         ]),
+
+        // Whole structures, for filling the plots of a region.
+        "plot_ziggurat": Structure(style: "ziggurat", height: (0.25, 0.45)),
+        "plot_spire": Structure(style: "spire", height: (0.7, 1.0)),
+        "plot_hall": Structure(style: "hall", height: (0.12, 0.2)),
+        "plot_tables": Structure(style: "tables", height: (0.2, 0.35)),
+        "plot_fins": Structure(style: "fins", height: (0.15, 0.3)),
+        "plot_lattice": Structure(style: "lattice", height: (0.2, 0.4)),
+        // A thin paved plate covering the plot (2 m in a 200 m high region).
+        "plaza": Slab(thickness: 0.01),
     },
 
     styles: {
@@ -149,14 +169,33 @@
                 (on: Early, module: "box", weight: 2),
             ],
         ),
+
+        // A region: a 5 x 5 grid of plots separated by streets (the gap),
+        // each plot a structure, a plaza, or left empty. Spires gather in the
+        // middle; facades of fins line the edges.
+        "quarter": (
+            divisions: (5, 1, 5), keep: All, depth: 1, gap: 0.82, albedo: 0.15,
+            leaves: [
+                (on: Interior, module: "plot_spire", weight: 1),
+                (on: Interior, module: "plaza", weight: 1),
+                (on: Edge, module: "plot_fins", weight: 1),
+                (on: Any, module: "plot_ziggurat", weight: 2),
+                (on: Any, module: "plot_hall", weight: 2),
+                (on: Any, module: "plot_tables", weight: 1),
+                (on: Any, module: "plot_lattice", weight: 1),
+                (on: Any, module: "void", weight: 1),
+            ],
+        ),
     },
 
     structures: [
         (style: "lattice",  at: (1643, 978), size: (150, 90, 120), seed: 1),
         (style: "spire",    at: (1637, 791), size: (60, 340, 60),  seed: 2, yaw: 20),
         (style: "hall",     at: (1555, 623), size: (160, 50, 100), seed: 3, yaw: 35),
-        (style: "ziggurat", at: (1411, 503), size: (140, 80, 140), seed: 4),
+        (style: "ziggurat", at: (1411, 503), size: (60, 80, 140), seed: 4),
         (style: "fins",     at: (1231, 451), size: (140, 70, 40),  seed: 5, yaw: -10),
         (style: "tables",   at: (1046, 477), size: (120, 90, 120), seed: 6),
+        // A 600 m region behind the spawn point (turn around to see it).
+        (style: "quarter",  at: (900, 1450), size: (600, 200, 600), seed: 7),
     ],
 )

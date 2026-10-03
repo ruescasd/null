@@ -6,6 +6,9 @@
 //!   sub-box of the cell filled by another module.
 //! - A **style** is a fractal rule (see `ifs.rs`) plus **leaf rules** that
 //!   pick a module for each leaf from where it sat in its parent's grid.
+//! - A module can also be a whole **structure**: a style run inside the cell.
+//!   That nests scales: a region of plots, each plot a building, each
+//!   building of modules.
 //! - Everything ends up as **solids**, boxes and wedges, which are meshed
 //!   with hard edges and become box and wedge colliders.
 
@@ -39,12 +42,18 @@ impl Library {
     fn check(&self) -> Result<(), String> {
         let known = |name: &str| BUILT_IN.contains(&name) || self.modules.contains_key(name);
         for (name, module) in &self.modules {
-            if let Module::Group(parts) = module {
-                for part in parts {
-                    if !known(&part.module) {
-                        return Err(format!("module '{name}': unknown module '{}'", part.module));
+            match module {
+                Module::Group(parts) => {
+                    for part in parts {
+                        if !known(&part.module) {
+                            return Err(format!("module '{name}': unknown module '{}'", part.module));
+                        }
                     }
                 }
+                Module::Structure { style, .. } if !self.styles.contains_key(style) => {
+                    return Err(format!("module '{name}': unknown style '{style}'"));
+                }
+                _ => {}
             }
         }
         for (name, style) in &self.styles {
@@ -102,12 +111,33 @@ pub enum Module {
     },
     /// The cell's twelve edges as bars `bar` (fraction) thick: a hollow frame.
     Frame { bar: f32 },
-    /// A wedge filling the cell, rising towards +x.
+    /// A wedge filling the cell, rising towards +x. Only where it is walkable
+    /// (no steeper than 45 degrees); in a steeper cell it becomes stairs.
     Ramp,
-    /// Steps rising towards +x.
-    Stairs { steps: u32 },
+    /// Steps rising towards +x, each at most `rise` metres high so they can
+    /// be walked up; their number follows from the cell's height.
+    Stairs {
+        #[serde(default = "default_rise")]
+        rise: f32,
+    },
     /// Parts placed inside the cell, each filled by another module.
     Group(Vec<Part>),
+    /// A whole structure of the given style built inside the cell, standing
+    /// on its floor, with a random fraction `height` (min, max) of the cell's
+    /// height. Nests up to three deep.
+    Structure {
+        style: String,
+        #[serde(default = "full_height")]
+        height: (f32, f32),
+    },
+}
+
+fn default_rise() -> f32 {
+    0.45
+}
+
+fn full_height() -> (f32, f32) {
+    (1.0, 1.0)
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -278,9 +308,9 @@ impl Style {
     }
 }
 
-/// Builds the solids of a structure whose base centre is at the origin.
+/// Builds the solids of a structure whose base centre is at the origin, with
+/// at most `max_leaves` leaves in total (nested structures included).
 pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec<Solid> {
-    let Some(style) = library.styles.get(&placement.style) else { return Vec::new() };
     let (sx, sy, sz) = placement.size;
     let root = Block {
         center: Vec3::Y * (sy * 0.5 - placement.sink),
@@ -289,28 +319,145 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
         level: 0,
     };
     let seed = placement.seed.wrapping_mul(0x9e37_79b9) ^ 0x5eed;
-    let leaves = ifs::generate(&style.rule(), root, seed, max_leaves);
-    let mut solids = Vec::new();
-    for (n, leaf) in leaves.iter().enumerate() {
-        let r = |k: i32| hash01(n as i32, k, leaf.block.level as i32, seed);
-        let albedo = style.albedo + style.albedo_spread * (r(0) - 0.5) * 2.0;
-        let Some((module, turn)) = choose(style, leaf, r(1), r(2)) else {
-            solids.push(Solid { wedge: false, center: leaf.block.center, rotation: leaf.block.rotation, half: leaf.block.half, albedo });
-            continue;
-        };
-        let turns = match turn {
-            Turn::None => 0,
-            Turn::Random => (r(3) * 4.0) as u32 % 4,
-            Turn::Outward | Turn::Inward => {
-                let (ox, oz) = leaf.context.outward();
-                let towards = if matches!(turn, Turn::Inward) { -1.0 } else { 1.0 };
-                facing_turns(ox * towards, oz * towards)
-            }
-        };
-        let cell = turned(leaf.block, turns);
-        expand(library, &library.module(&module), cell, albedo, 0, &mut solids);
+    let mut builder = Builder { library, budget: max_leaves, out: Vec::new() };
+    builder.style(&placement.style, root, seed, 0);
+    builder.out
+}
+
+/// How deep structures may nest inside structures.
+const MAX_NESTING: u32 = 3;
+
+struct Builder<'a> {
+    library: &'a Library,
+    /// Leaves still allowed, shared by nested structures.
+    budget: usize,
+    out: Vec<Solid>,
+}
+
+impl Builder<'_> {
+    /// Runs a style's rule inside `root` and fills its leaves.
+    fn style(&mut self, name: &str, root: Block, seed: u32, nesting: u32) {
+        let Some(style) = self.library.styles.get(name) else { return };
+        let leaves = ifs::generate(&style.rule(), Block { level: 0, ..root }, seed, self.budget);
+        self.budget = self.budget.saturating_sub(leaves.len());
+        for (n, leaf) in leaves.iter().enumerate() {
+            let r = |k: i32| hash01(n as i32, k, leaf.block.level as i32, seed);
+            let albedo = style.albedo + style.albedo_spread * (r(0) - 0.5) * 2.0;
+            let Some((module, turn)) = choose(style, leaf, r(1), r(2)) else {
+                self.out.push(Solid {
+                    wedge: false,
+                    center: leaf.block.center,
+                    rotation: leaf.block.rotation,
+                    half: leaf.block.half,
+                    albedo,
+                });
+                continue;
+            };
+            let turns = match turn {
+                Turn::None => 0,
+                Turn::Random => (r(3) * 4.0) as u32 % 4,
+                Turn::Outward | Turn::Inward => {
+                    let (ox, oz) = leaf.context.outward();
+                    let towards = if matches!(turn, Turn::Inward) { -1.0 } else { 1.0 };
+                    facing_turns(ox * towards, oz * towards)
+                }
+            };
+            let cell = turned(leaf.block, turns);
+            let child_seed = seed.wrapping_mul(0x85eb_ca6b) ^ (n as u32).wrapping_mul(0xc2b2_ae35);
+            let module = self.library.module(&module);
+            self.expand(&module, cell, albedo, 0, nesting, child_seed);
+        }
     }
-    solids
+
+    fn push(&mut self, b: Block, wedge: bool, albedo: f32) {
+        self.out.push(Solid { wedge, center: b.center, rotation: b.rotation, half: b.half, albedo });
+    }
+
+    fn expand(&mut self, module: &Module, cell: Block, albedo: f32, depth: u32, nesting: u32, seed: u32) {
+        let sub = |min: [f32; 3], max: [f32; 3]| sub_block(cell, Vec3::from(min), Vec3::from(max));
+        match module {
+            Module::Void => {}
+            Module::Box => self.push(cell, false, albedo),
+            Module::Ramp => {
+                // Steeper than 45 degrees cannot be walked: use stairs instead.
+                if cell.half.y > cell.half.x {
+                    self.expand(&Module::Stairs { rise: default_rise() }, cell, albedo, depth, nesting, seed);
+                } else {
+                    self.push(cell, true, albedo);
+                }
+            }
+            Module::Slab { thickness, at } => {
+                let t = thickness.clamp(0.01, 1.0) * 2.0;
+                let (lo, hi) = match at {
+                    Height::Bottom => (-1.0, -1.0 + t),
+                    Height::Middle => (-t * 0.5, t * 0.5),
+                    Height::Top => (1.0 - t, 1.0),
+                };
+                self.push(sub([-1.0, lo, -1.0], [1.0, hi, 1.0]), false, albedo);
+            }
+            Module::Column { width } => {
+                let w = width.clamp(0.01, 1.0);
+                self.push(sub([-w, -1.0, -w], [w, 1.0, w]), false, albedo);
+            }
+            Module::Fin { thickness, axis } => {
+                let t = thickness.clamp(0.01, 1.0);
+                let (min, max) = match axis {
+                    Axis::X => ([-t, -1.0, -1.0], [t, 1.0, 1.0]),
+                    Axis::Z => ([-1.0, -1.0, -t], [1.0, 1.0, t]),
+                };
+                self.push(sub(min, max), false, albedo);
+            }
+            Module::Frame { bar } => {
+                let b = bar.clamp(0.01, 0.5) * 2.0;
+                for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                    // Vertical posts at the four corners.
+                    let (x0, x1) = if sx < 0.0 { (-1.0, -1.0 + b) } else { (1.0 - b, 1.0) };
+                    let (z0, z1) = if sz < 0.0 { (-1.0, -1.0 + b) } else { (1.0 - b, 1.0) };
+                    self.push(sub([x0, -1.0, z0], [x1, 1.0, z1]), false, albedo);
+                }
+                for y in [-1.0, 1.0] {
+                    let (y0, y1) = if y < 0.0 { (-1.0, -1.0 + b) } else { (1.0 - b, 1.0) };
+                    // Bars along x on the front and back, along z on the sides.
+                    self.push(sub([-1.0, y0, -1.0], [1.0, y1, -1.0 + b]), false, albedo);
+                    self.push(sub([-1.0, y0, 1.0 - b], [1.0, y1, 1.0]), false, albedo);
+                    self.push(sub([-1.0, y0, -1.0], [-1.0 + b, y1, 1.0]), false, albedo);
+                    self.push(sub([1.0 - b, y0, -1.0], [1.0, y1, 1.0]), false, albedo);
+                }
+            }
+            Module::Stairs { rise } => {
+                // Enough steps that none is higher than `rise`.
+                let height = cell.half.y * 2.0;
+                let n = (height / rise.max(0.05)).ceil().clamp(1.0, 256.0) as u32;
+                let step = 2.0 / n as f32;
+                for s in 0..n {
+                    let x0 = -1.0 + step * s as f32;
+                    let top = -1.0 + step * (s + 1) as f32;
+                    self.push(sub([x0, -1.0, -1.0], [x0 + step, top, 1.0]), false, albedo);
+                }
+            }
+            Module::Group(parts) => {
+                if depth > 8 {
+                    return;
+                }
+                for part in parts {
+                    let b = sub_block(cell, Vec3::from(part.min), Vec3::from(part.max));
+                    let b = turned(b, part.turn);
+                    let module = self.library.module(&part.module);
+                    self.expand(&module, b, albedo, depth + 1, nesting, seed.wrapping_add(depth + 1));
+                }
+            }
+            Module::Structure { style, height } => {
+                if nesting >= MAX_NESTING || self.budget == 0 {
+                    return;
+                }
+                // Stand on the cell's floor, a random fraction of its height.
+                let (lo, hi) = (height.0.min(height.1), height.0.max(height.1));
+                let fraction = (lo + (hi - lo) * hash01(seed as i32, 11, 0, 0x57c7)).clamp(0.05, 1.0);
+                let root = sub([-1.0, -1.0, -1.0], [1.0, -1.0 + 2.0 * fraction, 1.0]);
+                self.style(style, root, seed, nesting + 1);
+            }
+        }
+    }
 }
 
 /// Picks a module for a leaf among the rules that match it, by weight.
@@ -372,72 +519,6 @@ fn sub_block(cell: Block, min: Vec3, max: Vec3) -> Block {
     }
 }
 
-fn expand(library: &Library, module: &Module, cell: Block, albedo: f32, depth: u32, out: &mut Vec<Solid>) {
-    let solid = |b: Block, wedge: bool| Solid { wedge, center: b.center, rotation: b.rotation, half: b.half, albedo };
-    let sub = |min: [f32; 3], max: [f32; 3]| sub_block(cell, Vec3::from(min), Vec3::from(max));
-    match module {
-        Module::Void => {}
-        Module::Box => out.push(solid(cell, false)),
-        Module::Ramp => out.push(solid(cell, true)),
-        Module::Slab { thickness, at } => {
-            let t = thickness.clamp(0.01, 1.0) * 2.0;
-            let (lo, hi) = match at {
-                Height::Bottom => (-1.0, -1.0 + t),
-                Height::Middle => (-t * 0.5, t * 0.5),
-                Height::Top => (1.0 - t, 1.0),
-            };
-            out.push(solid(sub([-1.0, lo, -1.0], [1.0, hi, 1.0]), false));
-        }
-        Module::Column { width } => {
-            let w = width.clamp(0.01, 1.0);
-            out.push(solid(sub([-w, -1.0, -w], [w, 1.0, w]), false));
-        }
-        Module::Fin { thickness, axis } => {
-            let t = thickness.clamp(0.01, 1.0);
-            let (min, max) = match axis {
-                Axis::X => ([-t, -1.0, -1.0], [t, 1.0, 1.0]),
-                Axis::Z => ([-1.0, -1.0, -t], [1.0, 1.0, t]),
-            };
-            out.push(solid(sub(min, max), false));
-        }
-        Module::Frame { bar } => {
-            let b = bar.clamp(0.01, 0.5) * 2.0;
-            for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                // Vertical posts at the four corners.
-                let (x0, x1) = if sx < 0.0 { (-1.0, -1.0 + b) } else { (1.0 - b, 1.0) };
-                let (z0, z1) = if sz < 0.0 { (-1.0, -1.0 + b) } else { (1.0 - b, 1.0) };
-                out.push(solid(sub([x0, -1.0, z0], [x1, 1.0, z1]), false));
-            }
-            for y in [-1.0, 1.0] {
-                let (y0, y1) = if y < 0.0 { (-1.0, -1.0 + b) } else { (1.0 - b, 1.0) };
-                // Bars along x on the front and back, along z on the sides.
-                out.push(solid(sub([-1.0, y0, -1.0], [1.0, y1, -1.0 + b]), false));
-                out.push(solid(sub([-1.0, y0, 1.0 - b], [1.0, y1, 1.0]), false));
-                out.push(solid(sub([-1.0, y0, -1.0], [-1.0 + b, y1, 1.0]), false));
-                out.push(solid(sub([1.0 - b, y0, -1.0], [1.0, y1, 1.0]), false));
-            }
-        }
-        Module::Stairs { steps } => {
-            let n = (*steps).max(1) as f32;
-            for s in 0..steps.max(&1).to_owned() {
-                let x0 = -1.0 + 2.0 * s as f32 / n;
-                let top = -1.0 + 2.0 * (s + 1) as f32 / n;
-                out.push(solid(sub([x0, -1.0, -1.0], [x0 + 2.0 / n, top, 1.0]), false));
-            }
-        }
-        Module::Group(parts) => {
-            if depth > 8 {
-                return;
-            }
-            for part in parts {
-                let b = sub_block(cell, Vec3::from(part.min), Vec3::from(part.max));
-                let b = turned(b, part.turn);
-                expand(library, &library.module(&part.module), b, albedo, depth + 1, out);
-            }
-        }
-    }
-}
-
 /// Flat-shaded mesh of the solids: hard edges everywhere. Undersides and the
 /// lower parts of side faces are darker.
 pub fn mesh(solids: &[Solid]) -> ColumnMesh {
@@ -496,7 +577,7 @@ mod tests {
             "pier": Column(width: 0.3),
             "porch": Group([
                 (min: (-1, -1, -1), max: (1, -0.6, 1), module: "plinth"),
-                (min: (0, -0.6, -1), max: (1, 1, 1), module: "ramp", turn: 2),
+                (min: (-1, -0.6, -1), max: (1, -0.4, 1), module: "ramp", turn: 2),
             ]),
         },
         styles: {
@@ -530,6 +611,42 @@ mod tests {
             let face = (p(tri[1]) - p(tri[0])).cross(p(tri[2]) - p(tri[0]));
             assert!(face.dot(Vec3::from(m.normals[tri[0] as usize])) > 0.0);
         }
+    }
+
+    #[test]
+    fn steep_ramps_become_walkable_stairs() {
+        let lib = Library::parse(r#"(
+            styles: { "one": (divisions: (1, 1, 1), keep: All, depth: 0, leaves: [(on: Any, module: "ramp")]) },
+            structures: [ (style: "one", at: (0, 0), size: (4, 10, 4)) ],
+        )"#)
+        .unwrap();
+        let solids = build(&lib, &lib.structures[0], 100);
+        assert!(solids.iter().all(|s| !s.wedge), "too steep for a ramp");
+        // 10 m in steps of at most 0.45 m.
+        assert!(solids.len() >= 23);
+        let mut tops: Vec<f32> = solids.iter().map(|s| s.center.y + s.half.y).collect();
+        tops.sort_by(f32::total_cmp);
+        for pair in tops.windows(2) {
+            assert!(pair[1] - pair[0] <= 0.45 + 1e-3);
+        }
+    }
+
+    #[test]
+    fn structures_nest_inside_cells() {
+        let lib = Library::parse(r#"(
+            modules: { "tower": Structure(style: "inner", height: (0.5, 0.5)) },
+            styles: {
+                "inner": (divisions: (2, 2, 2), keep: All, depth: 1),
+                "region": (divisions: (3, 1, 3), keep: All, depth: 1, gap: 0.8, leaves: [(on: Any, module: "tower")]),
+            },
+            structures: [ (style: "region", at: (0, 0), size: (90, 40, 90)) ],
+        )"#)
+        .unwrap();
+        let solids = build(&lib, &lib.structures[0], 10_000);
+        // Nine plots, each a 2x2x2 structure half the plot's height.
+        assert_eq!(solids.len(), 9 * 8);
+        let top = solids.iter().map(|s| s.center.y + s.half.y).fold(f32::MIN, f32::max);
+        assert!((top - 20.0).abs() < 1e-3, "top {top}");
     }
 
     #[test]

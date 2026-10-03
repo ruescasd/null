@@ -30,7 +30,7 @@ impl Plugin for StructuresPlugin {
 }
 
 /// Blocks per structure at most, to keep a typo from freezing the game.
-const MAX_LEAVES: usize = 20_000;
+const MAX_LEAVES: usize = 40_000;
 
 #[derive(Component)]
 struct Structure;
