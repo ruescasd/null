@@ -2,6 +2,7 @@
 
 mod camera;
 mod capture;
+mod figure;
 mod landmarks;
 mod look;
 mod player;
@@ -83,6 +84,7 @@ fn main() {
             camera::FlyCameraPlugin,
             look::LookPlugin,
             capture::CapturePlugin,
+            figure::FigurePlugin,
             landmarks::LandmarksPlugin,
             player::PlayerPlugin,
             structures::StructuresPlugin,
