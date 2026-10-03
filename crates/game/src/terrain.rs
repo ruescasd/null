@@ -30,6 +30,8 @@ use worldgen::{
     voxel_size,
 };
 
+use bevy::camera::{primitives::Aabb, visibility::NoAutoAabb};
+
 use crate::Args;
 
 /// Radius of each detail level's disc, in metres.
@@ -176,6 +178,8 @@ type Key = (u32, IVec2);
 /// A generated column, ready to instance.
 struct Built {
     mesh: Handle<Mesh>,
+    /// Its bounds, computed once (see `bounds`).
+    aabb: Aabb,
     /// Collision shape; only the finest level gets one, since that is the
     /// only level the player can reach.
     collider: Option<Collider>,
@@ -384,6 +388,8 @@ fn stream_columns(
         let mut entity = commands.spawn((
             TerrainColumn,
             Mesh3d(built.mesh.clone()),
+            built.aabb,
+            NoAutoAabb,
             MeshMaterial3d(material.0.clone()),
             Transform::from_xyz(key.x as f32 * size, -sink, key.y as f32 * size),
         ));
@@ -419,7 +425,7 @@ fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh
     for (key, task) in streamer.pending.iter_mut() {
         if let Some((column, collider)) = check_ready(task) {
             let built = (!column.is_empty())
-                .then(|| Built { mesh: meshes.add(to_bevy_mesh(column)), collider });
+                .then(|| Built { aabb: bounds(&column), mesh: meshes.add(to_bevy_mesh(column)), collider });
             done.push((*key, built));
         }
     }
@@ -427,6 +433,22 @@ fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh
         streamer.pending.remove(&key);
         streamer.cache.insert(key, built);
     }
+}
+
+/// A mesh's bounds for culling. Bevy would compute them itself, but keeps
+/// recomputing them for big meshes every frame (milliseconds with the
+/// structures); these meshes never change, so they get them once, with
+/// `NoAutoAabb`.
+pub fn bounds(mesh: &ColumnMesh) -> Aabb {
+    let (mut lo, mut hi) = (Vec3::MAX, Vec3::MIN);
+    for &p in &mesh.positions {
+        lo = lo.min(Vec3::from(p));
+        hi = hi.max(Vec3::from(p));
+    }
+    if lo.x > hi.x {
+        return Aabb::from_min_max(Vec3::ZERO, Vec3::ZERO);
+    }
+    Aabb::from_min_max(lo, hi)
 }
 
 /// A static triangle-mesh collider for a column's geometry, if it has any.

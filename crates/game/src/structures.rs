@@ -12,8 +12,11 @@ use std::{
     time::SystemTime,
 };
 
-use avian3d::prelude::{Collider, Position, Rotation};
-use bevy::{prelude::*, tasks::AsyncComputeTaskPool};
+use avian3d::prelude::{Collider, Position, RigidBody, Rotation};
+use bevy::{
+    prelude::*,
+    tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
+};
 use worldgen::{
     ColumnMesh,
     plates::PlateWorld,
@@ -25,9 +28,10 @@ use worldgen::{
 use crate::{
     Args,
     camera::FlyCam,
-    landmarks::{FractalTask, Landmark},
-    terrain::{Streamer, WorldGen},
+    landmarks::Landmark,
+    terrain::{Streamer, StreamSet, TerrainMaterialHandle, WorldGen, bounds, to_bevy_mesh},
 };
+use bevy::camera::visibility::NoAutoAabb;
 
 pub struct StructuresPlugin;
 
@@ -35,7 +39,10 @@ impl Plugin for StructuresPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Watch>()
             .add_systems(Startup, setup_notice)
-            .add_systems(Update, (watch, stream_sites.after(watch), fade_notice));
+            .add_systems(
+                Update,
+                (watch, stream_sites.after(watch), receive, choose_levels.after(StreamSet), fade_notice),
+            );
     }
 }
 
@@ -54,6 +61,44 @@ struct Structure;
 /// A site, by its grid cell.
 #[derive(Component)]
 struct Site((i32, i32));
+
+/// How many versions of each structure are built: full detail, then each
+/// one level of its rules less deep (and without small pieces).
+const LEVELS: u32 = 3;
+/// Beyond these distances from the camera (to the structure's edge), the
+/// next coarser version is shown.
+const LEVEL_DISTANCE: [f32; 2] = [350.0, 900.0];
+
+/// The versions of a structure, built in the background: meshes from fine
+/// to coarse, the collider (from the finest) and the structure's radius.
+type Levels = (Vec<ColumnMesh>, Option<Collider>, f32);
+
+/// A structure still being built in the background.
+#[derive(Component)]
+pub struct Building(Task<Levels>);
+
+/// A structure's versions are its children; `radius` is how far it reaches
+/// from its origin.
+#[derive(Component)]
+struct Detail {
+    radius: f32,
+}
+
+/// Which version a child mesh is.
+#[derive(Component)]
+struct Level(usize);
+
+/// A structure's collider, kept aside while the structure is far away:
+/// keeping thousands of pieces in the physics world costs every frame.
+#[derive(Component)]
+struct Solidity {
+    collider: Collider,
+    active: bool,
+}
+
+/// Colliders are active within this distance of the camera (to the
+/// structure's edge), and put aside beyond the second.
+const COLLIDE_DISTANCE: [f32; 2] = [300.0, 400.0];
 
 #[derive(Component)]
 struct Notice {
@@ -163,8 +208,10 @@ fn watch(
         let (x, z) = placement.at;
         let origin = Vec3::new(x, world.ground_height(x, z), z);
         let library = library.clone();
-        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new()) });
-        commands.spawn((Structure, FractalTask(task), Landmark { origin }, Transform::from_translation(origin)));
+        let task = pool.spawn(async move {
+            finish((0..LEVELS).map(|c| (structure::build_coarse(&library, &placement, MAX_LEAVES, c), Vec::new())))
+        });
+        commands.spawn((Structure, Building(task), Landmark { origin }, Transform::from_translation(origin)));
     }
     // Sites stream back in on their own.
     state.library = Some(library.clone());
@@ -177,28 +224,102 @@ fn watch(
     info!("{}: {} structures, {} site rules", path.display(), library.structures.len(), library.sites.len());
 }
 
-/// Mesh and colliders for built solids and prisms.
-fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> (ColumnMesh, Option<Collider>) {
-    let mut mesh = structure::mesh(&solids);
-    forms::mesh_into(&mut mesh, &prisms);
-    // A box, wedge or hull collider per piece: robust for the player.
-    let hulls = prisms
-        .iter()
-        .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
-    let shapes: Vec<(Position, Rotation, Collider)> = solids
-        .iter()
-        .filter_map(|s| {
-            let shape = if s.wedge {
-                Collider::convex_hull(structure::wedge_points(s.half))?
-            } else {
-                Collider::cuboid(s.half.x * 2.0, s.half.y * 2.0, s.half.z * 2.0)
-            };
-            Some((Position(s.center), Rotation(s.rotation), shape))
-        })
-        .chain(hulls)
-        .collect();
-    let collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
-    (mesh, collider)
+/// Meshes for each version (fine to coarse), and a collider for the finest:
+/// a box, wedge or hull per piece, robust for the player.
+fn finish(levels: impl Iterator<Item = (Vec<Solid>, Vec<Prism>)>) -> Levels {
+    let mut meshes = Vec::new();
+    let mut collider = None;
+    let mut radius: f32 = 0.0;
+    for (i, (solids, prisms)) in levels.enumerate() {
+        let mut mesh = structure::mesh(&solids);
+        forms::mesh_into(&mut mesh, &prisms);
+        if i == 0 {
+            radius = mesh.positions.iter().map(|p| Vec2::new(p[0], p[2]).length()).fold(0.0, f32::max);
+            let hulls = prisms
+                .iter()
+                .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
+            let shapes: Vec<(Position, Rotation, Collider)> = solids
+                .iter()
+                .filter_map(|s| {
+                    let shape = if s.wedge {
+                        Collider::convex_hull(structure::wedge_points(s.half))?
+                    } else {
+                        Collider::cuboid(s.half.x * 2.0, s.half.y * 2.0, s.half.z * 2.0)
+                    };
+                    Some((Position(s.center), Rotation(s.rotation), shape))
+                })
+                .chain(hulls)
+                .collect();
+            collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
+        }
+        meshes.push(mesh);
+    }
+    (meshes, collider, radius)
+}
+
+/// Puts finished structures in the world: one child mesh per version.
+fn receive(
+    mut commands: Commands,
+    mut tasks: Query<(Entity, &mut Building)>,
+    material: Res<TerrainMaterialHandle>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    for (entity, mut task) in &mut tasks {
+        let Some((levels, collider, radius)) = check_ready(&mut task.0) else { continue };
+        let mut e = commands.entity(entity);
+        e.remove::<Building>().insert((Detail { radius }, Visibility::default()));
+        if let Some(collider) = collider {
+            e.insert(Solidity { collider, active: false });
+        }
+        for (i, mesh) in levels.into_iter().enumerate() {
+            if mesh.is_empty() {
+                continue;
+            }
+            e.with_child((
+                Level(i),
+                bounds(&mesh),
+                NoAutoAabb,
+                Mesh3d(meshes.add(to_bevy_mesh(mesh))),
+                MeshMaterial3d(material.0.clone()),
+                Transform::default(),
+                if i == 0 { Visibility::Inherited } else { Visibility::Hidden },
+            ));
+        }
+    }
+}
+
+/// Shows each structure's version for its distance from the camera, and
+/// makes it solid only when near.
+fn choose_levels(
+    mut commands: Commands,
+    camera: Single<&Transform, With<FlyCam>>,
+    mut structures: Query<(Entity, &Transform, &Detail, &Children, Option<&mut Solidity>), Without<FlyCam>>,
+    mut levels: Query<(&Level, &mut Visibility)>,
+) {
+    let cam = camera.translation;
+    for (entity, transform, detail, children, solidity) in &mut structures {
+        let to = transform.translation - cam;
+        let distance = (Vec2::new(to.x, to.z).length() - detail.radius).max(0.0);
+        if let Some(mut solid) = solidity {
+            if !solid.active && distance < COLLIDE_DISTANCE[0] {
+                solid.active = true;
+                commands.entity(entity).insert((RigidBody::Static, solid.collider.clone()));
+            } else if solid.active && distance > COLLIDE_DISTANCE[1] {
+                solid.active = false;
+                commands.entity(entity).remove::<(RigidBody, Collider)>();
+            }
+        }
+        let level = LEVEL_DISTANCE.iter().filter(|&&d| distance > d).count();
+        // The coarsest version there is, if this one was empty.
+        let present: Vec<usize> = children.iter().filter_map(|c| levels.get(c).ok().map(|(l, _)| l.0)).collect();
+        let shown = present.iter().copied().filter(|&l| l <= level).max().unwrap_or(0);
+        for child in children.iter() {
+            if let Ok((l, mut visibility)) = levels.get_mut(child) {
+                let want = if l.0 == shown { Visibility::Inherited } else { Visibility::Hidden };
+                visibility.set_if_neq(want);
+            }
+        }
+    }
 }
 
 /// Twice a second: builds the sites that came into range in the background
@@ -248,17 +369,20 @@ fn stream_sites(
         let cell = site.cell;
         let (library, plates) = (library.clone(), plates.clone());
         let task = pool.spawn(async move {
-            let built = sites::build(&library, &plates, &site, MAX_LEAVES);
-            let lift = built.base - ground;
-            let solids = built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
-            let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
-            finish(solids, prisms)
+            finish((0..LEVELS).map(|c| {
+                let built = sites::build_coarse(&library, &plates, &site, MAX_LEAVES, c);
+                let lift = built.base - ground;
+                let solids =
+                    built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
+                let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
+                (solids, prisms)
+            }))
         });
         let origin = Vec3::new(x, ground, z);
         commands.spawn((
             Structure,
             Site(cell),
-            FractalTask(task),
+            Building(task),
             Landmark { origin },
             Transform::from_translation(origin),
         ));

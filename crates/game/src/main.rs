@@ -67,7 +67,17 @@ impl Args {
 
 fn main() {
     let args = Args::parse();
-    App::new()
+    // Measurements and captures run flat out even without focus (Bevy
+    // otherwise slows an unfocused window to 60 fps).
+    let unattended = args.opt("bench") || args.shot.is_some() || args.opt("bot") || args.opt("stairbot");
+    let mut app = App::new();
+    if unattended {
+        app.insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+        });
+    }
+    app
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "terrain".into(),
@@ -78,6 +88,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin)
         .insert_resource(args)
         .add_plugins((
             terrain::TerrainPlugin,
