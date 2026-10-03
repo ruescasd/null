@@ -66,14 +66,18 @@
 //                      (-) it; `then` grows on its top
 //   Inset(by: (1, 3), then: "name")
 //                      the polygon shrunk on every side: setbacks, margins
+//   Neck(by: (1, 2), height: (2, 4), then: "name")
+//                      a recessed band (the polygon shrunk, this high), then
+//                      `then` on the whole polygon again: grooves between bands
 //   Split(depth: 2, gap: 0, min_width: 8, then: "name")
 //                      cut in two across its length, `depth` times, along
 //                      the plate's own lines, with `gap` metres between
 //   Cells(size: 6, gap: 0, then: "name")
 //                      divided into smaller plates about `size` across
-//   Rim(width: 1.5, height: (4, 8), gates: 0.3, inner: "name")
+//   Rim(width: 1.5, height: (4, 8), gates: 0.3, inner: "name", wall: "name")
 //                      a wall along each edge, with gates by chance; `inner`
-//                      grows inside it
+//                      grows inside it; with `wall`, each stretch of wall
+//                      grows that form (and `height` is not used)
 //   Pillars(width: 1.5, height: (6, 12), spacing: 12, then: "name")
 //                      pillars at the corners and along the edges; `then`
 //                      grows on the whole polygon at their top
@@ -106,7 +110,16 @@
 //     Optionally a centrepiece of a box `style` stands in the middle, of a
 //     size between min and max; the core then fits around it.
 //     plinth: false leaves the ground alone (centrepiece only).
+//     form: "name", footprint: (60, 120)
+//       grows a form on the whole footprint instead: the big plate at the
+//       centre, scaled to that many metres from its centre to its furthest
+//       corner (the core then fits around it).
 //   Sites stream in within 2.5 km of you; `--opt nosites` leaves them out.
+//
+// COLOSSI: the same rules on a much coarser grid, for megastructures.
+//   colossus_grid: (spacing: 2048, chance: 0.85)
+//   colossi: [ (district: Stacks, form: "name", footprint: (90, 160), ...), ... ]
+//   Ordinary sites keep clear of them; they stream in within 4.5 km.
 //   Changing the sites regenerates the terrain, which takes a few seconds.
 (
     modules: {
@@ -291,6 +304,50 @@
         "towers_plate": Choose([(3, "monolith"), (3, "blocks"), (1, "lattice_block"), (1, "nothing")]),
         "ruin": Choose([(3, "paving"), (1, "court"), (3, "nothing"), (1, "low_block"), (1, "dais")]),
         "terrace": Choose([(2, "paving"), (1, "court"), (2, "dais"), (1, "low_block")]),
+
+        // Colossi: hundreds of metres, with detail at every scale.
+        // Bands with grooves between them, now and then a setback, and a
+        // crown when they stop.
+        "c_band": Extrude(height: (14, 32), taper: (0, 0.03), then: "c_band_next"),
+        "c_band_next": Choose([(14, "c_groove"), (3, "c_setback"), (1, "c_crown")]),
+        "c_groove": Neck(by: (1.2, 2.5), height: (2, 4), then: "c_band"),
+        "c_setback": Inset(by: (4, 12), then: "c_band"),
+        "c_crown": Choose([(2, "c_crown_split"), (1, "c_crown_batter"), (1, "nothing")]),
+        "c_crown_split": Split(depth: 2, gap: 3, min_width: 10, then: "c_crown_piece"),
+        "c_crown_piece": Extrude(height: (6, 40), then: "c_crown_more"),
+        "c_crown_more": Choose([(2, "nothing"), (1, "c_crown_up")]),
+        "c_crown_up": Inset(by: (2, 5), then: "c_crown_piece"),
+        "c_crown_batter": Extrude(height: (20, 60), taper: (0.3, 0.6), tone: -0.02),
+
+        // Stacks: a cluster of needles on a plinth, split by deep slots.
+        "colossus_needles": Extrude(height: (8, 16), then: "needles_base"),
+        "needles_base": Inset(by: (10, 20), then: "needles"),
+        "needles": Split(depth: 2, gap: 8, min_width: 30, then: "needle"),
+        "needle": Choose([(5, "c_band"), (1, "nothing")]),
+
+        // Tiers: a stepped mountain, sometimes split into twin peaks.
+        "colossus_mountain": Extrude(height: (18, 30), then: "mountain_up"),
+        "mountain_up": Choose([(8, "mountain_step"), (1, "mountain_split"), (1, "c_crown")]),
+        "mountain_step": Inset(by: (8, 16), then: "colossus_mountain"),
+        "mountain_split": Split(depth: 1, gap: 8, min_width: 40, then: "mountain_step"),
+
+        // Floor: a vast walled enclosure, banded walls broken by gates, and
+        // something inside.
+        "colossus_enclosure": Rim(width: 14, gates: 0.6, wall: "w_band", inner: "enclosure_inside"),
+        "w_band": Extrude(height: (10, 22), then: "w_next"),
+        "w_next": Choose([(5, "w_groove"), (1, "nothing")]),
+        "w_groove": Neck(by: (0.8, 1.5), height: (1.5, 3), then: "w_band"),
+        "enclosure_inside": Choose([(2, "lone_needle"), (1, "lone_mountain"), (1, "nothing")]),
+        "lone_needle": Inset(by: (50, 90), then: "c_band"),
+        "lone_mountain": Inset(by: (40, 70), then: "colossus_mountain"),
+
+        // Broken: a shattered field of shafts, some bent as they rise.
+        "colossus_ruin": Cells(size: 45, gap: 6, then: "ruin_shaft"),
+        "ruin_shaft": Choose([(2, "c_band"), (2, "r_band"), (2, "ruin_stub"), (2, "nothing")]),
+        "r_band": Extrude(height: (14, 32), lean: 3, then: "r_next"),
+        "r_next": Choose([(10, "r_groove"), (1, "c_crown")]),
+        "r_groove": Neck(by: (1, 2), height: (2, 4), then: "r_band"),
+        "ruin_stub": Extrude(height: (10, 60), taper: (0, 0.4), lean: 6, then: "c_crown_split"),
     },
 
     site_grid: (spacing: 768, chance: 0.55),
@@ -316,5 +373,17 @@
         (district: Broken, weight: 1, plates: "town", terraces: "ruin", core: (60, 100), lift: (-8, 4)),
         (district: Broken, weight: 1, style: "lattice", size: ((100, 60, 100), (180, 120, 180)), plates: "ruin",
             terraces: "ruin", lift: (-10, 8)),
+    ],
+
+    colossus_grid: (spacing: 2048, chance: 0.85),
+    colossi: [
+        (district: Stacks, form: "colossus_needles", footprint: (90, 160), lift: (2, 6), rings: 3, ring_width: 30,
+            terraces: "ruin"),
+        (district: Tiers, form: "colossus_mountain", footprint: (140, 220), lift: (6, 14), rings: 4, ring_width: 24,
+            step: 2, terraces: "terrace", terrace_chance: 0.5),
+        (district: Floor, form: "colossus_enclosure", footprint: (180, 260), lift: (0.5, 2), rings: 2, ring_width: 40,
+            terraces: "terrace"),
+        (district: Broken, form: "colossus_ruin", footprint: (140, 220), lift: (-6, 6), rings: 3, ring_width: 30,
+            terraces: "ruin"),
     ],
 )

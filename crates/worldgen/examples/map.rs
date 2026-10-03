@@ -157,6 +157,30 @@ fn main() {
         );
     }
 
+    // The colossi: how many, and the nearest few with their height.
+    let colossi = sites::all_in(sites::Layer::Colossi, &library, &world);
+    println!("{} colossi", colossi.len());
+    let mut near: Vec<&sites::Site> = colossi.iter().collect();
+    near.sort_by(|a, b| {
+        let d = |s: &sites::Site| (s.at.0 - 1200.0).hypot(s.at.1 - 900.0);
+        d(a).total_cmp(&d(b))
+    });
+    for site in near.iter().take(6) {
+        let built = sites::build(&library, &world, site, 40_000);
+        let top = built.prisms.iter().map(|p| p.y1).fold(0.0, f32::max);
+        let (x, z) = site.at;
+        println!(
+            "{:>22} at {:6.0}, {:6.0}  ({}), {} pieces, {:.0} m tall, footprint {:.0} m",
+            site.form.as_ref().map_or("", |f| f.0.as_str()),
+            x,
+            z,
+            world.district(x as f64, z as f64).name(),
+            built.prisms.len(),
+            top,
+            site.form.as_ref().map_or(0.0, |f| f.1),
+        );
+    }
+
     let mut counts = [0usize; 4];
     for k in &kinds {
         counts[District::ALL.iter().position(|d| d == k).unwrap()] += 1;

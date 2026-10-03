@@ -21,7 +21,7 @@ use worldgen::{
     ColumnMesh,
     plates::PlateWorld,
     forms::{self, Prism},
-    sites,
+    sites::{self, Layer},
     structure::{self, Library, Solid},
 };
 
@@ -49,18 +49,17 @@ impl Plugin for StructuresPlugin {
 /// Blocks per structure at most, to keep a typo from freezing the game.
 const MAX_LEAVES: usize = 40_000;
 
-/// Sites are built within this distance of the camera...
-const SITE_RADIUS: f32 = 2500.0;
-/// ...and dropped beyond this one.
-const SITE_DROP: f32 = 2900.0;
+/// Each layer of sites is built within the first distance of the camera
+/// and dropped beyond the second: colossi are seen from much further.
+const LAYERS: [(Layer, f32, f32); 2] = [(Layer::Sites, 2500.0, 2900.0), (Layer::Colossi, 4500.0, 5000.0)];
 
 /// Anything built from the library, rebuilt when it changes.
 #[derive(Component)]
 struct Structure;
 
-/// A site, by its grid cell.
+/// A site, by its layer and grid cell.
 #[derive(Component)]
-struct Site((i32, i32));
+struct Site(Layer, (i32, i32));
 
 /// Plate pieces narrower than these are left out of the coarser versions
 /// of a structure's plate buildings (box structures are always drawn whole:
@@ -362,22 +361,26 @@ fn stream_sites(
     };
     let mut have = HashSet::new();
     for (entity, site, landmark) in &existing {
-        if distance(landmark.origin.x, landmark.origin.z) > SITE_DROP {
+        let drop = LAYERS.iter().find(|l| l.0 == site.0).map_or(0.0, |l| l.2);
+        if distance(landmark.origin.x, landmark.origin.z) > drop {
             commands.entity(entity).despawn();
         } else {
-            have.insert(site.0);
+            have.insert((site.0, site.1));
         }
     }
     let pool = AsyncComputeTaskPool::get();
-    for site in sites::near(&library, plates, cam.x, cam.z, SITE_RADIUS) {
+    let wanted = LAYERS
+        .iter()
+        .flat_map(|&(layer, radius, _)| sites::near_in(layer, &library, plates, cam.x, cam.z, radius).into_iter().map(move |s| (s, radius)));
+    for (site, radius) in wanted {
         let (x, z) = site.at;
-        if distance(x, z) > SITE_RADIUS || !have.insert(site.cell) {
+        if distance(x, z) > radius || !have.insert((site.layer, site.cell)) {
             continue;
         }
         // The height it stands at is only known once built, so the entity
         // sits at the ground at its centre and the solids are lifted.
         let ground = plates.height_at(x, z);
-        let cell = site.cell;
+        let key = Site(site.layer, site.cell);
         let (library, plates) = (library.clone(), plates.clone());
         let task = pool.spawn(async move {
             let built = sites::build(&library, &plates, &site, MAX_LEAVES);
@@ -389,7 +392,7 @@ fn stream_sites(
         let origin = Vec3::new(x, ground, z);
         commands.spawn((
             Structure,
-            Site(cell),
+            key,
             Building(task),
             Landmark { origin },
             Transform::from_translation(origin),

@@ -39,6 +39,11 @@ pub struct Library {
     pub site_grid: SiteGrid,
     #[serde(default)]
     pub sites: Vec<SiteRule>,
+    /// The coarser grid of colossi, and what grows where (the same rules).
+    #[serde(default = "SiteGrid::colossi")]
+    pub colossus_grid: SiteGrid,
+    #[serde(default)]
+    pub colossi: Vec<SiteRule>,
 }
 
 impl Library {
@@ -81,13 +86,13 @@ impl Library {
             }
         }
         forms::check(&self.forms, &self.styles)?;
-        for site in &self.sites {
+        for site in self.sites.iter().chain(&self.colossi) {
             if let Some(style) = &site.style
                 && !self.styles.contains_key(style)
             {
                 return Err(format!("site ({:?}): unknown style '{style}'", site.district));
             }
-            for form in site.plates.iter().chain(&site.terraces) {
+            for form in site.plates.iter().chain(&site.terraces).chain(&site.form) {
                 if form != "nothing" && !self.forms.contains_key(form) {
                     return Err(format!("site ({:?}): unknown form '{form}'", site.district));
                 }

@@ -43,6 +43,15 @@ pub enum Form {
     },
     /// The polygon shrunk by `by` on every side.
     Inset { by: (f32, f32), then: String },
+    /// A recessed band: a prism of the polygon shrunk by `by`, `height`
+    /// high; `then` grows on top of it on the whole polygon again. Stacked
+    /// between bands it makes the grooves that give tall things a scale.
+    Neck {
+        by: (f32, f32),
+        height: (f32, f32),
+        #[serde(default)]
+        then: Option<String>,
+    },
     /// Cut into blocks by straight cuts across the polygon's length, `depth`
     /// times, with `gap` between the pieces.
     Split {
@@ -63,14 +72,18 @@ pub enum Form {
         then: String,
     },
     /// A wall along each edge, `width` thick, broken by gates with the given
-    /// chance; `inner` grows inside it.
+    /// chance; `inner` grows inside it. With `wall`, each stretch of wall
+    /// grows that form instead of being a plain prism `height` high.
     Rim {
         width: f32,
+        #[serde(default)]
         height: (f32, f32),
         #[serde(default = "default_gates")]
         gates: f32,
         #[serde(default)]
         inner: Option<String>,
+        #[serde(default)]
+        wall: Option<String>,
     },
     /// Square pillars at the corners and every `spacing` along the edges;
     /// `then` grows on the whole polygon at their top.
@@ -110,8 +123,10 @@ fn default_spacing() -> f32 {
 pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
-        Form::Extrude { then, .. } | Form::Pillars { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Rim { inner, .. } => inner.iter().map(|s| s.as_str()).collect(),
+        Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } => {
+            then.iter().map(|s| s.as_str()).collect()
+        }
+        Form::Rim { inner, wall, .. } => inner.iter().chain(wall).map(|s| s.as_str()).collect(),
         Form::Inset { then, .. } | Form::Split { then, .. } | Form::Cells { then, .. } => vec![then],
         Form::Choose(options) => options.iter().map(|(_, s)| s.as_str()).collect(),
         Form::Stack(forms) => forms.iter().map(|s| s.as_str()).collect(),
@@ -211,7 +226,7 @@ pub struct Growth {
 }
 
 /// Recursion deeper than this stops, whatever the forms say.
-const MAX_DEPTH: u32 = 24;
+const MAX_DEPTH: u32 = 64;
 /// Polygons smaller than this (square metres) are dropped.
 const MIN_AREA: f32 = 3.0;
 
@@ -259,6 +274,26 @@ impl Grower<'_> {
                 let inner = inset(poly, pick(*by, 1));
                 self.grow(then, &inner, floor, tone, child(1), depth + 1);
             }
+            Form::Neck { by, height, then } => {
+                // Too thin to recess: a band all the same, so what grows
+                // on top still stands on something.
+                let inner = Some(inset(poly, pick(*by, 1))).filter(|p| p.len() >= 3).unwrap_or_else(|| poly.to_vec());
+                let top = floor + pick(*height, 2);
+                if self.budget > 0 {
+                    self.budget -= 1;
+                    self.out.prisms.push(Prism {
+                        points: inner,
+                        y0: floor,
+                        y1: top,
+                        top_scale: 1.0,
+                        lean: Vec2::ZERO,
+                        albedo: (tone - 0.03).clamp(0.03, 0.4),
+                    });
+                }
+                if let Some(then) = then {
+                    self.grow(then, poly, top, tone, child(1), depth + 1);
+                }
+            }
             Form::Split { depth: cuts, gap, min_width, then } => {
                 let mut pieces = vec![poly.to_vec()];
                 for level in 0..*cuts {
@@ -283,7 +318,7 @@ impl Grower<'_> {
                     self.grow(then, &cell, floor, tone, child(i as u32), depth + 1);
                 }
             }
-            Form::Rim { width, height, gates, inner } => {
+            Form::Rim { width, height, gates, inner, wall: wall_form } => {
                 let h = pick(*height, 1);
                 let n = poly.len();
                 let inward = inward_normals(poly);
@@ -304,7 +339,9 @@ impl Grower<'_> {
                         let (p, q) = (a.lerp(b, t0), a.lerp(b, t1));
                         let wall = [p, q, q + inward[i] * *width, p + inward[i] * *width];
                         let wall = clip_to(&wall, poly);
-                        if wall.len() >= 3 && area(&wall) > 0.2 && self.budget > 0 {
+                        if let Some(form) = wall_form {
+                            self.grow(form, &wall, floor, tone, child(100 + i as u32 * 2 + (t0 > 0.0) as u32), depth + 1);
+                        } else if wall.len() >= 3 && area(&wall) > 0.2 && self.budget > 0 {
                             self.budget -= 1;
                             self.out.prisms.push(Prism {
                                 points: wall,

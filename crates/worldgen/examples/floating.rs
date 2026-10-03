@@ -146,7 +146,8 @@ fn main() {
         let pieces: Vec<Piece> = structure::build(&library, placement, 40_000).iter().map(|s| solid_box(s, offset)).collect();
         report(&world, &format!("test {}", placement.style), placement.at, &pieces);
     }
-    for site in sites::near(&library, &world, x, z, radius) {
+    let colossi = sites::near_in(sites::Layer::Colossi, &library, &world, x, z, radius * 1.5);
+    for site in sites::near(&library, &world, x, z, radius).into_iter().chain(colossi) {
         let built = sites::build(&library, &world, &site, 40_000);
         let offset = Vec3::new(site.at.0, built.base, site.at.1);
         let mut pieces: Vec<Piece> = built.solids.iter().map(|s| solid_box(s, offset)).collect();
@@ -156,6 +157,7 @@ fn main() {
             .iter()
             .map(|p| p.style.as_str())
             .chain(site.plates.as_deref())
+            .chain(site.form.as_ref().map(|f| f.0.as_str()))
             .collect::<Vec<_>>()
             .join("+");
         report(&world, &format!("site {name}"), site.at, &pieces);

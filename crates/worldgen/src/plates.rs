@@ -333,6 +333,19 @@ impl PlateWorld {
         self.plate(cache, sites, level)
     }
 
+    /// The outline of the big (128 m) plate around a point.
+    pub fn big_plate(&self, x: f64, z: f64) -> Vec<DVec2> {
+        let g = self.nearest_site(0, DVec2::new(x, z));
+        let s = self.site(0, g);
+        let square = [
+            s + DVec2::new(-3.0, -3.0) * GRID[0],
+            s + DVec2::new(3.0, -3.0) * GRID[0],
+            s + DVec2::new(3.0, 3.0) * GRID[0],
+            s + DVec2::new(-3.0, 3.0) * GRID[0],
+        ];
+        self.cell(0, g, &square)
+    }
+
     /// The plates a site's ground is made of, exactly as they are meshed.
     pub fn site_plates(&self, ground: &SiteGround) -> Vec<SitePlate> {
         let c = ground.center;

@@ -123,6 +123,14 @@ convex polygon prism, with one hull for collision. Forms are named in
 setbacks, the next a walled court, the next a field of shards; a site may
 also keep a box-style centrepiece. Plates next to a higher one may get a
 flight of stairs up to it instead (0.45 m steps, walkable without jumping).
+Colossi are megastructures on the same rules over a much coarser grid,
+about one per district and a few hundred metres tall, seen from 4.5 km:
+a form grown on a whole footprint (the big plate there, scaled up),
+with grooved bands, setbacks, slots and crowns so their size reads. For
+now: needle clusters in the stacks, stepped mountains in the tiers, walled
+enclosures on the floor and shattered fields of bent shafts in broken
+districts. Ordinary sites keep clear of them.
+
 Site ground keeps its full detail at every distance, and everything built
 reaches a few metres into its plate, so nothing floats when seen from afar.
 Box-style structures are settled too: blocks stack flush (grooves only

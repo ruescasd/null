@@ -42,6 +42,44 @@ impl Default for SiteGrid {
     }
 }
 
+impl SiteGrid {
+    /// The colossi's grid by default: about one per district.
+    pub fn colossi() -> Self {
+        Self { spacing: 2048.0, chance: 0.85 }
+    }
+}
+
+/// Sites come in two layers on their own grids: ordinary sites, and colossi
+/// (far bigger, far apart; ordinary sites keep clear of them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Layer {
+    Sites,
+    Colossi,
+}
+
+impl Layer {
+    fn grid(self, library: &Library) -> SiteGrid {
+        match self {
+            Layer::Sites => library.site_grid,
+            Layer::Colossi => library.colossus_grid,
+        }
+    }
+
+    fn rules(self, library: &Library) -> &[SiteRule] {
+        match self {
+            Layer::Sites => &library.sites,
+            Layer::Colossi => &library.colossi,
+        }
+    }
+
+    fn seed(self) -> u32 {
+        match self {
+            Layer::Sites => 0x517e_5eed,
+            Layer::Colossi => 0xc0_1055,
+        }
+    }
+}
+
 fn default_spacing() -> f32 {
     768.0
 }
@@ -78,6 +116,9 @@ fn default_terrace_chance() -> f32 {
 fn default_stairs() -> f32 {
     0.5
 }
+fn default_footprint() -> (f32, f32) {
+    (60.0, 120.0)
+}
 
 /// "In this district, structures of this style grow, this often, this big,
 /// on this kind of ground."
@@ -108,6 +149,12 @@ pub struct SiteRule {
     /// to it (instead of a form).
     #[serde(default = "default_stairs")]
     pub stairs: f32,
+    /// A form grown on the whole footprint: the big plate at the centre,
+    /// scaled to `footprint` metres from the centre to its furthest corner.
+    #[serde(default)]
+    pub form: Option<String>,
+    #[serde(default = "default_footprint")]
+    pub footprint: (f32, f32),
     /// Reshape the ground into a core and terraces (default), or stand
     /// straight on the ground as it is.
     #[serde(default = "yes")]
@@ -166,7 +213,8 @@ impl SiteGround {
 /// the ground it shapes and what grows there.
 #[derive(Clone, Debug)]
 pub struct Site {
-    /// The grid cell, which identifies the site.
+    pub layer: Layer,
+    /// The grid cell, which identifies the site in its layer.
     pub cell: (i32, i32),
     pub at: (f32, f32),
     pub seed: u32,
@@ -179,6 +227,8 @@ pub struct Site {
     pub terraces: Option<String>,
     pub terrace_chance: f32,
     pub stairs: f32,
+    /// A form grown on the whole footprint, and the footprint's radius.
+    pub form: Option<(String, f32)>,
 }
 
 /// How far a site's centre may stray from its cell's centre, as a fraction
@@ -203,10 +253,15 @@ fn cells(world_size: f32, spacing: f32) -> (i32, f32) {
 
 /// The site in a grid cell, if any. Cheap: a few samples of the landform.
 pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<Site> {
-    let grid = library.site_grid;
+    plan_in(Layer::Sites, library, world, cell)
+}
+
+/// The site (or colossus) in a grid cell of a layer, if any.
+pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<Site> {
+    let grid = layer.grid(library);
     let (n, size) = cells(world.size(), grid.spacing);
     let cell = (cell.0.rem_euclid(n), cell.1.rem_euclid(n));
-    let seed = world.seed() ^ 0x517e_5eed;
+    let seed = world.seed() ^ layer.seed();
     let r = |k: i32| hash01(cell.0, k, cell.1, seed);
     if r(0) >= grid.chance {
         return None;
@@ -214,7 +269,7 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
     let x = (cell.0 as f32 + 0.5 + (r(1) * 2.0 - 1.0) * JITTER) * size;
     let z = (cell.1 as f32 + 0.5 + (r(2) * 2.0 - 1.0) * JITTER) * size;
     let district = world.district(x as f64, z as f64);
-    let rules: Vec<&SiteRule> = library.sites.iter().filter(|s| s.district == district).collect();
+    let rules: Vec<&SiteRule> = layer.rules(library).iter().filter(|s| s.district == district).collect();
     let total: f32 = rules.iter().map(|s| s.weight.max(0.0)).sum();
     if total <= 0.0 {
         return None;
@@ -242,11 +297,21 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
         let distance = wrap(other.at.0 - x).hypot(wrap(other.at.1 - z));
         reach = reach.min(distance - placed_ground_radius(other) - CANAL_CLEARANCE);
     }
+    // Ordinary sites keep clear of the colossi.
+    if layer == Layer::Sites {
+        for colossus in near_in(Layer::Colossi, library, world, x, z, 0.0) {
+            let Some(ground) = colossus.ground else { continue };
+            let wrap = |d: f32| d - (d / world.size()).round() * world.size();
+            let distance = wrap(ground.center.x as f32 - x).hypot(wrap(ground.center.y as f32 - z));
+            reach = reach.min(distance - ground.radius as f32 - CANAL_CLEARANCE);
+        }
+    }
     let terraces = if rule.plinth { rule.rings as f32 * rule.ring_width } else { 0.0 };
     let seed = (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed;
 
     // A centrepiece shrinks (keeping its proportions) to fit what the
     // terraces leave; the core reaches a little beyond its corners.
+    let mut form = None;
     let (centrepiece, core) = match &rule.style {
         Some(style) => {
             let ((x0, y0, z0), (x1, y1, z1)) = rule.size;
@@ -270,6 +335,15 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
                 sink: 0.0,
             };
             (Some(placement), sx.hypot(sz) * 0.5 + CORE_MARGIN)
+        }
+        None if rule.form.is_some() && rule.plinth => {
+            // A form on the whole footprint, which shrinks to fit.
+            let footprint = lerp(rule.footprint.0, rule.footprint.1, r(4)).min(reach - terraces - CORE_MARGIN);
+            if footprint < MIN_FOOTPRINT {
+                return None;
+            }
+            form = rule.form.clone().map(|f| (f, footprint));
+            (None, footprint + CORE_MARGIN)
         }
         None => {
             if !rule.plinth || rule.plates.is_none() {
@@ -297,6 +371,7 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
         }
     });
     Some(Site {
+        layer,
         cell,
         at: (x, z),
         seed,
@@ -306,13 +381,19 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
         terraces: rule.terraces.clone().filter(|_| rule.plinth),
         terrace_chance: rule.terrace_chance,
         stairs: rule.stairs,
+        form,
     })
 }
 
 /// Every site whose cell lies within `radius` of (x, z), wrapping. Cells
 /// repeat around the torus, so a small world can list a site twice.
 pub fn near(library: &Library, world: &PlateWorld, x: f32, z: f32, radius: f32) -> Vec<Site> {
-    let (_, size) = cells(world.size(), library.site_grid.spacing);
+    near_in(Layer::Sites, library, world, x, z, radius)
+}
+
+/// The same for a layer.
+pub fn near_in(layer: Layer, library: &Library, world: &PlateWorld, x: f32, z: f32, radius: f32) -> Vec<Site> {
+    let (_, size) = cells(world.size(), layer.grid(library).spacing);
     let (cx, cz) = ((x / size).floor() as i32, (z / size).floor() as i32);
     let reach = (radius / size).ceil() as i32 + 1;
     let mut out = Vec::new();
@@ -323,7 +404,7 @@ pub fn near(library: &Library, world: &PlateWorld, x: f32, z: f32, radius: f32) 
             if (center.0 - x).hypot(center.1 - z) > radius + size {
                 continue;
             }
-            if let Some(site) = plan(library, world, (gx, gz)) {
+            if let Some(site) = plan_in(layer, library, world, (gx, gz)) {
                 out.push(site);
             }
         }
@@ -333,8 +414,13 @@ pub fn near(library: &Library, world: &PlateWorld, x: f32, z: f32, radius: f32) 
 
 /// Every site in the world.
 pub fn all(library: &Library, world: &PlateWorld) -> Vec<Site> {
-    let (n, _) = cells(world.size(), library.site_grid.spacing);
-    (0..n * n).filter_map(|i| plan(library, world, (i % n, i / n))).collect()
+    all_in(Layer::Sites, library, world)
+}
+
+/// Every site of a layer.
+pub fn all_in(layer: Layer, library: &Library, world: &PlateWorld) -> Vec<Site> {
+    let (n, _) = cells(world.size(), layer.grid(library).spacing);
+    (0..n * n).filter_map(|i| plan_in(layer, library, world, (i % n, i / n))).collect()
 }
 
 /// The ground of every site, by cell, for the plate generator to look up.
@@ -344,6 +430,10 @@ pub struct SiteTable {
     cell: f64,
     size: f64,
     grounds: Vec<Option<SiteGround>>,
+    /// The colossi's grid and grounds.
+    big_n: i32,
+    big_cell: f64,
+    big: Vec<Option<SiteGround>>,
     /// The ground under the hand-placed structures.
     placed: Vec<SiteGround>,
 }
@@ -361,6 +451,10 @@ impl SiteTable {
     pub fn new(library: &Library, world: &PlateWorld) -> Self {
         let (n, cell) = cells(world.size(), library.site_grid.spacing);
         let grounds = (0..n * n).map(|i| plan(library, world, (i % n, i / n)).and_then(|s| s.ground)).collect();
+        let (big_n, big_cell) = cells(world.size(), library.colossus_grid.spacing);
+        let big = (0..big_n * big_n)
+            .map(|i| plan_in(Layer::Colossi, library, world, (i % big_n, i / big_n)).and_then(|s| s.ground))
+            .collect();
         // Hand-placed structures stand on a flat core level with the ground
         // at their centre, like a site's.
         let placed = library
@@ -380,7 +474,16 @@ impl SiteTable {
                 }
             })
             .collect();
-        Self { n, cell: cell as f64, size: world.size() as f64, grounds, placed }
+        Self {
+            n,
+            cell: cell as f64,
+            size: world.size() as f64,
+            grounds,
+            big_n,
+            big_cell: big_cell as f64,
+            big,
+            placed,
+        }
     }
 
     /// The site whose ground (grown by `margin`) contains `p`, at any
@@ -395,6 +498,17 @@ impl SiteTable {
             for dx in -1..=1 {
                 let (gx, gz) = ((cx + dx).rem_euclid(self.n), (cz + dz).rem_euclid(self.n));
                 let Some(ground) = &self.grounds[(gz * self.n + gx) as usize] else { continue };
+                let distance = wrap(ground.center.x - p.x).hypot(wrap(ground.center.y - p.y));
+                if distance < ground.radius + margin {
+                    return Some((ground, distance));
+                }
+            }
+        }
+        let (bx, bz) = ((p.x / self.big_cell).floor() as i32, (p.y / self.big_cell).floor() as i32);
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let (gx, gz) = ((bx + dx).rem_euclid(self.big_n), (bz + dz).rem_euclid(self.big_n));
+                let Some(ground) = &self.big[(gz * self.big_n + gx) as usize] else { continue };
                 let distance = wrap(ground.center.x - p.x).hypot(wrap(ground.center.y - p.y));
                 if distance < ground.radius + margin {
                     return Some((ground, distance));
@@ -442,7 +556,7 @@ pub struct Flight {
 }
 
 /// Pieces of buildings per site at most.
-const MAX_PRISMS: usize = 8000;
+const MAX_PRISMS: usize = 20_000;
 /// Everything standing on a plate reaches this far into it, so it never
 /// floats where distant terrain is drawn a little low.
 const FOUNDATION: f32 = 8.0;
@@ -488,8 +602,26 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
         let r = |k: i32| hash01(site.cell.0, k, site.cell.1, site.seed ^ 0x9a7e);
         // One tone for the site, as if built of one material.
         let tone = 0.1 + 0.06 * r(0);
-        let keep_clear = site.centrepiece.as_ref().map_or(0.0, |p| p.size.0.hypot(p.size.2) * 0.5 + 6.0);
         let center = ground.center;
+        let mut keep_clear = site.centrepiece.as_ref().map_or(0.0, |p| p.size.0.hypot(p.size.2) * 0.5 + 6.0);
+        // A form on the whole footprint: the big plate here, scaled to fit.
+        if let Some((form, radius)) = &site.form {
+            let plate = world.big_plate(center.x, center.y);
+            if plate.len() >= 3 {
+                let local: Vec<Vec2> = plate.iter().map(|p| Vec2::new(p.x as f32, p.y as f32)).collect();
+                let c = forms::centroid(&local);
+                let reach = local.iter().map(|p| (*p - c).length()).fold(0.0, f32::max).max(1.0);
+                let footprint: Vec<Vec2> = local.iter().map(|p| (*p - c) * (radius / reach)).collect();
+                let start = grower.out.prisms.len();
+                grower.grow(form, &footprint, 0.0, tone, site.seed ^ 0xf0f1, 0);
+                for prism in &mut grower.out.prisms[start..] {
+                    if prism.y0.abs() < 1e-3 {
+                        prism.y0 -= FOUNDATION;
+                    }
+                }
+                keep_clear = keep_clear.max(radius + 6.0);
+            }
+        }
         for plate in world.site_plates(ground) {
             let local: Vec<Vec2> =
                 plate.points.iter().map(|p| Vec2::new((p.x - center.x) as f32, (p.y - center.y) as f32)).collect();
