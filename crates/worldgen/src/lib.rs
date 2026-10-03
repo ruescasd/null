@@ -9,8 +9,8 @@ pub mod canal;
 pub mod district;
 pub mod fractal;
 pub mod ifs;
-pub mod landmarks;
 pub mod plates;
+pub mod sites;
 pub mod structure;
 pub mod world;
 

@@ -93,6 +93,11 @@ impl PlateWorld {
         }
     }
 
+    /// The world's seed (scrambled), for things derived from it.
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
     /// The district a point belongs to.
     pub fn district(&self, x: f64, z: f64) -> District {
         self.districts.at(x, z)

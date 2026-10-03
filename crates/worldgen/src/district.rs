@@ -12,7 +12,7 @@ use glam::DVec2;
 
 use crate::noise::hash01;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
 pub enum District {
     /// Vast pale flat plates, like plazas: steps of a few centimetres.
     Floor,

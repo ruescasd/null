@@ -1,6 +1,7 @@
-//! Spawns the world's megastructures and keeps each one at whichever of its
-//! wrapped copies is nearest the camera. Also the fractal prototypes: built
-//! in the background at startup, standing in the open near the spawn point.
+//! Keeps things placed once in the world (structures, sites) at whichever of
+//! their wrapped copies is nearest the camera, and receives the ones built
+//! in the background. Also the distance-field fractal prototypes, for
+//! comparison.
 
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::{
@@ -21,7 +22,7 @@ pub struct LandmarksPlugin;
 
 impl Plugin for LandmarksPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, (spawn, spawn_fractals))
+        app.add_systems(PostStartup, spawn_fractals)
             .add_systems(Update, (receive_fractals, follow_wrap.after(StreamSet)));
     }
 }
@@ -31,34 +32,6 @@ impl Plugin for LandmarksPlugin {
 #[derive(Component)]
 pub struct Landmark {
     pub origin: Vec3,
-}
-
-fn spawn(
-    mut commands: Commands,
-    world: Res<WorldGen>,
-    args: Res<crate::Args>,
-    material: Res<TerrainMaterialHandle>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    // Off by default until they look right; `--opt landmarks` shows them.
-    if !args.opt("landmarks") {
-        return;
-    }
-    let ground = |x: f32, z: f32| world.ground_height(x, z);
-    let district = |x: f32, z: f32| world.district(x, z);
-    for landmark in worldgen::landmarks::place(world.size(), args.seed, ground, district) {
-        info!("{} at {:.0}, {:.0}", landmark.kind, landmark.origin.x, landmark.origin.z);
-        let collider = column_collider(&landmark.mesh);
-        let mut entity = commands.spawn((
-            Landmark { origin: landmark.origin },
-            Mesh3d(meshes.add(to_bevy_mesh(landmark.mesh))),
-            MeshMaterial3d(material.0.clone()),
-            Transform::from_translation(landmark.origin),
-        ));
-        if let Some(collider) = collider {
-            entity.insert((RigidBody::Static, collider));
-        }
-    }
 }
 
 fn follow_wrap(

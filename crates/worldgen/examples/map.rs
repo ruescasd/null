@@ -1,5 +1,6 @@
 //! A top-down map of the whole world, for judging layout at planet scale:
-//! relief shading tinted by district, canals, landmarks and a grid.
+//! relief shading tinted by district, canals, the footprints of the sites
+//! and test structures in `data/structures.ron`, and a 1 km grid.
 //!
 //! `cargo run -p worldgen --release --example map -- [out.png] [metres per pixel] [seed]`
 
@@ -7,7 +8,7 @@ use std::thread;
 
 use glam::Vec3;
 use image::{Rgb, RgbImage};
-use worldgen::{district::District, landmarks, plates::PlateWorld};
+use worldgen::{district::District, plates::PlateWorld, sites, structure::Library};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -74,20 +75,53 @@ fn main() {
         }
     }
 
-    let ground = |x: f32, z: f32| world.height_at(x, z);
-    let district = |x: f32, z: f32| world.district(x as f64, z as f64);
-    for landmark in landmarks::place(size, seed, ground, district) {
-        let Vec3 { x, z, .. } = landmark.origin;
-        let (cx, cy) = ((x / scale) as i64, (z / scale) as i64);
-        for dy in -5..=5i64 {
-            for dx in -5..=5i64 {
-                if dx.abs().max(dy.abs()) >= 4 {
-                    let (px_, py_) = ((cx + dx).rem_euclid(px as i64), (cy + dy).rem_euclid(px as i64));
-                    img.put_pixel(px_ as u32, py_ as u32, Rgb([230, 30, 30]));
-                }
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/structures.ron");
+    let library = Library::parse(&std::fs::read_to_string(path).expect("read structures.ron")).expect("parse");
+    // Footprint outlines: sites in red, test structures in yellow.
+    let mut outline = |at: (f32, f32), size: (f32, f32, f32), yaw: f32, color: [u8; 3]| {
+        let rotation = glam::Quat::from_rotation_y(yaw.to_radians());
+        let (hx, hz) = (size.0 * 0.5, size.2 * 0.5);
+        let steps = ((hx.max(hz) * 4.0 / scale) as i32).max(8);
+        for side in 0..4 {
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32 * 2.0 - 1.0;
+                let (lx, lz) = match side {
+                    0 => (t * hx, -hz),
+                    1 => (t * hx, hz),
+                    2 => (-hx, t * hz),
+                    _ => (hx, t * hz),
+                };
+                let w = rotation * Vec3::new(lx, 0.0, lz);
+                let (x, y) = (((at.0 + w.x) / scale) as i64, ((at.1 + w.z) / scale) as i64);
+                img.put_pixel(x.rem_euclid(px as i64) as u32, y.rem_euclid(px as i64) as u32, Rgb(color));
             }
         }
-        println!("{:>14} at {:6.0}, {:6.0} ({})", landmark.kind, x, z, district(x, z).name());
+    };
+    let all = sites::all(&library, &world);
+    let mut styles = std::collections::BTreeMap::<&str, usize>::new();
+    for site in &all {
+        let p = &site.placement;
+        outline(p.at, p.size, p.yaw, [230, 30, 30]);
+        *styles.entry(&p.style).or_default() += 1;
+    }
+    for p in &library.structures {
+        outline(p.at, p.size, p.yaw, [240, 220, 40]);
+    }
+    println!("{} sites: {styles:?}", all.len());
+    // The nearest few to the default spawn point, for pointing the camera.
+    let mut near = sites::near(&library, &world, 1200.0, 900.0, 2500.0);
+    near.sort_by(|a, b| {
+        let d = |s: &sites::Site| (s.placement.at.0 - 1200.0).hypot(s.placement.at.1 - 900.0);
+        d(a).total_cmp(&d(b))
+    });
+    for site in near.iter().take(8) {
+        let p = &site.placement;
+        println!(
+            "{:>10} at {:6.0}, {:6.0}  size {:.0} x {:.0} x {:.0}  ({}), podium {:.1} m above the ground at its centre",
+            p.style, p.at.0, p.at.1, p.size.0, p.size.1, p.size.2,
+            world.district(p.at.0 as f64, p.at.1 as f64).name(),
+            sites::build(&library, &world, site, 100).base - world.height_at(p.at.0, p.at.1)
+        );
     }
 
     let mut counts = [0usize; 4];

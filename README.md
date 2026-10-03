@@ -33,7 +33,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bot                                 scripted movement test: logs speed/height and exits
     --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
     --opt voxel                               the earlier organic voxel terrain
-    --opt flat|hard|noao|nossao|nocontact|notaa|nolandmarks|nograin   switch features off
+    --opt flat|hard|noao|nossao|nocontact|notaa|nograin|nosites   switch features off
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
 
@@ -45,16 +45,17 @@ crashed the GPU driver.
 - `crates/worldgen` — engine-agnostic generation. `plates.rs`: the plate
   world (hierarchical Voronoi, prisms meshed exactly, stylised AO).
   `district.rs`: districts and their generator rules. `canal.rs`: the canals.
-  `landmarks.rs`: the old megastructures. `ifs.rs` + `structure.rs`:
-  structures from fractal rules and modules. `world.rs` + `mesh.rs`: the earlier voxel
+  `ifs.rs` + `structure.rs`: structures from fractal rules and modules;
+  `sites.rs`: where they grow in the world. `world.rs` + `mesh.rs`: the earlier voxel
   density field and surface-nets mesher. `cargo test -p worldgen`;
   benchmarks in `examples/`; `cargo run -p worldgen --release --example map --
   map.png 8` draws a top-down map of the whole world (districts, canals,
-  landmarks) at 8 m per pixel.
+  site footprints) at 8 m per pixel and lists the sites nearest the spawn
+  point.
 - `crates/game` — Bevy app: column streaming with LOD (`terrain.rs`), curved
   horizon and AO shaders (`*.wgsl`), suns / stars / bounce and fill light and
-  grading (`look.rs`), landmarks kept at their nearest wrapped copy
-  (`landmarks.rs`), Quake-style movement, thrust beam and HUD (`player.rs`,
+  grading (`look.rs`), structures and streamed sites (`structures.rs`), kept
+  at their nearest wrapped copy (`landmarks.rs`), Quake-style movement, thrust beam and HUD (`player.rs`,
   tuning constants at the top; `player/tether.rs` is the grappling tether's
   state and look; `player/bot.rs` is the scripted test pilot),
   mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`).
@@ -72,31 +73,39 @@ even with nothing else in view.
 
 The planet was once a single built surface; what is left are its plates,
 grouped into districts whose purpose is lost, each with its own rules and
-its own megastructures:
+its own structures:
 
-| District | Ground | Megastructures |
+| District | Ground | Sites (for now) |
 |---|---|---|
-| floor | vast pale flat plates, steps of a few cm | beams hanging unsupported in the sky |
-| tiers | terraces of 2 m (mantle-height) ledges | shards: jagged triangular spikes |
-| stacks | dark small plates, many tall pillars | needle fields, twisted towers |
-| broken | the original mixed terrain | bridges, hovering slabs |
+| floor | vast pale flat plates, steps of a few cm | halls, screens of fins, whole quarters |
+| tiers | terraces of 2 m (mantle-height) ledges | ziggurats, lattices |
+| stacks | dark small plates, many tall pillars | spires, tables |
+| broken | the original mixed terrain | lattices, halls, ziggurats |
 
-Megastructures are off by default for now (`--opt landmarks`): as simple
-primitives they read as low-poly models rather than alien constructions.
-Their replacement: structures from fractal *rules* (`ifs.rs`) filled with
+Structures come from fractal *rules* (`ifs.rs`) filled with
 hand-designed modules (`structure.rs`). A style splits a block into a grid,
 keeps some cells and repeats; each final cell is filled by a module (box,
 slab, column, fin, frame, ramp, stairs, or a group of parts), chosen by where
 it sat in its parent. Everything is boxes and wedges: hard edges, box and
 wedge colliders.
 
-**`data/structures.ron`** holds the modules, styles and test placements and
-documents its own format. The game watches it: save and the structures are
+**`data/structures.ron`** holds the modules, styles, test placements and
+site rules, and documents its own format. The game watches it: save and the structures are
 rebuilt within a second; mistakes show at the top right while the last good
 version stays up. Six test structures stand in an arc about 450 m ahead of the
 default spawn point (`--opt nofractals` leaves them out). The earlier
 distance-field fractals (`fractal.rs`: soft edges, millions of triangles,
 fidgety collision) remain behind `--opt sdf_fractals`.
+
+Sites are structures that grow out of the world by the data file's rules
+(`sites.rs`): the planet is cut into cells of about 770 m, each holding a
+site with some chance; the district there picks a style by weight and a
+size within a range, and everything is decided by hashing the cell, so the
+world is the same every time. Sites keep clear of each other, the canals
+and the test structures. Each stands on a podium whose top clears most of
+the ground under it (the odd pillar pokes through) and whose sides reach
+below the lowest, so nothing floats or is half buried. They are built in
+the background within 2.5 km of the camera and dropped beyond 2.9 km.
 
 An experiment in enemies (`figure.rs`): figures made of the same fractal
 language. A procedural skeleton walks on the terrain (feet planted until too

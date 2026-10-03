@@ -26,7 +26,6 @@ use bevy::{
 };
 use worldgen::{
     ColumnMesh, LOD_FACTOR, LOD_LEVELS, World, WorldConfig, column_size, mesh_column,
-    district::District,
     plates::{CanalFlow, PlateWorld},
     voxel_size,
 };
@@ -88,13 +87,6 @@ impl WorldGen {
         match self {
             WorldGen::Plates(w) => w.height_at(x, z),
             WorldGen::Voxel(w) => w.column(x, z).height,
-        }
-    }
-
-    pub fn district(&self, x: f32, z: f32) -> District {
-        match self {
-            WorldGen::Plates(w) => w.district(x as f64, z as f64),
-            WorldGen::Voxel(_) => District::Broken,
         }
     }
 

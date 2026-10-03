@@ -55,6 +55,19 @@
 // STRUCTURES (test placements)
 //   (style: "name", at: (x, z), size: (x, y, z), yaw: 0, seed: 0, sink: 0)
 //   The default spawn point is at (1200, 900), looking towards +x / -z.
+//
+// SITES: structures that grow out of the world by themselves.
+//   site_grid: (spacing: 768, chance: 0.5)
+//     The world is cut into cells about `spacing` metres wide; each holds a
+//     site with probability `chance`, near its centre.
+//   sites: [ (district: Floor, style: "name", weight: 1,
+//             size: ((min x, y, z), (max x, y, z)), plinth: true), ... ]
+//     district: Floor | Tiers | Stacks | Broken
+//     A site picks among its district's rules by weight, and a size between
+//     min and max. Footprints shrink to keep clear of neighbours, canals and
+//     the test structures. With plinth (the default) it stands on a podium
+//     whose top is just above the highest ground under it.
+//   Sites stream in within 2.5 km of you; `--opt nosites` leaves them out.
 (
     modules: {
         "floor": Slab(thickness: 0.2),
@@ -197,5 +210,23 @@
         (style: "tables",   at: (1046, 477), size: (120, 90, 120), seed: 6),
         // A 600 m region behind the spawn point (turn around to see it).
         (style: "quarter",  at: (900, 1450), size: (600, 200, 600), seed: 7),
+    ],
+
+    site_grid: (spacing: 768, chance: 0.55),
+    sites: [
+        // Floor: vast plazas, long halls and screens of fins.
+        (district: Floor,  style: "hall",     weight: 3, size: ((120, 30, 80),  (260, 70, 160))),
+        (district: Floor,  style: "fins",     weight: 2, size: ((100, 50, 30),  (220, 110, 60))),
+        (district: Floor,  style: "quarter",  weight: 1, size: ((300, 120, 300), (420, 220, 420))),
+        // Tiers: stepped masses.
+        (district: Tiers,  style: "ziggurat", weight: 3, size: ((60, 50, 80),   (160, 120, 220))),
+        (district: Tiers,  style: "lattice",  weight: 1, size: ((100, 60, 100), (180, 120, 180))),
+        // Stacks: towers among the pillars.
+        (district: Stacks, style: "spire",    weight: 3, size: ((40, 200, 40),  (80, 420, 80))),
+        (district: Stacks, style: "tables",   weight: 1, size: ((90, 70, 90),   (150, 140, 150))),
+        // Broken: whatever is left.
+        (district: Broken, style: "lattice",  weight: 2, size: ((100, 60, 100), (200, 140, 200))),
+        (district: Broken, style: "hall",     weight: 1, size: ((120, 30, 80),  (240, 60, 140))),
+        (district: Broken, style: "ziggurat", weight: 1, size: ((60, 50, 80),   (140, 100, 200))),
     ],
 )

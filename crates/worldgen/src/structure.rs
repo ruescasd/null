@@ -20,6 +20,7 @@ use serde::Deserialize;
 use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
+use crate::sites::{SiteGrid, SiteRule};
 
 /// The whole data file.
 #[derive(Clone, Debug, Deserialize)]
@@ -29,6 +30,11 @@ pub struct Library {
     pub styles: BTreeMap<String, Style>,
     #[serde(default)]
     pub structures: Vec<Placement>,
+    /// The grid sites grow on, and what grows where (see `sites.rs`).
+    #[serde(default)]
+    pub site_grid: SiteGrid,
+    #[serde(default)]
+    pub sites: Vec<SiteRule>,
 }
 
 impl Library {
@@ -66,6 +72,11 @@ impl Library {
         for placement in &self.structures {
             if !self.styles.contains_key(&placement.style) {
                 return Err(format!("structure: unknown style '{}'", placement.style));
+            }
+        }
+        for site in &self.sites {
+            if !self.styles.contains_key(&site.style) {
+                return Err(format!("site ({:?}): unknown style '{}'", site.district, site.style));
             }
         }
         Ok(())
