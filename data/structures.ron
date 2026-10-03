@@ -1,0 +1,162 @@
+// Structures: modules, styles, and where to build test structures.
+//
+// The game watches this file: save it and every structure is rebuilt within
+// a second. If something is wrong the error shows at the top right and the
+// last good version stays up.
+//
+// HOW IT WORKS
+// A style is a fractal rule: split a block into a grid of cells, keep some,
+// and repeat inside each kept cell, `depth` times. Every final cell (a
+// "leaf") is filled by a module, chosen by the style's leaf rules from where
+// the leaf sat in its parent's grid.
+//
+// MODULES fill a cell. Inside a cell, coordinates run from -1 to 1 on each
+// axis, y up. Sizes are fractions of the cell. Built in: "box", "void", "ramp".
+//   Box                          the whole cell
+//   Void                         nothing
+//   Slab(thickness: 0.2)         a horizontal slab; add at: Middle or at: Top
+//   Column(width: 0.3)           a full-height square column
+//   Fin(thickness: 0.1)          a full-height plate; add axis: Z to turn it
+//   Frame(bar: 0.1)              the cell's twelve edges as bars
+//   Ramp                         a wedge rising towards +x
+//   Stairs(steps: 6)             steps rising towards +x
+//   Group([ (min: (x, y, z), max: (x, y, z), module: "name", turn: 1), ... ])
+//                                parts inside the cell, each a sub-box filled
+//                                by another module; turn = quarter turns
+//
+// STYLES
+//   divisions: (x, y, z)   cells per axis at each split
+//   keep:   All | Lattice | ColumnsAndRoof | Skyline | Random(0.6)
+//   depth:  how many times to split
+//   gap:    fraction of its cell each child fills (below 1 leaves grooves)
+//   twist:  degrees each level turns relative to its parent
+//   stop_chance: chance a block stops splitting early (plain masses)
+//   lift:   random vertical shift of children, fraction of a cell
+//   min_size: blocks smaller than this (metres) are not split
+//   albedo, albedo_spread: tone
+//   leaves: [ (on: Where, module: "name", weight: 1, turn: None), ... ]
+//     on:   Any | Top | Bottom | Corner | Edge | Interior | Outside | Early
+//           (Corner = a vertical edge of the parent, Edge = one of its faces,
+//            Early = a block that stopped splitting early)
+//     turn: None | Random | Outward | Inward  (Outward points +x away from
+//           the parent's centre: ramps and stairs rising outwards)
+//     Every matching rule is a candidate, picked by weight; with none, a box.
+//
+// STRUCTURES (test placements)
+//   (style: "name", at: (x, z), size: (x, y, z), yaw: 0, seed: 0, sink: 0)
+//   The default spawn point is at (1200, 900), looking towards +x / -z.
+(
+    modules: {
+        "floor": Slab(thickness: 0.2),
+        "roof": Slab(thickness: 0.15, at: Top),
+        "pier": Column(width: 0.35),
+        "needle": Column(width: 0.12),
+        "blade": Fin(thickness: 0.08),
+        "blade_z": Fin(thickness: 0.08, axis: Z),
+        "cage": Frame(bar: 0.08),
+        "steps": Stairs(steps: 6),
+
+        // A low block with a ramp running up from its top.
+        "terrace": Group([
+            (min: (-1, -1, -1), max: (1, -0.4, 1), module: "box"),
+            (min: (-1, -0.4, -1), max: (1, 0.3, 1), module: "ramp"),
+        ]),
+        // Two piers carrying a lintel.
+        "gate": Group([
+            (min: (-1, -1, -1), max: (-0.55, 1, 1), module: "box"),
+            (min: (0.55, -1, -1), max: (1, 1, 1), module: "box"),
+            (min: (-0.55, 0.5, -1), max: (0.55, 1, 1), module: "box"),
+        ]),
+        // A stack of thin slabs.
+        "louvres": Group([
+            (min: (-1, -1, -1), max: (1, -0.85, 1), module: "box"),
+            (min: (-1, -0.45, -1), max: (1, -0.3, 1), module: "box"),
+            (min: (-1, 0.1, -1), max: (1, 0.25, 1), module: "box"),
+            (min: (-1, 0.65, -1), max: (1, 0.8, 1), module: "box"),
+        ]),
+        // A slab on four needles, like a table.
+        "table": Group([
+            (min: (-1, 0.6, -1), max: (1, 1, 1), module: "box"),
+            (min: (-1, -1, -1), max: (-0.7, 0.6, -0.7), module: "box"),
+            (min: (0.7, -1, -1), max: (1, 0.6, -0.7), module: "box"),
+            (min: (-1, -1, 0.7), max: (-0.7, 0.6, 1), module: "box"),
+            (min: (0.7, -1, 0.7), max: (1, 0.6, 1), module: "box"),
+        ]),
+    },
+
+    styles: {
+        // A Menger-like lattice; its interior cells become open cages.
+        "lattice": (
+            divisions: (3, 3, 3), keep: Lattice, depth: 3, gap: 0.93, twist: 2,
+            stop_chance: 0.15, albedo: 0.13,
+            leaves: [
+                (on: Any, module: "box", weight: 3),
+                (on: Interior, module: "cage", weight: 2),
+                (on: Top, module: "louvres", weight: 1),
+            ],
+        ),
+        // A tall twisting tower of blades and louvres around solid cores.
+        "spire": (
+            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 10,
+            stop_chance: 0.2, albedo: 0.1,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // Piers carrying roofs, arcades within arcades, with gates.
+        "hall": (
+            divisions: (5, 2, 3), keep: ColumnsAndRoof, depth: 3, gap: 0.95,
+            stop_chance: 0.1, albedo: 0.16,
+            leaves: [
+                (on: Top, module: "roof", weight: 2),
+                (on: Top, module: "box", weight: 1),
+                (on: Corner, module: "pier", weight: 2),
+                (on: Edge, module: "gate", weight: 2, turn: Outward),
+                (on: Any, module: "box", weight: 1),
+            ],
+        ),
+        // Stepped massing climbed by ramps and stairs that face outwards.
+        "ziggurat": (
+            divisions: (4, 4, 4), keep: Skyline, depth: 2, gap: 0.92,
+            stop_chance: 0.2, albedo: 0.14,
+            leaves: [
+                (on: Top, module: "terrace", weight: 2, turn: Outward),
+                (on: Top, module: "steps", weight: 1, turn: Outward),
+                (on: Any, module: "box", weight: 2),
+            ],
+        ),
+        // A block whose faces are rows of blades: a brise-soleil facade.
+        "fins": (
+            divisions: (6, 4, 2), keep: All, depth: 2, gap: 0.97, albedo: 0.18,
+            leaves: [
+                (on: Outside, module: "blade", weight: 2),
+                (on: Outside, module: "blade_z", weight: 1),
+                (on: Interior, module: "void"),
+                (on: Bottom, module: "box", weight: 1),
+            ],
+        ),
+        // A loose stack of tables and cages.
+        "tables": (
+            divisions: (3, 3, 3), keep: Random(0.55), depth: 3, gap: 0.92, twist: -4,
+            stop_chance: 0.25, lift: 0.15, albedo: 0.11,
+            leaves: [
+                (on: Any, module: "table", weight: 2),
+                (on: Any, module: "cage", weight: 1),
+                (on: Early, module: "box", weight: 2),
+            ],
+        ),
+    },
+
+    structures: [
+        (style: "lattice",  at: (1643, 978), size: (150, 90, 120), seed: 1),
+        (style: "spire",    at: (1637, 791), size: (60, 340, 60),  seed: 2, yaw: 20),
+        (style: "hall",     at: (1555, 623), size: (160, 50, 100), seed: 3, yaw: 35),
+        (style: "ziggurat", at: (1411, 503), size: (140, 80, 140), seed: 4),
+        (style: "fins",     at: (1231, 451), size: (140, 70, 40),  seed: 5, yaw: -10),
+        (style: "tables",   at: (1046, 477), size: (120, 90, 120), seed: 6),
+    ],
+)

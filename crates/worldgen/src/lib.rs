@@ -11,6 +11,7 @@ pub mod fractal;
 pub mod ifs;
 pub mod landmarks;
 pub mod plates;
+pub mod structure;
 pub mod world;
 
 pub use mesh::{

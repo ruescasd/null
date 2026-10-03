@@ -5,6 +5,8 @@ version.workspace = true
 
 [dependencies]
 glam = "0.32"
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

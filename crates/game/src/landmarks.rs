@@ -2,7 +2,7 @@
 //! wrapped copies is nearest the camera. Also the fractal prototypes: built
 //! in the background at startup, standing in the open near the spawn point.
 
-use avian3d::prelude::{Collider, Position, RigidBody, Rotation};
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
@@ -10,7 +10,6 @@ use bevy::{
 use worldgen::{
     ColumnMesh,
     fractal::{Kifs, build},
-    ifs::{self, Block, Keep, Style},
 };
 
 use crate::{
@@ -22,14 +21,16 @@ pub struct LandmarksPlugin;
 
 impl Plugin for LandmarksPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, (spawn, spawn_fractals, spawn_ifs))
+        app.add_systems(PostStartup, (spawn, spawn_fractals))
             .add_systems(Update, (receive_fractals, follow_wrap.after(StreamSet)));
     }
 }
 
+/// Something placed once in the world, kept at whichever of its wrapped
+/// copies is nearest the camera.
 #[derive(Component)]
-struct Landmark {
-    origin: Vec3,
+pub struct Landmark {
+    pub origin: Vec3,
 }
 
 fn spawn(
@@ -75,7 +76,7 @@ fn follow_wrap(
 }
 
 #[derive(Component)]
-struct FractalTask(Task<(ColumnMesh, Option<Collider>)>);
+pub struct FractalTask(pub Task<(ColumnMesh, Option<Collider>)>);
 
 /// The first fractal prototypes, meshed from distance fields (soft edges,
 /// heavy, fidgety collision); only with `--opt sdf_fractals`, for comparison.
@@ -137,61 +138,5 @@ fn receive_fractals(
         if let Some(collider) = collider {
             e.insert((RigidBody::Static, collider));
         }
-    }
-}
-
-/// Structures from fractal rules built out of crisp boxes (see `ifs.rs`):
-/// four families in an arc ahead of the default spawn point, about 450 m
-/// away (`--opt nofractals` leaves them out).
-fn spawn_ifs(mut commands: Commands, world: Res<WorldGen>, args: Res<crate::Args>) {
-    if args.opt("nofractals") {
-        return;
-    }
-    let style = |divisions, keep, depth, gap, twist: f32, stop_chance, lift, albedo| Style {
-        divisions,
-        keep,
-        depth,
-        gap,
-        twist: Quat::from_rotation_y(twist),
-        stop_chance,
-        lift,
-        min_half: 0.8,
-        albedo,
-        albedo_spread: 0.04,
-    };
-    let designs = [
-        // A lattice block, slightly twisted at every level.
-        ((1648.0, 861.0), Vec3::new(90.0, 55.0, 70.0), style([3, 3, 3], Keep::Lattice, 3, 0.93, 0.04, 0.15, 0.0, 0.13)),
-        // A tall spire that twists further at each level.
-        ((1569.0, 642.0), Vec3::new(35.0, 190.0, 35.0), style([3, 6, 3], Keep::Lattice, 3, 0.9, 0.18, 0.2, 0.0, 0.1)),
-        // A hall of piers carrying roof slabs, arcades within arcades.
-        ((1390.0, 492.0), Vec3::new(90.0, 30.0, 60.0), style([5, 2, 3], Keep::ColumnsAndRoof, 3, 0.95, 0.0, 0.1, 0.0, 0.16)),
-        // Stepped massing, like a skyline of blocks.
-        ((1161.0, 452.0), Vec3::new(80.0, 70.0, 80.0), style([4, 4, 4], Keep::Skyline, 2, 0.9, 0.0, 0.3, 0.12, 0.12)),
-    ];
-    let pool = AsyncComputeTaskPool::get();
-    for (n, ((x, z), half, style)) in designs.into_iter().enumerate() {
-        let yaw = n as f32 * 0.7;
-        let origin = Vec3::new(x, world.ground_height(x, z) - half.y * 0.05, z);
-        let root = Block {
-            center: Vec3::Y * half.y,
-            rotation: Quat::from_rotation_y(yaw),
-            half,
-            level: 0,
-        };
-        let seed = args.seed ^ (n as u32 * 0x9e37);
-        let task = pool.spawn(async move {
-            let blocks = ifs::generate(&style, root, seed, 15_000);
-            let mesh = ifs::mesh(&blocks, &style, seed);
-            // One box collider per block: the most robust case for movement.
-            let collider = Collider::compound(
-                blocks
-                    .iter()
-                    .map(|b| (Position(b.center), Rotation(b.rotation), Collider::cuboid(b.half.x * 2.0, b.half.y * 2.0, b.half.z * 2.0)))
-                    .collect(),
-            );
-            (mesh, Some(collider))
-        });
-        commands.spawn((FractalTask(task), Landmark { origin }, Transform::from_translation(origin)));
     }
 }

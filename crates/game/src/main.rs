@@ -5,6 +5,7 @@ mod capture;
 mod landmarks;
 mod look;
 mod player;
+mod structures;
 mod terrain;
 
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, window::PresentMode};
@@ -84,6 +85,7 @@ fn main() {
             capture::CapturePlugin,
             landmarks::LandmarksPlugin,
             player::PlayerPlugin,
+            structures::StructuresPlugin,
         ))
         .run();
 }
