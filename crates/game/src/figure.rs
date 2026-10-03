@@ -10,7 +10,11 @@
 //! two-bone IK, arms swing against the legs. For now the figure walks
 //! towards the player and stops a few metres away (`--opt nofigures`).
 
-use bevy::prelude::*;
+use bevy::{
+    asset::RenderAssetUsages,
+    mesh::{Indices, PrimitiveTopology},
+    prelude::*,
+};
 use worldgen::{
     ifs::{self, Block, Keep, Rule},
     noise::hash01,
@@ -172,7 +176,23 @@ fn spawn(
         Foot { planted: p, from: p, to: p, step: None }
     };
 
-    let cube = meshes.add(Cuboid::new(2.0, 2.0, 2.0));
+    // Fragments are cubes, wedges (triangular prisms) and pointed shards,
+    // all spanning -1..1 so a fragment's scale is its half extents.
+    let shapes = [
+        meshes.add(Cuboid::new(2.0, 2.0, 2.0)),
+        meshes.add(faceted(&[
+            [-1., -1., -1.],
+            [1., -1., -1.],
+            [-1., 1., -1.],
+            [-1., -1., 1.],
+            [1., -1., 1.],
+            [-1., 1., 1.],
+        ], &[&[0, 2, 1], &[3, 4, 5], &[0, 1, 4, 3], &[0, 3, 5, 2], &[1, 2, 5, 4]])),
+        meshes.add(faceted(
+            &[[-1., -1., -1.], [1., -1., -0.6], [-0.2, -1., 1.], [0.3, 1., 0.1]],
+            &[&[0, 1, 2], &[0, 3, 1], &[1, 3, 2], &[2, 3, 0]],
+        )),
+    ];
     let material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.03, 0.03, 0.03),
         perceptual_roughness: 0.35,
@@ -229,7 +249,12 @@ fn spawn(
                     velocity: Vec3::ZERO,
                     phase: hash01(index as i32, n as i32, 3, 77) * 100.0,
                 },
-                Mesh3d(cube.clone()),
+                Mesh3d(shapes[match hash01(index as i32, n as i32, 9, 0x5a9) {
+                    x if x < 0.5 => 0,
+                    x if x < 0.78 => 1,
+                    _ => 2,
+                }]
+                .clone()),
                 MeshMaterial3d(material.clone()),
                 Transform::from_translation(position + Vec3::Y * 2.0).with_scale(b.half),
             ));
@@ -388,4 +413,32 @@ fn follow(time: Res<Time>, figure: Single<&Figure>, mut elements: Query<(&mut El
         let rotation = pose.rotation * e.rotation;
         transform.rotation = transform.rotation.slerp(rotation, (dt * 14.0).min(1.0));
     }
+}
+
+/// A flat-shaded convex mesh from corner points and faces (polygons of
+/// indices); each face is turned to point away from the shape's centre.
+fn faceted(points: &[[f32; 3]], faces: &[&[usize]]) -> Mesh {
+    let center = points.iter().map(|&p| Vec3::from(p)).sum::<Vec3>() / points.len() as f32;
+    let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
+    for face in faces {
+        let mut corners: Vec<Vec3> = face.iter().map(|&i| Vec3::from(points[i])).collect();
+        let mut normal = (corners[1] - corners[0]).cross(corners[2] - corners[0]).normalize_or_zero();
+        let middle = corners.iter().copied().sum::<Vec3>() / corners.len() as f32;
+        if normal.dot(middle - center) < 0.0 {
+            corners.reverse();
+            normal = -normal;
+        }
+        let base = positions.len() as u32;
+        for c in &corners {
+            positions.push(c.to_array());
+            normals.push(normal.to_array());
+        }
+        for k in 1..corners.len() as u32 - 1 {
+            indices.extend_from_slice(&[base, base + k, base + k + 1]);
+        }
+    }
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
 }
