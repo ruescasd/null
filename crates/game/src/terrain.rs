@@ -26,7 +26,9 @@ use bevy::{
 };
 use worldgen::{
     ColumnMesh, LOD_FACTOR, LOD_LEVELS, World, WorldConfig, column_size, mesh_column,
-    plates::PlateWorld, voxel_size,
+    district::District,
+    plates::{CanalFlow, PlateWorld},
+    voxel_size,
 };
 
 use crate::Args;
@@ -86,6 +88,29 @@ impl WorldGen {
         match self {
             WorldGen::Plates(w) => w.height_at(x, z),
             WorldGen::Voxel(w) => w.column(x, z).height,
+        }
+    }
+
+    pub fn district(&self, x: f32, z: f32) -> District {
+        match self {
+            WorldGen::Plates(w) => w.district(x as f64, z as f64),
+            WorldGen::Voxel(_) => District::Broken,
+        }
+    }
+
+    /// The canal flow at a point, if it is inside a canal's pipe.
+    pub fn canal_at(&self, x: f32, z: f32) -> Option<CanalFlow> {
+        match self {
+            WorldGen::Plates(w) => w.canal_at(x, z),
+            WorldGen::Voxel(_) => None,
+        }
+    }
+
+    /// The nearest canal centreline point, its flow direction and floor.
+    pub fn nearest_canal(&self, x: f32, z: f32) -> Option<(Vec2, Vec2, f32)> {
+        match self {
+            WorldGen::Plates(w) => w.nearest_canal(x, z),
+            WorldGen::Voxel(_) => None,
         }
     }
 

@@ -6617,6 +6617,7 @@ name = "worldgen"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "image",
 ]
 
 [[package]]

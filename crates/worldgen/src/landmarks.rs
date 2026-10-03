@@ -3,6 +3,7 @@
 
 use glam::{Quat, Vec3};
 
+use crate::district::District;
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
 
@@ -14,11 +15,19 @@ pub struct Landmark {
     pub kind: &'static str,
 }
 
-/// Places landmarks on a jittered grid of `spacing` cells, some left empty.
-/// `ground` gives the terrain height at a point.
-pub fn place(size: f32, seed: u32, ground: impl Fn(f32, f32) -> f32) -> Vec<Landmark> {
-    const SPACING: f32 = 4096.0;
-    let n = (size / SPACING).round().max(1.0) as i32;
+/// Places landmarks on a jittered grid, some cells left empty. Each district
+/// has its own kinds: beams over the floor, shards in the tiers, needles and
+/// twisted towers in the stacks, bridges and hovering slabs in the broken
+/// lands. `ground` gives the terrain height and `district` the district.
+pub fn place(
+    size: f32,
+    seed: u32,
+    ground: impl Fn(f32, f32) -> f32,
+    district: impl Fn(f32, f32) -> District,
+) -> Vec<Landmark> {
+    // About one landmark every 2.7 km.
+    let n = 6;
+    let cell = size / n as f32;
     let seed = seed ^ 0x1a2d_3a4c;
     let mut out = Vec::new();
     for gz in 0..n {
@@ -27,16 +36,21 @@ pub fn place(size: f32, seed: u32, ground: impl Fn(f32, f32) -> f32) -> Vec<Land
             if r(0) < 0.15 {
                 continue;
             }
-            let x = (gx as f32 + 0.5 + (r(1) - 0.5) * 0.5) * SPACING;
-            let z = (gz as f32 + 0.5 + (r(2) - 0.5) * 0.5) * SPACING;
+            let x = (gx as f32 + 0.5 + (r(1) - 0.5) * 0.5) * cell;
+            let z = (gz as f32 + 0.5 + (r(2) - 0.5) * 0.5) * cell;
             let yaw = r(3) * std::f32::consts::TAU;
             let rr = |k: i32| r(100 + k);
             let mut b = Builder::default();
-            let kind = match ((r(4) * 4.0) as i32).min(3) {
-                0 => bridge(&mut b, yaw, &rr, |dx, dz| ground(x + dx, z + dz) - ground(x, z)),
-                1 => twisted_tower(&mut b, yaw, &rr),
-                2 => hovering_slab(&mut b, yaw, &rr),
-                _ => needle_field(&mut b, yaw, &rr),
+            let either = r(4) < 0.5;
+            let kind = match district(x, z) {
+                District::Floor => beams(&mut b, yaw, &rr),
+                District::Tiers => shards(&mut b, yaw, &rr),
+                District::Stacks if either => needle_field(&mut b, yaw, &rr),
+                District::Stacks => twisted_tower(&mut b, yaw, &rr),
+                District::Broken if either => {
+                    bridge(&mut b, yaw, &rr, |dx, dz| ground(x + dx, z + dz) - ground(x, z))
+                }
+                District::Broken => hovering_slab(&mut b, yaw, &rr),
             };
             out.push(Landmark { origin: Vec3::new(x, ground(x, z), z), mesh: b.mesh, kind });
         }
@@ -190,4 +204,36 @@ fn needle_field(b: &mut Builder, yaw: f32, r: &impl Fn(i32) -> f32) -> &'static 
         }
     }
     "needle field"
+}
+
+/// Colossal horizontal beams hanging high over the floor, unsupported: one
+/// to three, each turned its own way, at different heights.
+fn beams(b: &mut Builder, yaw: f32, r: &impl Fn(i32) -> f32) -> &'static str {
+    let count = 1 + (r(0) * 3.0) as i32;
+    for i in 0..count {
+        let rr = |k: i32| r(10 + i * 10 + k);
+        let half = Vec3::new(300.0 + rr(0) * 450.0, 7.0 + rr(1) * 6.0, 9.0 + rr(2) * 10.0);
+        let height = 260.0 + rr(3) * 260.0 + i as f32 * 60.0;
+        let turn = if i == 0 { 0.0 } else { (rr(4) - 0.5) * 1.6 };
+        let rot = Quat::from_rotation_y(yaw + turn) * Quat::from_rotation_z((rr(5) - 0.5) * 0.06);
+        let shift = Quat::from_rotation_y(yaw + 1.57) * Vec3::X * (rr(6) - 0.5) * 400.0;
+        b.cuboid(half, rot, Vec3::Y * height + shift * (i as f32).min(1.0));
+    }
+    "beams"
+}
+
+/// A cluster of jagged triangular spikes stabbing hundreds of metres up.
+fn shards(b: &mut Builder, yaw: f32, r: &impl Fn(i32) -> f32) -> &'static str {
+    let count = 3 + (r(0) * 4.0) as i32;
+    for i in 0..count {
+        let rr = |k: i32| r(10 + i * 10 + k);
+        let a = yaw + i as f32 / count as f32 * std::f32::consts::TAU + (rr(0) - 0.5);
+        let dist = if i == 0 { 0.0 } else { 40.0 + rr(1) * 140.0 };
+        let height = if i == 0 { 450.0 + rr(2) * 250.0 } else { 160.0 + rr(2) * 330.0 };
+        let base = height * (0.12 + rr(3) * 0.08);
+        let lean = Quat::from_rotation_y(a) * Quat::from_rotation_x(rr(4) * 0.35);
+        let at = Vec3::new(a.cos() * dist, -25.0, a.sin() * dist);
+        b.prism(3, base, 0.5, height, lean * Quat::from_rotation_y(rr(5) * 2.0), at);
+    }
+    "shards"
 }

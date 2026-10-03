@@ -80,6 +80,13 @@ const MANTLE_EXIT_SPEED: f32 = 6.0;
 /// How far sideways the player may be nudged past an edge they clipped.
 const SLIP: f32 = 0.24;
 
+/// Inside a canal: the flow pushes along it at this rate (m/s²) until the
+/// speed along the canal reaches `CANAL_SPEED`, and ground friction drops
+/// to `CANAL_FRICTION` of normal so the pipe can be surfed.
+const CANAL_THRUST: f32 = 18.0;
+const CANAL_SPEED: f32 = 38.0;
+const CANAL_FRICTION: f32 = 0.1;
+
 /// Half the player's width (Quake: 15 units).
 const HALF_WIDTH: f32 = 0.45;
 const HEIGHT: f32 = 1.8;
@@ -117,6 +124,8 @@ pub struct Player {
     pub firing: bool,
     pub tether: Tether,
     pub mantle: Option<Mantle>,
+    /// Whether the player is in a canal's flow.
+    pub in_canal: bool,
     /// The tether button must be released before the tether fires again.
     tether_held: bool,
     /// Movement waits until the terrain around the spawn point has loaded.
@@ -132,6 +141,7 @@ fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
         firing: false,
         tether: Tether::Idle,
         mantle: None,
+        in_canal: false,
         tether_held: false,
         ready: false,
     });
@@ -456,10 +466,28 @@ pub fn walk(
             player.grounded = false;
         }
         let tethered = matches!(player.tether, Tether::Anchored { .. });
+        // Canal flow: inside a pipe (and not high above it) the flow pushes
+        // along the canal and the surface is nearly frictionless.
+        let feet = center.y - HEIGHT * 0.5;
+        let flow = world
+            .canal_at(center.x, center.z)
+            .filter(|f| feet < f.floor + worldgen::canal::PIPE_RADIUS as f32 + 1.5);
+        player.in_canal = flow.is_some();
+        if let Some(flow) = flow {
+            let dir = Vec3::new(flow.dir.x, 0.0, flow.dir.y);
+            let along = player.velocity.dot(dir);
+            if along < CANAL_SPEED {
+                player.velocity += dir * (CANAL_THRUST * dt).min(CANAL_SPEED - along);
+            }
+        }
         if player.grounded {
-            // The pull drags you along the ground rather than fighting friction.
+            // The tether's pull drags you along the ground rather than
+            // fighting friction; canals are nearly frictionless.
             if !tethered {
-                friction(&mut player.velocity, dt);
+                let mut slowed = player.velocity;
+                friction(&mut slowed, dt);
+                let keep = if player.in_canal { 1.0 - CANAL_FRICTION } else { 0.0 };
+                player.velocity = slowed.lerp(player.velocity, keep);
             }
             accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
             player.velocity = clip(player.velocity, player.ground_normal);

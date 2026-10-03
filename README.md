@@ -44,9 +44,12 @@ crashed the GPU driver.
 
 - `crates/worldgen` — engine-agnostic generation. `plates.rs`: the plate
   world (hierarchical Voronoi, prisms meshed exactly, stylised AO).
-  `landmarks.rs`: megastructures (bridges, twisted towers, hovering slabs,
-  needle fields). `world.rs` + `mesh.rs`: the earlier voxel density field and
-  surface-nets mesher. `cargo test -p worldgen`; benchmarks in `examples/`.
+  `district.rs`: districts and their generator rules. `canal.rs`: the canals.
+  `landmarks.rs`: megastructures. `world.rs` + `mesh.rs`: the earlier voxel
+  density field and surface-nets mesher. `cargo test -p worldgen`;
+  benchmarks in `examples/`; `cargo run -p worldgen --release --example map --
+  map.png 8` draws a top-down map of the whole world (districts, canals,
+  landmarks) at 8 m per pixel.
 - `crates/game` — Bevy app: column streaming with LOD (`terrain.rs`), curved
   horizon and AO shaders (`*.wgsl`), suns / stars / bounce and fill light and
   grading (`look.rs`), landmarks kept at their nearest wrapped copy
@@ -63,6 +66,25 @@ scaled with how much sun is up, and a faint glow from overhead at night.
 Surfaces get procedural grain in the terrain shader (albedo mottling and a
 faint micro-relief, fixed in the world, tiling with the wrap) so motion reads
 even with nothing else in view.
+
+## The world
+
+The planet was once a single built surface; what is left are its plates,
+grouped into districts whose purpose is lost, each with its own rules and
+its own megastructures:
+
+| District | Ground | Megastructures |
+|---|---|---|
+| floor | vast pale flat plates, steps of a few cm | beams hanging unsupported in the sky |
+| tiers | terraces of 2 m (mantle-height) ledges | shards: jagged triangular spikes |
+| stacks | dark small plates, many tall pillars | needle fields, twisted towers |
+| broken | the original mixed terrain | bridges, hovering slabs |
+
+Canals are huge faceted half-pipes running dead straight across the planet,
+each closing on itself around the torus; they cross at the same height, cut
+trenches through high ground and ride embankments over low ground. Inside,
+an unexplained flow pushes along the canal (up to 38 m/s) on a nearly
+frictionless surface, so they can be surfed.
 
 The world is a torus (16 km, wrapping in x and z) rendered as if it were a
 planet of radius 40 km: geometry is bent down by d²/2R around the camera.

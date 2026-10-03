@@ -5,6 +5,8 @@
 
 pub mod mesh;
 pub mod noise;
+pub mod canal;
+pub mod district;
 pub mod landmarks;
 pub mod plates;
 pub mod world;

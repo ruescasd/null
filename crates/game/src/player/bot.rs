@@ -17,6 +17,7 @@ pub struct BotState {
     /// Height of the ledge top the mantle test climbs onto.
     mantle_target: Option<f32>,
     saw_mantle: bool,
+    canal_started: bool,
     /// When the tether test started its drop, and from what height.
     tether_drop: Option<(f32, f32)>,
 }
@@ -49,6 +50,7 @@ pub fn drive(
         t if t < 16.5 => "tether down",
         t if t < 18.5 => "step up",
         t if t < 21.0 => "mantle",
+        t if t < 25.0 => "canal",
         _ => {
             exit.write(AppExit::Success);
             return;
@@ -98,6 +100,22 @@ pub fn drive(
             }
             input.wish = Vec2::Y;
             input.jump = true;
+        }
+        "canal" => {
+            // Dropped into the nearest canal, facing along the flow, no input.
+            if !state.canal_started {
+                state.canal_started = true;
+                let p = transform.translation;
+                if let Some((center, dir, floor)) = world.nearest_canal(p.x, p.z) {
+                    transform.translation = Vec3::new(center.x, floor + super::EYE + 0.3, center.y);
+                    player.velocity = Vec3::ZERO;
+                    fly.yaw = (-dir.x).atan2(-dir.y);
+                    fly.pitch = 0.0;
+                    info!("bot canal: dropped in at {:.0},{:.0}, floor {floor:.1}", center.x, center.y);
+                } else {
+                    info!("bot canal: no canal");
+                }
+            }
         }
         "tether down" => {
             // From 40 m up and at rest, tether straight down.
@@ -156,11 +174,12 @@ pub fn drive(
         }
     }
 
-    if now - state.last_log >= if matches!(phase, "run" | "tether down" | "mantle") { 0.25 } else { 0.5 } {
+    if now - state.last_log >= if matches!(phase, "run" | "tether down" | "mantle" | "canal") { 0.25 } else { 0.5 } {
         state.last_log = now;
         let p = transform.translation;
         info!(
-            "bot t={t:4.1} {phase:12} speed {speed:5.2} m/s ({:4.0} ups)  vy {:6.2}  y {:7.2}  grounded {}  energy {:3.0}  tether {}  pos {:.0},{:.0}",
+            "bot t={t:4.1} {phase:12} canal {}  speed {speed:5.2} m/s ({:4.0} ups)  vy {:6.2}  y {:7.2}  grounded {}  energy {:3.0}  tether {}  pos {:.0},{:.0}",
+            player.in_canal,
             speed / 0.032,
             player.velocity.y,
             p.y,

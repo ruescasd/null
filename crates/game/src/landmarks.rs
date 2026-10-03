@@ -34,7 +34,8 @@ fn spawn(
         return;
     }
     let ground = |x: f32, z: f32| world.ground_height(x, z);
-    for landmark in worldgen::landmarks::place(world.size(), args.seed, ground) {
+    let district = |x: f32, z: f32| world.district(x, z);
+    for landmark in worldgen::landmarks::place(world.size(), args.seed, ground, district) {
         info!("{} at {:.0}, {:.0}", landmark.kind, landmark.origin.x, landmark.origin.z);
         let collider = column_collider(&landmark.mesh);
         let mut entity = commands.spawn((

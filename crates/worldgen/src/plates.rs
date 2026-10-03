@@ -7,11 +7,17 @@
 //! Voronoi diagram that fall inside it, and those can split again. Heights
 //! follow a smooth landform, quantised, so neighbouring plates differ by small
 //! steps rather than at random. Everything tiles with period `size`.
+//!
+//! Districts (see `district.rs`) set the rules: relief, which ledge heights
+//! exist, pillars, tone. Canals (see `canal.rs`) cut their corridors through
+//! the plates and bring their own geometry.
 
 use std::collections::HashMap;
 
 use glam::{DVec2, Vec3};
 
+use crate::canal::{CanalHit, Canals, PIPE_RADIUS};
+use crate::district::{District, DistrictMap};
 use crate::mesh::{ColumnMesh, column_size};
 use crate::noise::{Fbm, hash01};
 
@@ -30,6 +36,19 @@ pub struct PlateWorld {
     ridges: Fbm,
     ridge_mask: Fbm,
     split_mask: Fbm,
+    pub districts: DistrictMap,
+    pub canals: Canals,
+}
+
+/// Flow inside a canal at a point.
+#[derive(Clone, Copy, Debug)]
+pub struct CanalFlow {
+    /// Horizontal unit direction the flow pushes along.
+    pub dir: glam::Vec2,
+    /// Height of the canal's floor (bottom of the pipe) here.
+    pub floor: f32,
+    /// Signed distance from the centreline.
+    pub offset: f32,
 }
 
 /// The plate covering a point.
@@ -67,7 +86,59 @@ impl PlateWorld {
             ridges: Fbm::new(512.0, 4, 0.45, s ^ 4),
             ridge_mask: Fbm::new(1024.0, 2, 0.5, s ^ 5),
             split_mask: Fbm::new(512.0, 2, 0.5, s ^ 6),
+            districts: DistrictMap::new(size as f64, seed),
+            canals: Canals::new(size as f64, seed),
         }
+    }
+
+    /// The district a point belongs to.
+    pub fn district(&self, x: f64, z: f64) -> District {
+        self.districts.at(x, z)
+    }
+
+    /// The landform scaled by the local district's relief: what plates fit.
+    fn shaped(&self, x: f64, z: f64) -> f64 {
+        self.landform(x, z) * self.districts.blended(x, z).0
+    }
+
+    /// Height of a canal's floor at a point on its centreline: the broad
+    /// shape of the ground (no ridges), so canals run in trenches through
+    /// high ground and on embankments over low ground, with gentle grades.
+    pub fn canal_floor(&self, c: DVec2) -> f64 {
+        let base = self.base.sample2(c.x as f32, c.y as f32, self.size as f32) as f64;
+        let base = if base < 0.0 { base * 0.25 } else { base };
+        let relief = self.districts.blended(c.x, c.y).0.min(0.8);
+        base * 90.0 * relief - PIPE_RADIUS + 1.0
+    }
+
+    /// The canal flow at a point, if it is inside a canal's pipe.
+    pub fn canal_at(&self, x: f32, z: f32) -> Option<CanalFlow> {
+        let hit: CanalHit = self.canals.hit(DVec2::new(x as f64, z as f64), 0.0)?;
+        (hit.offset.abs() < PIPE_RADIUS).then(|| CanalFlow {
+            dir: glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
+            floor: self.canal_floor(hit.center) as f32,
+            offset: hit.offset as f32,
+        })
+    }
+
+    /// The nearest point on any canal's centreline, its flow direction and
+    /// floor height there.
+    pub fn nearest_canal(&self, x: f32, z: f32) -> Option<(glam::Vec2, glam::Vec2, f32)> {
+        let hit = self.canals.nearest(DVec2::new(x as f64, z as f64))?;
+        Some((
+            glam::Vec2::new(hit.center.x as f32, hit.center.y as f32),
+            glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
+            self.canal_floor(hit.center) as f32,
+        ))
+    }
+
+    /// Height of whatever surface is at (x, z): a canal, or a plate.
+    fn surface(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> f64 {
+        let p = DVec2::new(x, z);
+        if let Some(h) = self.canals.surface(p, &|c| self.canal_floor(c)) {
+            return h;
+        }
+        self.plate_at(cache, x, z, max_level).height
     }
 
     pub fn size(&self) -> f32 {
@@ -124,7 +195,7 @@ impl PlateWorld {
             return h;
         }
         let p = self.site(level, g);
-        let h = self.landform(p.x, p.y);
+        let h = self.shaped(p.x, p.y);
         cache.landform.insert(key, h);
         h
     }
@@ -133,61 +204,60 @@ impl PlateWorld {
     fn slope(&self, level: usize, g: (i32, i32)) -> f64 {
         let p = self.site(level, g);
         let e = GRID[level] * 0.35;
-        let dx = self.landform(p.x + e, p.y) - self.landform(p.x - e, p.y);
-        let dz = self.landform(p.x, p.y + e) - self.landform(p.x, p.y - e);
+        let dx = self.shaped(p.x + e, p.y) - self.shaped(p.x - e, p.y);
+        let dz = self.shaped(p.x, p.y + e) - self.shaped(p.x, p.y - e);
         (dx * dx + dz * dz).sqrt() / (2.0 * e)
     }
 
     fn splits(&self, level: usize, g: (i32, i32)) -> bool {
         let p = self.site(level, g);
-        let mask = self.split_mask.sample2(p.x as f32, p.y as f32, self.size as f32) as f64;
-        let r = self.rand(level, g, 3);
-        match level {
-            0 => self.slope(0, g) * GRID[0] > 7.0 || r < 0.15 + 0.4 * mask.max(0.0),
-            1 => self.slope(1, g) * GRID[1] > 4.0 || r < 0.1 + 0.5 * mask.max(0.0),
-            _ => false,
+        if level >= 2 {
+            return false;
         }
+        let rules = self.districts.at(p.x, p.y).rules();
+        let mask = self.split_mask.sample2(p.x as f32, p.y as f32, self.size as f32) as f64;
+        let chance = rules.split[level] + rules.split_mask_gain[level] * mask.max(0.0);
+        self.slope(level, g) * GRID[level] > rules.split_rise[level] || self.rand(level, g, 3) < chance
     }
 
-    /// Height and look of the plate with the given site chain.
+    /// Height and look of the plate with the given site chain, following
+    /// the rules of the district its biggest plate belongs to.
     fn plate(&self, cache: &mut Cache, sites: [(i32, i32); 3], level: usize) -> Plate {
+        let s0 = self.site(0, sites[0]);
+        let rules = self.districts.at(s0.x, s0.y).rules();
+        let base_albedo = self.districts.blended(s0.x, s0.y).1;
+        let step = |h: f64, q: f64| (h / q).round() * q;
+
         let l0 = self.landform_at_site(cache, 0, sites[0]);
-        let mut height = (l0 / 2.0).round() * 2.0;
+        let mut height = step(l0, rules.quantum0);
         let r = self.rand(0, sites[0], 4);
-        if r < 0.005 {
-            // A raised mesa.
+        if r < rules.mesa_chance {
             height += 25.0 + self.rand(0, sites[0], 5) * 60.0;
-        } else if r < 0.012 {
-            // A sunken pit.
+        } else if r < rules.mesa_chance + rules.pit_chance {
             height -= 6.0 + self.rand(0, sites[0], 5) * 14.0;
         }
-        let mut albedo = 0.13 + 0.05 * self.rand(0, sites[0], 6);
+        let mut albedo = base_albedo + rules.albedo_spread * (self.rand(0, sites[0], 6) - 0.5) * 2.0;
         if level >= 1 {
-            // Follow the landform locally, in quantised steps, plus a nudge.
+            // Follow the landform locally, in the district's steps, plus a nudge.
             let l1 = self.landform_at_site(cache, 1, sites[1]);
-            let follow = ((l1 - l0) * 0.85 / 0.75).round() * 0.75;
-            let nudge = ((self.rand(1, sites[1], 4) - 0.5) * 2.0).round() * 0.5;
-            height += follow + nudge;
-            albedo += 0.04 * (self.rand(1, sites[1], 6) - 0.5);
+            let nudge = ((self.rand(1, sites[1], 4) - 0.5) * 2.0 * rules.nudge).round() * rules.quantum;
+            height += step((l1 - l0) * 0.85, rules.quantum) + nudge;
+            albedo += rules.albedo_spread * (self.rand(1, sites[1], 6) - 0.5);
         }
         if level >= 2 {
             let l1 = self.landform_at_site(cache, 1, sites[1]);
             let l2 = self.landform_at_site(cache, 2, sites[2]);
-            let follow = ((l2 - l1) * 0.85 / 0.5).round() * 0.5;
-            let r = self.rand(2, sites[2], 4);
-            let lift = if r < 0.006 {
-                // A small pillar.
-                3.0 + self.rand(2, sites[2], 5) * 9.0
-            } else {
-                0.0
-            };
-            height += follow + lift;
-            albedo += 0.03 * (self.rand(2, sites[2], 6) - 0.5);
+            height += step((l2 - l1) * 0.85, rules.quantum);
+            if self.rand(2, sites[2], 4) < rules.pillar_chance {
+                let (lo, hi) = rules.pillar_height;
+                height += step(lo + self.rand(2, sites[2], 5) * (hi - lo), rules.quantum);
+            }
+            albedo += rules.albedo_spread * 0.6 * (self.rand(2, sites[2], 6) - 0.5);
         }
         let marking = self.rand(level, sites[level], 7);
-        if marking < 0.012 {
+        if marking < rules.marking_chance * 0.66 {
             albedo = 0.07;
-        } else if marking < 0.018 {
+        } else if marking < rules.marking_chance {
             albedo = 0.26;
         }
         Plate { height, albedo: albedo as f32, level, sites }
@@ -206,8 +276,9 @@ impl PlateWorld {
         self.plate(cache, sites, level)
     }
 
+    /// Height of the ground (plate or canal) at a point.
     pub fn height_at(&self, x: f32, z: f32) -> f32 {
-        self.plate_at(&mut Cache::default(), x as f64, z as f64, 2).height as f32
+        self.surface(&mut Cache::default(), x as f64, z as f64, 2) as f32
     }
 
     /// Clips `poly` to the side of the bisector nearer `site` than `other`.
@@ -274,6 +345,8 @@ impl PlateWorld {
                 self.emit_split(&mut cache, &mut mesh, &poly, &mut sites, 0, max_level, (x0, z0));
             }
         }
+        let scale = 4f64.powi(lod as i32);
+        self.canals.mesh_square(&mut mesh, (x0, z0), size, scale, &|c| self.canal_floor(c));
         mesh
     }
 
@@ -293,7 +366,11 @@ impl PlateWorld {
         }
         if level >= max_level || !self.splits(level, sites[level]) {
             let plate = self.plate(cache, *sites, level);
-            self.emit_prism(cache, mesh, poly, &plate, max_level, origin);
+            for piece in self.canals.cut(poly.to_vec()) {
+                if area(&piece) > 0.5 {
+                    self.emit_prism(cache, mesh, &piece, &plate, max_level, origin);
+                }
+            }
             return;
         }
         // Pieces of the next level's Voronoi diagram inside this polygon.
@@ -329,7 +406,7 @@ impl PlateWorld {
             let mut max_sin: f64 = 0.0;
             for r in DIST {
                 let q = p + dir * r;
-                let dh = self.plate_at(cache, q.x, q.y, max_level).height - h;
+                let dh = self.surface(cache, q.x, q.y, max_level) - h;
                 if dh > 0.0 {
                     max_sin = max_sin.max(dh / (dh * dh + r * r).sqrt());
                 }
@@ -358,7 +435,7 @@ impl PlateWorld {
             let (a, b) = (poly[i], poly[(i + 1) % n]);
             for p in [a, (a + b) * 0.5] {
                 let out = p + (p - centroid).normalize_or_zero() * 0.75;
-                lowest = lowest.min(self.plate_at(cache, out.x, out.y, max_level).height);
+                lowest = lowest.min(self.surface(cache, out.x, out.y, max_level));
             }
         }
         let depth = (h - lowest + 1.0).max(1.0);
