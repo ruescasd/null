@@ -64,6 +64,12 @@
 //                      top (1 = to a point), lean shifts its top sideways by
 //                      up to that many metres, tone lightens (+) or darkens
 //                      (-) it; `then` grows on its top
+//   Facade(height: (8, 20), panel: 3, storey: 3.5, depth: (0.3, 1.2), fill: 0.55,
+//          tone: 0, then: "name")
+//                      a prism whose faces are covered with panels: a grid
+//                      of cells `panel` wide and `storey` high, each holding
+//                      (by chance `fill`) a slab standing out `depth` with a
+//                      tone of its own; `then` grows on its top
 //   Inset(by: (1, 3), then: "name")
 //                      the polygon shrunk on every side: setbacks, margins
 //   Neck(by: (1, 2), height: (2, 4), then: "name")
@@ -267,13 +273,16 @@
 
     forms: {
         // Blocks: a few storeys; the top may set back and rise again.
-        "block": Extrude(height: (5, 18), then: "block_top"),
+        "block": Facade(height: (5, 18), panel: 3, storey: 3.2, depth: (0.25, 1.1), fill: 0.6, then: "block_top"),
         "block_top": Choose([(4, "nothing"), (3, "setback"), (1, "parapet")]),
         "setback": Inset(by: (1.5, 5), then: "block"),
         "parapet": Rim(width: 0.5, height: (1.1, 1.1), gates: 0),
         "low_block": Inset(by: (3, 6), then: "block"),
         // A tall tower, slightly battered.
-        "monolith": Extrude(height: (25, 70), taper: (0.03, 0.2), tone: -0.03, then: "block_top"),
+        "monolith": Facade(height: (12, 24), panel: 4, storey: 4, depth: (0.4, 1.6), fill: 0.55, tone: -0.03,
+            then: "monolith_next"),
+        "monolith_next": Choose([(4, "monolith_groove"), (1, "setback"), (1, "nothing")]),
+        "monolith_groove": Neck(by: (0.8, 1.6), height: (1.2, 2.4), then: "monolith"),
 
         // Blocks cut along the plate's own lines, with streets between.
         "blocks": Split(depth: 3, gap: 3, min_width: 7, then: "block_or_gap"),
@@ -308,7 +317,7 @@
         // Colossi: hundreds of metres, with detail at every scale.
         // Bands with grooves between them, now and then a setback, and a
         // crown when they stop.
-        "c_band": Extrude(height: (14, 32), taper: (0, 0.03), then: "c_band_next"),
+        "c_band": Facade(height: (14, 32), panel: 8, storey: 6, depth: (0.8, 3), fill: 0.5, then: "c_band_next"),
         "c_band_next": Choose([(14, "c_groove"), (3, "c_setback"), (1, "c_crown")]),
         "c_groove": Neck(by: (1.2, 2.5), height: (2, 4), then: "c_band"),
         "c_setback": Inset(by: (4, 12), then: "c_band"),
@@ -326,7 +335,8 @@
         "needle": Choose([(5, "c_band"), (1, "nothing")]),
 
         // Tiers: a stepped mountain, sometimes split into twin peaks.
-        "colossus_mountain": Extrude(height: (18, 30), then: "mountain_up"),
+        "colossus_mountain": Facade(height: (18, 30), panel: 7, storey: 5, depth: (0.6, 2.5), fill: 0.45,
+            then: "mountain_up"),
         "mountain_up": Choose([(8, "mountain_step"), (1, "mountain_split"), (1, "c_crown")]),
         "mountain_step": Inset(by: (8, 16), then: "colossus_mountain"),
         "mountain_split": Split(depth: 1, gap: 8, min_width: 40, then: "mountain_step"),
@@ -334,7 +344,7 @@
         // Floor: a vast walled enclosure, banded walls broken by gates, and
         // something inside.
         "colossus_enclosure": Rim(width: 14, gates: 0.6, wall: "w_band", inner: "enclosure_inside"),
-        "w_band": Extrude(height: (10, 22), then: "w_next"),
+        "w_band": Facade(height: (10, 22), panel: 5, storey: 4.5, depth: (0.5, 1.8), fill: 0.5, then: "w_next"),
         "w_next": Choose([(5, "w_groove"), (1, "nothing")]),
         "w_groove": Neck(by: (0.8, 1.5), height: (1.5, 3), then: "w_band"),
         "enclosure_inside": Choose([(2, "lone_needle"), (1, "lone_mountain"), (1, "nothing")]),

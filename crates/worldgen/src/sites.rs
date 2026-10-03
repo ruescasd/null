@@ -556,7 +556,7 @@ pub struct Flight {
 }
 
 /// Pieces of buildings per site at most.
-const MAX_PRISMS: usize = 20_000;
+const MAX_PRISMS: usize = 60_000;
 /// Everything standing on a plate reaches this far into it, so it never
 /// floats where distant terrain is drawn a little low.
 const FOUNDATION: f32 = 8.0;

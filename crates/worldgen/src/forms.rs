@@ -41,6 +41,26 @@ pub enum Form {
         #[serde(default)]
         then: Option<String>,
     },
+    /// A prism whose faces are covered with panels: a core, and on each
+    /// face a grid of cells `panel` wide and `storey` high, each holding
+    /// (with chance `fill`) a slab standing out `depth` from the face, with
+    /// a tone of its own. The panels stay within the polygon. `then` grows
+    /// on top, on the whole polygon.
+    Facade {
+        height: (f32, f32),
+        #[serde(default = "default_panel")]
+        panel: f32,
+        #[serde(default = "default_storey")]
+        storey: f32,
+        #[serde(default = "default_depth")]
+        depth: (f32, f32),
+        #[serde(default = "default_fill")]
+        fill: f32,
+        #[serde(default)]
+        tone: f32,
+        #[serde(default)]
+        then: Option<String>,
+    },
     /// The polygon shrunk by `by` on every side.
     Inset { by: (f32, f32), then: String },
     /// A recessed band: a prism of the polygon shrunk by `by`, `height`
@@ -118,12 +138,24 @@ fn default_gates() -> f32 {
 fn default_spacing() -> f32 {
     12.0
 }
+fn default_panel() -> f32 {
+    3.0
+}
+fn default_storey() -> f32 {
+    3.5
+}
+fn default_depth() -> (f32, f32) {
+    (0.3, 1.2)
+}
+fn default_fill() -> f32 {
+    0.55
+}
 
 /// The names a form refers to.
 pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
-        Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } => {
+        Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
         }
         Form::Rim { inner, wall, .. } => inner.iter().chain(wall).map(|s| s.as_str()).collect(),
@@ -268,6 +300,69 @@ impl Grower<'_> {
                 self.out.prisms.push(prism);
                 if let (Some(then), false) = (then, pointed) {
                     self.grow(then, &top, y1, tone, child(1), depth + 1);
+                }
+            }
+            Form::Facade { height, panel, storey, depth: (d0, d1), fill, tone: t, then } => {
+                let tone = tone + t;
+                let core = Some(inset(poly, *d1)).filter(|c| c.len() >= 3).unwrap_or_else(|| poly.to_vec());
+                let h = pick(*height, 1);
+                if self.budget == 0 {
+                    return;
+                }
+                self.budget -= 1;
+                self.out.prisms.push(Prism {
+                    points: core.clone(),
+                    y0: floor,
+                    y1: floor + h,
+                    top_scale: 1.0,
+                    lean: Vec2::ZERO,
+                    albedo: (tone + (r(5) - 0.5) * 0.02).clamp(0.03, 0.4),
+                });
+                let rows = (h / storey.max(0.5)).round().max(1.0) as usize;
+                let row_h = h / rows as f32;
+                let outward: Vec<Vec2> = inward_normals(&core).into_iter().map(|n| -n).collect();
+                let n = core.len();
+                for i in 0..n {
+                    let (a, b) = (core[i], core[(i + 1) % n]);
+                    let length = (b - a).length();
+                    if length < 0.5 {
+                        continue;
+                    }
+                    let columns = (length / panel.max(0.5)).floor().max(1.0) as usize;
+                    let along = (b - a) / length;
+                    let w = length / columns as f32;
+                    for c in 0..columns {
+                        for row in 0..rows {
+                            let k = (i * 7919 + c * 131 + row) as i32;
+                            let q = |key: i32| hash01(seed as i32 ^ k, key, depth as i32, 0xfa5e);
+                            if q(0) >= *fill || self.budget == 0 {
+                                continue;
+                            }
+                            // A slab in its cell, a little inside its edges.
+                            let d = d0 + (d1 - d0) * q(1);
+                            let (t0, t1) = (c as f32 * w + w * 0.06, (c + 1) as f32 * w - w * 0.06);
+                            let (p0, p1) = (a + along * t0, a + along * t1);
+                            let slab = [p0, p1, p1 + outward[i] * d, p0 + outward[i] * d];
+                            let slab = clip_to(&slab, poly);
+                            if slab.len() < 3 {
+                                continue;
+                            }
+                            self.budget -= 1;
+                            self.out.prisms.push(Prism {
+                                points: slab,
+                                y0: floor + row as f32 * row_h + row_h * 0.06,
+                                y1: floor + (row + 1) as f32 * row_h - row_h * 0.06,
+                                top_scale: 1.0,
+                                lean: Vec2::ZERO,
+                                albedo: (tone + (q(2) - 0.5) * 0.08).clamp(0.03, 0.4),
+                            });
+                        }
+                    }
+                }
+                // What grows on top takes the whole polygon again, so banded
+                // towers keep their girth.
+                if let Some(then) = then {
+                    self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
             }
             Form::Inset { by, then } => {
