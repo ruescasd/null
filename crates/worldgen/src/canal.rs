@@ -6,8 +6,11 @@
 //!
 //! The canal floor follows a gentle height field evaluated at the
 //! centreline, so canals cut trenches through high ground and ride
-//! embankments over low ground, and two canals meet at the same height where
-//! they cross. Inside, an unexplained flow pushes along the canal.
+//! embankments over low ground. The surface is slick (see the player): no
+//! friction, so the pipe rides like a skate or snowboard half-pipe.
+//!
+//! For now all canals share one direction, so they never cross: parallel
+//! loops a third of `spacing` apart. Crossings would need designed junctions.
 
 use glam::{DVec2, Vec3};
 
@@ -23,7 +26,7 @@ pub const HALF_WIDTH: f64 = PIPE_RADIUS + LIP;
 /// How far the canal's outer walls reach below its rim.
 const OUTER_DEPTH: f64 = 70.0;
 /// Facets across the half-pipe.
-const FACETS: usize = 10;
+const FACETS: usize = 24;
 /// Target length of a mesh segment at the finest level of detail.
 const SEGMENT: f64 = 8.0;
 
@@ -56,6 +59,8 @@ pub struct CanalHit {
     pub center: DVec2,
     /// Direction of the flow.
     pub flow_dir: DVec2,
+    /// Unit direction in which `offset` grows.
+    pub across: DVec2,
 }
 
 pub struct Canals {
@@ -64,23 +69,22 @@ pub struct Canals {
 
 impl Canals {
     pub fn new(size: f64, seed: u32) -> Self {
-        // Directions (a, b): one axis-aligned and two slanted loops.
-        let dirs = [(1, 0), (1, 2), (-2, 1)];
-        let lines = dirs
-            .iter()
-            .enumerate()
-            .map(|(i, &(a, b))| {
-                let r = |k: i32| hash01(i as i32, k, 0, seed ^ 0xca7a1) as f64;
-                let n = ((a * a + b * b) as f64).sqrt();
-                let dir = DVec2::new(a as f64, b as f64) / n;
-                Canal {
-                    origin: DVec2::new(r(1) * size, r(2) * size),
-                    dir,
-                    perp: DVec2::new(-dir.y, dir.x),
-                    spacing: size / n,
-                    period: size / n,
-                    flow: if r(3) < 0.5 { 1.0 } else { -1.0 },
-                }
+        // Three parallel loops in direction (2, 1), evenly spaced.
+        const COUNT: usize = 3;
+        let (a, b) = (2, 1);
+        let r = |k: i32| hash01(0, k, 0, seed ^ 0xca7a1) as f64;
+        let n = ((a * a + b * b) as f64).sqrt();
+        let dir = DVec2::new(a as f64, b as f64) / n;
+        let perp = DVec2::new(-dir.y, dir.x);
+        let start = DVec2::new(r(1) * size, r(2) * size);
+        let lines = (0..COUNT)
+            .map(|i| Canal {
+                origin: start + perp * (size / n) * (i as f64 / COUNT as f64),
+                dir,
+                perp,
+                spacing: size / n,
+                period: size / n,
+                flow: if r(3 + i as i32) < 0.5 { 1.0 } else { -1.0 },
             })
             .collect();
         Self { lines }
@@ -111,6 +115,7 @@ impl Canals {
                     offset,
                     center: self.point(i, copy, along),
                     flow_dir: self.lines[i].dir * self.lines[i].flow,
+                    across: self.lines[i].perp,
                 })
             })
             .min_by(|a, b| a.offset.abs().total_cmp(&b.offset.abs()))
@@ -252,8 +257,19 @@ impl Canals {
             })
         };
 
-        for w in profile.windows(2) {
+        // Smooth shading: each profile point gets the curved surface's
+        // normal there (towards the pipe's axis), the lips face straight up.
+        let profile_normal = |(o, h, _): (f64, f64, f32), on_lip: bool| {
+            if on_lip {
+                return Vec3::Y;
+            }
+            let n = DVec2::new(-o, PIPE_RADIUS - h).normalize_or_zero();
+            Vec3::new((perp.x * n.x) as f32, n.y as f32, (perp.y * n.x) as f32).normalize_or(Vec3::Y)
+        };
+        let last = profile.len() - 1;
+        for (index, w) in profile.windows(2).enumerate() {
             let (p0, p1) = (w[0], w[1]);
+            let lip = index == 0 || index + 1 == last;
             let quad = [world(a, floor_a, p0), world(a, floor_a, p1), world(b, floor_b, p1), world(b, floor_b, p0)];
             let mid_offset = (p0.0 + p1.0) * 0.5;
             let mid = (a + b) * 0.5 + perp * mid_offset;
@@ -270,7 +286,8 @@ impl Canals {
             }
             let bottom_ness = 1.0 - (p0.1 + p1.1) as f32 * 0.5 / PIPE_RADIUS as f32;
             let ao = 1.0 - 0.35 * bottom_ness.max(0.0);
-            push_quad(mesh, quad, normal, p0.2, [ao; 4]);
+            let (n0, n1) = (profile_normal(p0, lip), profile_normal(p1, lip));
+            push_quad_smooth(mesh, quad, [n0, n1, n1, n0], normal, p0.2, [ao; 4]);
         }
 
         // Outer walls, down past the ground on both sides.
@@ -302,6 +319,31 @@ pub fn clip_half_plane(poly: &[DVec2], side: impl Fn(DVec2) -> f64) -> Vec<DVec2
         }
     }
     out
+}
+
+/// Appends a quad as two triangles facing `facing`, with its own normal at
+/// each corner for smooth shading.
+fn push_quad_smooth(
+    mesh: &mut ColumnMesh,
+    quad: [Vec3; 4],
+    normals: [Vec3; 4],
+    facing: Vec3,
+    albedo: f32,
+    ao: [f32; 4],
+) {
+    let base = mesh.positions.len() as u32;
+    for ((p, n), a) in quad.iter().zip(normals).zip(ao) {
+        mesh.positions.push(p.to_array());
+        mesh.normals.push(n.to_array());
+        mesh.albedo.push(albedo);
+        mesh.ao.push(a);
+    }
+    let face = (quad[1] - quad[0]).cross(quad[2] - quad[0]);
+    if face.dot(facing) >= 0.0 {
+        mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    } else {
+        mesh.indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+    }
 }
 
 /// Appends a quad as two triangles facing `normal`.

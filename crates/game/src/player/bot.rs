@@ -18,6 +18,9 @@ pub struct BotState {
     mantle_target: Option<f32>,
     saw_mantle: bool,
     canal_started: bool,
+    canal_rim: f32,
+    canal_peak: f32,
+    canal_reported: bool,
     /// When the tether test started its drop, and from what height.
     tether_drop: Option<(f32, f32)>,
 }
@@ -102,19 +105,33 @@ pub fn drive(
             input.jump = true;
         }
         "canal" => {
-            // Dropped into the nearest canal, facing along the flow, no input.
+            // Dropped onto the bottom of the nearest canal moving across it
+            // (and a little along): a half-pipe should carry the bot up the
+            // far wall and out above the lip, then back in. No input.
             if !state.canal_started {
                 state.canal_started = true;
                 let p = transform.translation;
                 if let Some((center, dir, floor)) = world.nearest_canal(p.x, p.z) {
-                    transform.translation = Vec3::new(center.x, floor + super::EYE + 0.3, center.y);
-                    player.velocity = Vec3::ZERO;
+                    transform.translation = Vec3::new(center.x, floor + super::EYE + super::HALF_WIDTH, center.y);
+                    let across = Vec3::new(-dir.y, 0.0, dir.x);
+                    player.velocity = across * 22.0 + Vec3::new(dir.x, 0.0, dir.y) * 8.0;
                     fly.yaw = (-dir.x).atan2(-dir.y);
                     fly.pitch = 0.0;
-                    info!("bot canal: dropped in at {:.0},{:.0}, floor {floor:.1}", center.x, center.y);
+                    state.canal_rim = floor + worldgen::canal::PIPE_RADIUS as f32;
+                    state.canal_peak = f32::MIN;
+                    info!("bot canal: dropped in at {:.0},{:.0}, rim at {:.1}", center.x, center.y, state.canal_rim);
                 } else {
                     info!("bot canal: no canal");
                 }
+            }
+            state.canal_peak = state.canal_peak.max(transform.translation.y - super::EYE);
+            if t > 24.8 && !state.canal_reported {
+                state.canal_reported = true;
+                info!(
+                    "bot canal: highest feet {:.2} m above the rim; {} the pipe now",
+                    state.canal_peak - state.canal_rim,
+                    if player.in_canal { "in" } else { "out of" },
+                );
             }
         }
         "tether down" => {

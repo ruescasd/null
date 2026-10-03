@@ -80,11 +80,17 @@ its own megastructures:
 | stacks | dark small plates, many tall pillars | needle fields, twisted towers |
 | broken | the original mixed terrain | bridges, hovering slabs |
 
-Canals are huge faceted half-pipes running dead straight across the planet,
-each closing on itself around the torus; they cross at the same height, cut
-trenches through high ground and ride embankments over low ground. Inside,
-an unexplained flow pushes along the canal (up to 38 m/s) on a nearly
-frictionless surface, so they can be surfed.
+Megastructures are off by default for now (`--opt landmarks`): as simple
+primitives they read as low-poly models rather than alien constructions.
+
+Canals are huge smooth half-pipes running dead straight across the planet,
+each closing on itself around the torus (for now three parallel loops, so
+they never cross). They cut trenches through high ground and ride
+embankments over low ground. Their surface is slick, as in Quake 3 / Defrag:
+no friction, air-strength acceleration and gravity always acting, and inside
+the pipe the player rides the exact cylinder rather than its triangles, so
+it works like a half-pipe: speed carries you up the walls and out over the
+lip.
 
 The world is a torus (16 km, wrapping in x and z) rendered as if it were a
 planet of radius 40 km: geometry is bent down by d²/2R around the camera.

@@ -30,7 +30,8 @@ fn spawn(
     material: Res<TerrainMaterialHandle>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    if args.opt("nolandmarks") {
+    // Off by default until they look right; `--opt landmarks` shows them.
+    if !args.opt("landmarks") {
         return;
     }
     let ground = |x: f32, z: f32| world.ground_height(x, z);

@@ -49,6 +49,8 @@ pub struct CanalFlow {
     pub floor: f32,
     /// Signed distance from the centreline.
     pub offset: f32,
+    /// Unit direction in which `offset` grows.
+    pub across: glam::Vec2,
 }
 
 /// The plate covering a point.
@@ -118,6 +120,7 @@ impl PlateWorld {
             dir: glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
             floor: self.canal_floor(hit.center) as f32,
             offset: hit.offset as f32,
+            across: glam::Vec2::new(hit.across.x as f32, hit.across.y as f32),
         })
     }
 

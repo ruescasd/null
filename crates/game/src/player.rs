@@ -80,15 +80,17 @@ const MANTLE_EXIT_SPEED: f32 = 6.0;
 /// How far sideways the player may be nudged past an edge they clipped.
 const SLIP: f32 = 0.24;
 
-/// Inside a canal: the flow pushes along it at this rate (m/s²) until the
-/// speed along the canal reaches `CANAL_SPEED`, and ground friction drops
-/// to `CANAL_FRICTION` of normal so the pipe can be surfed.
-const CANAL_THRUST: f32 = 18.0;
-const CANAL_SPEED: f32 = 38.0;
-const CANAL_FRICTION: f32 = 0.1;
+/// Inside a canal's pipe the player's feet ride the exact cylinder (this much
+/// smaller than the pipe, for the hull's half width) instead of colliding
+/// with its triangles, so speed is never lost at the facets.
+const PIPE_RIDE_RADIUS: f32 = worldgen::canal::PIPE_RADIUS as f32 - HALF_WIDTH;
+
+/// The tether lets go only if its line stays blocked this long, so grazing
+/// an edge does not cut it.
+const TETHER_SEVER_TIME: f32 = 0.15;
 
 /// Half the player's width (Quake: 15 units).
-const HALF_WIDTH: f32 = 0.45;
+pub const HALF_WIDTH: f32 = 0.45;
 const HEIGHT: f32 = 1.8;
 pub const EYE: f32 = 1.6;
 
@@ -124,8 +126,10 @@ pub struct Player {
     pub firing: bool,
     pub tether: Tether,
     pub mantle: Option<Mantle>,
-    /// Whether the player is in a canal's flow.
+    /// Whether the player is on a canal's slick surface.
     pub in_canal: bool,
+    /// How long the tether's line has been blocked.
+    tether_blocked: f32,
     /// The tether button must be released before the tether fires again.
     tether_held: bool,
     /// Movement waits until the terrain around the spawn point has loaded.
@@ -142,6 +146,7 @@ fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
         tether: Tether::Idle,
         mantle: None,
         in_canal: false,
+        tether_blocked: 0.0,
         tether_held: false,
         ready: false,
     });
@@ -346,6 +351,58 @@ pub fn gather_input(
     };
 }
 
+/// The tether's pull: accelerate towards the anchor until the speed along
+/// the line reaches the cap.
+fn pull_towards(velocity: &mut Vec3, to_anchor: Vec3, dt: f32) {
+    let dir = to_anchor.normalize_or_zero();
+    let along = velocity.dot(dir);
+    if along < TETHER_MAX_PULL_SPEED {
+        *velocity += dir * (TETHER_PULL * dt).min(TETHER_MAX_PULL_SPEED - along);
+    }
+}
+
+/// One movement step inside a canal's half-pipe. The surface is slick, as in
+/// Quake 3 (Defrag's slick gliding): no friction and air-strength
+/// acceleration, with gravity always acting. The feet ride the exact
+/// cylinder: after moving, if they are outside it they are put back on it
+/// and only the outward part of the velocity is removed, so speed turns into
+/// height and back without loss: down one wall, up the other, and with
+/// enough speed out above the lip. Returns the new hull centre.
+fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, jump: bool, dt: f32) -> Vec3 {
+    let radius = worldgen::canal::PIPE_RADIUS as f32;
+    // Jump off the surface, away from it.
+    if player.grounded && jump {
+        player.velocity += player.ground_normal * JUMP_SPEED;
+        player.grounded = false;
+    }
+    accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
+    player.velocity.y -= GRAVITY * dt;
+
+    let mut moved = center + player.velocity * dt;
+    player.grounded = false;
+    let Some(pipe) = world.canal_at(moved.x, moved.z) else { return moved };
+    let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
+    let axis_height = pipe.floor + radius;
+    // The feet relative to the pipe's axis, in its cross-section.
+    let (o, h) = (pipe.offset, moved.y - HEIGHT * 0.5 - axis_height);
+    let r = (o * o + h * h).sqrt();
+    if h < 0.0 && r > PIPE_RIDE_RADIUS {
+        let k = PIPE_RIDE_RADIUS / r;
+        moved += across * (o * k - o) + Vec3::Y * (h * k - h);
+        let outward = (across * o + Vec3::Y * h) / r;
+        let into = player.velocity.dot(outward);
+        if into > 0.0 {
+            player.velocity -= outward * into;
+        }
+        let normal = -outward;
+        if normal.y >= MIN_WALK_NORMAL {
+            player.grounded = true;
+            player.ground_normal = normal;
+        }
+    }
+    moved
+}
+
 /// Runs between mouse look and the world wrap (see `camera.rs`).
 #[allow(clippy::too_many_arguments)]
 pub fn walk(
@@ -388,15 +445,19 @@ pub fn walk(
     if let Tether::Anchored { point, .. } = player.tether {
         let line = point - eye;
         let length = line.length();
-        if let Ok(ray) = Dir3::new(line)
-            && length > TETHER_SEVER_MARGIN
-            && move_and_slide
-                .spatial_query
-                .cast_ray(eye, ray, length - TETHER_SEVER_MARGIN, true, &default())
-                .is_some()
-        {
+        let blocked = Dir3::new(line).is_ok_and(|ray| {
+            length > TETHER_SEVER_MARGIN
+                && move_and_slide
+                    .spatial_query
+                    .cast_ray(eye, ray, length - TETHER_SEVER_MARGIN, true, &default())
+                    .is_some()
+        });
+        player.tether_blocked = if blocked { player.tether_blocked + time.delta_secs() } else { 0.0 };
+        if player.tether_blocked > TETHER_SEVER_TIME {
             player.tether = Tether::Missed;
         }
+    } else {
+        player.tether_blocked = 0.0;
     }
 
     if fly.noclip {
@@ -466,28 +527,30 @@ pub fn walk(
             player.grounded = false;
         }
         let tethered = matches!(player.tether, Tether::Anchored { .. });
-        // Canal flow: inside a pipe (and not high above it) the flow pushes
-        // along the canal and the surface is nearly frictionless.
+        // Inside a canal's pipe (up to just above its rim), movement is a
+        // half-pipe: see `ride_pipe`.
         let feet = center.y - HEIGHT * 0.5;
-        let flow = world
-            .canal_at(center.x, center.z)
-            .filter(|f| feet < f.floor + worldgen::canal::PIPE_RADIUS as f32 + 1.5);
-        player.in_canal = flow.is_some();
-        if let Some(flow) = flow {
-            let dir = Vec3::new(flow.dir.x, 0.0, flow.dir.y);
-            let along = player.velocity.dot(dir);
-            if along < CANAL_SPEED {
-                player.velocity += dir * (CANAL_THRUST * dt).min(CANAL_SPEED - along);
+        let pipe = world.canal_at(center.x, center.z).filter(|f| {
+            f.offset.abs() <= PIPE_RIDE_RADIUS + 0.01
+                && feet < f.floor + worldgen::canal::PIPE_RADIUS as f32 + 0.3
+        });
+        player.in_canal = pipe.is_some();
+        if pipe.is_some() {
+            if player.firing {
+                player.velocity -= aim * THRUST * dt;
+                player.energy = (player.energy - ENERGY_DRAIN * dt).max(0.0);
             }
+            if let Tether::Anchored { point, .. } = player.tether {
+                pull_towards(&mut player.velocity, point - center, dt);
+            }
+            center = ride_pipe(&world, &mut player, center, wishdir, jump, dt);
+            continue;
         }
         if player.grounded {
             // The tether's pull drags you along the ground rather than
-            // fighting friction; canals are nearly frictionless.
+            // fighting friction.
             if !tethered {
-                let mut slowed = player.velocity;
-                friction(&mut slowed, dt);
-                let keep = if player.in_canal { 1.0 - CANAL_FRICTION } else { 0.0 };
-                player.velocity = slowed.lerp(player.velocity, keep);
+                friction(&mut player.velocity, dt);
             }
             accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
             player.velocity = clip(player.velocity, player.ground_normal);
@@ -497,16 +560,10 @@ pub fn walk(
         }
 
         if let Tether::Anchored { point, .. } = player.tether {
-            let to_anchor = point - center;
-            let dist = to_anchor.length();
-            if dist < TETHER_DETACH {
+            if (point - center).length() < TETHER_DETACH {
                 player.tether = Tether::Missed;
             } else {
-                let dir = to_anchor / dist;
-                let along = player.velocity.dot(dir);
-                if along < TETHER_MAX_PULL_SPEED {
-                    player.velocity += dir * (TETHER_PULL * dt).min(TETHER_MAX_PULL_SPEED - along);
-                }
+                pull_towards(&mut player.velocity, point - center, dt);
             }
         }
 
