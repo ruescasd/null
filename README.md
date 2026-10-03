@@ -98,12 +98,17 @@ default spawn point (`--opt nofractals` leaves them out). The earlier
 distance-field fractals (`fractal.rs`: soft edges, millions of triangles,
 fidgety collision) remain behind `--opt sdf_fractals`.
 
-An experiment in enemies (`figure.rs`): a humanoid made of the same fractal
+An experiment in enemies (`figure.rs`): figures made of the same fractal
 language. A procedural skeleton walks on the terrain (feet planted until too
 far, then stepping on an arc; two-bone IK legs); each bone's volume is filled
-by a fractal fill of small boxes held to the bone by springs, so the body
-trails and shivers rather than being solid. One stands about 20 m ahead of
-the spawn point and walks towards you (`--opt nofigures` removes it).
+by a fractal fill of fragments (cubes, wedges, shards) held to the bone by
+springs, a dense core with a frayed edge, so the body is held together
+rather than solid. A core of glowing shards and a lamp inside the chest
+light it from within, through its own gaps. The default is a menacing
+humanoid (hunched, head forward and low, shoulders raised); `--opt creature`
+gives a feral creature with digitigrade legs. One stands about 20 m ahead of
+the spawn point and walks towards you; `--opt statue` keeps it still,
+`--opt nofigures` removes it.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so

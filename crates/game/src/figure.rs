@@ -5,12 +5,17 @@
 //! its place on its bone instead of being fixed to it, so the body is held
 //! together rather than solid.
 //!
-//! The anatomy is feral rather than engineered: a deep crouch, a spine
-//! curving into a hunched back, a long low neck and an elongated skull,
-//! long arms ending in claws, and digitigrade legs (walking on the toes with
-//! a high, backward-pointing ankle). Every part tapers, and each is filled
-//! as a dense core with irregular gaps plus a sparse outer layer of
-//! fragments, so the outline frays.
+//! Two anatomies share the same skeleton: a menacing humanoid (human
+//! proportions, but hunched, head pushed forward and low, shoulders raised,
+//! knees bent, arms forward with elbows out) and, with `--opt creature`, a
+//! feral creature (long low neck and elongated skull, long clawed arms,
+//! digitigrade legs). Every part tapers, and each is filled as a dense core
+//! with irregular gaps plus a sparse outer layer of fragments, so the
+//! outline frays.
+//!
+//! A core of faintly glowing shards sits deep in the chest and skull, with
+//! a small light among them: the body is lit from inside, through its own
+//! gaps, so it reads against the black sky from any side, and it pulses.
 //!
 //! The walk is procedural: a foot stays planted until it is too far from
 //! where it should be, then steps there along an arc; legs bend with
@@ -34,7 +39,7 @@ pub struct FigurePlugin;
 impl Plugin for FigurePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PostStartup, spawn)
-            .add_systems(Update, (walk, follow).chain().after(crate::terrain::StreamSet));
+            .add_systems(Update, (walk, follow, pulse).chain().after(crate::terrain::StreamSet));
     }
 }
 
@@ -43,15 +48,59 @@ const WALK_SPEED: f32 = 1.8;
 const STEP_TRIGGER: f32 = 0.8;
 const STEP_TIME: f32 = 0.4;
 const STEP_HEIGHT: f32 = 0.35;
-const PELVIS_HEIGHT: f32 = 1.5;
-const HIP_WIDTH: f32 = 0.2;
-const THIGH: f32 = 0.78;
-const SHIN: f32 = 0.82;
-/// The raised foot, from the ankle down to the toe.
-const METATARSAL: f32 = 0.55;
-const SHOULDER_WIDTH: f32 = 0.4;
-const UPPER_ARM: f32 = 0.8;
-const FOREARM: f32 = 0.8;
+/// Brightness of the glowing core (cd/m², before the pulse) and the light
+/// output of the lamp inside the chest (lumens).
+const GLOW: f32 = 20000.0;
+const CORE_LIGHT: f32 = 60000.0;
+
+/// Which body plan the figure has.
+#[derive(Clone, Copy, PartialEq)]
+enum Anatomy {
+    /// Human proportions with a menacing, hunched, forward stance.
+    Humanoid,
+    /// Long low neck, elongated skull, long clawed arms, digitigrade legs.
+    Creature,
+}
+
+/// Limb lengths and widths of an anatomy, in metres.
+struct Build {
+    pelvis_height: f32,
+    hip_width: f32,
+    thigh: f32,
+    shin: f32,
+    /// The foot: for the creature the raised section from ankle to toe.
+    foot: f32,
+    shoulder_width: f32,
+    upper_arm: f32,
+    forearm: f32,
+}
+
+impl Anatomy {
+    fn build(self) -> Build {
+        match self {
+            Anatomy::Humanoid => Build {
+                pelvis_height: 1.58,
+                hip_width: 0.19,
+                thigh: 0.94,
+                shin: 0.92,
+                foot: 0.24,
+                shoulder_width: 0.38,
+                upper_arm: 0.74,
+                forearm: 0.7,
+            },
+            Anatomy::Creature => Build {
+                pelvis_height: 1.5,
+                hip_width: 0.2,
+                thigh: 0.78,
+                shin: 0.82,
+                foot: 0.55,
+                shoulder_width: 0.4,
+                upper_arm: 0.8,
+                forearm: 0.8,
+            },
+        }
+    }
+}
 /// How close the figure comes before stopping.
 const KEEP_AWAY: f32 = 5.0;
 /// Spring holding each fragment to its place: stiffness and damping.
@@ -118,8 +167,27 @@ struct Part {
 }
 
 impl Bone {
-    fn part(self) -> Part {
+    fn part(self, anatomy: Anatomy) -> Part {
         let p = |start, end, length, levels| Part { start, end, length, levels };
+        let b = anatomy.build();
+        if anatomy == Anatomy::Humanoid {
+            return match self {
+                Bone::Pelvis => p((0.46, 0.32), (0.42, 0.3), 0.26, 2),
+                Bone::Waist => p((0.38, 0.28), (0.32, 0.26), 0.34, 2),
+                // A broad V of a torso, shoulders wide and high.
+                Bone::Chest => p((0.4, 0.3), (0.82, 0.46), 0.6, 2),
+                Bone::Neck => p((0.17, 0.18), (0.14, 0.16), 0.22, 1),
+                Bone::Skull => p((0.24, 0.28), (0.18, 0.22), 0.34, 2),
+                Bone::UpperArm(_) => p((0.21, 0.21), (0.12, 0.12), b.upper_arm, 2),
+                Bone::Forearm(_) => p((0.13, 0.13), (0.08, 0.09), b.forearm, 1),
+                // Hands narrowing to clawed fingers.
+                Bone::Claw(_) => p((0.12, 0.05), (0.03, 0.02), 0.3, 1),
+                Bone::Thigh(_) => p((0.3, 0.32), (0.15, 0.16), b.thigh, 2),
+                Bone::Shin(_) => p((0.14, 0.16), (0.09, 0.11), b.shin, 1),
+                Bone::Metatarsal(_) => p((0.1, 0.08), (0.09, 0.06), b.foot, 1),
+                Bone::Toe(_) => p((0.09, 0.05), (0.03, 0.02), 0.12, 1),
+            };
+        }
         match self {
             Bone::Pelvis => p((0.44, 0.34), (0.4, 0.3), 0.26, 2),
             Bone::Waist => p((0.36, 0.3), (0.28, 0.26), 0.36, 2),
@@ -128,12 +196,12 @@ impl Bone {
             Bone::Neck => p((0.2, 0.22), (0.13, 0.15), 0.42, 1),
             // An elongated skull tapering to a point.
             Bone::Skull => p((0.26, 0.32), (0.05, 0.07), 0.6, 2),
-            Bone::UpperArm(_) => p((0.24, 0.24), (0.12, 0.12), UPPER_ARM, 2),
-            Bone::Forearm(_) => p((0.15, 0.15), (0.08, 0.09), FOREARM, 1),
+            Bone::UpperArm(_) => p((0.24, 0.24), (0.12, 0.12), b.upper_arm, 2),
+            Bone::Forearm(_) => p((0.15, 0.15), (0.08, 0.09), b.forearm, 1),
             Bone::Claw(_) => p((0.13, 0.05), (0.02, 0.02), 0.42, 1),
-            Bone::Thigh(_) => p((0.36, 0.38), (0.15, 0.16), THIGH, 2),
-            Bone::Shin(_) => p((0.13, 0.15), (0.08, 0.1), SHIN, 1),
-            Bone::Metatarsal(_) => p((0.08, 0.1), (0.07, 0.12), METATARSAL, 1),
+            Bone::Thigh(_) => p((0.36, 0.38), (0.15, 0.16), b.thigh, 2),
+            Bone::Shin(_) => p((0.13, 0.15), (0.08, 0.1), b.shin, 1),
+            Bone::Metatarsal(_) => p((0.08, 0.1), (0.07, 0.12), b.foot, 1),
             Bone::Toe(_) => p((0.1, 0.06), (0.02, 0.02), 0.22, 1),
         }
     }
@@ -160,12 +228,20 @@ struct Foot {
 
 #[derive(Component)]
 struct Figure {
+    anatomy: Anatomy,
     position: Vec3,
     heading: f32,
     speed: f32,
     feet: [Foot; 2],
     poses: Vec<Pose>,
 }
+
+/// The glowing core's material (pulsed) and the lamp inside the chest.
+#[derive(Resource)]
+struct Glow(Handle<StandardMaterial>);
+
+#[derive(Component)]
+struct CoreLight;
 
 /// One fragment of the body, held to a place on a bone by a spring.
 #[derive(Component)]
@@ -196,8 +272,10 @@ fn spawn(
     let heading = 140f32.to_radians();
     let forward = Vec3::new(heading.sin(), 0.0, heading.cos());
     let right = Vec3::new(forward.z, 0.0, -forward.x);
+    let anatomy = if args.opt("creature") { Anatomy::Creature } else { Anatomy::Humanoid };
+    let hip_width = anatomy.build().hip_width;
     let foot = |side: f32| {
-        let p = position + right * side * HIP_WIDTH + forward * 0.2;
+        let p = position + right * side * hip_width + forward * 0.2;
         let p = Vec3::new(p.x, world.ground_height(p.x, p.z), p.z);
         Foot { planted: p, from: p, to: p, step: None }
     };
@@ -226,15 +304,35 @@ fn spawn(
         })
     });
 
+    // The glowing core: emissive shards, pulsed by `pulse`.
+    let glow = materials.add(StandardMaterial {
+        base_color: Color::BLACK,
+        emissive: LinearRgba::rgb(GLOW, GLOW, GLOW),
+        ..default()
+    });
+    commands.insert_resource(Glow(glow.clone()));
     commands.spawn((
-        Figure { position, heading, speed: 0.0, feet: [foot(-1.0), foot(1.0)], poses: vec![Pose::default(); BONES.len()] },
+        CoreLight,
+        PointLight { intensity: CORE_LIGHT, range: 5.0, shadow_maps_enabled: false, ..default() },
+        Transform::from_translation(position + Vec3::Y * 2.0),
+    ));
+
+    commands.spawn((
+        Figure {
+            anatomy,
+            position,
+            heading,
+            speed: 0.0,
+            feet: [foot(-1.0), foot(1.0)],
+            poses: vec![Pose::default(); BONES.len()],
+        },
         Transform::default(),
         Visibility::default(),
     ));
 
     let mut count = 0;
     for (index, bone) in BONES.iter().enumerate() {
-        let part = bone.part();
+        let part = bone.part(anatomy);
         let (wide, deep) = (part.start.0.max(part.end.0), part.start.1.max(part.end.1));
         // Generated one unit long at the part's widest, then tapered.
         let root = Block {
@@ -282,10 +380,21 @@ fn spawn(
                     x if x < 0.78 => 1,
                     _ => 2,
                 };
+                // Shards inside the chest, along the spine and in the skull
+                // glow, close enough to the surface to show through the gaps.
+                let inside = layer == 0
+                    && matches!(bone, Bone::Chest | Bone::Waist | Bone::Neck | Bone::Skull)
+                    && (b.center.x / (wide * 0.5)).abs() < 0.75
+                    && (b.center.z / (deep * 0.5)).abs() < 0.75;
+                let material = if inside && r(11) < 0.3 {
+                    glow.clone()
+                } else {
+                    finishes[(r(10) * 3.0) as usize % 3].clone()
+                };
                 commands.spawn((
                     Element { bone: index, offset, rotation: b.rotation * tilt, velocity: Vec3::ZERO, phase: r(9) * 100.0 },
                     Mesh3d(shapes[shape].clone()),
-                    MeshMaterial3d(finishes[(r(10) * 3.0) as usize % 3].clone()),
+                    MeshMaterial3d(material),
                     Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
                 ));
                 count += 1;
@@ -347,12 +456,14 @@ fn walk(
         let forward = Vec3::new(f.heading.sin(), 0.0, f.heading.cos());
         let right = Vec3::new(forward.z, 0.0, -forward.x);
         f.position = ground(f.position + forward * f.speed * dt);
+        let body = f.anatomy.build();
+        let creature = f.anatomy == Anatomy::Creature;
 
         // Feet: step when too far from where they belong, one at a time.
         for i in 0..2 {
             let other_stepping = f.feet[1 - i].step.is_some();
             let side = if i == 0 { -1.0 } else { 1.0 };
-            let home = ground(f.position + right * side * HIP_WIDTH + forward * (0.2 + f.speed * 0.4));
+            let home = ground(f.position + right * side * body.hip_width + forward * (0.2 + f.speed * 0.4));
             let foot = &mut f.feet[i];
             match foot.step {
                 Some(t) => {
@@ -374,12 +485,19 @@ fn walk(
         let lift = f.feet.iter().map(|ft| ft.step.map_or(0.0, |t| (t * std::f32::consts::PI).sin())).sum::<f32>();
         let pace = f.speed / WALK_SPEED;
         let bob = -0.07 * (1.0 - lift.min(1.0)) * pace;
-        let pelvis = f.position + Vec3::Y * (PELVIS_HEIGHT + bob);
+        let pelvis = f.position + Vec3::Y * (body.pelvis_height + bob);
         let hunch = 0.15 * pace;
-        let waist = pelvis + tip(Vec3::Y, forward, 0.45 + hunch) * 0.36;
-        let shoulders = waist + tip(Vec3::Y, forward, 1.0 + hunch) * 0.62;
-        let neck_end = shoulders + tip(forward, Vec3::Y, 0.25) * 0.42;
-        let skull_dir = tip(forward, Vec3::NEG_Y, 0.3);
+        // The creature folds far forward; the humanoid leans, hunched, with
+        // its head pushed forward and down.
+        let (waist_lean, chest_lean) = if creature { (0.45, 1.0) } else { (0.25, 0.55) };
+        let waist = pelvis + tip(Vec3::Y, forward, waist_lean + hunch) * 0.35;
+        let shoulders = waist + tip(Vec3::Y, forward, chest_lean + hunch) * 0.6;
+        let neck_end = if creature {
+            shoulders + tip(forward, Vec3::Y, 0.25) * 0.42
+        } else {
+            shoulders + tip(Vec3::Y, forward, 1.0) * 0.22
+        };
+        let skull_dir = if creature { tip(forward, Vec3::NEG_Y, 0.3) } else { tip(Vec3::Y, forward, 0.75) };
         let swing = |s: f32| {
             let leg = if s < 0.0 { 0 } else { 1 };
             -(f.feet[leg].planted - f.position).dot(forward) * 0.7
@@ -393,36 +511,47 @@ fn walk(
                 Bone::Waist => pose(pelvis, waist),
                 Bone::Chest => pose(waist, shoulders),
                 Bone::Neck => pose(shoulders - forward * 0.05, neck_end),
-                Bone::Skull => pose(neck_end - skull_dir * 0.08, neck_end + skull_dir * 0.52),
+                Bone::Skull if creature => pose(neck_end - skull_dir * 0.08, neck_end + skull_dir * 0.52),
+                Bone::Skull => pose(neck_end - skull_dir * 0.04, neck_end + skull_dir * 0.32),
                 Bone::UpperArm(side) | Bone::Forearm(side) | Bone::Claw(side) => {
                     let s = side.sign();
-                    let shoulder = shoulders + right * s * SHOULDER_WIDTH - Vec3::Y * 0.05;
-                    // Long arms hanging forward from the hunched shoulders.
-                    let hang = (Vec3::NEG_Y + forward * (0.45 + swing(s)) + right * s * 0.15).normalize();
-                    let hand = shoulder + hang * (UPPER_ARM + FOREARM) * 0.9;
-                    let elbow = middle_joint(shoulder, hand, UPPER_ARM, FOREARM, -forward + right * s * 0.5);
+                    // Shoulders raised on the humanoid, as if braced.
+                    let raise = if creature { -0.05 } else { 0.07 };
+                    let shoulder = shoulders + right * s * body.shoulder_width + Vec3::Y * raise;
+                    // Arms forward from the hunched shoulders, elbows out.
+                    let reach = if creature { 0.45 } else { 0.32 };
+                    let hang = (Vec3::NEG_Y + forward * (reach + swing(s)) + right * s * 0.18).normalize();
+                    let hand = shoulder + hang * (body.upper_arm + body.forearm) * if creature { 0.9 } else { 0.86 };
+                    let elbow = middle_joint(shoulder, hand, body.upper_arm, body.forearm, -forward + right * s * 0.7);
                     match bone {
                         Bone::UpperArm(_) => pose(shoulder, elbow),
                         Bone::Forearm(_) => pose(elbow, hand),
                         _ => {
                             let along = (hand - elbow).normalize();
-                            pose(hand, hand + tip(along, Vec3::NEG_Y, 0.4) * 0.42)
+                            let claw = if creature { 0.42 } else { 0.3 };
+                            pose(hand, hand + tip(along, Vec3::NEG_Y, 0.4) * claw)
                         }
                     }
                 }
                 Bone::Thigh(side) | Bone::Shin(side) | Bone::Metatarsal(side) | Bone::Toe(side) => {
                     let s = side.sign();
                     let leg = if s < 0.0 { 0 } else { 1 };
-                    let hip = pelvis + right * s * HIP_WIDTH;
+                    let hip = pelvis + right * s * body.hip_width;
                     let toe = f.feet[leg].planted;
-                    // Digitigrade: the heel raised high behind the toe.
-                    let ankle = toe + tip(Vec3::Y, -forward, 0.55) * METATARSAL;
-                    let knee = middle_joint(hip, ankle, THIGH, SHIN, forward + right * s * 0.2);
+                    // The creature walks on its toes with the heel raised
+                    // high behind; the humanoid's heel is on the ground.
+                    let ankle = if creature {
+                        toe + tip(Vec3::Y, -forward, 0.55) * body.foot
+                    } else {
+                        toe - forward * body.foot + Vec3::Y * 0.1
+                    };
+                    let knee = middle_joint(hip, ankle, body.thigh, body.shin, forward + right * s * 0.2);
+                    let toe_length = if creature { 0.22 } else { 0.12 };
                     match bone {
                         Bone::Thigh(_) => pose(hip, knee),
                         Bone::Shin(_) => pose(knee, ankle),
                         Bone::Metatarsal(_) => pose(ankle, toe),
-                        _ => pose(toe, toe + forward * 0.22 - Vec3::Y * 0.02),
+                        _ => pose(toe, toe + forward * toe_length - Vec3::Y * 0.02),
                     }
                 }
             };
@@ -434,9 +563,17 @@ fn walk(
 
 /// Moves every fragment towards its place on its bone through a spring, with
 /// a faint shiver.
-fn follow(time: Res<Time>, figure: Single<&Figure>, mut elements: Query<(&mut Element, &mut Transform)>) {
+fn follow(
+    time: Res<Time>,
+    figure: Single<&Figure>,
+    mut elements: Query<(&mut Element, &mut Transform), Without<CoreLight>>,
+    mut light: Single<&mut Transform, With<CoreLight>>,
+) {
     let dt = time.delta_secs().min(0.05);
     let t = time.elapsed_secs();
+    // The lamp sits in the middle of the chest.
+    let chest = figure.poses[2];
+    light.translation = chest.start + chest.rotation * Vec3::Y * chest.length * 0.55;
     for (mut e, mut transform) in &mut elements {
         let pose = figure.poses[e.bone];
         if pose.length <= 0.0 {
@@ -486,4 +623,21 @@ fn faceted(points: &[[f32; 3]], faces: &[&[usize]]) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_indices(Indices::U32(indices))
+}
+
+/// A slow, uneven pulse of the glowing core and the lamp inside it.
+fn pulse(
+    time: Res<Time>,
+    glow: Option<Res<Glow>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut light: Single<&mut PointLight, With<CoreLight>>,
+) {
+    let Some(glow) = glow else { return };
+    let t = time.elapsed_secs();
+    let beat = 0.55 + 0.45 * ((t * 1.6).sin() * 0.7 + (t * 0.53).sin() * 0.3).max(-1.0);
+    if let Some(mut material) = materials.get_mut(&glow.0) {
+        let g = GLOW * beat;
+        material.emissive = LinearRgba::rgb(g, g, g);
+    }
+    light.intensity = CORE_LIGHT * beat;
 }
