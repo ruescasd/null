@@ -1,14 +1,21 @@
-//! An experiment: a humanoid made of the world's fractal language. A simple
+//! An experiment: a creature made of the world's fractal language. A
 //! procedural skeleton walks on the real terrain; each bone's volume is
-//! filled by a fractal lattice of small boxes (the same rule as the
-//! structures), and every box springs towards its place on its bone instead
-//! of being fixed to it, so the body is held together rather than solid: it
-//! trails, sways and shivers.
+//! filled by a fractal fill of small fragments (cubes, wedges and shards,
+//! from the same rule as the structures), and every fragment springs towards
+//! its place on its bone instead of being fixed to it, so the body is held
+//! together rather than solid.
+//!
+//! The anatomy is feral rather than engineered: a deep crouch, a spine
+//! curving into a hunched back, a long low neck and an elongated skull,
+//! long arms ending in claws, and digitigrade legs (walking on the toes with
+//! a high, backward-pointing ankle). Every part tapers, and each is filled
+//! as a dense core with irregular gaps plus a sparse outer layer of
+//! fragments, so the outline frays.
 //!
 //! The walk is procedural: a foot stays planted until it is too far from
 //! where it should be, then steps there along an arc; legs bend with
-//! two-bone IK, arms swing against the legs. For now the figure walks
-//! towards the player and stops a few metres away (`--opt nofigures`).
+//! two-bone IK. For now the figure walks towards the player and stops a few
+//! metres away (`--opt nofigures`).
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -31,38 +38,25 @@ impl Plugin for FigurePlugin {
     }
 }
 
-const WALK_SPEED: f32 = 1.4;
+const WALK_SPEED: f32 = 1.8;
 /// A foot steps when it is this far from where it should be.
-const STEP_TRIGGER: f32 = 0.55;
-const STEP_TIME: f32 = 0.38;
-const STEP_HEIGHT: f32 = 0.3;
-const THIGH: f32 = 0.88;
-const SHIN: f32 = 0.86;
-const HIP_HEIGHT: f32 = 1.62;
-const HIP_WIDTH: f32 = 0.17;
-const SHOULDER_WIDTH: f32 = 0.3;
-const UPPER_ARM: f32 = 0.66;
-const FOREARM: f32 = 0.62;
+const STEP_TRIGGER: f32 = 0.8;
+const STEP_TIME: f32 = 0.4;
+const STEP_HEIGHT: f32 = 0.35;
+const PELVIS_HEIGHT: f32 = 1.5;
+const HIP_WIDTH: f32 = 0.2;
+const THIGH: f32 = 0.78;
+const SHIN: f32 = 0.82;
+/// The raised foot, from the ankle down to the toe.
+const METATARSAL: f32 = 0.55;
+const SHOULDER_WIDTH: f32 = 0.4;
+const UPPER_ARM: f32 = 0.8;
+const FOREARM: f32 = 0.8;
 /// How close the figure comes before stopping.
 const KEEP_AWAY: f32 = 5.0;
-/// Spring holding each element to its place: stiffness and damping.
+/// Spring holding each fragment to its place: stiffness and damping.
 const STIFFNESS: f32 = 220.0;
 const DAMPING: f32 = 18.0;
-
-/// Body parts, each a box along a bone from joint `a` to joint `b`:
-/// (name, width, depth, lattice depth).
-#[derive(Clone, Copy)]
-enum Bone {
-    Pelvis,
-    Torso,
-    Neck,
-    Head,
-    UpperArm(Side),
-    Forearm(Side),
-    Thigh(Side),
-    Shin(Side),
-    Foot(Side),
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Side {
@@ -76,44 +70,77 @@ impl Side {
     }
 }
 
-const BONES: [Bone; 15] = [
+#[derive(Clone, Copy)]
+enum Bone {
+    Pelvis,
+    Waist,
+    Chest,
+    Neck,
+    Skull,
+    UpperArm(Side),
+    Forearm(Side),
+    Claw(Side),
+    Thigh(Side),
+    Shin(Side),
+    Metatarsal(Side),
+    Toe(Side),
+}
+
+const BONES: [Bone; 19] = [
     Bone::Pelvis,
-    Bone::Torso,
+    Bone::Waist,
+    Bone::Chest,
     Bone::Neck,
-    Bone::Head,
+    Bone::Skull,
     Bone::UpperArm(Side::Left),
     Bone::UpperArm(Side::Right),
     Bone::Forearm(Side::Left),
     Bone::Forearm(Side::Right),
+    Bone::Claw(Side::Left),
+    Bone::Claw(Side::Right),
     Bone::Thigh(Side::Left),
     Bone::Thigh(Side::Right),
     Bone::Shin(Side::Left),
     Bone::Shin(Side::Right),
-    Bone::Foot(Side::Left),
-    Bone::Foot(Side::Right),
-    // A second, thinner layer around the torso: the "ribcage".
-    Bone::Torso,
+    Bone::Metatarsal(Side::Left),
+    Bone::Metatarsal(Side::Right),
+    Bone::Toe(Side::Left),
+    Bone::Toe(Side::Right),
 ];
 
+/// A part's volume: width and depth at its start and at its end (it tapers
+/// between them), its nominal length, and how finely it is split.
+struct Part {
+    start: (f32, f32),
+    end: (f32, f32),
+    length: f32,
+    levels: u32,
+}
+
 impl Bone {
-    /// Width and depth of the part, and the lattice rule filling it.
-    fn shape(self) -> (f32, f32, u32) {
+    fn part(self) -> Part {
+        let p = |start, end, length, levels| Part { start, end, length, levels };
         match self {
-            Bone::Pelvis => (0.56, 0.38, 2),
-            Bone::Torso => (0.7, 0.44, 2),
-            Bone::Neck => (0.16, 0.16, 1),
-            Bone::Head => (0.38, 0.46, 2),
-            Bone::UpperArm(_) => (0.22, 0.22, 2),
-            Bone::Forearm(_) => (0.18, 0.18, 2),
-            Bone::Thigh(_) => (0.3, 0.3, 2),
-            Bone::Shin(_) => (0.22, 0.22, 2),
-            Bone::Foot(_) => (0.18, 0.14, 1),
+            Bone::Pelvis => p((0.44, 0.34), (0.4, 0.3), 0.26, 2),
+            Bone::Waist => p((0.36, 0.3), (0.28, 0.26), 0.36, 2),
+            // A barrel ribcage, widest at the shoulders, hunched.
+            Bone::Chest => p((0.34, 0.3), (0.86, 0.56), 0.62, 2),
+            Bone::Neck => p((0.2, 0.22), (0.13, 0.15), 0.42, 1),
+            // An elongated skull tapering to a point.
+            Bone::Skull => p((0.26, 0.32), (0.05, 0.07), 0.6, 2),
+            Bone::UpperArm(_) => p((0.24, 0.24), (0.12, 0.12), UPPER_ARM, 2),
+            Bone::Forearm(_) => p((0.15, 0.15), (0.08, 0.09), FOREARM, 1),
+            Bone::Claw(_) => p((0.13, 0.05), (0.02, 0.02), 0.42, 1),
+            Bone::Thigh(_) => p((0.36, 0.38), (0.15, 0.16), THIGH, 2),
+            Bone::Shin(_) => p((0.13, 0.15), (0.08, 0.1), SHIN, 1),
+            Bone::Metatarsal(_) => p((0.08, 0.1), (0.07, 0.12), METATARSAL, 1),
+            Bone::Toe(_) => p((0.1, 0.06), (0.02, 0.02), 0.22, 1),
         }
     }
 }
 
 /// A bone's pose: where its part starts, the part's length, and its frame
-/// (local +y runs along the bone).
+/// (local +y runs along the bone, +x across it).
 #[derive(Clone, Copy, Default)]
 struct Pose {
     start: Vec3,
@@ -123,6 +150,7 @@ struct Pose {
 
 #[derive(Clone, Copy)]
 struct Foot {
+    /// Where the toe touches the ground.
     planted: Vec3,
     from: Vec3,
     to: Vec3,
@@ -137,19 +165,18 @@ struct Figure {
     speed: f32,
     feet: [Foot; 2],
     poses: Vec<Pose>,
-    clock: f32,
 }
 
-/// One box of the body, held to a place on a bone by a spring.
+/// One fragment of the body, held to a place on a bone by a spring.
 #[derive(Component)]
 struct Element {
     bone: usize,
-    /// Centre in the bone's frame, with y measured as a fraction of the
-    /// bone's length so parts stretch with the skeleton.
+    /// Centre in the bone's frame, with y as a fraction of the bone's
+    /// length so parts follow the skeleton.
     offset: Vec3,
     rotation: Quat,
     velocity: Vec3,
-    /// A per-element phase for the shiver.
+    /// A per-fragment phase for the shiver.
     phase: f32,
 }
 
@@ -163,15 +190,14 @@ fn spawn(
     if args.opt("nofigures") {
         return;
     }
-    // About 22 m ahead of the default spawn point, looking back at it.
+    // About 22 m ahead of the default spawn point, facing it.
     let (x, z) = (1214.0, 883.0);
-    let ground = world.ground_height(x, z);
-    let position = Vec3::new(x, ground, z);
+    let position = Vec3::new(x, world.ground_height(x, z), z);
     let heading = 140f32.to_radians();
     let forward = Vec3::new(heading.sin(), 0.0, heading.cos());
     let right = Vec3::new(forward.z, 0.0, -forward.x);
     let foot = |side: f32| {
-        let p = position + right * side * HIP_WIDTH;
+        let p = position + right * side * HIP_WIDTH + forward * 0.2;
         let p = Vec3::new(p.x, world.ground_height(p.x, p.z), p.z);
         Foot { planted: p, from: p, to: p, step: None }
     };
@@ -180,88 +206,93 @@ fn spawn(
     // all spanning -1..1 so a fragment's scale is its half extents.
     let shapes = [
         meshes.add(Cuboid::new(2.0, 2.0, 2.0)),
-        meshes.add(faceted(&[
-            [-1., -1., -1.],
-            [1., -1., -1.],
-            [-1., 1., -1.],
-            [-1., -1., 1.],
-            [1., -1., 1.],
-            [-1., 1., 1.],
-        ], &[&[0, 2, 1], &[3, 4, 5], &[0, 1, 4, 3], &[0, 3, 5, 2], &[1, 2, 5, 4]])),
+        meshes.add(faceted(
+            &[[-1., -1., -1.], [1., -1., -1.], [-1., 1., -1.], [-1., -1., 1.], [1., -1., 1.], [-1., 1., 1.]],
+            &[&[0, 2, 1], &[3, 4, 5], &[0, 1, 4, 3], &[0, 3, 5, 2], &[1, 2, 5, 4]],
+        )),
         meshes.add(faceted(
             &[[-1., -1., -1.], [1., -1., -0.6], [-0.2, -1., 1.], [0.3, 1., 0.1]],
             &[&[0, 1, 2], &[0, 3, 1], &[1, 3, 2], &[2, 3, 0]],
         )),
     ];
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.03, 0.03, 0.03),
-        perceptual_roughness: 0.35,
-        reflectance: 0.7,
-        ..default()
+    // Three finishes, from pale to dark, so the body reads against both the
+    // pale ground and the black sky (all-dark fragments vanish against it).
+    let finishes = [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)].map(|(tone, rough, refl)| {
+        materials.add(StandardMaterial {
+            base_color: Color::srgb(tone, tone, tone),
+            perceptual_roughness: rough,
+            reflectance: refl,
+            ..default()
+        })
     });
 
-    let figure = Figure {
-        position,
-        heading,
-        speed: 0.0,
-        feet: [foot(-1.0), foot(1.0)],
-        poses: vec![Pose::default(); BONES.len()],
-        clock: 0.0,
-    };
-    commands.spawn((figure, Transform::default(), Visibility::default()));
+    commands.spawn((
+        Figure { position, heading, speed: 0.0, feet: [foot(-1.0), foot(1.0)], poses: vec![Pose::default(); BONES.len()] },
+        Transform::default(),
+        Visibility::default(),
+    ));
 
-    // Fill every part with a lattice of boxes, in a unit-length frame.
     let mut count = 0;
     for (index, bone) in BONES.iter().enumerate() {
-        let (width, depth, levels) = bone.shape();
-        let ribcage = index == BONES.len() - 1;
-        let (width, depth) = if ribcage { (width * 1.35, depth * 1.6) } else { (width, depth) };
-        // Parts are generated one metre long and stretched to the bone.
-        // A random fill with chunks of every size: some blocks stop splitting
-        // early, the rest break into smaller pieces, with visible gaps.
-        let rule = Rule {
-            divisions: [2, 3, 2],
-            keep: if ribcage { Keep::Random(0.3) } else { Keep::Random(0.7) },
-            depth: levels,
-            gap: if ribcage { 0.5 } else { 0.68 },
-            twist: Quat::IDENTITY,
-            stop_chance: 0.35,
-            lift: 0.0,
-            min_size: 0.0,
-        };
+        let part = bone.part();
+        let (wide, deep) = (part.start.0.max(part.end.0), part.start.1.max(part.end.1));
+        // Generated one unit long at the part's widest, then tapered.
         let root = Block {
             center: Vec3::Y * 0.5,
             rotation: Quat::IDENTITY,
-            half: Vec3::new(width * 0.5, 0.5, depth * 0.5),
+            half: Vec3::new(wide * 0.5, 0.5, deep * 0.5),
             level: 0,
         };
-        for (n, leaf) in ifs::generate(&rule, root, 41 + index as u32, 600).iter().enumerate() {
-            let b = leaf.block;
-            // Each fragment turned and shifted a little: fragments, not a grid.
-            let r = |k: i32| hash01(index as i32, n as i32, k, 0xf16) - 0.5;
-            let tilt = Quat::from_euler(EulerRot::YXZ, r(1) * 0.6, r(2) * 0.4, r(3) * 0.4);
-            let nudge = Vec3::new(r(4), r(5) * 0.3, r(6)) * b.half * 0.6;
-            commands.spawn((
-                Element {
-                    bone: index,
-                    offset: b.center + nudge,
-                    rotation: b.rotation * tilt,
-                    velocity: Vec3::ZERO,
-                    phase: hash01(index as i32, n as i32, 3, 77) * 100.0,
-                },
-                Mesh3d(shapes[match hash01(index as i32, n as i32, 9, 0x5a9) {
+        // A dense core, then a sparse outer layer pushed out from the
+        // surface, so the outline frays.
+        let core = Rule {
+            divisions: [2, 4, 2],
+            keep: Keep::Random(0.9),
+            depth: part.levels + 1,
+            gap: 1.0,
+            twist: Quat::IDENTITY,
+            stop_chance: 0.3,
+            lift: 0.0,
+            min_size: 0.0,
+        };
+        let fray = Rule { divisions: [3, 6, 3], keep: Keep::Random(0.3), depth: 1, stop_chance: 0.0, ..core };
+        for (layer, rule) in [core, fray].iter().enumerate() {
+            let leaves = ifs::generate(rule, root, 41 + index as u32 * 7 + layer as u32, 1200);
+            for (n, leaf) in leaves.iter().enumerate() {
+                let b = leaf.block;
+                let r = |k: i32| hash01(index as i32 * 2 + layer as i32, n as i32, k, 0xf16);
+                // Taper: width and depth follow the part along its length.
+                let t = b.center.y.clamp(0.0, 1.0);
+                let fx = (part.start.0 + (part.end.0 - part.start.0) * t) / wide;
+                let fz = (part.start.1 + (part.end.1 - part.start.1) * t) / deep;
+                // Irregular gaps: each fragment shrunk by its own amount.
+                let shrink = Vec3::new(0.5 + 0.45 * r(1), 0.5 + 0.45 * r(2), 0.5 + 0.45 * r(3));
+                let mut half = b.half * shrink * Vec3::new(fx, part.length, fz);
+                let mut offset = Vec3::new(b.center.x * fx, b.center.y, b.center.z * fz);
+                if layer == 1 {
+                    // Pushed out beyond the surface, and smaller.
+                    let out = 1.25 + 0.45 * r(4);
+                    offset.x *= out;
+                    offset.z *= out;
+                    half *= 0.55;
+                }
+                let tilt = Quat::from_euler(EulerRot::YXZ, (r(5) - 0.5) * 0.7, (r(6) - 0.5) * 0.5, (r(7) - 0.5) * 0.5);
+                let shape = match r(8) {
                     x if x < 0.5 => 0,
                     x if x < 0.78 => 1,
                     _ => 2,
-                }]
-                .clone()),
-                MeshMaterial3d(material.clone()),
-                Transform::from_translation(position + Vec3::Y * 2.0).with_scale(b.half),
-            ));
-            count += 1;
+                };
+                commands.spawn((
+                    Element { bone: index, offset, rotation: b.rotation * tilt, velocity: Vec3::ZERO, phase: r(9) * 100.0 },
+                    Mesh3d(shapes[shape].clone()),
+                    MeshMaterial3d(finishes[(r(10) * 3.0) as usize % 3].clone()),
+                    Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
+                ));
+                count += 1;
+            }
         }
     }
-    info!("figure: {count} elements");
+    info!("figure: {count} fragments");
 }
 
 /// Rotation whose +y runs along `along` and whose +x is as close to `right`
@@ -273,9 +304,9 @@ fn frame(along: Vec3, right: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(x, y, z))
 }
 
-/// Two-bone IK: the knee (or elbow) between `root` and `end`, bending
-/// towards `pole`.
-fn knee(root: Vec3, end: Vec3, a: f32, b: f32, pole: Vec3) -> Vec3 {
+/// Two-bone IK: the middle joint between `root` and `end`, bending towards
+/// `pole`.
+fn middle_joint(root: Vec3, end: Vec3, a: f32, b: f32, pole: Vec3) -> Vec3 {
     let to_end = end - root;
     let d = to_end.length().clamp(0.05, a + b - 1e-3);
     let dir = to_end.normalize_or(Vec3::NEG_Y);
@@ -284,8 +315,15 @@ fn knee(root: Vec3, end: Vec3, a: f32, b: f32, pole: Vec3) -> Vec3 {
     root + dir * a * cos + bend * a * (1.0 - cos * cos).sqrt()
 }
 
+/// `dir` turned by `angle` radians towards `towards` (both unit, roughly
+/// perpendicular).
+fn tip(dir: Vec3, towards: Vec3, angle: f32) -> Vec3 {
+    (dir * angle.cos() + towards * angle.sin()).normalize()
+}
+
 fn walk(
     time: Res<Time>,
+    args: Res<Args>,
     world: Res<WorldGen>,
     camera: Single<&Transform, (With<FlyCam>, Without<Figure>)>,
     mut figures: Query<&mut Figure>,
@@ -293,29 +331,28 @@ fn walk(
     let dt = time.delta_secs().min(0.05);
     let ground = |p: Vec3| Vec3::new(p.x, world.ground_height(p.x, p.z), p.z);
     for mut f in &mut figures {
-        f.clock += dt;
         // Head for the player; stop a few metres away.
         let to_player = camera.translation - f.position;
         let flat = Vec3::new(to_player.x, 0.0, to_player.z);
-        let distance = flat.length();
+        // `--opt statue` keeps it still where it spawned, for looking at.
+        let distance = if args.opt("statue") { 0.0 } else { flat.length() };
         if distance > 0.1 {
             let target = flat.x.atan2(flat.z);
             let turn = (target - f.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
                 - std::f32::consts::PI;
-            f.heading += turn.clamp(-1.2 * dt, 1.2 * dt);
+            f.heading += turn.clamp(-1.4 * dt, 1.4 * dt);
         }
         let wanted = if distance > KEEP_AWAY && distance < 120.0 { WALK_SPEED } else { 0.0 };
-        f.speed += (wanted - f.speed).clamp(-1.5 * dt, 1.5 * dt);
+        f.speed += (wanted - f.speed).clamp(-2.0 * dt, 2.0 * dt);
         let forward = Vec3::new(f.heading.sin(), 0.0, f.heading.cos());
         let right = Vec3::new(forward.z, 0.0, -forward.x);
-        let step_to = f.position + forward * f.speed * dt;
-        f.position = ground(step_to);
+        f.position = ground(f.position + forward * f.speed * dt);
 
-        // Feet: step when too far from where they belong; one at a time.
+        // Feet: step when too far from where they belong, one at a time.
         for i in 0..2 {
             let other_stepping = f.feet[1 - i].step.is_some();
             let side = if i == 0 { -1.0 } else { 1.0 };
-            let home = ground(f.position + right * side * HIP_WIDTH + forward * f.speed * 0.32);
+            let home = ground(f.position + right * side * HIP_WIDTH + forward * (0.2 + f.speed * 0.4));
             let foot = &mut f.feet[i];
             match foot.step {
                 Some(t) => {
@@ -333,51 +370,59 @@ fn walk(
             }
         }
 
-        // Pose the skeleton.
+        // Pose: crouched, hunched, head low and forward.
         let lift = f.feet.iter().map(|ft| ft.step.map_or(0.0, |t| (t * std::f32::consts::PI).sin())).sum::<f32>();
-        let bob = -0.06 * (1.0 - lift.min(1.0)) * (f.speed / WALK_SPEED);
-        let lean = 0.12 * f.speed / WALK_SPEED;
-        let pelvis = f.position + Vec3::Y * (HIP_HEIGHT + bob);
-        let up = (Vec3::Y + forward * lean).normalize();
-        let chest = pelvis + up * 0.78;
-        let neck = chest + up * 0.3;
-        let head = neck + (Vec3::Y + forward * 0.25).normalize() * 0.06;
-        let swing = |side: f32| {
-            // Arms swing against the leg on the same side.
-            let leg = if side < 0.0 { 0 } else { 1 };
-            let reach = (f.feet[leg].planted - f.position).dot(forward);
-            -reach * 0.6
+        let pace = f.speed / WALK_SPEED;
+        let bob = -0.07 * (1.0 - lift.min(1.0)) * pace;
+        let pelvis = f.position + Vec3::Y * (PELVIS_HEIGHT + bob);
+        let hunch = 0.15 * pace;
+        let waist = pelvis + tip(Vec3::Y, forward, 0.45 + hunch) * 0.36;
+        let shoulders = waist + tip(Vec3::Y, forward, 1.0 + hunch) * 0.62;
+        let neck_end = shoulders + tip(forward, Vec3::Y, 0.25) * 0.42;
+        let skull_dir = tip(forward, Vec3::NEG_Y, 0.3);
+        let swing = |s: f32| {
+            let leg = if s < 0.0 { 0 } else { 1 };
+            -(f.feet[leg].planted - f.position).dot(forward) * 0.7
         };
+
         let mut poses = Vec::with_capacity(BONES.len());
         for bone in BONES {
             let pose = |a: Vec3, b: Vec3| Pose { start: a, rotation: frame(b - a, right), length: a.distance(b) };
             let p = match bone {
-                Bone::Pelvis => pose(pelvis - up * 0.14, pelvis + up * 0.14),
-                Bone::Torso => pose(pelvis + up * 0.1, chest),
-                Bone::Neck => pose(chest, neck),
-                Bone::Head => pose(head, head + (Vec3::Y + forward * 0.2).normalize() * 0.44),
-                Bone::UpperArm(side) | Bone::Forearm(side) => {
+                Bone::Pelvis => pose(pelvis - Vec3::Y * 0.13, pelvis + Vec3::Y * 0.13),
+                Bone::Waist => pose(pelvis, waist),
+                Bone::Chest => pose(waist, shoulders),
+                Bone::Neck => pose(shoulders - forward * 0.05, neck_end),
+                Bone::Skull => pose(neck_end - skull_dir * 0.08, neck_end + skull_dir * 0.52),
+                Bone::UpperArm(side) | Bone::Forearm(side) | Bone::Claw(side) => {
                     let s = side.sign();
-                    let shoulder = chest + right * s * SHOULDER_WIDTH - up * 0.05;
-                    let hang = (Vec3::NEG_Y + forward * swing(s) + right * s * 0.12).normalize();
-                    let hand = shoulder + hang * (UPPER_ARM + FOREARM) * 0.95;
-                    let elbow = knee(shoulder, hand, UPPER_ARM, FOREARM, -forward);
-                    if matches!(bone, Bone::UpperArm(_)) { pose(shoulder, elbow) } else { pose(elbow, hand) }
+                    let shoulder = shoulders + right * s * SHOULDER_WIDTH - Vec3::Y * 0.05;
+                    // Long arms hanging forward from the hunched shoulders.
+                    let hang = (Vec3::NEG_Y + forward * (0.45 + swing(s)) + right * s * 0.15).normalize();
+                    let hand = shoulder + hang * (UPPER_ARM + FOREARM) * 0.9;
+                    let elbow = middle_joint(shoulder, hand, UPPER_ARM, FOREARM, -forward + right * s * 0.5);
+                    match bone {
+                        Bone::UpperArm(_) => pose(shoulder, elbow),
+                        Bone::Forearm(_) => pose(elbow, hand),
+                        _ => {
+                            let along = (hand - elbow).normalize();
+                            pose(hand, hand + tip(along, Vec3::NEG_Y, 0.4) * 0.42)
+                        }
+                    }
                 }
-                Bone::Thigh(side) | Bone::Shin(side) | Bone::Foot(side) => {
+                Bone::Thigh(side) | Bone::Shin(side) | Bone::Metatarsal(side) | Bone::Toe(side) => {
                     let s = side.sign();
                     let leg = if s < 0.0 { 0 } else { 1 };
                     let hip = pelvis + right * s * HIP_WIDTH;
-                    let ankle = f.feet[leg].planted + Vec3::Y * 0.1;
-                    let knee_at = knee(hip, ankle, THIGH, SHIN, forward);
+                    let toe = f.feet[leg].planted;
+                    // Digitigrade: the heel raised high behind the toe.
+                    let ankle = toe + tip(Vec3::Y, -forward, 0.55) * METATARSAL;
+                    let knee = middle_joint(hip, ankle, THIGH, SHIN, forward + right * s * 0.2);
                     match bone {
-                        Bone::Thigh(_) => pose(hip, knee_at),
-                        Bone::Shin(_) => pose(knee_at, ankle),
-                        _ => Pose {
-                            start: ankle - Vec3::Y * 0.1 - forward * 0.06,
-                            rotation: frame(forward, right) * Quat::from_rotation_x(0.0),
-                            length: 0.3,
-                        },
+                        Bone::Thigh(_) => pose(hip, knee),
+                        Bone::Shin(_) => pose(knee, ankle),
+                        Bone::Metatarsal(_) => pose(ankle, toe),
+                        _ => pose(toe, toe + forward * 0.22 - Vec3::Y * 0.02),
                     }
                 }
             };
@@ -387,7 +432,7 @@ fn walk(
     }
 }
 
-/// Moves every element towards its place on its bone through a spring, with
+/// Moves every fragment towards its place on its bone through a spring, with
 /// a faint shiver.
 fn follow(time: Res<Time>, figure: Single<&Figure>, mut elements: Query<(&mut Element, &mut Transform)>) {
     let dt = time.delta_secs().min(0.05);
