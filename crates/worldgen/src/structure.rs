@@ -336,12 +336,6 @@ impl Style {
 /// Builds the solids of a structure whose base centre is at the origin, with
 /// at most `max_leaves` leaves in total (nested structures included).
 pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec<Solid> {
-    build_coarse(library, placement, max_leaves, 0)
-}
-
-/// The same structure with its rules run `coarsen` levels less deep (but
-/// at least one): the same outline in bigger blocks, for seeing from afar.
-pub fn build_coarse(library: &Library, placement: &Placement, max_leaves: usize, coarsen: u32) -> Vec<Solid> {
     let (sx, sy, sz) = placement.size;
     let root = Block {
         center: Vec3::Y * (sy * 0.5 - placement.sink),
@@ -350,7 +344,7 @@ pub fn build_coarse(library: &Library, placement: &Placement, max_leaves: usize,
         level: 0,
     };
     let seed = placement.seed.wrapping_mul(0x9e37_79b9) ^ 0x5eed;
-    let mut builder = Builder { library, budget: max_leaves, coarsen, out: Vec::new() };
+    let mut builder = Builder { library, budget: max_leaves, out: Vec::new() };
     builder.style(&placement.style, root, seed, 0);
     let mut solids = builder.out;
     settle(&mut solids);
@@ -476,8 +470,6 @@ struct Builder<'a> {
     library: &'a Library,
     /// Leaves still allowed, shared by nested structures.
     budget: usize,
-    /// Levels of each rule left out.
-    coarsen: u32,
     out: Vec<Solid>,
 }
 
@@ -485,9 +477,7 @@ impl Builder<'_> {
     /// Runs a style's rule inside `root` and fills its leaves.
     fn style(&mut self, name: &str, root: Block, seed: u32, nesting: u32) {
         let Some(style) = self.library.styles.get(name) else { return };
-        let mut rule = style.rule();
-        rule.depth = rule.depth.saturating_sub(self.coarsen).max(1);
-        let leaves = ifs::generate(&rule, Block { level: 0, ..root }, seed, self.budget);
+        let leaves = ifs::generate(&style.rule(), Block { level: 0, ..root }, seed, self.budget);
         self.budget = self.budget.saturating_sub(leaves.len());
         for (n, leaf) in leaves.iter().enumerate() {
             let r = |k: i32| hash01(n as i32, k, leaf.block.level as i32, seed);

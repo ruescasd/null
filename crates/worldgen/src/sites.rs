@@ -417,6 +417,19 @@ pub struct Built {
     pub flights: Vec<Flight>,
 }
 
+/// The pieces at least `min_width` across: what is worth drawing from afar
+/// (steps and paving drop out; outlines stay).
+pub fn wide_prisms(prisms: &[Prism], min_width: f32) -> Vec<Prism> {
+    prisms
+        .iter()
+        .filter(|p| {
+            let (lo, hi) = p.points.iter().fold((Vec2::MAX, Vec2::MIN), |(lo, hi), q| (lo.min(*q), hi.max(*q)));
+            (hi - lo).length() >= min_width
+        })
+        .cloned()
+        .collect()
+}
+
 /// A flight of stairs (local coordinates, heights relative to the base).
 #[derive(Clone, Copy, Debug)]
 pub struct Flight {
@@ -443,15 +456,6 @@ const STAIR_WIDTH: f32 = 5.0;
 
 /// Builds what grows on a site, which belongs in the background.
 pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usize) -> Built {
-    build_coarse(library, world, site, max_leaves, 0)
-}
-
-/// Plate pieces narrower than this are left out at each level of coarsening.
-const COARSE_MIN_WIDTH: [f32; 3] = [0.0, 3.0, 8.0];
-
-/// A site seen from afar: box styles `coarsen` levels less deep, small
-/// pieces left out.
-pub fn build_coarse(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usize, coarsen: u32) -> Built {
     let (x, z) = site.at;
     let base = match &site.ground {
         Some(ground) => ground.top as f32,
@@ -459,7 +463,7 @@ pub fn build_coarse(library: &Library, world: &PlateWorld, site: &Site, max_leav
     };
     let mut solids = match &site.centrepiece {
         Some(placement) => {
-            let mut solids = structure::build_coarse(library, placement, max_leaves, coarsen);
+            let mut solids = structure::build(library, placement, max_leaves);
             // Its foundation, hidden in the core.
             let (sx, _, sz) = placement.size;
             solids.push(Solid {
@@ -477,7 +481,6 @@ pub fn build_coarse(library: &Library, world: &PlateWorld, site: &Site, max_leav
         library,
         budget: MAX_PRISMS,
         leaves: max_leaves.saturating_sub(solids.len()),
-        coarsen,
         out: Growth::default(),
     };
     let mut flights = Vec::new();
@@ -524,15 +527,7 @@ pub fn build_coarse(library: &Library, world: &PlateWorld, site: &Site, max_leav
         }
     }
     solids.extend(grower.out.solids);
-    let mut prisms = grower.out.prisms;
-    let min_width = COARSE_MIN_WIDTH[(coarsen as usize).min(2)];
-    if min_width > 0.0 {
-        prisms.retain(|p| {
-            let (lo, hi) = p.points.iter().fold((Vec2::MAX, Vec2::MIN), |(lo, hi), q| (lo.min(*q), hi.max(*q)));
-            (hi - lo).length() >= min_width
-        });
-    }
-    Built { base, solids, prisms, flights }
+    Built { base, solids, prisms: grower.out.prisms, flights }
 }
 
 /// A flight of stairs on a plate (local coordinates, floor relative to the

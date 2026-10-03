@@ -221,8 +221,6 @@ pub struct Grower<'a> {
     pub budget: usize,
     /// Leaves still allowed for box styles.
     pub leaves: usize,
-    /// Levels left out of box styles (see `structure::build_coarse`).
-    pub coarsen: u32,
     pub out: Growth,
 }
 
@@ -396,7 +394,7 @@ impl Grower<'_> {
                     seed,
                     sink: 0.0,
                 };
-                let solids = structure::build_coarse(self.library, &placement, self.leaves, self.coarsen);
+                let solids = structure::build(self.library, &placement, self.leaves);
                 self.leaves = self.leaves.saturating_sub(solids.len());
                 let offset = Vec3::new(center.x, floor, center.y);
                 self.out.solids.extend(solids.into_iter().map(|s| Solid { center: s.center + offset, ..s }));
@@ -648,7 +646,7 @@ mod tests {
             )"#,
         )
         .unwrap();
-        let mut grower = Grower { library: &library, budget: 10_000, leaves: 1000, coarsen: 0, out: Growth::default() };
+        let mut grower = Grower { library: &library, budget: 10_000, leaves: 1000, out: Growth::default() };
         grower.grow("all", &hexagon(20.0), 0.0, 0.12, 1, 0);
         let prisms = &grower.out.prisms;
         assert!(prisms.len() > 40, "{} prisms", prisms.len());

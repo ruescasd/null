@@ -62,16 +62,17 @@ struct Structure;
 #[derive(Component)]
 struct Site((i32, i32));
 
-/// How many versions of each structure are built: full detail, then each
-/// one level of its rules less deep (and without small pieces).
-const LEVELS: u32 = 3;
-/// Beyond these distances from the camera (to the structure's edge), the
-/// next coarser version is shown.
+/// Plate pieces narrower than these are left out of the coarser versions
+/// of a structure's plate buildings (box structures are always drawn whole:
+/// fewer levels of their rules change their outline, which shows)...
+const LEVEL_MIN_WIDTH: [f32; 2] = [3.0, 8.0];
+/// ...shown beyond these distances from the camera (to the structure's edge).
 const LEVEL_DISTANCE: [f32; 2] = [350.0, 900.0];
 
-/// The versions of a structure, built in the background: meshes from fine
-/// to coarse, the collider (from the finest) and the structure's radius.
-type Levels = (Vec<ColumnMesh>, Option<Collider>, f32);
+/// A structure built in the background: the mesh of its box solids (always
+/// shown), its plate pieces' meshes from fine to coarse, the collider and
+/// the structure's radius.
+type Levels = (ColumnMesh, Vec<ColumnMesh>, Option<Collider>, f32);
 
 /// A structure still being built in the background.
 #[derive(Component)]
@@ -208,9 +209,7 @@ fn watch(
         let (x, z) = placement.at;
         let origin = Vec3::new(x, world.ground_height(x, z), z);
         let library = library.clone();
-        let task = pool.spawn(async move {
-            finish((0..LEVELS).map(|c| (structure::build_coarse(&library, &placement, MAX_LEAVES, c), Vec::new())))
-        });
+        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new()) });
         commands.spawn((Structure, Building(task), Landmark { origin }, Transform::from_translation(origin)));
     }
     // Sites stream back in on their own.
@@ -224,37 +223,40 @@ fn watch(
     info!("{}: {} structures, {} site rules", path.display(), library.structures.len(), library.sites.len());
 }
 
-/// Meshes for each version (fine to coarse), and a collider for the finest:
-/// a box, wedge or hull per piece, robust for the player.
-fn finish(levels: impl Iterator<Item = (Vec<Solid>, Vec<Prism>)>) -> Levels {
-    let mut meshes = Vec::new();
-    let mut collider = None;
-    let mut radius: f32 = 0.0;
-    for (i, (solids, prisms)) in levels.enumerate() {
-        let mut mesh = structure::mesh(&solids);
-        forms::mesh_into(&mut mesh, &prisms);
-        if i == 0 {
-            radius = mesh.positions.iter().map(|p| Vec2::new(p[0], p[2]).length()).fold(0.0, f32::max);
-            let hulls = prisms
-                .iter()
-                .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
-            let shapes: Vec<(Position, Rotation, Collider)> = solids
-                .iter()
-                .filter_map(|s| {
-                    let shape = if s.wedge {
-                        Collider::convex_hull(structure::wedge_points(s.half))?
-                    } else {
-                        Collider::cuboid(s.half.x * 2.0, s.half.y * 2.0, s.half.z * 2.0)
-                    };
-                    Some((Position(s.center), Rotation(s.rotation), shape))
-                })
-                .chain(hulls)
-                .collect();
-            collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
-        }
-        meshes.push(mesh);
+/// Meshes (box solids; plate pieces fine to coarse) and a collider: a box,
+/// wedge or hull per piece, robust for the player.
+fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
+    let fixed = structure::mesh(&solids);
+    let mut levels = vec![ColumnMesh::default()];
+    forms::mesh_into(&mut levels[0], &prisms);
+    for min_width in LEVEL_MIN_WIDTH {
+        let mut mesh = ColumnMesh::default();
+        forms::mesh_into(&mut mesh, &sites::wide_prisms(&prisms, min_width));
+        levels.push(mesh);
     }
-    (meshes, collider, radius)
+    let radius = fixed
+        .positions
+        .iter()
+        .chain(&levels[0].positions)
+        .map(|p| Vec2::new(p[0], p[2]).length())
+        .fold(0.0, f32::max);
+    let hulls = prisms
+        .iter()
+        .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
+    let shapes: Vec<(Position, Rotation, Collider)> = solids
+        .iter()
+        .filter_map(|s| {
+            let shape = if s.wedge {
+                Collider::convex_hull(structure::wedge_points(s.half))?
+            } else {
+                Collider::cuboid(s.half.x * 2.0, s.half.y * 2.0, s.half.z * 2.0)
+            };
+            Some((Position(s.center), Rotation(s.rotation), shape))
+        })
+        .chain(hulls)
+        .collect();
+    let collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
+    (fixed, levels, collider, radius)
 }
 
 /// Puts finished structures in the world: one child mesh per version.
@@ -265,11 +267,20 @@ fn receive(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (entity, mut task) in &mut tasks {
-        let Some((levels, collider, radius)) = check_ready(&mut task.0) else { continue };
+        let Some((fixed, levels, collider, radius)) = check_ready(&mut task.0) else { continue };
         let mut e = commands.entity(entity);
         e.remove::<Building>().insert((Detail { radius }, Visibility::default()));
         if let Some(collider) = collider {
             e.insert(Solidity { collider, active: false });
+        }
+        if !fixed.is_empty() {
+            e.with_child((
+                bounds(&fixed),
+                NoAutoAabb,
+                Mesh3d(meshes.add(to_bevy_mesh(fixed))),
+                MeshMaterial3d(material.0.clone()),
+                Transform::default(),
+            ));
         }
         for (i, mesh) in levels.into_iter().enumerate() {
             if mesh.is_empty() {
@@ -369,14 +380,11 @@ fn stream_sites(
         let cell = site.cell;
         let (library, plates) = (library.clone(), plates.clone());
         let task = pool.spawn(async move {
-            finish((0..LEVELS).map(|c| {
-                let built = sites::build_coarse(&library, &plates, &site, MAX_LEAVES, c);
-                let lift = built.base - ground;
-                let solids =
-                    built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
-                let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
-                (solids, prisms)
-            }))
+            let built = sites::build(&library, &plates, &site, MAX_LEAVES);
+            let lift = built.base - ground;
+            let solids = built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
+            let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
+            finish(solids, prisms)
         });
         let origin = Vec3::new(x, ground, z);
         commands.spawn((

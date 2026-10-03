@@ -32,6 +32,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --shot path.png                           render once the view has loaded, save, exit
     --opt bot                                 scripted movement test: logs speed/height and exits
     --opt stairbot                            walks up a flight of stairs near spawn, logs every frame
+    --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
     --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
     --opt voxel                               the earlier organic voxel terrain
     --opt flat|hard|noao|nossao|nocontact|notaa|nograin|nosites   switch features off
