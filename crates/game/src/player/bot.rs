@@ -23,6 +23,11 @@ pub struct BotState {
     canal_reported: bool,
     /// When the tether test started its drop, and from what height.
     tether_drop: Option<(f32, f32)>,
+    /// The stairs test (`--opt stairbot`): where the flight starts, which
+    /// way is up, the height of its top, and when the bot got there.
+    stair: Option<(Vec3, Vec2, f32, f32)>,
+    stair_mantles: u32,
+    stair_was_mantling: bool,
 }
 
 pub fn drive(
@@ -34,10 +39,14 @@ pub fn drive(
     world: Res<WorldGen>,
     camera: Single<(&mut Transform, &mut FlyCam, &mut Player)>,
 ) {
+    let (mut transform, mut fly, mut player) = camera.into_inner();
+    if args.opt("stairbot") {
+        stairs(&time, &mut state, &mut input, &mut exit, &world, &mut transform, &mut fly, &mut player);
+        return;
+    }
     if !args.opt("bot") {
         return;
     }
-    let (mut transform, mut fly, mut player) = camera.into_inner();
     if !player.ready {
         return;
     }
@@ -212,6 +221,84 @@ pub fn drive(
             p.z,
         );
     }
+}
+
+/// Walks up the biggest flight of stairs on a site near the spawn point and
+/// logs every frame: a flight should be climbed by stepping, never by
+/// mantling.
+#[allow(clippy::too_many_arguments)]
+fn stairs(
+    time: &Time,
+    state: &mut BotState,
+    input: &mut MoveInput,
+    exit: &mut MessageWriter<AppExit>,
+    world: &WorldGen,
+    transform: &mut Transform,
+    fly: &mut FlyCam,
+    player: &mut Player,
+) {
+    if !player.ready {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if state.stair.is_none() {
+        let WorldGen::Plates(plates) = world else { return };
+        let Ok(library) = crate::structures::load_library() else { return };
+        let found = worldgen::sites::near(&library, plates, 1200.0, 900.0, 3000.0).into_iter().find_map(|site| {
+            let built = worldgen::sites::build(&library, plates, &site, 1000);
+            let flight = *built.flights.iter().max_by(|a, b| a.rise.total_cmp(&b.rise))?;
+            Some((site.at, built.base, flight))
+        });
+        let Some(((x, z), base, flight)) = found else {
+            info!("bot stairs: no stairs nearby");
+            exit.write(AppExit::Success);
+            return;
+        };
+        let foot = Vec3::new(x + flight.foot.x, base + flight.floor, z + flight.foot.y);
+        info!("bot stairs: flight at {:.0},{:.0} rising {:.2} m from {:.2}", foot.x, foot.z, flight.rise, foot.y);
+        state.stair = Some((foot, flight.up, foot.y + flight.rise, now));
+    }
+    let (foot, up, top, since) = state.stair.unwrap();
+    let t = now - since;
+    *input = MoveInput::default();
+    fly.yaw = (-up.x).atan2(-up.y);
+    fly.pitch = 0.0;
+    // Stand at the foot while the terrain there loads.
+    if t < 5.0 {
+        transform.translation = foot + Vec3::Y * (super::EYE + 0.02);
+        player.velocity = Vec3::ZERO;
+        return;
+    }
+    if t < 8.0 {
+        input.wish = Vec2::Y;
+        let feet = transform.translation.y - super::EYE;
+        let mantling = player.mantle.is_some();
+        if mantling && !state.stair_was_mantling {
+            state.stair_mantles += 1;
+        }
+        state.stair_was_mantling = mantling;
+        let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
+        info!(
+            "bot stairs t={:.3} feet {:+.2} (top {:+.2})  grounded {}  mantle {}  speed {:.1}  vy {:+.2}",
+            t - 5.0,
+            feet - foot.y,
+            top - foot.y,
+            player.grounded,
+            mantling,
+            speed,
+            player.velocity.y
+        );
+        return;
+    }
+    let feet = transform.translation.y - super::EYE;
+    info!(
+        "bot stairs: {} (feet {:+.2}, top {:+.2}), {} mantles",
+        if feet > top - 0.1 { "reached the top" } else { "did not reach the top" },
+        feet - foot.y,
+        top - foot.y,
+        state.stair_mantles
+    );
+    exit.write(AppExit::Success);
 }
 
 /// A spot `run_up` metres in front of a ledge between `min` and `max` high,

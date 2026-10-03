@@ -31,6 +31,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --seed n                                  world seed
     --shot path.png                           render once the view has loaded, save, exit
     --opt bot                                 scripted movement test: logs speed/height and exits
+    --opt stairbot                            walks up a flight of stairs near spawn, logs every frame
     --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
     --opt voxel                               the earlier organic voxel terrain
     --opt flat|hard|noao|nossao|nocontact|notaa|nograin|nosites   switch features off
@@ -52,7 +53,8 @@ crashed the GPU driver.
   benchmarks in `examples/`; `cargo run -p worldgen --release --example map --
   map.png 8` draws a top-down map of the whole world (districts, canals,
   site footprints) at 8 m per pixel and lists the sites nearest the spawn
-  point.
+  point; `--example floating` reports pieces of structures with nothing
+  under them.
 - `crates/game` — Bevy app: column streaming with LOD (`terrain.rs`), curved
   horizon and AO shaders (`*.wgsl`), suns / stars / bounce and fill light and
   grading (`look.rs`), structures and streamed sites (`structures.rs`), kept
@@ -121,7 +123,11 @@ setbacks, the next a walled court, the next a field of shards; a site may
 also keep a box-style centrepiece. Plates next to a higher one may get a
 flight of stairs up to it instead (0.45 m steps, walkable without jumping).
 Site ground keeps its full detail at every distance, and everything built
-reaches a few metres into its plate, so nothing floats when seen from afar. Structures are built in the background within 2.5 km of the
+reaches a few metres into its plate, so nothing floats when seen from afar.
+Box-style structures are settled too: blocks stack flush (grooves only
+run sideways), cells spanning a gap reach their neighbours, and anything
+still cut off from the ground reaches down to what is below it. The test
+structures stand on a flat core with terraces, like sites. Structures are built in the background within 2.5 km of the
 camera and dropped beyond 2.9 km; changing the site rules regenerates the
 terrain.
 

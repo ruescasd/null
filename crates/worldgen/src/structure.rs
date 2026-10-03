@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use serde::Deserialize;
 
 use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
@@ -346,7 +346,121 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
     let seed = placement.seed.wrapping_mul(0x9e37_79b9) ^ 0x5eed;
     let mut builder = Builder { library, budget: max_leaves, out: Vec::new() };
     builder.style(&placement.style, root, seed, 0);
-    builder.out
+    let mut solids = builder.out;
+    settle(&mut solids);
+    // Seated on the ground: the lowest piece's bottom at the base (less the
+    // sink), whatever the rules left out at the bottom.
+    let lowest = solids.iter().map(Solid::bottom).fold(f32::MAX, f32::min);
+    if lowest.is_finite() {
+        let drop = lowest + placement.sink;
+        for s in &mut solids {
+            s.center.y -= drop;
+            // What stands on the ground reaches into it, so it meets lower
+            // plates under its footprint instead of hovering over them.
+            if !s.wedge && s.bottom() < -placement.sink + 0.01 {
+                s.center.y -= FOUNDATION * 0.5;
+                s.half.y += FOUNDATION * 0.5;
+            }
+        }
+    }
+    solids
+}
+
+/// How far pieces on the ground reach into it, metres.
+const FOUNDATION: f32 = 8.0;
+
+/// Nothing hangs in the air. Pieces connected to the base through others
+/// (touching, sideways included: roofs, bridges) stay as they are; a piece
+/// cut off from it reaches down to the highest thing below it, or to the
+/// base. The rules cannot see what grew in the cell below, so this is
+/// settled afterwards.
+fn settle(solids: &mut [Solid]) {
+    const CELL: f32 = 8.0;
+    const TOUCH: f32 = 0.1;
+    let base = solids.iter().map(Solid::bottom).fold(f32::MAX, f32::min);
+    if !base.is_finite() {
+        return;
+    }
+    let bounds = |s: &Solid| {
+        let (mut lo, mut hi) = (Vec3::MAX, Vec3::MIN);
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    let p = s.center + s.rotation * (Vec3::new(x, y, z) * s.half);
+                    lo = lo.min(p);
+                    hi = hi.max(p);
+                }
+            }
+        }
+        (lo, hi)
+    };
+    let cells = |lo: Vec3, hi: Vec3| {
+        let (x0, z0) = ((lo.x / CELL).floor() as i32, (lo.z / CELL).floor() as i32);
+        let (x1, z1) = ((hi.x / CELL).floor() as i32, (hi.z / CELL).floor() as i32);
+        (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| (x, z)))
+    };
+    let touching = |a: &(Vec3, Vec3), b: &(Vec3, Vec3)| {
+        (0..3).all(|k| a.0[k] <= b.1[k] + TOUCH && b.0[k] <= a.1[k] + TOUCH)
+    };
+    let covers = |s: &Solid, p: Vec2| {
+        let local = s.rotation.inverse() * (Vec3::new(p.x, s.center.y, p.y) - s.center);
+        local.x.abs() <= s.half.x && local.z.abs() <= s.half.z
+    };
+    let mut boxes: Vec<(Vec3, Vec3)> = solids.iter().map(bounds).collect();
+    let mut grid: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
+    for (i, &(lo, hi)) in boxes.iter().enumerate() {
+        for key in cells(lo, hi) {
+            grid.entry(key).or_default().push(i);
+        }
+    }
+    let mut supported: Vec<bool> = boxes.iter().map(|b| b.0.y <= base + TOUCH).collect();
+    let mut stack: Vec<usize> = (0..solids.len()).filter(|&i| supported[i]).collect();
+    let mut loose: Vec<usize> = (0..solids.len()).filter(|&i| !supported[i]).collect();
+    loose.sort_by(|&a, &b| boxes[a].0.y.total_cmp(&boxes[b].0.y));
+    let mut next = 0;
+    loop {
+        // Everything connected to the supported pieces.
+        while let Some(i) = stack.pop() {
+            for key in cells(boxes[i].0, boxes[i].1) {
+                for &j in grid.get(&key).into_iter().flatten() {
+                    if !supported[j] && touching(&boxes[i], &boxes[j]) {
+                        supported[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        // The lowest piece still loose reaches down to what is below, which
+        // joins it (and whatever touches it) to the supported.
+        while next < loose.len() && (supported[loose[next]] || solids[loose[next]].wedge) {
+            next += 1;
+        }
+        let Some(&i) = loose.get(next) else { break };
+        next += 1;
+        let s = solids[i];
+        let bottom = boxes[i].0.y;
+        let mut highest = base;
+        for (u, v) in [(0.0, 0.0), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8), (-0.8, -0.8)] {
+            let p = s.center + s.rotation * Vec3::new(u * s.half.x, 0.0, v * s.half.z);
+            let p = Vec2::new(p.x, p.z);
+            let key = ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32);
+            for &j in grid.get(&key).into_iter().flatten() {
+                if j != i && supported[j] && covers(&solids[j], p) && boxes[j].1.y <= bottom + TOUCH {
+                    highest = highest.max(boxes[j].1.y);
+                }
+            }
+        }
+        let drop = bottom - highest;
+        let s = &mut solids[i];
+        s.center.y -= drop * 0.5;
+        s.half.y += drop * 0.5;
+        boxes[i] = bounds(s);
+        for key in cells(boxes[i].0, boxes[i].1) {
+            grid.entry(key).or_default().push(i);
+        }
+        supported[i] = true;
+        stack.push(i);
+    }
 }
 
 /// How deep structures may nest inside structures.
@@ -582,6 +696,21 @@ pub fn mesh(solids: &[Solid]) -> ColumnMesh {
         }
     }
     mesh
+}
+
+impl Solid {
+    /// The height of its lowest corner.
+    pub fn bottom(&self) -> f32 {
+        let mut low = f32::MAX;
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    low = low.min((self.center + self.rotation * (Vec3::new(x, y, z) * self.half)).y);
+                }
+            }
+        }
+        low
+    }
 }
 
 /// The corners of a wedge in its own frame (for a convex collider).

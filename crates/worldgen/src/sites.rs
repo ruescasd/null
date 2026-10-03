@@ -240,7 +240,7 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
     for other in &library.structures {
         let wrap = |d: f32| d - (d / world.size()).round() * world.size();
         let distance = wrap(other.at.0 - x).hypot(wrap(other.at.1 - z));
-        reach = reach.min(distance - other.size.0.hypot(other.size.2) * 0.5 - CANAL_CLEARANCE);
+        reach = reach.min(distance - placed_ground_radius(other) - CANAL_CLEARANCE);
     }
     let terraces = if rule.plinth { rule.rings as f32 * rule.ring_width } else { 0.0 };
     let seed = (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed;
@@ -344,13 +344,43 @@ pub struct SiteTable {
     cell: f64,
     size: f64,
     grounds: Vec<Option<SiteGround>>,
+    /// The ground under the hand-placed structures.
+    placed: Vec<SiteGround>,
+}
+
+/// Terraces around a hand-placed structure's core.
+const PLACED_RINGS: u32 = 2;
+const PLACED_RING_WIDTH: f32 = 22.0;
+
+/// How far a hand-placed structure's ground reaches from its centre.
+fn placed_ground_radius(placement: &Placement) -> f32 {
+    placement.size.0.hypot(placement.size.2) * 0.5 + CORE_MARGIN + PLACED_RINGS as f32 * PLACED_RING_WIDTH
 }
 
 impl SiteTable {
     pub fn new(library: &Library, world: &PlateWorld) -> Self {
         let (n, cell) = cells(world.size(), library.site_grid.spacing);
         let grounds = (0..n * n).map(|i| plan(library, world, (i % n, i / n)).and_then(|s| s.ground)).collect();
-        Self { n, cell: cell as f64, size: world.size() as f64, grounds }
+        // Hand-placed structures stand on a flat core level with the ground
+        // at their centre, like a site's.
+        let placed = library
+            .structures
+            .iter()
+            .map(|p| {
+                let (x, z) = p.at;
+                let step = default_step() as f64;
+                let core = (p.size.0.hypot(p.size.2) * 0.5 + CORE_MARGIN) as f64;
+                SiteGround {
+                    center: DVec2::new(x as f64, z as f64),
+                    top: (world.shaped(x as f64, z as f64) / step).round() * step,
+                    core,
+                    radius: placed_ground_radius(p) as f64,
+                    rings: PLACED_RINGS,
+                    step,
+                }
+            })
+            .collect();
+        Self { n, cell: cell as f64, size: world.size() as f64, grounds, placed }
     }
 
     /// The site whose ground (grown by `margin`) contains `p`, at any
@@ -371,7 +401,10 @@ impl SiteTable {
                 }
             }
         }
-        None
+        self.placed.iter().find_map(|ground| {
+            let distance = wrap(ground.center.x - p.x).hypot(wrap(ground.center.y - p.y));
+            (distance < ground.radius + margin).then_some((ground, distance))
+        })
     }
 }
 
@@ -381,6 +414,18 @@ pub struct Built {
     pub base: f32,
     pub solids: Vec<Solid>,
     pub prisms: Vec<Prism>,
+    pub flights: Vec<Flight>,
+}
+
+/// A flight of stairs (local coordinates, heights relative to the base).
+#[derive(Clone, Copy, Debug)]
+pub struct Flight {
+    /// On the floor, a little before the lowest step.
+    pub foot: Vec2,
+    /// Horizontal unit direction up the flight.
+    pub up: Vec2,
+    pub floor: f32,
+    pub rise: f32,
 }
 
 /// Pieces of buildings per site at most.
@@ -425,6 +470,7 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
         leaves: max_leaves.saturating_sub(solids.len()),
         out: Growth::default(),
     };
+    let mut flights = Vec::new();
     if let Some(ground) = &site.ground {
         let r = |k: i32| hash01(site.cell.0, k, site.cell.1, site.seed ^ 0x9a7e);
         // One tone for the site, as if built of one material.
@@ -437,9 +483,10 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
             let k = |i: i32| hash01(plate.key.0, i, plate.key.1, site.seed);
             let floor = (plate.height - base as f64) as f32;
             if k(1) < site.stairs
-                && let Some(flight) = stairs(world, &local, center, plate.height as f32, floor, tone)
+                && let Some((steps, flight)) = stairs(world, &local, center, plate.height as f32, floor, tone)
             {
-                grower.out.prisms.extend(flight);
+                grower.out.prisms.extend(steps);
+                flights.push(flight);
                 continue;
             }
             let form = if plate.distance <= ground.core {
@@ -467,12 +514,19 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
         }
     }
     solids.extend(grower.out.solids);
-    Built { base, solids, prisms: grower.out.prisms }
+    Built { base, solids, prisms: grower.out.prisms, flights }
 }
 
 /// A flight of stairs on a plate (local coordinates, floor relative to the
 /// site's base) up to its highest neighbour, if one is within reach.
-fn stairs(world: &PlateWorld, plate: &[Vec2], center: DVec2, height: f32, floor: f32, tone: f32) -> Option<Vec<Prism>> {
+fn stairs(
+    world: &PlateWorld,
+    plate: &[Vec2],
+    center: DVec2,
+    height: f32,
+    floor: f32,
+    tone: f32,
+) -> Option<(Vec<Prism>, Flight)> {
     let inward = forms::inward_normals(plate);
     let n = plate.len();
     // The edge with the highest neighbour beyond it.
@@ -485,7 +539,7 @@ fn stairs(world: &PlateWorld, plate: &[Vec2], center: DVec2, height: f32, floor:
         let probe = (a + b) * 0.5 - inward[i] * 1.5;
         let beyond = world.height_at((center.x + probe.x as f64) as f32, (center.y + probe.y as f64) as f32);
         let rise = beyond - height;
-        if (0.7..=12.0).contains(&rise) && best.is_none_or(|(r, _)| rise > r) {
+        if (0.7..=8.0).contains(&rise) && best.is_none_or(|(r, _)| rise > r) {
             best = Some((rise, i));
         }
     }
@@ -518,7 +572,9 @@ fn stairs(world: &PlateWorld, plate: &[Vec2], center: DVec2, height: f32, floor:
             });
         }
     }
-    Some(flight)
+    let run = steps as f32 * STAIR_TREAD;
+    let foot = Flight { foot: mid + inward[i] * (run + 1.5), up: -inward[i], floor, rise };
+    Some((flight, foot))
 }
 
 #[cfg(test)]

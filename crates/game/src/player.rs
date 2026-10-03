@@ -77,6 +77,9 @@ const MANTLE_REACH: f32 = 1.1;
 const MANTLE_TIME: f32 = 0.2;
 /// Least horizontal speed when coming out of a mantle.
 const MANTLE_EXIT_SPEED: f32 = 6.0;
+/// Time constant of the view catching up with the body after stepping up or
+/// down a step, so stairs read as walking rather than a run of hops.
+const VIEW_SMOOTH: f32 = 0.05;
 /// How far sideways the player may be nudged past an edge they clipped.
 const SLIP: f32 = 0.24;
 
@@ -134,6 +137,9 @@ pub struct Player {
     tether_held: bool,
     /// Movement waits until the terrain around the spawn point has loaded.
     pub ready: bool,
+    /// How far the view lags behind the body after a step (negative after
+    /// stepping up).
+    view_offset: f32,
 }
 
 fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
@@ -148,6 +154,7 @@ fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
         in_canal: false,
         tether_blocked: 0.0,
         tether_held: false,
+        view_offset: 0.0,
         ready: false,
     });
 }
@@ -259,6 +266,22 @@ impl Mover<'_, '_, '_> {
         let (down, normal) = self.sweep(stepped, Vec3::NEG_Y * (up + 0.05))?;
         (normal.y >= MIN_WALK_NORMAL)
             .then(|| (stepped - Vec3::Y * down, Vec3::new(step_vel.x, 0.0, step_vel.z)))
+    }
+
+    /// The most level surface straight below the hull (its middle and
+    /// corners). A box resting on a step's edge touches the edge itself,
+    /// whose normal leans; what is right below says what the ground really
+    /// is: on stairs a tread, on a ramp the ramp.
+    fn normal_below(&self, center: Vec3) -> Option<Vec3> {
+        let reach = HEIGHT * 0.5 + STEP_HEIGHT + 0.1;
+        let c = HALF_WIDTH * 0.8;
+        [(0.0, 0.0), (c, c), (-c, c), (c, -c), (-c, -c)]
+            .into_iter()
+            .filter_map(|(dx, dz)| {
+                let from = center + Vec3::new(dx, 0.0, dz);
+                self.query.spatial_query.cast_ray(from, Dir3::NEG_Y, reach, true, &self.filter).map(|hit| hit.normal)
+            })
+            .max_by(|a, b| a.y.total_cmp(&b.y))
     }
 
     /// Corner correction: try the move again from up to `SLIP` to either side.
@@ -419,6 +442,7 @@ pub fn walk(
     if keys.just_pressed(KeyCode::KeyV) {
         fly.noclip = !fly.noclip;
         player.velocity = Vec3::ZERO;
+        player.view_offset = 0.0;
     }
     player.firing = input.fire && player.energy > 0.0;
     // Fire, fly and release the tether (once per frame; the pull itself is
@@ -486,7 +510,7 @@ pub fn walk(
         config: MoveAndSlideConfig::default(),
         filter: SpatialQueryFilter::default(),
     };
-    let mut center = transform.translation - Vec3::Y * (EYE - HEIGHT * 0.5);
+    let mut center = transform.translation - Vec3::Y * (EYE - HEIGHT * 0.5 + player.view_offset);
     let total = time.delta_secs().min(0.1);
     let steps = (total / STEP_DT).ceil().max(1.0) as u32;
     let dt = total / steps as f32;
@@ -510,13 +534,15 @@ pub fn walk(
             continue;
         }
 
-        let ground = if player.velocity.y > 1.0 {
-            None
-        } else {
-            mover.sweep(center, Vec3::NEG_Y * 0.08).filter(|(_, n)| n.y >= MIN_WALK_NORMAL)
-        };
+        // On the ground unless moving away from it (as in Quake: a jump, a
+        // pull, a push).
+        let ground = mover
+            .sweep(center, Vec3::NEG_Y * 0.08)
+            .filter(|(_, n)| n.y >= MIN_WALK_NORMAL)
+            .map(|(_, n)| mover.normal_below(center).filter(|n| n.y >= MIN_WALK_NORMAL).unwrap_or(n))
+            .filter(|n| !(player.velocity.y > 0.0 && player.velocity.dot(*n) > 0.5));
         player.grounded = ground.is_some();
-        if let Some((_, normal)) = ground {
+        if let Some(normal) = ground {
             player.ground_normal = normal;
         }
 
@@ -526,6 +552,7 @@ pub fn walk(
             player.velocity.y = JUMP_SPEED;
             player.grounded = false;
         }
+        let was_grounded = player.grounded;
         let tethered = matches!(player.tether, Tether::Anchored { .. });
         // Inside a canal's pipe (up to just above its rim), movement is a
         // half-pipe: see `ride_pipe`.
@@ -586,13 +613,39 @@ pub fn walk(
 
         let can_step = player.grounded || player.velocity.y < 2.0;
         let (moved, velocity) = mover.step_slide(center, player.velocity, dt, can_step);
+        let rose = moved.y - center.y;
         center = moved;
         player.velocity = velocity;
+        if was_grounded && !tethered && !player.firing {
+            // Walking: rise no faster than the ground slopes. Catching the
+            // corner of a step must not throw the player upwards.
+            let n = player.ground_normal;
+            let follow = -(player.velocity.x * n.x + player.velocity.z * n.z) / n.y.max(0.1);
+            player.velocity.y = player.velocity.y.min(follow.max(0.0));
+        }
+        if was_grounded && player.grounded && rose > 0.05 {
+            // Stepped up: the body is there, the view follows.
+            player.view_offset -= rose;
+        } else if was_grounded && player.velocity.y <= 0.1 {
+            // Walked off a step: stay on the ground below it rather than
+            // falling, as walking down stairs should.
+            let on_ground = mover.sweep(center, Vec3::NEG_Y * 0.08).is_some_and(|(_, n)| n.y >= MIN_WALK_NORMAL);
+            if !on_ground
+                && let Some((down, n)) = mover.sweep(center, Vec3::NEG_Y * (STEP_HEIGHT + 0.05))
+                && n.y >= MIN_WALK_NORMAL
+            {
+                center.y -= down;
+                player.velocity.y = 0.0;
+                player.view_offset += down;
+            }
+        }
     }
-    transform.translation = center + Vec3::Y * (EYE - HEIGHT * 0.5);
+    player.view_offset = (player.view_offset * (-total / VIEW_SMOOTH).exp()).clamp(-1.0, 1.0);
+    transform.translation = center + Vec3::Y * (EYE - HEIGHT * 0.5 + player.view_offset);
 
     // Never fall out of the world.
     if transform.translation.y < ground_height - 30.0 {
+        player.view_offset = 0.0;
         transform.translation.y = ground_height + EYE + 0.5;
         player.velocity = Vec3::ZERO;
     }

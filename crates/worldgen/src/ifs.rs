@@ -141,23 +141,36 @@ fn split(
         1 + (h * ny as f32) as u32
     };
     let cell = block.half * 2.0 / Vec3::new(nx as f32, ny as f32, nz as f32);
+    let child_path = |i: u32, j: u32, k: u32| path.wrapping_mul(97).wrapping_add(1 + i + j * 7 + k * 49);
+    // Kept at random, a cell also needs the cell below it: nothing hangs in
+    // the air.
+    let random_keep = |i: u32, j: u32, k: u32, p: f32| {
+        (0..=j).all(|below| hash01(child_path(i, below, k) as i32, 1, block.level as i32 + 1, seed) < p)
+    };
+    let inner = |v: u32, n: u32| v > 0 && v + 1 < n;
+    let keeps = |i: u32, j: u32, k: u32| {
+        let interior = inner(i, nx) as u32 + inner(j, ny) as u32 + inner(k, nz) as u32;
+        match rule.keep {
+            Keep::All => true,
+            Keep::Lattice => interior <= 1,
+            Keep::ColumnsAndRoof => (!inner(i, nx) && !inner(k, nz)) || j + 1 == ny,
+            Keep::Random(p) => random_keep(i, j, k, p),
+            Keep::Skyline => j < column_height(i, k),
+        }
+    };
     for k in 0..nz {
         for j in 0..ny {
             for i in 0..nx {
-                let inner = |v: u32, n: u32| v > 0 && v + 1 < n;
-                let interior = inner(i, nx) as u32 + inner(j, ny) as u32 + inner(k, nz) as u32;
-                let child_path = path.wrapping_mul(97).wrapping_add(1 + i + j * 7 + k * 49);
+                let child_path = child_path(i, j, k);
                 let rc = |key: i32| hash01(child_path as i32, key, block.level as i32 + 1, seed);
-                let keep = match rule.keep {
-                    Keep::All => true,
-                    Keep::Lattice => interior <= 1,
-                    Keep::ColumnsAndRoof => (!inner(i, nx) && !inner(k, nz)) || j + 1 == ny,
-                    Keep::Random(p) => rc(1) < p,
-                    Keep::Skyline => j < column_height(i, k),
-                };
-                if !keep {
+                if !keeps(i, j, k) {
                     continue;
                 }
+                // A cell with nothing under it spans a gap (a bridge, a
+                // roof): it reaches across the grooves to its neighbours
+                // instead of hanging between them.
+                let spans = j > 0 && !keeps(i, j - 1, k);
+                let across = if spans { 2.0 - rule.gap } else { rule.gap };
                 let local = Vec3::new(
                     (i as f32 + 0.5) * cell.x - block.half.x,
                     (j as f32 + 0.5) * cell.y - block.half.y + (rc(2) - 0.5) * rule.lift * cell.y,
@@ -166,7 +179,8 @@ fn split(
                 let child = Block {
                     center: block.center + block.rotation * local,
                     rotation: block.rotation * rule.twist,
-                    half: cell * 0.5 * rule.gap,
+                    // Grooves between neighbours, but floors stack flush.
+                    half: cell * 0.5 * Vec3::new(across, 1.0, across),
                     level: block.level + 1,
                 };
                 let context = Context { index: [i, j, k], grid: [nx, ny, nz], early: false };
