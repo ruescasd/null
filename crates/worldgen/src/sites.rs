@@ -7,12 +7,14 @@
 //! every time and wraps seamlessly. Sites keep clear of each other, of the
 //! canals and of the hand-placed structures.
 //!
-//! A site stands on a podium: its top sits just above the highest ground
-//! under the footprint and its sides reach below the lowest, so nothing
-//! floats or is half buried, and on uneven ground it reads as a deliberate
-//! acropolis.
+//! A site reshapes the ground itself rather than standing on a slab: the
+//! plates around it (see `plates.rs`) become a flat core at the site's own
+//! height, where the structure stands, ringed by terraces that step from the
+//! core to the surrounding ground. The core can rise above the ground (an
+//! acropolis), sit level with it (a plaza) or sink into it (a court). Its
+//! outline follows the plates, so it is ragged rather than drawn.
 
-use glam::{DVec2, Quat, Vec3};
+use glam::{DVec2, Vec2};
 use serde::Deserialize;
 
 use crate::canal::HALF_WIDTH;
@@ -50,8 +52,21 @@ fn yes() -> bool {
 fn one() -> f32 {
     1.0
 }
+fn default_lift() -> (f32, f32) {
+    (3.0, 9.0)
+}
+fn default_rings() -> u32 {
+    3
+}
+fn default_ring_width() -> f32 {
+    22.0
+}
+fn default_step() -> f32 {
+    0.5
+}
 
-/// "In this district, structures of this style grow, this often, this big."
+/// "In this district, structures of this style grow, this often, this big,
+/// on this kind of ground."
 #[derive(Clone, Debug, Deserialize)]
 pub struct SiteRule {
     pub district: District,
@@ -60,33 +75,84 @@ pub struct SiteRule {
     pub weight: f32,
     /// Smallest and largest size (x, y, z), metres.
     pub size: ((f32, f32, f32), (f32, f32, f32)),
-    /// Stand on a podium (default) or straight on the ground.
+    /// Reshape the ground into a core and terraces (default), or stand
+    /// straight on the ground as it is.
     #[serde(default = "yes")]
     pub plinth: bool,
+    /// How far the core rises above the surrounding ground, smallest and
+    /// largest, metres; negative sinks it into a court.
+    #[serde(default = "default_lift")]
+    pub lift: (f32, f32),
+    /// Terraces between the core and the surrounding ground.
+    #[serde(default = "default_rings")]
+    pub rings: u32,
+    /// Width of each terrace, metres.
+    #[serde(default = "default_ring_width")]
+    pub ring_width: f32,
+    /// Terrace heights are multiples of this, metres.
+    #[serde(default = "default_step")]
+    pub step: f32,
+}
+
+/// The ground a site reshapes: circles around its centre, though the plates
+/// that fall inside them make the actual outline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SiteGround {
+    /// World position (canonical, 0..size).
+    pub center: DVec2,
+    /// Height of the core, where the structure stands.
+    pub top: f64,
+    /// Plates whose site lies within `core` of the centre form the core...
+    pub core: f64,
+    /// ...those within `radius` the terraces.
+    pub radius: f64,
+    pub rings: u32,
+    pub step: f64,
+}
+
+impl SiteGround {
+    /// The height of a plate whose site is `distance` from the centre, where
+    /// the ground's smooth landform is `natural`; None outside the site.
+    pub fn height(&self, distance: f64, natural: f64) -> Option<f64> {
+        if distance >= self.radius {
+            return None;
+        }
+        if distance <= self.core {
+            return Some(self.top);
+        }
+        // Ring 1 is the outermost terrace, ring `rings` the one by the core.
+        let width = (self.radius - self.core) / self.rings as f64;
+        let ring = ((self.radius - distance) / width).floor() + 1.0;
+        let t = ring / (self.rings as f64 + 1.0);
+        let h = natural + (self.top - natural) * t;
+        Some((h / self.step).round() * self.step)
+    }
 }
 
 /// A planned site: a structure placed in the world (its `at` is in the
-/// world's canonical 0..size range).
+/// world's canonical 0..size range) and the ground it stands on.
 #[derive(Clone, Debug)]
 pub struct Site {
     /// The grid cell, which identifies the site.
     pub cell: (i32, i32),
     pub placement: Placement,
-    pub plinth: bool,
+    /// None when the site stands on the ground as it is.
+    pub ground: Option<SiteGround>,
 }
 
 /// How far a site's centre may stray from its cell's centre, as a fraction
 /// of the cell.
 const JITTER: f32 = 0.15;
-/// A footprint's half-diagonal at most, as a fraction of the cell: with the
+/// A site's outer radius at most, as a fraction of the cell: with the
 /// jitter, neighbours can never touch.
 const REACH: f32 = 0.5 - JITTER - 0.02;
-/// Clearance between a footprint and a canal's lip, metres.
+/// Clearance between a site and a canal's lip, metres.
 const CANAL_CLEARANCE: f32 = 12.0;
-/// The podium's top clears this fraction of the ground under it.
-const HIGH_PERCENTILE: f32 = 0.85;
 /// Footprints smaller than this (in either direction) are not worth placing.
 const MIN_FOOTPRINT: f32 = 24.0;
+/// The core reaches this far beyond the structure's corners: plates are
+/// about 32 m across, so a lower terrace's plate can reach in this far.
+const CORE_MARGIN: f32 = 24.0;
 
 /// Cells per side and the cell size.
 fn cells(world_size: f32, spacing: f32) -> (i32, f32) {
@@ -94,7 +160,7 @@ fn cells(world_size: f32, spacing: f32) -> (i32, f32) {
     (n, world_size / n as f32)
 }
 
-/// The site in a grid cell, if any. Cheap: no ground sampling.
+/// The site in a grid cell, if any. Cheap: a few samples of the landform.
 pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<Site> {
     let grid = library.site_grid;
     let (n, size) = cells(world.size(), grid.spacing);
@@ -124,27 +190,47 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
     let ((x0, y0, z0), (x1, y1, z1)) = rule.size;
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let (mut sx, sy, mut sz) = (lerp(x0, x1, r(4)), lerp(y0, y1, r(5)), lerp(z0, z1, r(6)));
-    // Shrink (keeping proportions) to stay inside the cell and off the canals.
+
+    // The site's outer radius stays inside the cell, off the canals and off
+    // the hand-placed structures.
     let mut reach = REACH * size;
     if let Some((center, _, _)) = world.nearest_canal(x, z) {
-        let distance = (center - glam::Vec2::new(x, z)).length();
+        let distance = (center - Vec2::new(x, z)).length();
         reach = reach.min(distance - HALF_WIDTH as f32 - CANAL_CLEARANCE);
     }
-    // And off the hand-placed structures.
     for other in &library.structures {
         let wrap = |d: f32| d - (d / world.size()).round() * world.size();
         let distance = wrap(other.at.0 - x).hypot(wrap(other.at.1 - z));
         reach = reach.min(distance - other.size.0.hypot(other.size.2) * 0.5 - CANAL_CLEARANCE);
     }
+    // The terraces take their share; the structure shrinks (keeping its
+    // proportions) to fit what is left.
+    let terraces = if rule.plinth { CORE_MARGIN + rule.rings as f32 * rule.ring_width } else { 0.0 };
     let half_diagonal = sx.hypot(sz) * 0.5;
-    if half_diagonal > reach {
-        let k = reach.max(0.0) / half_diagonal;
+    let room = reach - terraces;
+    if half_diagonal > room {
+        let k = room.max(0.0) / half_diagonal;
         sx *= k;
         sz *= k;
     }
     if sx.min(sz) < MIN_FOOTPRINT {
         return None;
     }
+
+    let ground = rule.plinth.then(|| {
+        let step = rule.step.max(0.05) as f64;
+        let lift = lerp(rule.lift.0, rule.lift.1, r(8)) as f64;
+        let natural = world.shaped(x as f64, z as f64);
+        let core = (sx.hypot(sz) * 0.5 + CORE_MARGIN) as f64;
+        SiteGround {
+            center: DVec2::new(x as f64, z as f64),
+            top: ((natural + lift) / step).round() * step,
+            core,
+            radius: core + (rule.rings as f32 * rule.ring_width) as f64,
+            rings: rule.rings.max(1),
+            step,
+        }
+    });
     Some(Site {
         cell,
         placement: Placement {
@@ -155,7 +241,7 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
             seed: (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed,
             sink: 0.0,
         },
-        plinth: rule.plinth,
+        ground,
     })
 }
 
@@ -187,58 +273,59 @@ pub fn all(library: &Library, world: &PlateWorld) -> Vec<Site> {
     (0..n * n).filter_map(|i| plan(library, world, (i % n, i / n))).collect()
 }
 
+/// The ground of every site, by cell, for the plate generator to look up.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SiteTable {
+    n: i32,
+    cell: f64,
+    size: f64,
+    grounds: Vec<Option<SiteGround>>,
+}
+
+impl SiteTable {
+    pub fn new(library: &Library, world: &PlateWorld) -> Self {
+        let (n, cell) = cells(world.size(), library.site_grid.spacing);
+        let grounds = (0..n * n).map(|i| plan(library, world, (i % n, i / n)).and_then(|s| s.ground)).collect();
+        Self { n, cell: cell as f64, size: world.size() as f64, grounds }
+    }
+
+    /// The site whose ground (grown by `margin`) contains `p`, at any
+    /// wrapped copy, and the distance from its centre.
+    pub fn at(&self, p: DVec2, margin: f64) -> Option<(&SiteGround, f64)> {
+        if self.n == 0 {
+            return None;
+        }
+        let (cx, cz) = ((p.x / self.cell).floor() as i32, (p.y / self.cell).floor() as i32);
+        let wrap = |d: f64| d - (d / self.size).round() * self.size;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let (gx, gz) = ((cx + dx).rem_euclid(self.n), (cz + dz).rem_euclid(self.n));
+                let Some(ground) = &self.grounds[(gz * self.n + gx) as usize] else { continue };
+                let distance = wrap(ground.center.x - p.x).hypot(wrap(ground.center.y - p.y));
+                if distance < ground.radius + margin {
+                    return Some((ground, distance));
+                }
+            }
+        }
+        None
+    }
+}
+
 /// A built site: the height its structure stands at, and its solids
-/// (podium included) relative to (x, base, z).
+/// relative to (x, base, z).
 pub struct Built {
     pub base: f32,
     pub solids: Vec<Solid>,
 }
 
-/// Builds a site's structure and podium. Samples the ground under the
-/// footprint and runs the structure's rules, so it belongs in the background.
+/// Builds a site's structure, which belongs in the background.
 pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usize) -> Built {
     let (x, z) = site.placement.at;
-    let (sx, _, sz) = site.placement.size;
-    if !site.plinth {
-        let base = world.height_at(x, z);
-        return Built { base, solids: structure::build(library, &site.placement, max_leaves) };
-    }
-    // The podium is a little larger than the structure.
-    let half = Vec3::new(sx * 0.5 + 3.0, 0.0, sz * 0.5 + 3.0);
-    let rotation = Quat::from_rotation_y(site.placement.yaw.to_radians());
-    // Ground on a grid of about 6 m over the footprint: fine enough to catch
-    // most plates.
-    let (nx, nz) = (((half.x / 3.0) as usize).clamp(4, 48), ((half.z / 3.0) as usize).clamp(4, 48));
-    let mut heights = Vec::with_capacity((nx + 1) * (nz + 1));
-    for i in 0..=nx {
-        for j in 0..=nz {
-            let local = Vec3::new(
-                (i as f32 / nx as f32 * 2.0 - 1.0) * half.x,
-                0.0,
-                (j as f32 / nz as f32 * 2.0 - 1.0) * half.z,
-            );
-            let w = rotation * local;
-            let p = DVec2::new((x + w.x) as f64, (z + w.z) as f64);
-            heights.push(world.height_at(p.x as f32, p.y as f32));
-        }
-    }
-    heights.sort_by(f32::total_cmp);
-    let low = heights[0];
-    // Its top just above the ground, ignoring the odd pillar or mesa (which
-    // pokes through instead of lifting the whole site), its foot well below
-    // the lowest ground.
-    let high = heights[((heights.len() - 1) as f32 * HIGH_PERCENTILE) as usize];
-    let base = high + 0.4;
-    let bottom = low - 6.0 - base;
-    let mut solids = vec![Solid {
-        wedge: false,
-        center: Vec3::Y * bottom * 0.5,
-        rotation,
-        half: Vec3::new(half.x, -bottom * 0.5, half.z),
-        albedo: 0.11,
-    }];
-    solids.extend(structure::build(library, &site.placement, max_leaves));
-    Built { base, solids }
+    let base = match &site.ground {
+        Some(ground) => ground.top as f32,
+        None => world.height_at(x, z),
+    };
+    Built { base, solids: structure::build(library, &site.placement, max_leaves) }
 }
 
 #[cfg(test)]
@@ -273,7 +360,7 @@ mod tests {
                 let (bx, bz) = b.placement.at;
                 let wrap = |d: f32| d - (d / 16384.0).round() * 16384.0;
                 let distance = wrap(ax - bx).hypot(wrap(az - bz));
-                let reach = |s: &Site| s.placement.size.0.hypot(s.placement.size.2) * 0.5;
+                let reach = |s: &Site| s.ground.map_or(0.0, |g| g.radius as f32);
                 assert!(distance > reach(a) + reach(b), "{:?} and {:?} overlap", a.cell, b.cell);
             }
         }
@@ -283,17 +370,82 @@ mod tests {
         assert_eq!(first, plan(&library, &world, (n, 0)).map(|s| s.placement.at));
     }
 
+    /// The highest upward face of a column's mesh above (x, z).
+    fn mesh_height(mesh: &crate::ColumnMesh, origin: (f32, f32), x: f32, z: f32) -> Option<f32> {
+        let (px, pz) = (x - origin.0, z - origin.1);
+        let mut best: Option<f32> = None;
+        for t in mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            if mesh.normals[t[0] as usize][1] < 0.9 {
+                continue;
+            }
+            let d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+            if d.abs() < 1e-9 {
+                continue;
+            }
+            let l0 = ((b[2] - c[2]) * (px - c[0]) + (c[0] - b[0]) * (pz - c[2])) / d;
+            let l1 = ((c[2] - a[2]) * (px - c[0]) + (a[0] - c[0]) * (pz - c[2])) / d;
+            let l2 = 1.0 - l0 - l1;
+            if l0 >= -1e-4 && l1 >= -1e-4 && l2 >= -1e-4 {
+                let y = l0 * a[1] + l1 * b[1] + l2 * c[1];
+                best = Some(best.map_or(y, |h: f32| h.max(y)));
+            }
+        }
+        best
+    }
+
     #[test]
-    fn podiums_stand_above_the_ground() {
-        let world = PlateWorld::new(16384.0, 7);
+    fn mesh_matches_heights_around_sites() {
         let library = library();
-        let site = all(&library, &world).into_iter().next().unwrap();
-        let built = build(&library, &world, &site, 1000);
-        let (x, z) = site.placement.at;
-        assert!(built.base > world.height_at(x, z));
-        let podium = built.solids[0];
-        assert!(podium.center.y + podium.half.y <= 1e-3);
-        assert!(built.base + podium.center.y - podium.half.y < world.height_at(x, z));
-        assert!(built.solids.len() > 1);
+        let world = PlateWorld::new(16384.0, 7).with_sites(&library);
+        let size = crate::column_size(0);
+        for site in all(&library, &world).iter().take(4) {
+            let ground = site.ground.unwrap();
+            let (x, z) = site.placement.at;
+            let mut columns = std::collections::HashMap::new();
+            let mut bad = 0;
+            for i in 0..400 {
+                let a = i as f32 * 2.399;
+                let r = ground.radius as f32 * (0.3 + 1.0 * (i as f32 / 400.0));
+                let (px, pz) = (x + r * a.cos(), z + r * a.sin());
+                let key = ((px / size).floor() as i32, (pz / size).floor() as i32);
+                let mesh = columns.entry(key).or_insert_with(|| world.mesh_column(0, key.0, key.1));
+                let origin = (key.0 as f32 * size, key.1 as f32 * size);
+                let Some(m) = mesh_height(mesh, origin, px, pz) else { continue };
+                let h = world.height_at(px, pz);
+                if (m - h).abs() > 0.05 {
+                    bad += 1;
+                    eprintln!("{:?} at ({px:.1}, {pz:.1}), {:.0} m out: mesh {m:.2}, height_at {h:.2}", site.cell, r);
+                }
+            }
+            assert_eq!(bad, 0);
+        }
+    }
+
+    #[test]
+    fn structures_stand_on_a_flat_core() {
+        let library = library();
+        let world = PlateWorld::new(16384.0, 7).with_sites(&library);
+        let mut checked = 0;
+        for site in all(&library, &world).iter().take(20) {
+            let ground = site.ground.unwrap();
+            let (x, z) = site.placement.at;
+            let (sx, _, sz) = site.placement.size;
+            // Under the footprint (corners included), the ground is the core.
+            let yaw = site.placement.yaw.to_radians();
+            for (u, v) in [(0.0, 0.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (0.0, 1.0)] {
+                let (lx, lz) = (u * sx * 0.5, v * sz * 0.5);
+                let (wx, wz) = (x + lx * yaw.cos() + lz * yaw.sin(), z - lx * yaw.sin() + lz * yaw.cos());
+                let h = world.height_at(wx, wz) as f64;
+                assert!(
+                    (h - ground.top).abs() < 1e-3,
+                    "{:?}: {h} under the footprint, core at {}",
+                    site.cell,
+                    ground.top
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 0);
     }
 }

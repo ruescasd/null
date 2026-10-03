@@ -10,7 +10,8 @@
 //!
 //! Districts (see `district.rs`) set the rules: relief, which ledge heights
 //! exist, pillars, tone. Canals (see `canal.rs`) cut their corridors through
-//! the plates and bring their own geometry.
+//! the plates and bring their own geometry. Sites (see `sites.rs`) reshape
+//! the plates around them into a flat core and terraces.
 
 use std::collections::HashMap;
 
@@ -20,12 +21,18 @@ use crate::canal::{CanalHit, Canals, PIPE_RADIUS};
 use crate::district::{District, DistrictMap};
 use crate::mesh::{ColumnMesh, column_size};
 use crate::noise::{Fbm, hash01};
+use crate::sites::SiteTable;
+use crate::structure::Library;
 
 /// Grid spacing of each level's Voronoi sites, in metres.
 pub const GRID: [f64; 3] = [128.0, 32.0, 8.0];
 /// Site offset from its grid cell centre, as a fraction of the grid (±half).
 /// Kept at or below 0.6 so a 3x3 search always finds the nearest site.
 const JITTER: f64 = 0.6;
+/// Big plates whose site is this close to a site's ground split, so the
+/// site is made of 32 m plates (a big plate reaches about this far from its
+/// own site).
+const SITE_SPLIT_MARGIN: f64 = 160.0;
 
 pub struct PlateWorld {
     size: f64,
@@ -38,6 +45,7 @@ pub struct PlateWorld {
     split_mask: Fbm,
     pub districts: DistrictMap,
     pub canals: Canals,
+    sites: SiteTable,
 }
 
 /// Flow inside a canal at a point.
@@ -90,7 +98,20 @@ impl PlateWorld {
             split_mask: Fbm::new(512.0, 2, 0.5, s ^ 6),
             districts: DistrictMap::new(size as f64, seed),
             canals: Canals::new(size as f64, seed),
+            sites: SiteTable::default(),
         }
+    }
+
+    /// The same world with the ground reshaped by the library's sites.
+    pub fn with_sites(mut self, library: &Library) -> Self {
+        self.sites = SiteTable::new(library, &self);
+        self
+    }
+
+    /// Whether two worlds' sites shape the ground alike (if not, terrain
+    /// meshed for one is wrong for the other).
+    pub fn same_ground(&self, other: &PlateWorld) -> bool {
+        self.sites == other.sites
     }
 
     /// The world's seed (scrambled), for things derived from it.
@@ -104,7 +125,7 @@ impl PlateWorld {
     }
 
     /// The landform scaled by the local district's relief: what plates fit.
-    fn shaped(&self, x: f64, z: f64) -> f64 {
+    pub fn shaped(&self, x: f64, z: f64) -> f64 {
         self.landform(x, z) * self.districts.blended(x, z).0
     }
 
@@ -222,6 +243,15 @@ impl PlateWorld {
         if level >= 2 {
             return false;
         }
+        // Sites are made of 32 m plates, which do not split further.
+        if let Some((ground, distance)) = self.sites.at(p, SITE_SPLIT_MARGIN) {
+            if level == 0 {
+                return true;
+            }
+            if distance < ground.radius {
+                return false;
+            }
+        }
         let rules = self.districts.at(p.x, p.y).rules();
         let mask = self.split_mask.sample2(p.x as f32, p.y as f32, self.size as f32) as f64;
         let chance = rules.split[level] + rules.split_mask_gain[level] * mask.max(0.0);
@@ -261,6 +291,14 @@ impl PlateWorld {
                 height += step(lo + self.rand(2, sites[2], 5) * (hi - lo), rules.quantum);
             }
             albedo += rules.albedo_spread * 0.6 * (self.rand(2, sites[2], 6) - 0.5);
+        }
+        // Inside a site, its core and terraces.
+        let p = self.site(level, sites[level]);
+        if let Some((ground, distance)) = self.sites.at(p, 0.0) {
+            let natural = self.landform_at_site(cache, level, sites[level]);
+            if let Some(h) = ground.height(distance, natural) {
+                height = h;
+            }
         }
         let marking = self.rand(level, sites[level], 7);
         if marking < rules.marking_chance * 0.66 {

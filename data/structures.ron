@@ -61,13 +61,20 @@
 //     The world is cut into cells about `spacing` metres wide; each holds a
 //     site with probability `chance`, near its centre.
 //   sites: [ (district: Floor, style: "name", weight: 1,
-//             size: ((min x, y, z), (max x, y, z)), plinth: true), ... ]
+//             size: ((min x, y, z), (max x, y, z)),
+//             lift: (3, 9), rings: 3, ring_width: 22, step: 0.5), ... ]
 //     district: Floor | Tiers | Stacks | Broken
 //     A site picks among its district's rules by weight, and a size between
-//     min and max. Footprints shrink to keep clear of neighbours, canals and
-//     the test structures. With plinth (the default) it stands on a podium
-//     whose top is just above the highest ground under it.
+//     min and max. Sites shrink to keep clear of neighbours, canals and the
+//     test structures.
+//     The site reshapes the plates around it: those under and just around
+//     the structure become a flat core, `lift` metres (a random amount in
+//     the range) above the surrounding ground, or below it if negative (a
+//     sunken court); `rings` terraces, each `ring_width` metres wide, step
+//     from the core to the ground, at heights that are multiples of `step`.
+//     plinth: false leaves the ground alone.
 //   Sites stream in within 2.5 km of you; `--opt nosites` leaves them out.
+//   Changing the sites regenerates the terrain, which takes a few seconds.
 (
     modules: {
         "floor": Slab(thickness: 0.2),
@@ -214,19 +221,19 @@
 
     site_grid: (spacing: 768, chance: 0.55),
     sites: [
-        // Floor: vast plazas, long halls and screens of fins.
-        (district: Floor,  style: "hall",     weight: 3, size: ((120, 30, 80),  (260, 70, 160))),
-        (district: Floor,  style: "fins",     weight: 2, size: ((100, 50, 30),  (220, 110, 60))),
-        (district: Floor,  style: "quarter",  weight: 1, size: ((300, 120, 300), (420, 220, 420))),
-        // Tiers: stepped masses.
-        (district: Tiers,  style: "ziggurat", weight: 3, size: ((60, 50, 80),   (160, 120, 220))),
-        (district: Tiers,  style: "lattice",  weight: 1, size: ((100, 60, 100), (180, 120, 180))),
-        // Stacks: towers among the pillars.
-        (district: Stacks, style: "spire",    weight: 3, size: ((40, 200, 40),  (80, 420, 80))),
-        (district: Stacks, style: "tables",   weight: 1, size: ((90, 70, 90),   (150, 140, 150))),
-        // Broken: whatever is left.
-        (district: Broken, style: "lattice",  weight: 2, size: ((100, 60, 100), (200, 140, 200))),
-        (district: Broken, style: "hall",     weight: 1, size: ((120, 30, 80),  (240, 60, 140))),
-        (district: Broken, style: "ziggurat", weight: 1, size: ((60, 50, 80),   (140, 100, 200))),
+        // Floor: vast plazas barely raised, long halls and screens of fins.
+        (district: Floor,  style: "hall",     weight: 3, size: ((120, 30, 80),  (260, 70, 160)),  lift: (0.5, 3), rings: 2, ring_width: 30),
+        (district: Floor,  style: "fins",     weight: 2, size: ((100, 50, 30),  (220, 110, 60)),  lift: (0.5, 3), rings: 2, ring_width: 30),
+        (district: Floor,  style: "quarter",  weight: 1, size: ((300, 120, 300), (420, 220, 420)), lift: (1, 2), rings: 1, ring_width: 30),
+        // Tiers: stepped masses on high stepped mounds, in mantle-height steps.
+        (district: Tiers,  style: "ziggurat", weight: 3, size: ((60, 50, 80),   (160, 120, 220)), lift: (8, 16), rings: 5, ring_width: 16, step: 2),
+        (district: Tiers,  style: "lattice",  weight: 1, size: ((100, 60, 100), (180, 120, 180)), lift: (6, 12), rings: 4, ring_width: 18, step: 2),
+        // Stacks: towers in clearings among the pillars.
+        (district: Stacks, style: "spire",    weight: 3, size: ((40, 200, 40),  (80, 420, 80)),   lift: (2, 6)),
+        (district: Stacks, style: "tables",   weight: 1, size: ((90, 70, 90),   (150, 140, 150)), lift: (2, 6)),
+        // Broken: whatever is left, sometimes sunk into courts.
+        (district: Broken, style: "lattice",  weight: 2, size: ((100, 60, 100), (200, 140, 200)), lift: (-10, 8)),
+        (district: Broken, style: "hall",     weight: 1, size: ((120, 30, 80),  (240, 60, 140)),  lift: (-8, 4)),
+        (district: Broken, style: "ziggurat", weight: 1, size: ((60, 50, 80),   (140, 100, 200)), lift: (4, 10)),
     ],
 )

@@ -102,10 +102,14 @@ Sites are structures that grow out of the world by the data file's rules
 site with some chance; the district there picks a style by weight and a
 size within a range, and everything is decided by hashing the cell, so the
 world is the same every time. Sites keep clear of each other, the canals
-and the test structures. Each stands on a podium whose top clears most of
-the ground under it (the odd pillar pokes through) and whose sides reach
-below the lowest, so nothing floats or is half buried. They are built in
-the background within 2.5 km of the camera and dropped beyond 2.9 km.
+and the test structures. A site reshapes the plates around it rather than
+standing on a slab: the 32 m plates under and around the structure become
+a flat core, raised above the surrounding ground (an acropolis), level with
+it (a plaza) or sunk into it (a court), and rings of terraces step from the
+core to the ground. The outline follows the plates, so it is ragged rather
+than drawn. Structures are built in the background within 2.5 km of the
+camera and dropped beyond 2.9 km; changing the site rules regenerates the
+terrain.
 
 An experiment in enemies (`figure.rs`): figures made of the same fractal
 language. A procedural skeleton walks on the terrain (feet planted until too

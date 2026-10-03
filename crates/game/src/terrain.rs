@@ -47,7 +47,12 @@ impl Plugin for TerrainPlugin {
         let world = if args.opt("voxel") {
             WorldGen::Voxel(Arc::new(World::new(config)))
         } else {
-            WorldGen::Plates(Arc::new(PlateWorld::new(config.size, config.seed)))
+            // The sites in the structure library reshape the ground.
+            let world = PlateWorld::new(config.size, config.seed);
+            match crate::structures::load_library() {
+                Ok(library) if !args.opt("nosites") => WorldGen::Plates(Arc::new(world.with_sites(&library))),
+                _ => WorldGen::Plates(Arc::new(world)),
+            }
         };
         embedded_asset!(app, "terrain.wgsl");
         embedded_asset!(app, "terrain_vertex.wgsl");
@@ -183,8 +188,22 @@ pub struct Streamer {
     pending: HashMap<Key, Task<(ColumnMesh, Option<Collider>)>>,
     /// (lod, unwrapped key) -> instance.
     spawned: HashMap<Key, Entity>,
+    /// Instances of a world that has since changed, kept until their
+    /// replacements are drawn so the ground never disappears.
+    stale: HashMap<Key, Entity>,
     /// True once every column in view has been generated and spawned.
     pub settled: bool,
+}
+
+impl Streamer {
+    /// Regenerates everything, for when the world has changed.
+    pub fn reset(&mut self) {
+        let spawned: Vec<_> = self.spawned.drain().collect();
+        self.stale.extend(spawned);
+        self.cache.clear();
+        self.pending.clear();
+        self.settled = false;
+    }
 }
 
 fn setup_material(
@@ -268,6 +287,8 @@ fn stream_columns(
     material: Res<TerrainMaterialHandle>,
     anchor: Single<&Transform, With<StreamAnchor>>,
 ) {
+    // Borrow fields separately.
+    let streamer = &mut *streamer;
     let pos = Vec2::new(anchor.translation.x, anchor.translation.z);
 
     // Columns wanted at each level: those touching the level's disc.
@@ -355,6 +376,9 @@ fn stream_columns(
         }
         let n = world.columns_per_side(lod);
         let Some(Some(built)) = streamer.cache.get(&(lod, wrap_key(key, n))) else { continue };
+        if let Some(old) = streamer.stale.remove(&(lod, key)) {
+            commands.entity(old).despawn();
+        }
         let size = column_size(lod);
         let sink = world.sink(lod);
         let mut entity = commands.spawn((
@@ -369,6 +393,12 @@ fn stream_columns(
         }
         let entity = entity.id();
         streamer.spawned.insert((lod, key), entity);
+    }
+
+    if settled {
+        for (_, old) in streamer.stale.drain() {
+            commands.entity(old).despawn();
+        }
     }
 
     // Forget meshes and cancel work for columns well outside their disc.

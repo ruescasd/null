@@ -16,7 +16,9 @@ fn main() {
     let scale: f32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8.0);
     let seed: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
 
-    let world = PlateWorld::new(16384.0, seed);
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/structures.ron");
+    let library = Library::parse(&std::fs::read_to_string(path).expect("read structures.ron")).expect("parse");
+    let world = PlateWorld::new(16384.0, seed).with_sites(&library);
     let size = world.size();
     let px = (size / scale) as u32;
 
@@ -75,8 +77,6 @@ fn main() {
         }
     }
 
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/structures.ron");
-    let library = Library::parse(&std::fs::read_to_string(path).expect("read structures.ron")).expect("parse");
     // Footprint outlines: sites in red, test structures in yellow.
     let mut outline = |at: (f32, f32), size: (f32, f32, f32), yaw: f32, color: [u8; 3]| {
         let rotation = glam::Quat::from_rotation_y(yaw.to_radians());
@@ -109,18 +109,29 @@ fn main() {
     }
     println!("{} sites: {styles:?}", all.len());
     // The nearest few to the default spawn point, for pointing the camera.
-    let mut near = sites::near(&library, &world, 1200.0, 900.0, 2500.0);
+    let mut near = sites::near(&library, &world, 1200.0, 900.0, 4000.0);
     near.sort_by(|a, b| {
         let d = |s: &sites::Site| (s.placement.at.0 - 1200.0).hypot(s.placement.at.1 - 900.0);
         d(a).total_cmp(&d(b))
     });
-    for site in near.iter().take(8) {
+    // ...the nearest few, and the nearest in each district.
+    let mut shown: Vec<&sites::Site> = near.iter().take(6).collect();
+    for district in District::ALL {
+        let at = |s: &&sites::Site| world.district(s.placement.at.0 as f64, s.placement.at.1 as f64);
+        if let Some(site) = near.iter().find(|s| at(s) == district) {
+            if !shown.iter().any(|s| s.cell == site.cell) {
+                shown.push(site);
+            }
+        }
+    }
+    for site in shown {
         let p = &site.placement;
         println!(
-            "{:>10} at {:6.0}, {:6.0}  size {:.0} x {:.0} x {:.0}  ({}), podium {:.1} m above the ground at its centre",
+            "{:>10} at {:6.0}, {:6.0}  size {:.0} x {:.0} x {:.0}  ({}), core {:+.1} m from the landform, radius {:.0} m",
             p.style, p.at.0, p.at.1, p.size.0, p.size.1, p.size.2,
             world.district(p.at.0 as f64, p.at.1 as f64).name(),
-            sites::build(&library, &world, site, 100).base - world.height_at(p.at.0, p.at.1)
+            site.ground.map_or(0.0, |g| g.top - world.shaped(p.at.0 as f64, p.at.1 as f64)),
+            site.ground.map_or(0.0, |g| g.radius),
         );
     }
 

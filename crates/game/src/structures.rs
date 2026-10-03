@@ -16,6 +16,7 @@ use avian3d::prelude::{Collider, Position, Rotation};
 use bevy::{prelude::*, tasks::AsyncComputeTaskPool};
 use worldgen::{
     ColumnMesh,
+    plates::PlateWorld,
     sites,
     structure::{self, Library, Solid},
 };
@@ -24,7 +25,7 @@ use crate::{
     Args,
     camera::FlyCam,
     landmarks::{FractalTask, Landmark},
-    terrain::WorldGen,
+    terrain::{Streamer, WorldGen},
 };
 
 pub struct StructuresPlugin;
@@ -77,6 +78,14 @@ fn data_path() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/structures.ron"))
 }
 
+/// Reads and checks the data file.
+pub fn load_library() -> Result<Library, String> {
+    let path = data_path();
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))
+        .and_then(|t| Library::parse(&t))
+}
+
 fn setup_notice(mut commands: Commands) {
     commands.spawn((
         Notice { shown_at: f32::MIN },
@@ -102,6 +111,7 @@ fn watch(
     args: Res<Args>,
     world: Res<WorldGen>,
     mut state: ResMut<Watch>,
+    mut streamer: ResMut<Streamer>,
     existing: Query<Entity, With<Structure>>,
     mut notice: Single<(&mut Text, &mut Notice)>,
 ) {
@@ -122,7 +132,7 @@ fn watch(
 
     let (text, note) = &mut *notice;
     note.shown_at = now;
-    let library = match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Library::parse(&t)) {
+    let library = match load_library() {
         Ok(library) => Arc::new(library),
         Err(error) => {
             warn!("{}: {error}", path.display());
@@ -132,6 +142,18 @@ fn watch(
             return;
         }
     };
+    // Sites shape the ground: if they changed, the terrain is regenerated
+    // (what is shown stays up until its replacement is ready).
+    if let WorldGen::Plates(old) = &*world
+        && !args.opt("nosites")
+    {
+        let new = PlateWorld::new(old.size(), args.seed).with_sites(&library);
+        if !old.same_ground(&new) {
+            info!("sites changed: regenerating the terrain");
+            commands.insert_resource(WorldGen::Plates(Arc::new(new)));
+            streamer.reset();
+        }
+    }
     for entity in &existing {
         commands.entity(entity).despawn();
     }
