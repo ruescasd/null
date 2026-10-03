@@ -82,6 +82,12 @@ its own megastructures:
 
 Megastructures are off by default for now (`--opt landmarks`): as simple
 primitives they read as low-poly models rather than alien constructions.
+Their replacement is being prototyped with fractals (`fractal.rs`):
+kaleidoscopic IFS shapes (folds, rotations and scaling only, so faces stay
+flat and edges straight) meshed with surface nets. Two prototypes stand near
+the spawn point, a leaning megablock and a twisted spire (`--opt nofractals`
+leaves them out); `cargo run -p worldgen --release --example fractal_bench`
+times building them.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so

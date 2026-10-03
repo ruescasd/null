@@ -7,6 +7,7 @@ pub mod mesh;
 pub mod noise;
 pub mod canal;
 pub mod district;
+pub mod fractal;
 pub mod landmarks;
 pub mod plates;
 pub mod world;
