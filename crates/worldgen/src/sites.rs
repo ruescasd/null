@@ -14,7 +14,7 @@
 //! acropolis), sit level with it (a plaza) or sink into it (a court). Its
 //! outline follows the plates, so it is ragged rather than drawn.
 
-use glam::{DVec2, Vec2};
+use glam::{DVec2, Quat, Vec2, Vec3};
 
 use crate::forms::{self, Growth, Grower, Prism};
 use serde::Deserialize;
@@ -75,6 +75,9 @@ fn default_core() -> (f32, f32) {
 fn default_terrace_chance() -> f32 {
     0.35
 }
+fn default_stairs() -> f32 {
+    0.5
+}
 
 /// "In this district, structures of this style grow, this often, this big,
 /// on this kind of ground."
@@ -101,6 +104,10 @@ pub struct SiteRule {
     /// ...this fraction of them.
     #[serde(default = "default_terrace_chance")]
     pub terrace_chance: f32,
+    /// The fraction of plates with a higher neighbour that get stairs up
+    /// to it (instead of a form).
+    #[serde(default = "default_stairs")]
+    pub stairs: f32,
     /// Reshape the ground into a core and terraces (default), or stand
     /// straight on the ground as it is.
     #[serde(default = "yes")]
@@ -171,6 +178,7 @@ pub struct Site {
     pub plates: Option<String>,
     pub terraces: Option<String>,
     pub terrace_chance: f32,
+    pub stairs: f32,
 }
 
 /// How far a site's centre may stray from its cell's centre, as a fraction
@@ -297,6 +305,7 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
         plates: rule.plates.clone().filter(|_| rule.plinth),
         terraces: rule.terraces.clone().filter(|_| rule.plinth),
         terrace_chance: rule.terrace_chance,
+        stairs: rule.stairs,
     })
 }
 
@@ -376,6 +385,16 @@ pub struct Built {
 
 /// Pieces of buildings per site at most.
 const MAX_PRISMS: usize = 8000;
+/// Everything standing on a plate reaches this far into it, so it never
+/// floats where distant terrain is drawn a little low.
+const FOUNDATION: f32 = 8.0;
+/// Plates are inset this much before anything grows on them, so nothing
+/// shares a wall with the plate (its foundation stays hidden inside).
+const PLATE_MARGIN: f32 = 0.3;
+/// Stairs: the highest step, the depth of each, the widest flight.
+const STAIR_RISE: f32 = 0.45;
+const STAIR_TREAD: f32 = 0.55;
+const STAIR_WIDTH: f32 = 5.0;
 
 /// Builds what grows on a site, which belongs in the background.
 pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usize) -> Built {
@@ -385,7 +404,19 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
         None => world.height_at(x, z),
     };
     let mut solids = match &site.centrepiece {
-        Some(placement) => structure::build(library, placement, max_leaves),
+        Some(placement) => {
+            let mut solids = structure::build(library, placement, max_leaves);
+            // Its foundation, hidden in the core.
+            let (sx, _, sz) = placement.size;
+            solids.push(Solid {
+                wedge: false,
+                center: Vec3::Y * -FOUNDATION * 0.5,
+                rotation: Quat::from_rotation_y(placement.yaw.to_radians()),
+                half: Vec3::new(sx * 0.49, FOUNDATION * 0.5, sz * 0.49),
+                albedo: 0.11,
+            });
+            solids
+        }
         None => Vec::new(),
     };
     let mut grower = Grower {
@@ -394,9 +425,7 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
         leaves: max_leaves.saturating_sub(solids.len()),
         out: Growth::default(),
     };
-    if let Some(ground) = &site.ground
-        && (site.plates.is_some() || site.terraces.is_some())
-    {
+    if let Some(ground) = &site.ground {
         let r = |k: i32| hash01(site.cell.0, k, site.cell.1, site.seed ^ 0x9a7e);
         // One tone for the site, as if built of one material.
         let tone = 0.1 + 0.06 * r(0);
@@ -406,6 +435,13 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
             let local: Vec<Vec2> =
                 plate.points.iter().map(|p| Vec2::new((p.x - center.x) as f32, (p.y - center.y) as f32)).collect();
             let k = |i: i32| hash01(plate.key.0, i, plate.key.1, site.seed);
+            let floor = (plate.height - base as f64) as f32;
+            if k(1) < site.stairs
+                && let Some(flight) = stairs(world, &local, center, plate.height as f32, floor, tone)
+            {
+                grower.out.prisms.extend(flight);
+                continue;
+            }
             let form = if plate.distance <= ground.core {
                 if keep_clear > 0.0 && forms::centroid(&local).length() < keep_clear {
                     continue;
@@ -420,12 +456,69 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
                 let seed = (plate.key.0 as u32).wrapping_mul(0x2c1b_3c6d)
                     ^ (plate.key.1 as u32).wrapping_mul(0x297a_2d39)
                     ^ site.seed;
-                grower.grow(form, &local, (plate.height - base as f64) as f32, tone, seed, 0);
+                let start = grower.out.prisms.len();
+                grower.grow(form, &forms::inset(&local, PLATE_MARGIN), floor, tone, seed, 0);
+                for prism in &mut grower.out.prisms[start..] {
+                    if (prism.y0 - floor).abs() < 1e-3 {
+                        prism.y0 -= FOUNDATION;
+                    }
+                }
             }
         }
     }
     solids.extend(grower.out.solids);
     Built { base, solids, prisms: grower.out.prisms }
+}
+
+/// A flight of stairs on a plate (local coordinates, floor relative to the
+/// site's base) up to its highest neighbour, if one is within reach.
+fn stairs(world: &PlateWorld, plate: &[Vec2], center: DVec2, height: f32, floor: f32, tone: f32) -> Option<Vec<Prism>> {
+    let inward = forms::inward_normals(plate);
+    let n = plate.len();
+    // The edge with the highest neighbour beyond it.
+    let mut best: Option<(f32, usize)> = None;
+    for i in 0..n {
+        let (a, b) = (plate[i], plate[(i + 1) % n]);
+        if (b - a).length() < 3.0 {
+            continue;
+        }
+        let probe = (a + b) * 0.5 - inward[i] * 1.5;
+        let beyond = world.height_at((center.x + probe.x as f64) as f32, (center.y + probe.y as f64) as f32);
+        let rise = beyond - height;
+        if (0.7..=12.0).contains(&rise) && best.is_none_or(|(r, _)| rise > r) {
+            best = Some((rise, i));
+        }
+    }
+    let (rise, i) = best?;
+    let (a, b) = (plate[i], plate[(i + 1) % n]);
+    let along = (b - a).normalize();
+    let mid = (a + b) * 0.5;
+    let width = ((b - a).length() * 0.7).min(STAIR_WIDTH) * 0.5;
+    let steps = (rise / STAIR_RISE).ceil() as usize;
+    let mut flight = Vec::new();
+    for k in 1..=steps {
+        // The lowest step reaches furthest into the plate; each rests on
+        // the one below and on the plate.
+        let depth = (steps - k + 1) as f32 * STAIR_TREAD;
+        let rect = [
+            mid - along * width,
+            mid + along * width,
+            mid + along * width + inward[i] * depth,
+            mid - along * width + inward[i] * depth,
+        ];
+        let rect = forms::clip_to(&rect, plate);
+        if rect.len() >= 3 {
+            flight.push(Prism {
+                points: rect,
+                y0: floor - FOUNDATION,
+                y1: floor + rise * k as f32 / steps as f32,
+                top_scale: 1.0,
+                lean: Vec2::ZERO,
+                albedo: (tone - 0.015 * (k % 2) as f32).max(0.03),
+            });
+        }
+    }
+    Some(flight)
 }
 
 #[cfg(test)]
@@ -564,7 +657,7 @@ mod tests {
             let c = forms::centroid(&prism.points);
             let ground = world.height_at(x + c.x, z + c.y);
             let y0 = prism.y0 + built.base;
-            assert!((y0 - ground).abs() < 1e-2, "prism at {c} floats: {y0} vs {ground}");
+            assert!(y0 <= ground + 1e-2, "prism at {c} floats: {y0} vs {ground}");
         }
     }
 }

@@ -88,7 +88,7 @@
 //     site with probability `chance`, near its centre.
 //   sites: [ (district: Floor, weight: 1,
 //             plates: "form", terraces: "form", terrace_chance: 0.35,
-//             core: (40, 90),
+//             core: (40, 90), stairs: 0.5,
 //             style: "name", size: ((min x, y, z), (max x, y, z)),
 //             lift: (3, 9), rings: 3, ring_width: 22, step: 0.5), ... ]
 //     district: Floor | Tiers | Stacks | Broken
@@ -100,7 +100,9 @@
 //     terraces, each `ring_width` metres wide, step from the core to the
 //     ground, at heights that are multiples of `step`.
 //     Each plate of the core grows the `plates` form; a `terrace_chance`
-//     share of the terrace plates grow the `terraces` form.
+//     share of the terrace plates grow the `terraces` form. A `stairs` share
+//     of the plates next to a higher one get a flight of stairs up to it
+//     instead (0.45 m steps: walkable without jumping).
 //     Optionally a centrepiece of a box `style` stands in the middle, of a
 //     size between min and max; the core then fits around it.
 //     plinth: false leaves the ground alone (centrepiece only).
@@ -252,47 +254,43 @@
 
     forms: {
         // Blocks: a few storeys; the top may set back and rise again.
-        "block": Extrude(height: (5, 20), then: "block_top"),
-        "block_top": Choose([(4, "nothing"), (3, "setback"), (1, "spike"), (1, "parapet")]),
+        "block": Extrude(height: (5, 18), then: "block_top"),
+        "block_top": Choose([(4, "nothing"), (3, "setback"), (1, "parapet")]),
         "setback": Inset(by: (1.5, 5), then: "block"),
         "parapet": Rim(width: 0.5, height: (1.1, 1.1), gates: 0),
         "low_block": Inset(by: (3, 6), then: "block"),
-        // A tall battered tower, narrowing as it rises.
-        "monolith": Extrude(height: (35, 120), taper: (0.05, 0.4), tone: -0.03, then: "monolith_top"),
-        "monolith_top": Choose([(3, "nothing"), (1, "spike")]),
-        // A leaning shard drawn to a point.
-        "spike": Extrude(height: (8, 40), taper: (1, 1), lean: 6, tone: -0.02),
+        // A tall tower, slightly battered.
+        "monolith": Extrude(height: (25, 70), taper: (0.03, 0.2), tone: -0.03, then: "block_top"),
 
         // Blocks cut along the plate's own lines, with streets between.
         "blocks": Split(depth: 3, gap: 3, min_width: 7, then: "block_or_gap"),
-        "block_or_gap": Choose([(6, "block"), (1, "nothing"), (1, "monolith")]),
+        "block_or_gap": Choose([(8, "block"), (1, "nothing"), (1, "monolith")]),
+        // A screen of slender fins.
+        "screen": Split(depth: 4, gap: 1.4, min_width: 2.5, then: "fin"),
+        "fin": Extrude(height: (8, 22), tone: 0.02),
         // A walled court with a gate, and something inside.
         "court": Rim(width: 1.6, height: (5, 11), gates: 0.5, inner: "court_inside"),
-        "court_inside": Choose([(2, "nothing"), (1, "shards"), (1, "low_block"), (1, "table")]),
-        // The plate broken into small plates, some drawn up into shards.
-        "shards": Cells(size: 5, gap: 0.4, then: "shard"),
-        "shard": Choose([(3, "nothing"), (2, "stub"), (1, "shard_spike")]),
-        "stub": Extrude(height: (0.5, 2.5)),
-        "shard_spike": Extrude(height: (3, 12), taper: (0.8, 1), lean: 1.5),
-        // A field of tall shards.
-        "spike_field": Cells(size: 9, gap: 1.5, then: "spike_or_not"),
-        "spike_or_not": Choose([(3, "nothing"), (1, "spike")]),
-        // A slab raised on pillars, with something on it.
-        "table": Inset(by: (1, 3), then: "table_legs"),
-        "table_legs": Pillars(width: 1.6, height: (7, 18), spacing: 11, then: "table_top"),
-        "table_top": Extrude(height: (1.2, 2.5), then: "block_top"),
+        "court_inside": Choose([(2, "nothing"), (1, "low_block"), (1, "dais")]),
+        // A stepped dais: low terraces, each a mantle or less.
+        "dais": Extrude(height: (0.9, 1.8), then: "dais_up"),
+        "dais_up": Choose([(3, "dais_step"), (1, "nothing"), (1, "low_block")]),
+        "dais_step": Inset(by: (2.5, 5), then: "dais"),
+        // Paving broken into small plates, some lifted.
+        "paving": Cells(size: 6, gap: 0.5, then: "slab_or_not"),
+        "slab_or_not": Choose([(3, "nothing"), (2, "slab")]),
+        "slab": Extrude(height: (0.4, 1.4)),
         // An old box style on a plate.
         "lattice_block": Inset(by: (2, 4), then: "lattice_box"),
         "lattice_box": Structure(style: "lattice", height: (20, 50)),
 
         // What grows on a plate, by kind of site.
-        "plaza": Choose([(5, "nothing"), (1, "shards"), (1, "court"), (1, "table"), (1, "spike")]),
+        "plaza": Choose([(6, "nothing"), (1, "dais"), (1, "court"), (1, "paving")]),
         "town": Inset(by: (1, 2.5), then: "town_plate"),
-        "town_plate": Choose([(5, "blocks"), (1, "court"), (1, "table"), (1, "monolith"), (1, "nothing")]),
+        "town_plate": Choose([(6, "blocks"), (1, "court"), (1, "dais"), (1, "screen"), (1, "monolith"), (1, "nothing")]),
         "towers": Inset(by: (1.5, 4), then: "towers_plate"),
-        "towers_plate": Choose([(3, "monolith"), (2, "blocks"), (1, "lattice_block"), (1, "nothing")]),
-        "ruin": Choose([(3, "shards"), (1, "court"), (3, "nothing"), (1, "low_block"), (1, "spike_field")]),
-        "terrace": Choose([(3, "shards"), (1, "court"), (1, "table"), (1, "spike_field"), (1, "low_block")]),
+        "towers_plate": Choose([(3, "monolith"), (3, "blocks"), (1, "lattice_block"), (1, "nothing")]),
+        "ruin": Choose([(3, "paving"), (1, "court"), (3, "nothing"), (1, "low_block"), (1, "dais")]),
+        "terrace": Choose([(2, "paving"), (1, "court"), (2, "dais"), (1, "low_block")]),
     },
 
     site_grid: (spacing: 768, chance: 0.55),

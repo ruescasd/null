@@ -118,7 +118,10 @@ smaller plates, walled with gates or raised on pillars. Every piece stays a
 convex polygon prism, with one hull for collision. Forms are named in
 `data/structures.ron` and call each other, so one plate becomes a block with
 setbacks, the next a walled court, the next a field of shards; a site may
-also keep a box-style centrepiece. Structures are built in the background within 2.5 km of the
+also keep a box-style centrepiece. Plates next to a higher one may get a
+flight of stairs up to it instead (0.45 m steps, walkable without jumping).
+Site ground keeps its full detail at every distance, and everything built
+reaches a few metres into its plate, so nothing floats when seen from afar. Structures are built in the background within 2.5 km of the
 camera and dropped beyond 2.9 km; changing the site rules regenerates the
 terrain.
 

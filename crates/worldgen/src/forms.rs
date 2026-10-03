@@ -448,7 +448,7 @@ fn clip(poly: &[Vec2], n: Vec2, c: f32) -> Vec<Vec2> {
 }
 
 /// Each edge's unit normal pointing into the polygon.
-fn inward_normals(poly: &[Vec2]) -> Vec<Vec2> {
+pub fn inward_normals(poly: &[Vec2]) -> Vec<Vec2> {
     let sign = signed_area(poly).signum();
     (0..poly.len())
         .map(|i| {
@@ -474,7 +474,7 @@ pub fn inset(poly: &[Vec2], d: f32) -> Vec<Vec2> {
 }
 
 /// `shape` clipped to the inside of the convex polygon `within`.
-fn clip_to(shape: &[Vec2], within: &[Vec2]) -> Vec<Vec2> {
+pub fn clip_to(shape: &[Vec2], within: &[Vec2]) -> Vec<Vec2> {
     let mut out = shape.to_vec();
     for (i, n) in inward_normals(within).into_iter().enumerate() {
         out = clip(&out, n, n.dot(within[i]));

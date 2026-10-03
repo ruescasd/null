@@ -326,7 +326,7 @@ impl PlateWorld {
         let mut sites = [(0, 0); 3];
         let mut level = 0;
         sites[0] = self.nearest_site(0, p);
-        while level < max_level && self.splits(level, sites[level]) {
+        while (level < max_level || self.site_detail(level, sites[level])) && self.splits(level, sites[level]) {
             level += 1;
             sites[level] = self.nearest_site(level, p);
         }
@@ -380,6 +380,12 @@ impl PlateWorld {
             }
         }
         out
+    }
+
+    /// Whether a big plate is part of a site, which keeps its 32 m plates at
+    /// every level of detail (so structures stand on them from afar too).
+    fn site_detail(&self, level: usize, g: (i32, i32)) -> bool {
+        level == 0 && self.sites.at(self.site(0, g), SITE_SPLIT_MARGIN).is_some()
     }
 
     /// Height of the ground (plate or canal) at a point.
@@ -470,7 +476,7 @@ impl PlateWorld {
         if poly.len() < 3 {
             return;
         }
-        if level >= max_level || !self.splits(level, sites[level]) {
+        if (level >= max_level && !self.site_detail(level, sites[level])) || !self.splits(level, sites[level]) {
             let plate = self.plate(cache, *sites, level);
             for piece in self.canals.cut(poly.to_vec()) {
                 if area(&piece) > 0.5 {
