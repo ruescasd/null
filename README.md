@@ -33,8 +33,9 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bot                                 scripted movement test: logs speed/height and exits
     --opt noclip|beam|tether                  start flying / force the beam or tether on (for captures)
     --opt voxel                               the earlier organic voxel terrain
-    --opt flat|hard|noao|nossao|nocontact|notaa|nolandmarks   switch features off
-    --set ev=11.2 --set bounce=2 --set fill=6000 --set soft0=1 --set soft1=1   tuning numbers
+    --opt flat|hard|noao|nossao|nocontact|notaa|nolandmarks|nograin   switch features off
+    --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
+    --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
 
 Run only one capture at a time: two instances starting together have
 crashed the GPU driver.
@@ -55,8 +56,13 @@ crashed the GPU driver.
   mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`).
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 
-Lighting favours drama over physics: besides the two suns and the light
-bounced off the ground there is a shadowless fill kept opposite the main sun.
+Lighting favours drama over physics. Besides the two suns (each with a
+visible disc) and the light bounced off the sunlit ground, there is a
+shadowless fill with no visible source: opposite the dominant sun by day,
+scaled with how much sun is up, and a faint glow from overhead at night.
+Surfaces get procedural grain in the terrain shader (albedo mottling and a
+faint micro-relief, fixed in the world, tiling with the wrap) so motion reads
+even with nothing else in view.
 
 The world is a torus (16 km, wrapping in x and z) rendered as if it were a
 planet of radius 40 km: geometry is bent down by d²/2R around the camera.

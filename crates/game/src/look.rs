@@ -41,6 +41,8 @@ impl Plugin for LookPlugin {
         })
         .insert_resource(Tuning {
             bounce: args.num("bounce", 2.0),
+            fill: args.num("fill", 6000.0),
+            night_fill: args.num("night_fill", 2500.0),
             softness: [args.num("soft0", 1.0), args.num("soft1", 1.0)],
         })
         .insert_resource(ClearColor(Color::BLACK))
@@ -123,6 +125,9 @@ pub struct Sky {
 #[derive(Resource)]
 struct Tuning {
     bounce: f32,
+    /// Fill light in full daylight, and at night.
+    fill: f32,
+    night_fill: f32,
     softness: [f32; 2],
 }
 
@@ -199,13 +204,14 @@ fn setup(
         cam.insert(ContactShadows::default());
     }
 
-    // Fill: a soft, shadowless light kept opposite the main sun, so whatever
-    // faces away from the key light stays readable. Not physical (the sky is
-    // black), but it keeps the darkness dramatic rather than empty.
+    // Fill: a soft, shadowless light kept opposite the dominant sun, so
+    // whatever faces away from the key light stays readable. Not physical
+    // (the sky is black), but it keeps the darkness dramatic rather than
+    // empty. Its strength follows the daylight (see `move_suns`).
     commands.spawn((
         Fill,
         DirectionalLight {
-            illuminance: args.num("fill", 6000.0),
+            illuminance: 0.0,
             shadow_maps_enabled: false,
             ..default()
         },
@@ -309,11 +315,16 @@ fn move_suns(
     // cubemap is filtered; from then on that component carries the intensity.
     camera: Single<(&Transform, Option<&mut EnvironmentMapLight>), With<FlyCam>>,
     mut suns: Query<(&Sun, &mut Transform, &mut DirectionalLight), Without<FlyCam>>,
-    mut fill: Single<&mut Transform, (With<Fill>, Without<Sun>, Without<FlyCam>)>,
+    fill: Single<(&mut Transform, &mut DirectionalLight), (With<Fill>, Without<Sun>, Without<FlyCam>)>,
     mut discs: Query<(&SunDisc, &mut Transform), (Without<Sun>, Without<FlyCam>, Without<Fill>)>,
 ) {
     let (cam_transform, bounce) = camera.into_inner();
     let mut bounced = 0.0;
+    // How much daylight there is (0 when both suns are down), and which sun
+    // dominates it.
+    let mut daylight = 0.0;
+    let mut key = SUNS[0].direction(sky.time);
+    let mut key_weight = 0.0;
     for (sun, mut transform, mut light) in &mut suns {
         let orbit = &SUNS[sun.0];
         let dir = orbit.direction(sky.time);
@@ -324,17 +335,29 @@ fn move_suns(
         light.soft_shadow_size =
             sky.soft_shadows.then_some(orbit.shadow_softness * tuning.softness[sun.0]);
         bounced += orbit.illuminance * up;
+        let t = ((dir.y + 0.03) / 0.15).clamp(0.0, 1.0);
+        let weight = orbit.illuminance / SUNS[0].illuminance * t * t * (3.0 - 2.0 * t);
+        daylight += weight;
+        if weight > key_weight {
+            key_weight = weight;
+            key = dir;
+        }
     }
+    let daylight = daylight.min(1.0);
     // Sunlit ground radiance (Lambertian), which lights everything from below.
     if let Some(mut bounce) = bounce {
         bounce.intensity = bounced * GROUND_ALBEDO / PI * tuning.bounce;
     }
 
-    // Opposite the main sun's compass direction, 35 degrees up.
-    let key = SUNS[0].direction(sky.time);
+    // The fill follows the daylight: opposite the dominant sun's compass
+    // direction, 35 degrees up, and at night a faint glow from overhead so
+    // the world never goes completely blind.
+    let (mut fill_transform, mut fill_light) = fill.into_inner();
     let away = Vec3::new(-key.x, 0.0, -key.z).normalize_or(Vec3::X);
-    let from = (away * 35f32.to_radians().cos() + Vec3::Y * 35f32.to_radians().sin()).normalize();
-    **fill = Transform::IDENTITY.looking_to(-from, Vec3::Y);
+    let day_from = (away * 35f32.to_radians().cos() + Vec3::Y * 35f32.to_radians().sin()).normalize();
+    let from = Vec3::Y.lerp(day_from, daylight).normalize();
+    *fill_transform = Transform::IDENTITY.looking_to(-from, Vec3::Y);
+    fill_light.illuminance = tuning.night_fill + (tuning.fill - tuning.night_fill) * daylight;
 
     for (disc, mut transform) in &mut discs {
         let dir = SUNS[disc.0].direction(sky.time);

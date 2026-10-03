@@ -186,9 +186,9 @@ impl PlateWorld {
         }
         let marking = self.rand(level, sites[level], 7);
         if marking < 0.012 {
-            albedo = 0.04;
+            albedo = 0.07;
         } else if marking < 0.018 {
-            albedo = 0.32;
+            albedo = 0.26;
         }
         Plate { height, albedo: albedo as f32, level, sites }
     }

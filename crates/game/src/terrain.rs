@@ -120,6 +120,9 @@ pub struct TerrainExtension {
     /// x: baked occlusion strength, y: curvature (1 / 2R), zw: camera x and z.
     #[uniform(100)]
     pub params: Vec4,
+    /// x: albedo grain strength, y: world wrap period (m), z: relief strength.
+    #[uniform(101)]
+    pub grain: Vec4,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -170,6 +173,7 @@ pub struct Streamer {
 fn setup_material(
     mut commands: Commands,
     args: Res<Args>,
+    world: Res<WorldGen>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // Albedo comes from vertex colours; the material only sets the surface response.
@@ -182,6 +186,11 @@ fn setup_material(
         },
         extension: TerrainExtension {
             params: Vec4::new(if args.opt("noao") { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0),
+            grain: if args.opt("nograin") {
+                Vec4::new(0.0, world.size(), 0.0, 0.0)
+            } else {
+                Vec4::new(args.num("grain", 0.2), world.size(), args.num("relief", 2.5), 0.0)
+            },
         },
     });
     commands.insert_resource(TerrainMaterialHandle(material));
