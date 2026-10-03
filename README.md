@@ -46,7 +46,8 @@ crashed the GPU driver.
   world (hierarchical Voronoi, prisms meshed exactly, stylised AO).
   `district.rs`: districts and their generator rules. `canal.rs`: the canals.
   `ifs.rs` + `structure.rs`: structures from fractal rules and modules;
-  `sites.rs`: where they grow in the world. `world.rs` + `mesh.rs`: the earlier voxel
+  `forms.rs`: buildings grown from plates; `sites.rs`: where they grow in
+  the world. `world.rs` + `mesh.rs`: the earlier voxel
   density field and surface-nets mesher. `cargo test -p worldgen`;
   benchmarks in `examples/`; `cargo run -p worldgen --release --example map --
   map.png 8` draws a top-down map of the whole world (districts, canals,
@@ -107,7 +108,17 @@ standing on a slab: the 32 m plates under and around the structure become
 a flat core, raised above the surrounding ground (an acropolis), level with
 it (a plaza) or sunk into it (a court), and rings of terraces step from the
 core to the ground. The outline follows the plates, so it is ragged rather
-than drawn. Structures are built in the background within 2.5 km of the
+than drawn.
+
+What grows on a site comes from *forms* (`forms.rs`), which work on plates
+rather than boxes: each plate of the core, and some of the terraces, is
+extruded into prisms (straight, battered or drawn to a leaning point), set
+back, cut into blocks along its own lines with streets between, divided into
+smaller plates, walled with gates or raised on pillars. Every piece stays a
+convex polygon prism, with one hull for collision. Forms are named in
+`data/structures.ron` and call each other, so one plate becomes a block with
+setbacks, the next a walled court, the next a field of shards; a site may
+also keep a box-style centrepiece. Structures are built in the background within 2.5 km of the
 camera and dropped beyond 2.9 km; changing the site rules regenerates the
 terrain.
 

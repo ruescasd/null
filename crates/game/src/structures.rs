@@ -17,6 +17,7 @@ use bevy::{prelude::*, tasks::AsyncComputeTaskPool};
 use worldgen::{
     ColumnMesh,
     plates::PlateWorld,
+    forms::{self, Prism},
     sites,
     structure::{self, Library, Solid},
 };
@@ -162,7 +163,7 @@ fn watch(
         let (x, z) = placement.at;
         let origin = Vec3::new(x, world.ground_height(x, z), z);
         let library = library.clone();
-        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES)) });
+        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new()) });
         commands.spawn((Structure, FractalTask(task), Landmark { origin }, Transform::from_translation(origin)));
     }
     // Sites stream back in on their own.
@@ -176,10 +177,14 @@ fn watch(
     info!("{}: {} structures, {} site rules", path.display(), library.structures.len(), library.sites.len());
 }
 
-/// Mesh and colliders for built solids.
-fn finish(solids: Vec<Solid>) -> (ColumnMesh, Option<Collider>) {
-    let mesh = structure::mesh(&solids);
-    // A box or wedge collider per solid: robust for the player.
+/// Mesh and colliders for built solids and prisms.
+fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> (ColumnMesh, Option<Collider>) {
+    let mut mesh = structure::mesh(&solids);
+    forms::mesh_into(&mut mesh, &prisms);
+    // A box, wedge or hull collider per piece: robust for the player.
+    let hulls = prisms
+        .iter()
+        .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
     let shapes: Vec<(Position, Rotation, Collider)> = solids
         .iter()
         .filter_map(|s| {
@@ -190,6 +195,7 @@ fn finish(solids: Vec<Solid>) -> (ColumnMesh, Option<Collider>) {
             };
             Some((Position(s.center), Rotation(s.rotation), shape))
         })
+        .chain(hulls)
         .collect();
     let collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
     (mesh, collider)
@@ -232,7 +238,7 @@ fn stream_sites(
     }
     let pool = AsyncComputeTaskPool::get();
     for site in sites::near(&library, plates, cam.x, cam.z, SITE_RADIUS) {
-        let (x, z) = site.placement.at;
+        let (x, z) = site.at;
         if distance(x, z) > SITE_RADIUS || !have.insert(site.cell) {
             continue;
         }
@@ -243,8 +249,10 @@ fn stream_sites(
         let (library, plates) = (library.clone(), plates.clone());
         let task = pool.spawn(async move {
             let built = sites::build(&library, &plates, &site, MAX_LEAVES);
-            let lift = Vec3::Y * (built.base - ground);
-            finish(built.solids.into_iter().map(|s| Solid { center: s.center + lift, ..s }).collect())
+            let lift = built.base - ground;
+            let solids = built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
+            let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
+            finish(solids, prisms)
         });
         let origin = Vec3::new(x, ground, z);
         commands.spawn((

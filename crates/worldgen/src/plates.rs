@@ -21,7 +21,7 @@ use crate::canal::{CanalHit, Canals, PIPE_RADIUS};
 use crate::district::{District, DistrictMap};
 use crate::mesh::{ColumnMesh, column_size};
 use crate::noise::{Fbm, hash01};
-use crate::sites::SiteTable;
+use crate::sites::{SiteGround, SiteTable};
 use crate::structure::Library;
 
 /// Grid spacing of each level's Voronoi sites, in metres.
@@ -70,6 +70,17 @@ pub struct Plate {
     pub level: usize,
     /// Grid index of the site at each level down to `level`.
     pub sites: [(i32, i32); 3],
+}
+
+/// A plate belonging to a site: its outline (world coordinates near the
+/// site's centre), height, and how far its own site lies from the centre.
+#[derive(Clone, Debug)]
+pub struct SitePlate {
+    pub points: Vec<DVec2>,
+    pub height: f64,
+    pub distance: f64,
+    /// Its level-1 grid index, which identifies it.
+    pub key: (i32, i32),
 }
 
 /// Per-call memo of landform heights at sites; they are the expensive part.
@@ -320,6 +331,55 @@ impl PlateWorld {
             sites[level] = self.nearest_site(level, p);
         }
         self.plate(cache, sites, level)
+    }
+
+    /// The plates a site's ground is made of, exactly as they are meshed.
+    pub fn site_plates(&self, ground: &SiteGround) -> Vec<SitePlate> {
+        let c = ground.center;
+        let reach = ground.radius + SITE_SPLIT_MARGIN;
+        let (g0, g1) = (GRID[0], GRID[1]);
+        let mut cache = Cache::default();
+        let mut out = Vec::new();
+        let range = |v: f64| ((v - reach) / g0).floor() as i32 - 1..=((v + reach) / g0).ceil() as i32 + 1;
+        for gz in range(c.y) {
+            for gx in range(c.x) {
+                let g = (gx, gz);
+                let s = self.site(0, g);
+                if s.distance(c) > reach || !self.splits(0, g) {
+                    continue;
+                }
+                let square = [
+                    s + DVec2::new(-3.0, -3.0) * g0,
+                    s + DVec2::new(3.0, -3.0) * g0,
+                    s + DVec2::new(3.0, 3.0) * g0,
+                    s + DVec2::new(-3.0, 3.0) * g0,
+                ];
+                let poly = self.cell(0, g, &square);
+                if poly.len() < 3 {
+                    continue;
+                }
+                let (mut min, mut max) = (poly[0], poly[0]);
+                for p in &poly {
+                    min = min.min(*p);
+                    max = max.max(*p);
+                }
+                for iz in (min.y / g1).floor() as i32 - 1..=(max.y / g1).ceil() as i32 + 1 {
+                    for ix in (min.x / g1).floor() as i32 - 1..=(max.x / g1).ceil() as i32 + 1 {
+                        let distance = self.site(1, (ix, iz)).distance(c);
+                        if distance >= ground.radius {
+                            continue;
+                        }
+                        let piece = self.cell(1, (ix, iz), &poly);
+                        if piece.len() < 3 || area(&piece) < 0.5 {
+                            continue;
+                        }
+                        let height = self.plate(&mut cache, [g, (ix, iz), (0, 0)], 1).height;
+                        out.push(SitePlate { points: piece, height, distance, key: (ix, iz) });
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Height of the ground (plate or canal) at a point.

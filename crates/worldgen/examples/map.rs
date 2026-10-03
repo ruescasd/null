@@ -97,27 +97,47 @@ fn main() {
             }
         }
     };
+    // What grows on a site: its centrepiece's style and its plates' form.
+    let kind = |site: &sites::Site| {
+        let names: Vec<&str> =
+            site.centrepiece.iter().map(|p| p.style.as_str()).chain(site.plates.as_deref()).collect();
+        names.join("+")
+    };
     let all = sites::all(&library, &world);
-    let mut styles = std::collections::BTreeMap::<&str, usize>::new();
+    let mut cores = Vec::new();
+    let mut styles = std::collections::BTreeMap::<String, usize>::new();
     for site in &all {
-        let p = &site.placement;
-        outline(p.at, p.size, p.yaw, [230, 30, 30]);
-        *styles.entry(&p.style).or_default() += 1;
+        if let Some(p) = &site.centrepiece {
+            outline(p.at, p.size, p.yaw, [230, 30, 30]);
+        }
+        // The core, as a circle.
+        if let Some(ground) = &site.ground {
+            let steps = (ground.core * 8.0 / scale as f64) as i32;
+            for i in 0..steps {
+                let a = i as f64 / steps as f64 * std::f64::consts::TAU;
+                let (x, y) = (ground.center.x + a.cos() * ground.core, ground.center.y + a.sin() * ground.core);
+                cores.push(((x / scale as f64) as i64, (y / scale as f64) as i64));
+            }
+        }
+        *styles.entry(kind(site)).or_default() += 1;
     }
     for p in &library.structures {
         outline(p.at, p.size, p.yaw, [240, 220, 40]);
+    }
+    for (x, y) in cores {
+        img.put_pixel(x.rem_euclid(px as i64) as u32, y.rem_euclid(px as i64) as u32, Rgb([230, 30, 30]));
     }
     println!("{} sites: {styles:?}", all.len());
     // The nearest few to the default spawn point, for pointing the camera.
     let mut near = sites::near(&library, &world, 1200.0, 900.0, 4000.0);
     near.sort_by(|a, b| {
-        let d = |s: &sites::Site| (s.placement.at.0 - 1200.0).hypot(s.placement.at.1 - 900.0);
+        let d = |s: &sites::Site| (s.at.0 - 1200.0).hypot(s.at.1 - 900.0);
         d(a).total_cmp(&d(b))
     });
     // ...the nearest few, and the nearest in each district.
     let mut shown: Vec<&sites::Site> = near.iter().take(6).collect();
     for district in District::ALL {
-        let at = |s: &&sites::Site| world.district(s.placement.at.0 as f64, s.placement.at.1 as f64);
+        let at = |s: &&sites::Site| world.district(s.at.0 as f64, s.at.1 as f64);
         if let Some(site) = near.iter().find(|s| at(s) == district) {
             if !shown.iter().any(|s| s.cell == site.cell) {
                 shown.push(site);
@@ -125,12 +145,14 @@ fn main() {
         }
     }
     for site in shown {
-        let p = &site.placement;
+        let (x, z) = site.at;
         println!(
-            "{:>10} at {:6.0}, {:6.0}  size {:.0} x {:.0} x {:.0}  ({}), core {:+.1} m from the landform, radius {:.0} m",
-            p.style, p.at.0, p.at.1, p.size.0, p.size.1, p.size.2,
-            world.district(p.at.0 as f64, p.at.1 as f64).name(),
-            site.ground.map_or(0.0, |g| g.top - world.shaped(p.at.0 as f64, p.at.1 as f64)),
+            "{:>22} at {:6.0}, {:6.0}  ({}), core {:+.1} m from the landform, radius {:.0} m",
+            kind(site),
+            x,
+            z,
+            world.district(x as f64, z as f64).name(),
+            site.ground.map_or(0.0, |g| g.top - world.shaped(x as f64, z as f64)),
             site.ground.map_or(0.0, |g| g.radius),
         );
     }

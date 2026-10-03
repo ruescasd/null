@@ -15,6 +15,8 @@
 //! outline follows the plates, so it is ragged rather than drawn.
 
 use glam::{DVec2, Vec2};
+
+use crate::forms::{self, Growth, Grower, Prism};
 use serde::Deserialize;
 
 use crate::canal::HALF_WIDTH;
@@ -64,17 +66,41 @@ fn default_ring_width() -> f32 {
 fn default_step() -> f32 {
     0.5
 }
+fn default_size() -> ((f32, f32, f32), (f32, f32, f32)) {
+    ((60.0, 40.0, 60.0), (120.0, 80.0, 120.0))
+}
+fn default_core() -> (f32, f32) {
+    (40.0, 90.0)
+}
+fn default_terrace_chance() -> f32 {
+    0.35
+}
 
 /// "In this district, structures of this style grow, this often, this big,
 /// on this kind of ground."
 #[derive(Clone, Debug, Deserialize)]
 pub struct SiteRule {
     pub district: District,
-    pub style: String,
     #[serde(default = "one")]
     pub weight: f32,
-    /// Smallest and largest size (x, y, z), metres.
+    /// A centrepiece of a box style...
+    #[serde(default)]
+    pub style: Option<String>,
+    /// ...its smallest and largest size (x, y, z), metres.
+    #[serde(default = "default_size")]
     pub size: ((f32, f32, f32), (f32, f32, f32)),
+    /// The core's radius without a centrepiece, metres.
+    #[serde(default = "default_core")]
+    pub core: (f32, f32),
+    /// The form grown on each plate of the core (not under the centrepiece).
+    #[serde(default)]
+    pub plates: Option<String>,
+    /// The form grown on some of the terrace plates...
+    #[serde(default)]
+    pub terraces: Option<String>,
+    /// ...this fraction of them.
+    #[serde(default = "default_terrace_chance")]
+    pub terrace_chance: f32,
     /// Reshape the ground into a core and terraces (default), or stand
     /// straight on the ground as it is.
     #[serde(default = "yes")]
@@ -129,15 +155,22 @@ impl SiteGround {
     }
 }
 
-/// A planned site: a structure placed in the world (its `at` is in the
-/// world's canonical 0..size range) and the ground it stands on.
+/// A planned site: where it is (in the world's canonical 0..size range),
+/// the ground it shapes and what grows there.
 #[derive(Clone, Debug)]
 pub struct Site {
     /// The grid cell, which identifies the site.
     pub cell: (i32, i32),
-    pub placement: Placement,
+    pub at: (f32, f32),
+    pub seed: u32,
+    /// A structure of a box style at the centre.
+    pub centrepiece: Option<Placement>,
     /// None when the site stands on the ground as it is.
     pub ground: Option<SiteGround>,
+    /// Forms grown on the core's plates and on some of the terraces'.
+    pub plates: Option<String>,
+    pub terraces: Option<String>,
+    pub terrace_chance: f32,
 }
 
 /// How far a site's centre may stray from its cell's centre, as a fraction
@@ -187,9 +220,7 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
             pick <= 0.0
         })
         .unwrap_or(rules[rules.len() - 1]);
-    let ((x0, y0, z0), (x1, y1, z1)) = rule.size;
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-    let (mut sx, sy, mut sz) = (lerp(x0, x1, r(4)), lerp(y0, y1, r(5)), lerp(z0, z1, r(6)));
 
     // The site's outer radius stays inside the cell, off the canals and off
     // the hand-placed structures.
@@ -203,45 +234,69 @@ pub fn plan(library: &Library, world: &PlateWorld, cell: (i32, i32)) -> Option<S
         let distance = wrap(other.at.0 - x).hypot(wrap(other.at.1 - z));
         reach = reach.min(distance - other.size.0.hypot(other.size.2) * 0.5 - CANAL_CLEARANCE);
     }
-    // The terraces take their share; the structure shrinks (keeping its
-    // proportions) to fit what is left.
-    let terraces = if rule.plinth { CORE_MARGIN + rule.rings as f32 * rule.ring_width } else { 0.0 };
-    let half_diagonal = sx.hypot(sz) * 0.5;
-    let room = reach - terraces;
-    if half_diagonal > room {
-        let k = room.max(0.0) / half_diagonal;
-        sx *= k;
-        sz *= k;
-    }
-    if sx.min(sz) < MIN_FOOTPRINT {
-        return None;
-    }
+    let terraces = if rule.plinth { rule.rings as f32 * rule.ring_width } else { 0.0 };
+    let seed = (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed;
+
+    // A centrepiece shrinks (keeping its proportions) to fit what the
+    // terraces leave; the core reaches a little beyond its corners.
+    let (centrepiece, core) = match &rule.style {
+        Some(style) => {
+            let ((x0, y0, z0), (x1, y1, z1)) = rule.size;
+            let (mut sx, sy, mut sz) = (lerp(x0, x1, r(4)), lerp(y0, y1, r(5)), lerp(z0, z1, r(6)));
+            let half_diagonal = sx.hypot(sz) * 0.5;
+            let room = reach - terraces - CORE_MARGIN;
+            if half_diagonal > room {
+                let k = room.max(0.0) / half_diagonal;
+                sx *= k;
+                sz *= k;
+            }
+            if sx.min(sz) < MIN_FOOTPRINT {
+                return None;
+            }
+            let placement = Placement {
+                style: style.clone(),
+                at: (x, z),
+                size: (sx, sy, sz),
+                yaw: r(7) * 360.0,
+                seed,
+                sink: 0.0,
+            };
+            (Some(placement), sx.hypot(sz) * 0.5 + CORE_MARGIN)
+        }
+        None => {
+            if !rule.plinth || rule.plates.is_none() {
+                return None;
+            }
+            let core = lerp(rule.core.0, rule.core.1, r(4)).min(reach - terraces);
+            if core < MIN_FOOTPRINT {
+                return None;
+            }
+            (None, core)
+        }
+    };
 
     let ground = rule.plinth.then(|| {
         let step = rule.step.max(0.05) as f64;
         let lift = lerp(rule.lift.0, rule.lift.1, r(8)) as f64;
         let natural = world.shaped(x as f64, z as f64);
-        let core = (sx.hypot(sz) * 0.5 + CORE_MARGIN) as f64;
         SiteGround {
             center: DVec2::new(x as f64, z as f64),
             top: ((natural + lift) / step).round() * step,
-            core,
-            radius: core + (rule.rings as f32 * rule.ring_width) as f64,
+            core: core as f64,
+            radius: (core + terraces) as f64,
             rings: rule.rings.max(1),
             step,
         }
     });
     Some(Site {
         cell,
-        placement: Placement {
-            style: rule.style.clone(),
-            at: (x, z),
-            size: (sx, sy, sz),
-            yaw: r(7) * 360.0,
-            seed: (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed,
-            sink: 0.0,
-        },
+        at: (x, z),
+        seed,
+        centrepiece,
         ground,
+        plates: rule.plates.clone().filter(|_| rule.plinth),
+        terraces: rule.terraces.clone().filter(|_| rule.plinth),
+        terrace_chance: rule.terrace_chance,
     })
 }
 
@@ -311,21 +366,66 @@ impl SiteTable {
     }
 }
 
-/// A built site: the height its structure stands at, and its solids
+/// A built site: the height its core stands at, and what grows there
 /// relative to (x, base, z).
 pub struct Built {
     pub base: f32,
     pub solids: Vec<Solid>,
+    pub prisms: Vec<Prism>,
 }
 
-/// Builds a site's structure, which belongs in the background.
+/// Pieces of buildings per site at most.
+const MAX_PRISMS: usize = 8000;
+
+/// Builds what grows on a site, which belongs in the background.
 pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usize) -> Built {
-    let (x, z) = site.placement.at;
+    let (x, z) = site.at;
     let base = match &site.ground {
         Some(ground) => ground.top as f32,
         None => world.height_at(x, z),
     };
-    Built { base, solids: structure::build(library, &site.placement, max_leaves) }
+    let mut solids = match &site.centrepiece {
+        Some(placement) => structure::build(library, placement, max_leaves),
+        None => Vec::new(),
+    };
+    let mut grower = Grower {
+        library,
+        budget: MAX_PRISMS,
+        leaves: max_leaves.saturating_sub(solids.len()),
+        out: Growth::default(),
+    };
+    if let Some(ground) = &site.ground
+        && (site.plates.is_some() || site.terraces.is_some())
+    {
+        let r = |k: i32| hash01(site.cell.0, k, site.cell.1, site.seed ^ 0x9a7e);
+        // One tone for the site, as if built of one material.
+        let tone = 0.1 + 0.06 * r(0);
+        let keep_clear = site.centrepiece.as_ref().map_or(0.0, |p| p.size.0.hypot(p.size.2) * 0.5 + 6.0);
+        let center = ground.center;
+        for plate in world.site_plates(ground) {
+            let local: Vec<Vec2> =
+                plate.points.iter().map(|p| Vec2::new((p.x - center.x) as f32, (p.y - center.y) as f32)).collect();
+            let k = |i: i32| hash01(plate.key.0, i, plate.key.1, site.seed);
+            let form = if plate.distance <= ground.core {
+                if keep_clear > 0.0 && forms::centroid(&local).length() < keep_clear {
+                    continue;
+                }
+                site.plates.as_ref()
+            } else if k(0) < site.terrace_chance {
+                site.terraces.as_ref()
+            } else {
+                None
+            };
+            if let Some(form) = form {
+                let seed = (plate.key.0 as u32).wrapping_mul(0x2c1b_3c6d)
+                    ^ (plate.key.1 as u32).wrapping_mul(0x297a_2d39)
+                    ^ site.seed;
+                grower.grow(form, &local, (plate.height - base as f64) as f32, tone, seed, 0);
+            }
+        }
+    }
+    solids.extend(grower.out.solids);
+    Built { base, solids, prisms: grower.out.prisms }
 }
 
 #[cfg(test)]
@@ -336,12 +436,13 @@ mod tests {
         Library::parse(
             r#"(
                 styles: { "block": (divisions: (2, 2, 2), keep: All, depth: 1, leaves: [(on: Any, module: "box")]) },
+                forms: { "tower": Inset(by: (1, 1), then: "block"), "block": Extrude(height: (5, 30)) },
                 site_grid: (spacing: 768, chance: 0.6),
                 sites: [
                     (district: Floor, style: "block", size: ((80, 20, 80), (200, 60, 200))),
                     (district: Tiers, style: "block", size: ((80, 20, 80), (200, 60, 200))),
                     (district: Stacks, style: "block", size: ((80, 20, 80), (200, 60, 200))),
-                    (district: Broken, style: "block", size: ((80, 20, 80), (200, 60, 200))),
+                    (district: Broken, plates: "tower", terraces: "tower"),
                 ],
             )"#,
         )
@@ -356,8 +457,8 @@ mod tests {
         assert!(sites.len() > 100, "{} sites", sites.len());
         for (i, a) in sites.iter().enumerate() {
             for b in &sites[i + 1..] {
-                let (ax, az) = a.placement.at;
-                let (bx, bz) = b.placement.at;
+                let (ax, az) = a.at;
+                let (bx, bz) = b.at;
                 let wrap = |d: f32| d - (d / 16384.0).round() * 16384.0;
                 let distance = wrap(ax - bx).hypot(wrap(az - bz));
                 let reach = |s: &Site| s.ground.map_or(0.0, |g| g.radius as f32);
@@ -365,9 +466,9 @@ mod tests {
             }
         }
         // Wrapping: the cell past the edge is the first one.
-        let first = plan(&library, &world, (0, 0)).map(|s| s.placement.at);
+        let first = plan(&library, &world, (0, 0)).map(|s| s.at);
         let n = (16384.0f32 / 768.0).round() as i32;
-        assert_eq!(first, plan(&library, &world, (n, 0)).map(|s| s.placement.at));
+        assert_eq!(first, plan(&library, &world, (n, 0)).map(|s| s.at));
     }
 
     /// The highest upward face of a column's mesh above (x, z).
@@ -401,7 +502,7 @@ mod tests {
         let size = crate::column_size(0);
         for site in all(&library, &world).iter().take(4) {
             let ground = site.ground.unwrap();
-            let (x, z) = site.placement.at;
+            let (x, z) = site.at;
             let mut columns = std::collections::HashMap::new();
             let mut bad = 0;
             for i in 0..400 {
@@ -427,12 +528,13 @@ mod tests {
         let library = library();
         let world = PlateWorld::new(16384.0, 7).with_sites(&library);
         let mut checked = 0;
-        for site in all(&library, &world).iter().take(20) {
+        for site in all(&library, &world).iter().filter(|s| s.centrepiece.is_some()).take(20) {
             let ground = site.ground.unwrap();
-            let (x, z) = site.placement.at;
-            let (sx, _, sz) = site.placement.size;
+            let placement = site.centrepiece.as_ref().unwrap();
+            let (x, z) = site.at;
+            let (sx, _, sz) = placement.size;
             // Under the footprint (corners included), the ground is the core.
-            let yaw = site.placement.yaw.to_radians();
+            let yaw = placement.yaw.to_radians();
             for (u, v) in [(0.0, 0.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (0.0, 1.0)] {
                 let (lx, lz) = (u * sx * 0.5, v * sz * 0.5);
                 let (wx, wz) = (x + lx * yaw.cos() + lz * yaw.sin(), z - lx * yaw.sin() + lz * yaw.cos());
@@ -447,5 +549,22 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn plates_grow_buildings_on_their_own_ground() {
+        let library = library();
+        let world = PlateWorld::new(16384.0, 7).with_sites(&library);
+        let site = all(&library, &world).into_iter().find(|s| s.centrepiece.is_none()).unwrap();
+        let built = build(&library, &world, &site, 1000);
+        assert!(built.prisms.len() > 10, "{} prisms", built.prisms.len());
+        // Each building stands on the plate under it.
+        let (x, z) = site.at;
+        for prism in &built.prisms {
+            let c = forms::centroid(&prism.points);
+            let ground = world.height_at(x + c.x, z + c.y);
+            let y0 = prism.y0 + built.base;
+            assert!((y0 - ground).abs() < 1e-2, "prism at {c} floats: {y0} vs {ground}");
+        }
     }
 }

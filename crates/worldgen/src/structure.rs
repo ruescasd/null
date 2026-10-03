@@ -20,6 +20,7 @@ use serde::Deserialize;
 use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
+use crate::forms::{self, Form};
 use crate::sites::{SiteGrid, SiteRule};
 
 /// The whole data file.
@@ -30,6 +31,9 @@ pub struct Library {
     pub styles: BTreeMap<String, Style>,
     #[serde(default)]
     pub structures: Vec<Placement>,
+    /// Forms that grow buildings from plates (see `forms.rs`).
+    #[serde(default)]
+    pub forms: BTreeMap<String, Form>,
     /// The grid sites grow on, and what grows where (see `sites.rs`).
     #[serde(default)]
     pub site_grid: SiteGrid,
@@ -39,7 +43,9 @@ pub struct Library {
 
 impl Library {
     pub fn parse(text: &str) -> Result<Self, String> {
-        let library: Library = ron::from_str(text).map_err(|e| e.to_string())?;
+        // Optional names are written plainly, without Some(...).
+        let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
+        let library: Library = options.from_str(text).map_err(|e| e.to_string())?;
         library.check()?;
         Ok(library)
     }
@@ -74,9 +80,17 @@ impl Library {
                 return Err(format!("structure: unknown style '{}'", placement.style));
             }
         }
+        forms::check(&self.forms, &self.styles)?;
         for site in &self.sites {
-            if !self.styles.contains_key(&site.style) {
-                return Err(format!("site ({:?}): unknown style '{}'", site.district, site.style));
+            if let Some(style) = &site.style
+                && !self.styles.contains_key(style)
+            {
+                return Err(format!("site ({:?}): unknown style '{style}'", site.district));
+            }
+            for form in site.plates.iter().chain(&site.terraces) {
+                if form != "nothing" && !self.forms.contains_key(form) {
+                    return Err(format!("site ({:?}): unknown form '{form}'", site.district));
+                }
             }
         }
         Ok(())
