@@ -38,6 +38,13 @@ pub enum Keep {
     Random(f32),
     /// A stepped skyline: each column of cells is kept up to a random height.
     Skyline,
+    /// A massif: each column of cells is kept up to a height that falls from
+    /// the centre to the edges by `slope` (a fraction of the block's height),
+    /// broken up at random, and now and then an edge column is missing. The
+    /// top two levels shape the mountain (a mountain of mountains); below
+    /// them cells split as a skyline, so the surface breaks up into stepped
+    /// columns standing on their floors rather than into rubble.
+    Massif(f32),
 }
 
 /// The parameters of the rule.
@@ -61,6 +68,8 @@ pub struct Context {
     pub grid: [u32; 3],
     /// Stopped subdividing before reaching the full depth.
     pub early: bool,
+    /// Nothing kept above it in its parent's grid.
+    pub open_above: bool,
 }
 
 impl Context {
@@ -147,6 +156,24 @@ fn split(
     let random_keep = |i: u32, j: u32, k: u32, p: f32| {
         (0..=j).all(|below| hash01(child_path(i, below, k) as i32, 1, block.level as i32 + 1, seed) < p)
     };
+    // For the massif: how high each column of cells stands, falling with
+    // the distance from the centre (0 in the middle, 1 at the middle of an
+    // edge, more in the corners, which drop out: the footprint rounds off
+    // at every level).
+    let massif_height = |i: u32, k: u32, slope: f32| {
+        let centered = |v: u32, n: u32| if n > 1 { ((v as f32 + 0.5) / n as f32 * 2.0 - 1.0).abs() } else { 0.0 };
+        let (u, w) = (centered(i, nx), centered(k, nz));
+        let edge = 1.0 - 1.0 / nx.max(nz) as f32;
+        let r = (u * u + w * w).sqrt() / edge.max(1e-3);
+        // The middle columns stand full height.
+        let fall = ((r - 0.5) * 2.0).clamp(0.0, 1.0);
+        let h = hash01(path as i32 * 31 + i as i32, k as i32, block.level as i32 + 11, seed);
+        if r > 1.2 || (r > 0.95 && h < 0.2) {
+            return 0;
+        }
+        let top = 1.0 - slope * fall.powf(0.8) + (h - 0.5) * 0.4;
+        ((top * ny as f32).round() as u32).clamp(1, ny)
+    };
     let inner = |v: u32, n: u32| v > 0 && v + 1 < n;
     let keeps = |i: u32, j: u32, k: u32| {
         let interior = inner(i, nx) as u32 + inner(j, ny) as u32 + inner(k, nz) as u32;
@@ -156,6 +183,8 @@ fn split(
             Keep::ColumnsAndRoof => (!inner(i, nx) && !inner(k, nz)) || j + 1 == ny,
             Keep::Random(p) => random_keep(i, j, k, p),
             Keep::Skyline => j < column_height(i, k),
+            Keep::Massif(slope) if block.level < 2 => j < massif_height(i, k, slope),
+            Keep::Massif(_) => j < column_height(i, k),
         }
     };
     for k in 0..nz {
@@ -183,7 +212,8 @@ fn split(
                     half: cell * 0.5 * Vec3::new(across, 1.0, across),
                     level: block.level + 1,
                 };
-                let context = Context { index: [i, j, k], grid: [nx, ny, nz], early: false };
+                let open_above = j + 1 == ny || !keeps(i, j + 1, k);
+                let context = Context { index: [i, j, k], grid: [nx, ny, nz], early: false, open_above };
                 split(rule, child, context, seed, child_path, max_leaves, out);
             }
         }

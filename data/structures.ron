@@ -37,6 +37,8 @@
 // STYLES
 //   divisions: (x, y, z)   cells per axis at each split
 //   keep:   All | Lattice | ColumnsAndRoof | Skyline | Random(0.6)
+//           | Massif(0.8)  (columns falling from the centre by that much,
+//             at every level: a mountain of mountains)
 //   depth:  how many times to split
 //   gap:    fraction of its cell each child fills (below 1 leaves grooves)
 //   twist:  degrees each level turns relative to its parent
@@ -45,8 +47,9 @@
 //   min_size: blocks smaller than this (metres) are not split
 //   albedo, albedo_spread: tone
 //   leaves: [ (on: Where, module: "name", weight: 1, turn: None), ... ]
-//     on:   Any | Top | Bottom | Corner | Edge | Interior | Outside | Early
-//           (Corner = a vertical edge of the parent, Edge = one of its faces,
+//     on:   Any | Top | Summit | Bottom | Corner | Edge | Interior | Outside | Early
+//           (Summit = nothing above it in the parent's grid,
+//            Corner = a vertical edge of the parent, Edge = one of its faces,
 //            Early = a block that stopped splitting early)
 //     turn: None | Random | Outward | Inward  (Outward points +x away from
 //           the parent's centre: ramps and stairs rising outwards)
@@ -283,6 +286,32 @@
                 (on: Outside, module: "blade_z", weight: 1),
                 (on: Interior, module: "void"),
                 (on: Bottom, module: "box", weight: 1),
+            ],
+        ),
+        // Lab: a mountain of mountains. Every split keeps columns falling
+        // from the centre to broken edges, so the massif is made of smaller
+        // massifs down to a few metres; ramps rising inwards on the summits.
+        "massif": (
+            divisions: (4, 3, 4), keep: Massif(0.85), depth: 3, gap: 0.96,
+            stop_chance: 0.03, min_size: 3, albedo: 0.12, albedo_spread: 0.04,
+            leaves: [
+                (on: Summit, module: "ramp", weight: 2, turn: Inward),
+                (on: Summit, module: "box", weight: 2),
+                (on: Outside, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+                (on: Any, module: "box", weight: 3),
+            ],
+        ),
+        // Rougher: thirds, steeper falls, children lifted and turned a little.
+        "massif_rough": (
+            divisions: (3, 3, 3), keep: Massif(1.0), depth: 4, gap: 0.9, twist: 3,
+            stop_chance: 0.1, lift: 0.12, min_size: 1.5, albedo: 0.11, albedo_spread: 0.05,
+            leaves: [
+                (on: Summit, module: "ramp", weight: 1, turn: Inward),
+                (on: Corner, module: "needle", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Early, module: "box", weight: 3),
+                (on: Any, module: "box", weight: 3),
             ],
         ),
         // A loose stack of tables and cages.
@@ -546,9 +575,10 @@
         (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Bare"),
         (name: "truss_dressed", style: "truss", size: (40, 160, 40), dress: "industrial",
             note: "Pipes along its members, clamped; rising pipes with brackets; cables"),
-        (name: "mountain", form: "colossus_mountain", footprint: 120, variants: 1, note: "Bare"),
-        (name: "mountain_dressed", form: "colossus_mountain", footprint: 120, dress: "industrial",
-            note: "The sloped mountain with pipework"),
+        (name: "mountain", form: "colossus_mountain", footprint: 120, variants: 1,
+            note: "The old sloped mountain, for comparison"),
+        (name: "massif", style: "massif", size: (150, 120, 150),
+            note: "A mountain of mountains: the same falling envelope at every scale"),
         (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
         (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
             note: "The organ with pipework"),

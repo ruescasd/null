@@ -277,6 +277,9 @@ pub struct LeafRule {
 pub enum Where {
     Any,
     Top,
+    /// Nothing kept above it in the parent's grid: the top of a column,
+    /// wherever it stops (massifs, skylines).
+    Summit,
     Bottom,
     /// On a vertical edge of the parent (boundary in both x and z).
     Corner,
@@ -295,6 +298,7 @@ impl Where {
         match self {
             Where::Any => true,
             Where::Top => c.top(),
+            Where::Summit => c.open_above,
             Where::Bottom => c.bottom(),
             Where::Corner => c.corner(),
             Where::Edge => c.edge(),
