@@ -48,6 +48,8 @@ enum Kind {
 struct Cell {
     level: i32,
     kind: Kind,
+    /// The rect it belongs to (its walls share a style), or -1.
+    rect: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -66,7 +68,27 @@ enum Op {
     Down,
     Raised,
     Bridge,
+    /// A block standing several levels above its neighbour: massing.
+    Tower,
 }
+
+/// How a wall is built: all the bays of one face of a rect alike.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Wall {
+    /// Arched openings a bay deep, a gallery behind them.
+    Arcade,
+    /// Two deep, tall, narrow openings per bay and storey.
+    Slots,
+    /// Pilasters the wall's full height, a cornice.
+    Giant,
+    /// Pilasters, an arch in relief and a string course per storey.
+    Bays,
+    /// Plain, a cornice.
+    Blank,
+}
+
+/// How deep openings go into a wall (metres).
+const DEPTH: f32 = 2.4;
 
 struct Composer {
     cells: HashMap<(i32, i32), Cell>,
@@ -77,6 +99,7 @@ struct Composer {
     /// Solids made along the way (bridges), in grid metres.
     extra: Vec<Solid>,
     tone: f32,
+    seed: u32,
 }
 
 /// The frame of a direction: along it, and across it.
@@ -98,6 +121,30 @@ fn cell_at(x: i32, z: i32, y: f32) -> Vec3 {
 }
 
 impl Composer {
+    /// The style of a rect's wall facing `d`.
+    fn wall(&self, rect: i32, d: (i32, i32)) -> Wall {
+        let h = hash01(rect, d.0 * 3 + d.1 * 7 + 11, 0x3a1, self.seed);
+        match h {
+            h if h < 0.3 => Wall::Arcade,
+            h if h < 0.5 => Wall::Slots,
+            h if h < 0.7 => Wall::Giant,
+            h if h < 0.85 => Wall::Bays,
+            _ => Wall::Blank,
+        }
+    }
+
+    /// How many storeys a platform's face drops to what is beyond it.
+    fn drop(&self, x: i32, z: i32, d: (i32, i32)) -> i32 {
+        let Some(cell) = self.cells.get(&(x, z)) else { return 0 };
+        let top = cell.level as f32 * LEVEL;
+        let below = self.cells.get(&(x + d.0, z + d.1)).map_or(0.0, |n| match n.kind {
+            Kind::Stair { .. } => (n.level + 1) as f32 * LEVEL,
+            Kind::Bridge => top,
+            _ => n.level as f32 * LEVEL,
+        });
+        ((top - below) / LEVEL).round() as i32
+    }
+
     fn free(&self, x: i32, z: i32) -> bool {
         x.abs() < self.nx && z.abs() < self.nz && !self.cells.contains_key(&(x, z))
     }
@@ -113,7 +160,7 @@ impl Composer {
         let kind = if r.raised { Kind::Raised } else { Kind::Ground };
         for x in r.x0..=r.x1 {
             for z in r.z0..=r.z1 {
-                self.cells.insert((x, z), Cell { level: r.level, kind });
+                self.cells.insert((x, z), Cell { level: r.level, kind, rect: self.rects.len() as i32 });
             }
         }
         self.rects.push(r);
@@ -177,7 +224,7 @@ impl Composer {
                 if op == Op::Down && new.x1 - new.x0 + new.z1 - new.z0 < 2 {
                     return Some(new);
                 }
-                self.cells.insert(stair, Cell { level: base, kind: Kind::Stair { dir } });
+                self.cells.insert(stair, Cell { level: base, kind: Kind::Stair { dir }, rect: -1 });
                 Some(new)
             }
             Op::Raised => {
@@ -192,9 +239,15 @@ impl Composer {
                 if !self.place(new) {
                     return None;
                 }
-                self.cells.insert(s1, Cell { level: r.level, kind: Kind::Stair { dir: d } });
-                self.cells.insert(s2, Cell { level: r.level + 1, kind: Kind::Stair { dir: d } });
+                self.cells.insert(s1, Cell { level: r.level, kind: Kind::Stair { dir: d }, rect: -1 });
+                self.cells.insert(s2, Cell { level: r.level + 1, kind: Kind::Stair { dir: d }, rect: -1 });
                 Some(new)
+            }
+            Op::Tower => {
+                let size = 2 + (r1 * 2.0) as i32;
+                let level = r.level + 3 + (r2 * 4.0) as i32;
+                let new = Self::rect_in(d, amax + 1, amax + size, cs - size / 2, cs - size / 2 + size - 1, level, false);
+                self.place(new).then_some(new)
             }
             Op::Bridge => {
                 let gap = 2 + (r1 * 3.0) as i32;
@@ -204,7 +257,7 @@ impl Composer {
                     return None;
                 }
                 for &p in &span {
-                    self.cells.insert(p, Cell { level: r.level, kind: Kind::Bridge });
+                    self.cells.insert(p, Cell { level: r.level, kind: Kind::Bridge, rect: -1 });
                 }
                 self.bridge(span[0], *span.last().unwrap(), d, r.level);
                 Some(new)
@@ -255,7 +308,27 @@ impl Composer {
             let top = cell.level as f32 * LEVEL;
             match cell.kind {
                 Kind::Ground => {
-                    out.push(boxed(cell_at(x, z, (top - FOUNDATION) * 0.5), Vec3::new(BAY * 0.5, (top + FOUNDATION) * 0.5, BAY * 0.5), tone));
+                    // Inset by the openings' depth on faces whose wall is
+                    // open, so arcades and slots have real depth; the deck
+                    // covers the gallery.
+                    let mut lo = Vec2::splat(0.0);
+                    let mut hi = Vec2::splat(BAY);
+                    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        if self.drop(x, z, (dx, dz)) >= 1 && matches!(self.wall(cell.rect, (dx, dz)), Wall::Arcade | Wall::Slots) {
+                            match (dx, dz) {
+                                (1, _) => hi.x -= DEPTH,
+                                (-1, _) => lo.x += DEPTH,
+                                (_, 1) => hi.y -= DEPTH,
+                                _ => lo.y += DEPTH,
+                            }
+                        }
+                    }
+                    let (x0, z0) = (x as f32 * BAY, z as f32 * BAY);
+                    let c = Vec3::new(x0 + (lo.x + hi.x) * 0.5, (top - FOUNDATION) * 0.5, z0 + (lo.y + hi.y) * 0.5);
+                    out.push(boxed(c, Vec3::new((hi.x - lo.x) * 0.5, (top + FOUNDATION) * 0.5, (hi.y - lo.y) * 0.5), tone));
+                    if lo != Vec2::ZERO || hi != Vec2::splat(BAY) {
+                        out.push(boxed(cell_at(x, z, top - 0.5), Vec3::new(BAY * 0.5, 0.5, BAY * 0.5), tone));
+                    }
                 }
                 Kind::Raised => {
                     out.push(boxed(cell_at(x, z, top - 0.7), Vec3::new(BAY * 0.5, 0.7, BAY * 0.5), tone + 0.02));
@@ -302,46 +375,97 @@ impl Composer {
                 }
             }
         }
-        // Walls: every face of a platform over a drop is a wall of bays, one
-        // per storey: pilasters at the bay's edges, an arch between them
-        // under the storey line, a string course along each level.
+        // Walls: every face of a platform over a drop is built in its
+        // wall's style, bay by bay, storey by storey.
         for (&(x, z), cell) in &self.cells {
             if cell.kind != Kind::Ground {
                 continue;
             }
             let top = cell.level as f32 * LEVEL;
             for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let below = self.cells.get(&(x + dx, z + dz)).map_or(0.0, |n| top_of(n));
-                let storeys = ((top - below) / LEVEL).round() as i32;
+                let storeys = self.drop(x, z, (dx, dz));
                 if storeys < 1 {
                     continue;
                 }
+                let below = top - storeys as f32 * LEVEL;
                 let n = Vec3::new(dx as f32, 0.0, dz as f32);
                 let along = Vec3::new(-dz as f32, 0.0, dx as f32);
                 let face = cell_at(x, z, 0.0) + n * (BAY * 0.5);
                 let sized = |a: f32, h: f32, d: f32| if dx != 0 { Vec3::new(d, h, a) } else { Vec3::new(a, h, d) };
-                for k in 0..storeys {
-                    let y0 = below + k as f32 * LEVEL;
-                    let y1 = y0 + LEVEL;
-                    // Pilasters at both edges of the bay.
-                    for s in [-1.0, 1.0] {
-                        let c = face + along * (s * (BAY * 0.5 - 0.35)) + n * 0.25 + Vec3::Y * ((y0 + y1) * 0.5);
-                        out.push(boxed(c, sized(0.35, LEVEL * 0.5, 0.25), tone + 0.04));
+                // A piece of the face: `u0..u1` along it, `y0..y1`, `d0..d1`
+                // in from the face (negative: proud of it).
+                let mut piece = |u0: f32, u1: f32, y0: f32, y1: f32, d0: f32, d1: f32, shade: f32| {
+                    if u1 - u0 < 0.01 || y1 - y0 < 0.01 {
+                        return;
                     }
-                    // The arch between them, standing proud of the wall.
-                    let rad = BAY * 0.5 - 0.7;
-                    let spring = y1 - 0.5 - rad;
-                    for j in 0..8 {
-                        let u0 = -rad + 2.0 * rad * j as f32 / 8.0;
-                        let u1 = u0 + 2.0 * rad / 8.0;
-                        let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
-                        let arc = spring + (rad * rad - ui * ui).max(0.0).sqrt();
-                        let c = face + along * ((u0 + u1) * 0.5) + n * 0.2 + Vec3::Y * ((arc + y1) * 0.5);
-                        out.push(boxed(c, sized((u1 - u0) * 0.5 + 0.01, (y1 - arc) * 0.5 + 0.01, 0.2), tone + 0.04));
+                    let c = face + along * ((u0 + u1) * 0.5) - n * ((d0 + d1) * 0.5) + Vec3::Y * ((y0 + y1) * 0.5);
+                    out.push(boxed(c, sized((u1 - u0) * 0.5, (y1 - y0) * 0.5, (d1 - d0) * 0.5), shade));
+                };
+                let h = BAY * 0.5;
+                match self.wall(cell.rect, (dx, dz)) {
+                    Wall::Arcade => {
+                        // Piers at the bay's edges, an arched head per storey,
+                        // a floor per storey in the gallery behind.
+                        let pier = 0.8;
+                        for k in 0..storeys {
+                            let (y0, y1) = (below + k as f32 * LEVEL, below + (k + 1) as f32 * LEVEL);
+                            piece(-h, -h + pier, y0, y1, 0.0, DEPTH, tone + 0.03);
+                            piece(h - pier, h, y0, y1, 0.0, DEPTH, tone + 0.03);
+                            let rad = h - pier;
+                            let spring = y1 - 0.6 - rad * 0.7;
+                            for j in 0..10 {
+                                let u0 = -rad + 2.0 * rad * j as f32 / 10.0;
+                                let u1 = u0 + 2.0 * rad / 10.0;
+                                let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
+                                let arc = (spring + 0.7 * (rad * rad - ui * ui).max(0.0).sqrt()).min(y1);
+                                piece(u0 - 0.01, u1 + 0.01, arc, y1, 0.0, DEPTH, tone + 0.03);
+                            }
+                            if k > 0 {
+                                piece(-h, h, y0 - 0.25, y0, 0.0, DEPTH, tone + 0.01);
+                            }
+                        }
                     }
-                    // The string course at the storey line.
-                    let c = face + n * 0.3 + Vec3::Y * (y1 - 0.15);
-                    out.push(boxed(c, sized(BAY * 0.5, 0.15, 0.3), tone + 0.06));
+                    Wall::Slots => {
+                        for k in 0..storeys {
+                            let (y0, y1) = (below + k as f32 * LEVEL, below + (k + 1) as f32 * LEVEL);
+                            let (sill, head) = (y0 + 0.6, y1 - 0.9);
+                            piece(-h, h, y0, sill, 0.0, DEPTH, tone + 0.02);
+                            piece(-h, h, head, y1, 0.0, DEPTH, tone + 0.02);
+                            for (u0, u1) in [(-h, -1.9), (-0.6, 0.6), (1.9, h)] {
+                                piece(u0, u1, sill, head, 0.0, DEPTH, tone + 0.02);
+                            }
+                            if k > 0 {
+                                piece(-h, h, y0 - 0.2, y0, 0.0, DEPTH, tone + 0.01);
+                            }
+                        }
+                    }
+                    Wall::Giant => {
+                        for s in [-1.0, 1.0] {
+                            let u = s * (h - 0.45);
+                            piece(u - 0.45, u + 0.45, below, top - 0.8, -0.6, 0.0, tone + 0.05);
+                        }
+                        piece(-h, h, top - 0.8, top, -0.8, 0.0, tone + 0.06);
+                    }
+                    Wall::Bays => {
+                        for k in 0..storeys {
+                            let (y0, y1) = (below + k as f32 * LEVEL, below + (k + 1) as f32 * LEVEL);
+                            piece(-h, -h + 0.7, y0, y1, -0.25, 0.0, tone + 0.04);
+                            piece(h - 0.7, h, y0, y1, -0.25, 0.0, tone + 0.04);
+                            let rad = h - 0.7;
+                            let spring = y1 - 0.5 - rad;
+                            for j in 0..8 {
+                                let u0 = -rad + 2.0 * rad * j as f32 / 8.0;
+                                let u1 = u0 + 2.0 * rad / 8.0;
+                                let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
+                                let arc = spring + (rad * rad - ui * ui).max(0.0).sqrt();
+                                piece(u0, u1, arc, y1, -0.2, 0.0, tone + 0.04);
+                            }
+                            piece(-h, h, y1 - 0.3, y1, -0.3, 0.0, tone + 0.06);
+                        }
+                    }
+                    Wall::Blank => {
+                        piece(-h, h, top - 0.6, top, -0.5, 0.0, tone + 0.05);
+                    }
                 }
             }
         }
@@ -438,6 +562,7 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
         nz: (half.y / BAY) as i32,
         extra: Vec::new(),
         tone,
+        seed,
     };
     if c.nx < 3 || c.nz < 3 {
         return Vec::new();
@@ -448,7 +573,7 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
     c.place(root);
     let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     // Weighted towards climbing: the complex grows up as well as out.
-    let ops = [Op::Up, Op::Up, Op::Up, Op::Down, Op::Raised, Op::Raised, Op::Bridge];
+    let ops = [Op::Up, Op::Up, Op::Up, Op::Down, Op::Raised, Op::Raised, Op::Bridge, Op::Tower];
     let mut k = 0;
     let mut attempts = 0;
     while k < steps && attempts < steps * 20 {
@@ -480,6 +605,7 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
     }
     // Mirrored across x = -0.5 (the root is symmetric about it).
     if symmetric {
+        let rects_before = c.rects.len() as i32;
         let cells: Vec<((i32, i32), Cell)> = c.cells.iter().map(|(&k, &v)| (k, v)).collect();
         for ((x, z), cell) in cells {
             let mx = -1 - x;
@@ -490,7 +616,8 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
                 Kind::Stair { dir } => Kind::Stair { dir: (-dir.0, dir.1) },
                 other => other,
             };
-            c.cells.insert((mx, z), Cell { level: cell.level, kind });
+            let rect = if cell.rect >= 0 { cell.rect + rects_before } else { -1 };
+            c.cells.insert((mx, z), Cell { level: cell.level, kind, rect });
         }
         let extra: Vec<Solid> = c
             .extra

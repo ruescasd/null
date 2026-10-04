@@ -749,6 +749,8 @@
         "complex": Compose(steps: 24),
         "complex_symmetric": Compose(steps: 18, symmetric: true),
         "complex_big": Compose(steps: 60),
+        "complex_huge": Compose(steps: 160),
+        "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
         // boxes, pyramids or tetrahedra; a stepped tower made of stepped
         // towers; a cluster of clusters of towers, bridged.
@@ -1008,6 +1010,10 @@
             note: "The same, mirrored"),
         (name: "complex_big", form: "complex_big", footprint: 200, variants: 1,
             note: "A bigger one"),
+        (name: "complex_huge", form: "complex_huge", footprint: 320, variants: 1,
+            note: "Much bigger: does it keep reading as one place?"),
+        (name: "complex_huge_symmetric", form: "complex_huge_symmetric", footprint: 320, variants: 1,
+            note: "Much bigger, mirrored"),
         (name: "spire", style: "spire", size: (30, 120, 30), variants: 1, note: "Reference: the spire"),
         (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1, note: "Reference: the Manifold Garden tower"),
     ],
