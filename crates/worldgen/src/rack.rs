@@ -34,6 +34,11 @@ pub struct Layout {
     /// Columns and beams are this thick.
     pub frame: f32,
     pub strange: bool,
+    /// A strange rack's pipes sunk into the core's faces, only their crowns
+    /// showing, as if lying in grooves cut for them.
+    pub sunk: bool,
+    /// A strange rack's conduits square in section rather than round.
+    pub square: bool,
 }
 
 /// What a rack is made of.
@@ -55,7 +60,7 @@ enum Fill {
 /// Builds a rack along the edges of `poly` (convex), from `floor` up.
 pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) -> Rack {
     let mut rack = Rack::default();
-    let Layout { height, storey, bay, depth, frame: c, strange } = layout;
+    let Layout { height, storey, bay, depth, frame: c, strange, sunk, square } = layout;
     if poly.len() < 3 || height < 1.0 || depth < c * 3.0 {
         return rack;
     }
@@ -72,7 +77,9 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
         if strange {
             // The wall is the core's face, `depth` in from the edge; the
             // network fills the space between.
-            let wall = Surface::wall(a + inn * depth + e * depth * 0.5, e, -inn, length - depth, floor, height);
+            let mut wall = Surface::wall(a + inn * depth + e * depth * 0.5, e, -inn, length - depth, floor, height);
+            wall.sunk = sunk;
+            wall.square = square;
             network(&mut rack, &wall, depth, tone, seed ^ (i as u32).wrapping_mul(0x9e37_79b9));
             continue;
         }
@@ -332,6 +339,10 @@ pub struct Surface {
     width: f32,
     reach: f32,
     ground: bool,
+    /// Routes sunk into it, only their crowns showing.
+    sunk: bool,
+    /// Routes square in section, a face to the surface.
+    square: bool,
 }
 
 impl Surface {
@@ -346,6 +357,8 @@ impl Surface {
             width: length,
             reach: height,
             ground: false,
+            sunk: false,
+            square: false,
         }
     }
 
@@ -360,6 +373,8 @@ impl Surface {
             width: length,
             reach,
             ground: true,
+            sunk: false,
+            square: false,
         }
     }
 
@@ -433,7 +448,9 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
     // How far off the surface a route of this thickness runs: on the ground,
     // often half sunk.
     let depth_for = |radius: f32, h: f32| {
-        if surface.ground && h < 0.3 {
+        if surface.sunk {
+            -radius * 0.7
+        } else if surface.ground && h < 0.3 {
             radius * 0.4
         } else {
             let h = if surface.ground { (h - 0.3) / 0.7 } else { h };
@@ -492,6 +509,21 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
             let dir = (b - a).normalize_or_zero();
             // A little overlap hides the joints at bends.
             let d = dir * radius * 0.5;
+            if surface.square {
+                // A box along the run, one face to the surface.
+                let side = surface.off.cross(dir).normalize_or_zero();
+                let up = dir.cross(side);
+                let rotation = Quat::from_mat3(&Mat3::from_cols(dir, side, up));
+                rack.solids.push(Solid {
+                    wedge: false,
+                    round: false,
+                    center: (a + b) * 0.5,
+                    rotation,
+                    half: Vec3::new((b - a).length() * 0.5 + radius, radius, radius),
+                    albedo: shade_of(kind, h),
+                });
+                continue;
+            }
             rack.tubes.push(Tube { from: a - d, to: b + d, radius, albedo: shade_of(kind, h), glow: 0.0 });
             if kind == BANDED {
                 let span = (b - a).length();
@@ -524,7 +556,7 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
         let (lo, hi) = (width * 0.5 + 0.2 - spill, surface.width - width * 0.5 - 0.2 + spill);
         let clamp_u = |u: f32| u.clamp(lo, hi.max(lo));
         let action = r(1);
-        let sunk = z < radius;
+        let sunk = z < radius || surface.sunk;
         // A heavy bracket holding the bundle (on the ground, a support).
         let brackets = if surface.ground { 0.3 } else { 0.1 };
         if !sunk && r(2) < brackets {

@@ -114,6 +114,9 @@
 //                      a prism whose faces are carved into themselves: a
 //                      skin `depth` thick cut into recesses within recesses
 //                      (sunk relief); `then` grows on top
+//   Curtains(height: (90, 130), tone: 0)
+//                      walls round an open shaft, sheaves of long cables
+//                      crossing the void and hanging down the walls
 //   Cluster(height: (55, 80), tone: 0)
 //                      a mass made of cylinders: drums of very different
 //                      sizes packed and fused, taller in the middle, a few
@@ -562,6 +565,15 @@
         "relief_setback": Inset(by: (5, 9), then: "relief_upper"),
         "relief_upper": Relief(height: (20, 35), depth: 2),
         "relief_wall": Relief(height: (30, 40), depth: 2.5),
+        // Pipes in grooves (lab): the wall network sunk into a core, only
+        // the crowns showing.
+        "sunk_block": Rack(height: (40, 55), depth: (2.5, 3.5), core: true, strange: true, sunk: true),
+        // Square conduits (lab): standing off the wall, and sunk into it.
+        "square_block": Rack(height: (40, 55), depth: (2.5, 3.5), core: true, strange: true, square: true),
+        "square_sunk": Rack(height: (40, 55), depth: (2.5, 3.5), core: true, strange: true, square: true, sunk: true),
+        // Curtains (lab): wiring in its own right, sheaves of long cables
+        // across an open shaft (after the Citadel in Half-Life 2).
+        "citadel": Curtains(height: (90, 130)),
         "drums": Cluster(height: (55, 80)),
         "drums_tall": Cluster(height: (100, 140)),
         "rack_wall": Rack(height: (28, 36), depth: (2.5, 4), core: true, strange: true),
@@ -687,6 +699,14 @@
             note: "Sunk relief: faces carved into themselves, recesses within recesses"),
         (name: "relief_wall", form: "relief_wall", footprint: 20, stretch: 4,
             note: "A long wall in sunk relief"),
+        (name: "sunk_block", form: "sunk_block", footprint: 30,
+            note: "The wall network sunk into the walls: pipes lying in grooves cut for them"),
+        (name: "citadel", form: "citadel", footprint: 35,
+            note: "Sheaves of long cables across an open shaft, after the Citadel"),
+        (name: "square_block", form: "square_block", footprint: 30,
+            note: "The wall network with square conduits"),
+        (name: "square_sunk", form: "square_sunk", footprint: 30,
+            note: "Square conduits sunk into the wall, flush ridges"),
         (name: "drums", form: "drums", footprint: 55,
             note: "A mass made of cylinders, a tangle of tubes over them"),
         (name: "drums_tall", form: "drums_tall", footprint: 30,

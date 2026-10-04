@@ -36,7 +36,8 @@
 // x: strength of the baked occlusion (0 disables it), y: curvature 1 / 2R,
 // zw: camera x and z.
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: vec4<f32>;
-// x: albedo grain strength, y: world wrap period in metres, z: relief strength.
+// x: albedo grain strength, y: world wrap period in metres, z: relief
+// strength, w: 1 for the etched network instead of the panelling.
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> grain: vec4<f32>;
 // Panelling. x: strength (0 off), y: inlay glow, z: largest panel (m),
 // w: seam width (m).
@@ -262,6 +263,75 @@ fn relief_at(uv: vec2<f32>, pixel: f32, face: f32) -> Relief {
     return r;
 }
 
+// Etched network: thin grooves cut into the surface along routes like the
+// pipe network's. The face is divided into lanes (`lane` metres wide) and
+// rows (`cell` metres high); a lane carries a groove for a run of rows at a
+// time; in each row it may bend over into a neighbouring lane in a soft S
+// (merging with whatever runs there), and where it bends it may also carry
+// straight on (a split). A route is a bundle of one to four grooves. x: how much of the groove covers the point, y: how
+// near its middle, z: whether its route is lit.
+fn etch_layer(uv: vec2<f32>, pixel: f32, lane: f32, cell: f32, half: f32, salt: i32) -> vec3<f32> {
+    let j = floor(uv.y / cell);
+    let t = uv.y / cell - j;
+    let k0 = floor(uv.x / lane);
+    let ji = i32(j);
+    var best = 1e9;
+    var lit = 0.0;
+    for (var dk = -2; dk <= 2; dk++) {
+        let ki = i32(k0) + dk;
+        // Lanes carry grooves in runs of four rows.
+        let run = vec2<i32>(ki * 7 + salt, ji >> 2u);
+        if hash(run, 1 << 20) > 0.45 {
+            continue;
+        }
+        let h = hash(vec2<i32>(ki + salt * 3, ji * 5 + 1), 1 << 20);
+        let shift = select(select(0.0, 1.0, h > 0.84), -1.0, h < 0.16);
+        let s = t * t * (3.0 - 2.0 * t);
+        let x = (f32(ki) + 0.5) * lane + shift * lane * s;
+        let slope = shift * lane * 6.0 * t * (1.0 - t) / cell;
+        // A bundle of one to four grooves side by side.
+        let strands = 1.0 + floor(hash(run + vec2<i32>(0, 57), 1 << 20) * 4.0);
+        let spacing = half * 3.2;
+        let offset = uv.x - x;
+        let nearest = clamp(round(offset / spacing + (strands - 1.0) * 0.5), 0.0, strands - 1.0);
+        let strand_x = (nearest - (strands - 1.0) * 0.5) * spacing;
+        var d = abs(offset - strand_x) / sqrt(1.0 + slope * slope);
+        // Where it bends it may also carry straight on.
+        if shift != 0.0 && hash(vec2<i32>(ki * 11 + salt, ji * 3 + 2), 1 << 20) < 0.35 {
+            d = min(d, abs(uv.x - (f32(ki) + 0.5) * lane));
+        }
+        if d < best {
+            best = d;
+            lit = step(hash(run + vec2<i32>(91, 0), 1 << 20), 0.07) * step(nearest, 0.5);
+        }
+    }
+    let coverage = saturate(2.0 * half / pixel);
+    let groove = (1.0 - smoothstep(half - pixel * 0.5, half + pixel * 0.5, best)) * select(coverage, 1.0, half > pixel);
+    let middle = 1.0 - smoothstep(0.0, half * 0.45 + pixel * 0.5, best);
+    return vec3<f32>(groove, middle * coverage, lit);
+}
+
+fn etch_at(uv: vec2<f32>, pixel: f32, face: f32) -> Relief {
+    // Fine etchings everywhere but on the narrowest faces; wide grooves on
+    // broad ones.
+    let fine = etch_layer(uv, pixel, 0.9, 4.0, 0.045, 3) * smoothstep(0.6, 2.0, face);
+    let wide = etch_layer(uv, pixel, 3.4, 13.0, 0.2, 17) * smoothstep(3.0, 8.0, face);
+    var r = Relief(0.0, 1.0, 0.0);
+    r.height = -0.035 * fine.x - 0.18 * wide.x;
+    r.albedo = 1.0 - 0.35 * max(fine.x, wide.x);
+    // A faint light deep in some wide grooves.
+    r.glow = wide.z * wide.y * 0.12;
+    return r;
+}
+
+// The surface detail at a point: the etched network, or the panelling.
+fn surface_at(uv: vec2<f32>, pixel: f32, face: f32) -> Relief {
+    if grain.w > 0.5 {
+        return etch_at(uv, pixel, face);
+    }
+    return relief_at(uv, pixel, face);
+}
+
 // Weathering on walls: dark streaks run down from the top of each band, in
 // narrow columns of their own lengths, as if something had seeped from the
 // ledges for a very long time. Albedo factor; below a pixel the columns
@@ -323,10 +393,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // Panelling: its own relief, albedo and glow, on top of the grain.
     if detail.x > 0.0 {
-        let r = relief_at(uv, pixel, face);
+        let r = surface_at(uv, pixel, face);
         let e = max(0.02, pixel);
-        let ru = relief_at(uv + vec2<f32>(e, 0.0), pixel, face).height - r.height;
-        let rv = relief_at(uv + vec2<f32>(0.0, e), pixel, face).height - r.height;
+        let ru = surface_at(uv + vec2<f32>(e, 0.0), pixel, face).height - r.height;
+        let rv = surface_at(uv + vec2<f32>(0.0, e), pixel, face).height - r.height;
         let slope = (u_axis * ru + v_axis * rv) / e;
         pbr_input.N = normalize(pbr_input.N - slope * detail.x);
         let base = pbr_input.material.base_color.rgb;

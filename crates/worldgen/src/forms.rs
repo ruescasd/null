@@ -38,6 +38,14 @@ pub enum Form {
         #[serde(default)]
         then: Option<String>,
     },
+    /// Wiring in its own right (see `curtain.rs`): a broken ring of walls
+    /// round an open shaft, sheaves of long cables crossing the void and
+    /// hanging down the walls.
+    Curtains {
+        height: (f32, f32),
+        #[serde(default)]
+        tone: f32,
+    },
     /// A mass made of cylinders (see `cluster.rs`): drums packed and fused
     /// on the polygon, about `height` tall at its middle, a few lying across,
     /// and a tangle of small tubes sagging between them and winding down
@@ -80,6 +88,13 @@ pub enum Form {
         /// switching lanes, splitting, with bare wall between its knots.
         #[serde(default)]
         strange: bool,
+        /// With `strange` and `core`: the pipes sunk into the core's faces,
+        /// only their crowns showing.
+        #[serde(default)]
+        sunk: bool,
+        /// With `strange`: conduits square in section rather than round.
+        #[serde(default)]
+        square: bool,
         #[serde(default)]
         tone: f32,
         #[serde(default)]
@@ -253,7 +268,7 @@ pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
         Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Roots { .. } | Form::Cluster { .. } => vec![],
+        Form::Roots { .. } | Form::Cluster { .. } | Form::Curtains { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -409,6 +424,15 @@ impl Grower<'_> {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
             }
+            Form::Curtains { height, tone: t } => {
+                let (walls, cables) = crate::curtain::build(poly, floor, pick(*height, 1), tone + t, child(6));
+                if walls.len() + cables.len() > self.budget {
+                    return;
+                }
+                self.budget -= walls.len() + cables.len();
+                self.out.prisms.extend(walls);
+                self.out.solids.extend(cables);
+            }
             Form::Cluster { height, tone: t } => {
                 let solids = crate::cluster::build(poly, floor, pick(*height, 1), tone + t, child(4));
                 if solids.len() > self.budget {
@@ -431,7 +455,7 @@ impl Grower<'_> {
                 self.out.solids.extend(roots.solids);
                 self.out.tubes.extend(roots.tubes);
             }
-            Form::Rack { height, storey, bay, depth: d, frame, core, strange, tone: t, then } => {
+            Form::Rack { height, storey, bay, depth: d, frame, core, strange, sunk, square, tone: t, then } => {
                 let tone = tone + t;
                 let layout = crate::rack::Layout {
                     height: pick(*height, 1),
@@ -440,6 +464,8 @@ impl Grower<'_> {
                     depth: pick(*d, 4),
                     frame: *frame,
                     strange: *strange,
+                    sunk: *sunk,
+                    square: *square,
                 };
                 let rack = crate::rack::build(poly, floor, layout, tone, child(2));
                 let pieces = rack.solids.len() + rack.tubes.len();

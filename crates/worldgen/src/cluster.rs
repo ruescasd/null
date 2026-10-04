@@ -26,7 +26,7 @@ fn tube(a: Vec3, b: Vec3, radius: f32, albedo: f32) -> Option<Solid> {
 
 /// A curved tube through `points`, its segments overlapping a little so
 /// the joints do not show.
-fn curve(out: &mut Vec<Solid>, points: &[Vec3], radius: f32, albedo: f32) {
+pub(crate) fn curve(out: &mut Vec<Solid>, points: &[Vec3], radius: f32, albedo: f32) {
     for w in points.windows(2) {
         let dir = (w[1] - w[0]).normalize_or_zero();
         out.extend(tube(w[0] - dir * radius * 0.6, w[1] + dir * radius * 0.6, radius, albedo));
