@@ -40,7 +40,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
     --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)
 
-`toolsisit.ps1 <place>` opens the game at a place from the review pages
+`tools\visit.ps1 <place>` opens the game at a place from the review pages
 (without one it lists them); `tools\haze.ps1 none|light|dense|dark` runs a
 haze variant.
 
