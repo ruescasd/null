@@ -21,6 +21,7 @@ pub mod stairs;
 pub mod relief;
 pub mod sites;
 pub mod structure;
+pub mod tower;
 pub mod world;
 
 pub use mesh::{

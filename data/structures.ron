@@ -116,6 +116,10 @@
 //                      a prism whose faces are carved into themselves: a
 //                      skin `depth` thick cut into recesses within recesses
 //                      (sunk relief); `then` grows on top
+//   Tower(height: (150, 200), width: 0, spacing: 0, tone: 0)
+//                      an ordered tower transcribed from Manifold Garden in
+//                      the biggest square that fits; with spacing, towers
+//                      `width` across on a lattice that far apart
 //   Bastions(height: (90, 130), count: 1, tone: 0)
 //                      round towers of bare wall with rows of deep arches,
 //                      a door, a stair spiralling up the outside to each
@@ -597,6 +601,10 @@
         "citadel": Curtains(height: (90, 130)),
         // Bastions (lab): bare round walls given scale by human-sized
         // things: deep arches, a door, a spiral stair, bridges.
+        // Ordered towers (lab), transcribed from Manifold Garden: one, and
+        // a lattice of them.
+        "mg_tower": Tower(height: (170, 170)),
+        "mg_lattice": Tower(height: (170, 170), width: 56, spacing: 78),
         "bastion": Bastions(height: (260, 380)),
         "bastions": Bastions(height: (220, 400), count: 3),
         "drums": Cluster(height: (55, 80)),
@@ -722,6 +730,10 @@
             note: "A long wall in sunk relief"),
         (name: "sunk_block", form: "sunk_block", footprint: 30,
             note: "The wall network sunk into the walls: pipes lying in grooves cut for them"),
+        (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1,
+            note: "An ordered tower transcribed from Manifold Garden"),
+        (name: "mg_lattice", form: "mg_lattice", footprint: 280, variants: 1,
+            note: "The same tower repeated on a lattice"),
         (name: "bastion", form: "bastion", footprint: 60,
             note: "One round tower: bare wall, deep arches, a door, a spiral stair"),
         (name: "bastions", form: "bastions", footprint: 160,

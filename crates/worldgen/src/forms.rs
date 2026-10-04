@@ -38,6 +38,19 @@ pub enum Form {
         #[serde(default)]
         then: Option<String>,
     },
+    /// An ordered tower (see `tower.rs`), transcribed from Manifold Garden:
+    /// symmetric, proportioned, with designed-in stairs and fretwork, in
+    /// the biggest square that fits, about `height` tall. With `spacing`,
+    /// towers `width` across repeat on a lattice that far apart.
+    Tower {
+        height: (f32, f32),
+        #[serde(default)]
+        width: f32,
+        #[serde(default)]
+        spacing: f32,
+        #[serde(default)]
+        tone: f32,
+    },
     /// Round towers of bare wall given scale by a few human-sized things
     /// (see `bastion.rs`): rows of deep arches, a door, a stair spiralling
     /// up the outside, ledges, arched bridges between neighbours. Up to
@@ -284,7 +297,7 @@ pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
         Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Roots { .. } | Form::Cluster { .. } | Form::Curtains { .. } | Form::Bastions { .. } => vec![],
+        Form::Roots { .. } | Form::Cluster { .. } | Form::Curtains { .. } | Form::Bastions { .. } | Form::Tower { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -439,6 +452,21 @@ impl Grower<'_> {
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
+            }
+            Form::Tower { height, width, spacing, tone: t } => {
+                let Some((center, dir, half)) = inscribed_box(poly) else { return };
+                let origin = Vec3::new(center.x, floor, center.y);
+                let h = pick(*height, 1);
+                let solids = if *spacing > 0.0 {
+                    crate::tower::lattice(origin, dir, half, *width, h, *spacing, tone + t)
+                } else {
+                    crate::tower::build(origin, dir, half.min_element() * 2.0, h, tone + t)
+                };
+                if solids.len() > self.budget {
+                    return;
+                }
+                self.budget -= solids.len();
+                self.out.solids.extend(solids);
             }
             Form::Bastions { height, count, tone: t } => {
                 let (walls, solids) = crate::bastion::build(poly, floor, pick(*height, 1), *count, tone + t, child(7));
@@ -950,7 +978,7 @@ fn cells(poly: &[Vec2], size: f32, seed: u32) -> Vec<Vec<Vec2>> {
 
 /// A large box inside the polygon, aligned with its longest edge: centre,
 /// unit direction of its x axis, half extents.
-fn inscribed_box(poly: &[Vec2]) -> Option<(Vec2, Vec2, Vec2)> {
+pub(crate) fn inscribed_box(poly: &[Vec2]) -> Option<(Vec2, Vec2, Vec2)> {
     let n = poly.len();
     let longest = (0..n).max_by(|&a, &b| {
         let len = |i: usize| (poly[(i + 1) % n] - poly[i]).length_squared();
