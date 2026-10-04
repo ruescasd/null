@@ -355,7 +355,7 @@ fn spawn(
         };
         let fray = Rule { divisions: [3, 6, 3], keep: Keep::Random(0.3), depth: 1, stop_chance: 0.0, ..core };
         for (layer, rule) in [core, fray].iter().enumerate() {
-            let leaves = ifs::generate(rule, root, 41 + index as u32 * 7 + layer as u32, 1200);
+            let leaves = ifs::generate(rule, root, 41 + index as u32 * 7 + layer as u32, 1200, &[]);
             for (n, leaf) in leaves.iter().enumerate() {
                 let b = leaf.block;
                 let r = |k: i32| hash01(index as i32 * 2 + layer as i32, n as i32, k, 0xf16);

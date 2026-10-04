@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use glam::{Quat, Vec2, Vec3};
 use serde::Deserialize;
 
-use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
+use crate::ifs::{self, Block, Context, Cut, Keep, Leaf, Rule};
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
 use crate::forms::{self, Form};
@@ -271,6 +271,77 @@ pub struct Style {
     /// How leaves are filled; with none, or none matching, a leaf is a box.
     #[serde(default)]
     pub leaves: Vec<LeafRule>,
+    /// Cuts taken out of the box before it is filled (see `ifs::Cut`)...
+    #[serde(default)]
+    pub envelope: Vec<Cut>,
+    /// ...and this many more, picked at random from corners, notches,
+    /// strips, undercuts and slopes...
+    #[serde(default)]
+    pub cuts: u32,
+    /// ...mirrored across x and z, so the envelope stays symmetric.
+    #[serde(default)]
+    pub symmetric: bool,
+}
+
+impl Style {
+    /// The cuts for one structure: the style's own and its random ones.
+    pub fn cuts(&self, seed: u32) -> Vec<Cut> {
+        let mut out = self.envelope.clone();
+        let r = |k: u32, j: i32| hash01(k as i32, j, 0xc07, seed);
+        for k in 0..self.cuts {
+            let kind = (r(k, 0) * 5.0) as u32;
+            let (sx, sz) = (if r(k, 1) < 0.5 { -1.0 } else { 1.0 }, if r(k, 2) < 0.5 { -1.0 } else { 1.0 });
+            let depth = 0.3 + 0.5 * r(k, 3);
+            let low = -1.0 + 2.0 * (0.2 + 0.6 * r(k, 4));
+            let mut cut = match kind {
+                // A corner, the full height or above some level.
+                0 => {
+                    let y0 = if r(k, 5) < 0.5 { -1.1 } else { low };
+                    let (ax, az) = (sx * (1.0 - depth), sz * (1.0 - depth * (0.6 + 0.8 * r(k, 6))));
+                    Cut::Box { min: (ax.min(sx * 1.1), y0, az.min(sz * 1.1)), max: (ax.max(sx * 1.1), 1.1, az.max(sz * 1.1)) }
+                }
+                // A notch into the middle of a face.
+                1 => {
+                    let w = 0.2 + 0.3 * r(k, 6);
+                    let y0 = if r(k, 5) < 0.6 { -1.1 } else { low };
+                    let a = sx * (1.0 - depth * 0.7);
+                    Cut::Box { min: (a.min(sx * 1.1), y0, -w), max: (a.max(sx * 1.1), 1.1, w) }
+                }
+                // A strip off one side above some level (a setback).
+                2 => {
+                    let a = sz * (1.0 - depth * 0.6);
+                    Cut::Box { min: (-1.1, low, a.min(sz * 1.1)), max: (1.1, 1.1, a.max(sz * 1.1)) }
+                }
+                // An undercut: a side taken out below some level, leaving
+                // an overhang.
+                3 => {
+                    let a = sx * (1.0 - depth * 0.6);
+                    let top = -1.0 + 2.0 * (0.15 + 0.35 * r(k, 6));
+                    Cut::Box { min: (a.min(sx * 1.1), -1.1, -1.1), max: (a.max(sx * 1.1), top, 1.1) }
+                }
+                // A slope across the top, towards one side.
+                _ => {
+                    let n = Vec3::new(sx * (0.5 + r(k, 6)), 1.0, 0.0).normalize();
+                    Cut::Plane { normal: (n.x, n.y, n.z), offset: 0.3 + 0.5 * r(k, 7) }
+                }
+            };
+            if self.symmetric {
+                let mirror = |c: &Cut, mx: f32, mz: f32| match *c {
+                    Cut::Box { min, max } => Cut::Box {
+                        min: (min.0 * mx, min.1, min.2 * mz),
+                        max: (max.0 * mx, max.1, max.2 * mz),
+                    },
+                    Cut::Plane { normal, offset } => Cut::Plane { normal: (normal.0 * mx, normal.1, normal.2 * mz), offset },
+                };
+                for (mx, mz) in [(-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+                    out.push(mirror(&cut, mx, mz));
+                }
+                cut = mirror(&cut, 1.0, 1.0);
+            }
+            out.push(cut);
+        }
+        out
+    }
 }
 
 fn one() -> f32 {
@@ -408,7 +479,10 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
     let mut builder = Builder { library, budget: max_leaves, out: Vec::new() };
     builder.style(&placement.style, root, seed, 0);
     let mut solids = builder.out;
-    settle(&mut solids);
+    // A carved envelope leaves lintels and overhangs held up only by their
+    // neighbours across the grooves.
+    let carved = library.styles.get(&placement.style).is_some_and(|s| !s.envelope.is_empty() || s.cuts > 0);
+    settle(&mut solids, carved);
     // Seated on the ground: the lowest piece's bottom at the base (less the
     // sink), whatever the rules left out at the bottom.
     let lowest = solids.iter().map(Solid::bottom).fold(f32::MAX, f32::min);
@@ -431,6 +505,10 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
     solids
 }
 
+/// Pieces that would fall further than this to the ground under a carved
+/// envelope's overhang are removed (see `settle`), metres.
+const OVERHANG: f32 = 12.0;
+
 /// How far pieces on the ground reach into it, metres.
 const FOUNDATION: f32 = 8.0;
 
@@ -438,8 +516,12 @@ const FOUNDATION: f32 = 8.0;
 /// (touching, sideways included: roofs, bridges) stay as they are; a piece
 /// cut off from it reaches down to the highest thing below it, or to the
 /// base. The rules cannot see what grew in the cell below, so this is
-/// settled afterwards.
-fn settle(solids: &mut [Solid]) {
+/// settled afterwards. With `across_grooves` (carved envelopes), neighbours
+/// separated by no more than a groove also hold each other up, and a piece
+/// still cut off may be removed rather than reaching down (a stray needle under
+/// a lintel goes, rather than becoming a pole), when it would fall more
+/// than `OVERHANG` to the ground.
+fn settle(solids: &mut Vec<Solid>, across_grooves: bool) {
     const CELL: f32 = 8.0;
     const TOUCH: f32 = 0.1;
     let base = solids.iter().map(Solid::bottom).fold(f32::MAX, f32::min);
@@ -465,7 +547,16 @@ fn settle(solids: &mut [Solid]) {
         (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| (x, z)))
     };
     let touching = |a: &(Vec3, Vec3), b: &(Vec3, Vec3)| {
-        (0..3).all(|k| a.0[k] <= b.1[k] + TOUCH && b.0[k] <= a.1[k] + TOUCH)
+        let groove = if across_grooves {
+            let size = |b: &(Vec3, Vec3)| (b.1.x - b.0.x).min(b.1.z - b.0.z);
+            (size(a).max(size(b)) * 0.45).max(TOUCH)
+        } else {
+            TOUCH
+        };
+        (0..3).all(|k| {
+            let t = if k == 1 { TOUCH } else { groove };
+            a.0[k] <= b.1[k] + t && b.0[k] <= a.1[k] + t
+        })
     };
     let covers = |s: &Solid, p: Vec2| {
         let local = s.rotation.inverse() * (Vec3::new(p.x, s.center.y, p.y) - s.center);
@@ -516,6 +607,11 @@ fn settle(solids: &mut [Solid]) {
             }
         }
         let drop = bottom - highest;
+        // Under a lintel or an overhang: rather than a pole all the way to
+        // the ground, nothing.
+        if across_grooves && highest <= base + TOUCH && drop > OVERHANG {
+            continue;
+        }
         let s = &mut solids[i];
         s.center.y -= drop * 0.5;
         s.half.y += drop * 0.5;
@@ -525,6 +621,13 @@ fn settle(solids: &mut [Solid]) {
         }
         supported[i] = true;
         stack.push(i);
+    }
+    if across_grooves {
+        let mut k = 0;
+        solids.retain(|_| {
+            k += 1;
+            supported[k - 1]
+        });
     }
 }
 
@@ -542,7 +645,8 @@ impl Builder<'_> {
     /// Runs a style's rule inside `root` and fills its leaves.
     fn style(&mut self, name: &str, root: Block, seed: u32, nesting: u32) {
         let Some(style) = self.library.styles.get(name) else { return };
-        let leaves = ifs::generate(&style.rule(), Block { level: 0, ..root }, seed, self.budget);
+        let cuts = style.cuts(seed);
+        let leaves = ifs::generate(&style.rule(), Block { level: 0, ..root }, seed, self.budget, &cuts);
         self.budget = self.budget.saturating_sub(leaves.len());
         for (n, leaf) in leaves.iter().enumerate() {
             let r = |k: i32| hash01(n as i32, k, leaf.block.level as i32, seed);

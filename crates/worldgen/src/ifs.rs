@@ -108,6 +108,59 @@ impl Context {
     }
 }
 
+/// A cut taken out of a structure's envelope, in the root block's own
+/// coordinates (-1..1 on each axis, y up): what it contains is not built.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub enum Cut {
+    /// Everything inside this box.
+    Box { min: (f32, f32, f32), max: (f32, f32, f32) },
+    /// Everything beyond a plane: points p with p . normal > offset.
+    Plane { normal: (f32, f32, f32), offset: f32 },
+}
+
+impl Cut {
+    fn contains(&self, p: Vec3) -> bool {
+        match *self {
+            Cut::Box { min, max } => {
+                let (lo, hi) = (Vec3::from(min).min(Vec3::from(max)), Vec3::from(min).max(Vec3::from(max)));
+                p.cmpge(lo).all() && p.cmple(hi).all()
+            }
+            Cut::Plane { normal, offset } => p.dot(Vec3::from(normal)) > offset,
+        }
+    }
+}
+
+/// The root block and the cuts taken out of it.
+struct Envelope<'a> {
+    root: Block,
+    cuts: &'a [Cut],
+}
+
+impl Envelope<'_> {
+    fn inside(&self, world: Vec3) -> bool {
+        let local = self.root.rotation.inverse() * (world - self.root.center) / self.root.half;
+        !self.cuts.iter().any(|c| c.contains(local))
+    }
+
+    /// How much of a block lies inside: 0 none, 1 all, between partly
+    /// (sampled on a 3 x 3 x 3 grid).
+    fn share(&self, b: &Block) -> f32 {
+        if self.cuts.is_empty() {
+            return 1.0;
+        }
+        let mut n = 0;
+        for x in [-1.0, 0.0, 1.0] {
+            for y in [-1.0, 0.0, 1.0] {
+                for z in [-1.0, 0.0, 1.0] {
+                    let p = b.center + b.rotation * (Vec3::new(x, y, z) * b.half * 0.98);
+                    n += self.inside(p) as u32;
+                }
+            }
+        }
+        n as f32 / 27.0
+    }
+}
+
 /// A leaf of the tree: a cell to fill, and where it sat.
 #[derive(Clone, Copy, Debug)]
 pub struct Leaf {
@@ -116,15 +169,20 @@ pub struct Leaf {
 }
 
 /// Runs the rule from `root` and returns the leaves, at most `max_leaves`.
-pub fn generate(rule: &Rule, root: Block, seed: u32, max_leaves: usize) -> Vec<Leaf> {
+/// What `cuts` contains (see `Cut`) is carved out of the root first: cells
+/// outside are dropped, cells across a cut's edge split on (even when they
+/// would stop early) and at the last level are kept if their centre is in.
+pub fn generate(rule: &Rule, root: Block, seed: u32, max_leaves: usize, cuts: &[Cut]) -> Vec<Leaf> {
     let mut leaves = Vec::new();
-    split(rule, root, Context::default(), seed, 1, max_leaves, &mut leaves);
+    let envelope = Envelope { root, cuts };
+    split(rule, &envelope, root, Context::default(), seed, 1, max_leaves, &mut leaves);
     leaves
 }
 
 #[allow(clippy::too_many_arguments)]
 fn split(
     rule: &Rule,
+    envelope: &Envelope,
     block: Block,
     context: Context,
     seed: u32,
@@ -133,7 +191,15 @@ fn split(
     out: &mut Vec<Leaf>,
 ) {
     let r = |k: i32| hash01(path as i32, k, block.level as i32, seed);
-    let stops_early = block.level > 0 && r(0) < rule.stop_chance;
+    let share = envelope.share(&block);
+    if share <= 0.0 {
+        return;
+    }
+    let partial = share < 1.0;
+    let stops_early = block.level > 0 && r(0) < rule.stop_chance && !partial;
+    if partial && block.level >= rule.depth && !envelope.inside(block.center) {
+        return;
+    }
     let leaf = block.level >= rule.depth
         || block.half.min_element() * 2.0 < rule.min_size
         || stops_early
@@ -198,7 +264,24 @@ fn split(
                 // A cell with nothing under it spans a gap (a bridge, a
                 // roof): it reaches across the grooves to its neighbours
                 // instead of hanging between them.
-                let spans = j > 0 && !keeps(i, j - 1, k);
+                // The cell below, if the envelope carved it away, counts
+                // as missing too (a lintel, an overhang).
+                let carved_below = j > 0 && !envelope.cuts.is_empty() && {
+                    let below = Block {
+                        center: block.center
+                            + block.rotation
+                                * Vec3::new(
+                                    (i as f32 + 0.5) * cell.x - block.half.x,
+                                    (j as f32 - 0.5) * cell.y - block.half.y,
+                                    (k as f32 + 0.5) * cell.z - block.half.z,
+                                ),
+                        rotation: block.rotation,
+                        half: cell * 0.5,
+                        level: block.level + 1,
+                    };
+                    envelope.share(&below) < 0.5
+                };
+                let spans = j > 0 && (!keeps(i, j - 1, k) || carved_below);
                 let across = if spans { 2.0 - rule.gap } else { rule.gap };
                 let local = Vec3::new(
                     (i as f32 + 0.5) * cell.x - block.half.x,
@@ -214,7 +297,7 @@ fn split(
                 };
                 let open_above = j + 1 == ny || !keeps(i, j + 1, k);
                 let context = Context { index: [i, j, k], grid: [nx, ny, nz], early: false, open_above };
-                split(rule, child, context, seed, child_path, max_leaves, out);
+                split(rule, envelope, child, context, seed, child_path, max_leaves, out);
             }
         }
     }
@@ -237,7 +320,7 @@ mod tests {
             min_size: 0.0,
         };
         let root = Block { center: Vec3::ZERO, rotation: Quat::IDENTITY, half: Vec3::splat(27.0), level: 0 };
-        let leaves = generate(&rule, root, 1, usize::MAX);
+        let leaves = generate(&rule, root, 1, usize::MAX, &[]);
         assert_eq!(leaves.len(), 20 * 20 * 20);
         assert!(leaves.iter().all(|l| (l.block.half - Vec3::ONE).length() < 1e-4));
     }

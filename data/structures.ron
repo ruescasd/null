@@ -53,6 +53,12 @@
 //   min_size: blocks smaller than this (metres) are not split
 //   stairs: at most this many flights of stairs along the cliffs between
 //           levels
+//   envelope: [Box(min: (x, y, z), max: (x, y, z)), Plane(normal: (x, y, z), offset: 0.5)]
+//           cuts taken out of the box before it is filled, in its own -1..1
+//           coordinates: what a box contains, what lies beyond a plane
+//   cuts:   this many more cuts picked at random: corners (L shapes),
+//           notches, strips (setbacks), undercuts (overhangs), slopes
+//   symmetric: true mirrors the random cuts across x and z
 //   albedo, albedo_spread: tone
 //   leaves: [ (on: Where, module: "name", weight: 1, turn: None), ... ]
 //     on:   Any | Top | Summit | Bottom | Corner | Edge | Interior | Outside | Early
@@ -418,6 +424,92 @@
                 (on: Any, module: "box", weight: 3),
             ],
         ),
+        // The family (lab): the spire's recipe filling carved envelopes
+        // instead of the same box every time.
+        // Two random cuts: corners, notches, setbacks, overhangs, slopes.
+        "spire_carved": (
+            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, cuts: 2,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // One random cut, mirrored four ways.
+        "spire_symmetric": (
+            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, cuts: 1, symmetric: true,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // An ordered massif: a broad block, symmetric cuts.
+        "fam_massif": (
+            divisions: (4, 3, 4), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, cuts: 2, symmetric: true,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // A gate: two piers bridged at the top.
+        "fam_gate": (
+            divisions: (5, 4, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, envelope: [Box(min: (-0.45, -1.1, -1.1), max: (0.45, 0.35, 1.1))], cuts: 1, symmetric: true,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // A ring: walls round an empty court.
+        "fam_ring": (
+            divisions: (5, 3, 5), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, envelope: [Box(min: (-0.62, -0.7, -0.62), max: (0.62, 1.1, 0.62))], cuts: 1, symmetric: true,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // A cluster: four towers on one plinth.
+        "fam_cluster": (
+            divisions: (4, 6, 4), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, envelope: [Box(min: (-0.3, -0.75, -1.1), max: (0.3, 1.1, 1.1)), Box(min: (-1.1, -0.75, -0.3), max: (1.1, 1.1, 0.3)), Box(min: (-1.1, 0.2, -1.1), max: (-0.55, 1.1, -0.55)), Box(min: (0.55, 0.6, 0.55), max: (1.1, 1.1, 1.1))],
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // A hall: long and low, with setbacks.
+        "fam_hall": (
+            divisions: (6, 3, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
+            stop_chance: 0.2, albedo: 0.1, cuts: 2, symmetric: true,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
         // A loose stack of tables and cages.
         "tables": (
             divisions: (3, 3, 3), keep: Random(0.55), depth: 3, gap: 0.92, twist: -4,
@@ -729,34 +821,15 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
-        (name: "spire", style: "spire", size: (30, 120, 30), variants: 1,
-            note: "Reference: the spire that works"),
-        (name: "relief_block", form: "relief_block", footprint: 35,
-            note: "Sunk relief: faces carved into themselves, recesses within recesses"),
-        (name: "relief_wall", form: "relief_wall", footprint: 20, stretch: 4,
-            note: "A long wall in sunk relief"),
-        (name: "sunk_block", form: "sunk_block", footprint: 30,
-            note: "The wall network sunk into the walls: pipes lying in grooves cut for them"),
-        (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1,
-            note: "An ordered tower transcribed from Manifold Garden"),
-        (name: "mg_lattice", form: "mg_lattice", footprint: 280, variants: 1,
-            note: "The same tower repeated on a lattice"),
-        (name: "bastion", form: "bastion", footprint: 60,
-            note: "One round tower: bare wall, deep arches, a door, a spiral stair"),
-        (name: "bastions", form: "bastions", footprint: 160,
-            note: "Three towers joined by arched bridges"),
-        (name: "citadel", form: "citadel", footprint: 35,
-            note: "Sheaves of long cables across an open shaft, after the Citadel"),
-        (name: "square_block", form: "square_block", footprint: 30,
-            note: "The wall network with square conduits"),
-        (name: "square_sunk", form: "square_sunk", footprint: 30,
-            note: "Square conduits sunk into the wall, flush ridges"),
-        (name: "massif_stairs", style: "massif_stairs", size: (150, 120, 150),
-            note: "The massif with stairs between its levels"),
-        (name: "ziggurat_stairs", style: "ziggurat_stairs", size: (90, 50, 90),
-            note: "A stepped skyline with stairs between its levels"),
-        (name: "massif", style: "massif", size: (150, 120, 150), variants: 1,
-            note: "Reference: the massif"),
-        (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Reference: the truss"),
+        (name: "spire", style: "spire", size: (30, 120, 30), variants: 1, note: "Reference: the spire that works"),
+        (name: "spire_carved", style: "spire_carved", size: (40, 140, 40), variants: 3,
+            note: "The spire's recipe in a carved envelope: two random cuts"),
+        (name: "spire_symmetric", style: "spire_symmetric", size: (40, 140, 40), variants: 3,
+            note: "One cut, mirrored four ways"),
+        (name: "fam_massif", style: "fam_massif", size: (110, 70, 110), note: "An ordered massif"),
+        (name: "fam_gate", style: "fam_gate", size: (110, 90, 40), note: "A gate: two piers bridged at the top"),
+        (name: "fam_ring", style: "fam_ring", size: (120, 50, 120), note: "A ring of walls round a court"),
+        (name: "fam_cluster", style: "fam_cluster", size: (90, 160, 90), note: "Four towers on one plinth"),
+        (name: "fam_hall", style: "fam_hall", size: (180, 45, 60), note: "A long hall with setbacks"),
     ],
 )
