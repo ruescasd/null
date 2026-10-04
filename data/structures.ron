@@ -96,11 +96,13 @@
 //                      a structure of a box style in the biggest box that
 //                      fits, so high, or that many times its narrower side
 //   Rack(height: (40, 60), storey: (3.5, 5), bay: (3, 5), depth: (2.2, 3.5),
-//        frame: 0.45, core: false, tone: 0, then: "name")
+//        frame: 0.45, core: false, strange: false, tone: 0, then: "name")
 //                      an open frame along each edge, one bay deep, its bays
 //                      packed with pipes, tanks, hoses or machinery (or left
 //                      empty); `core` fills the inside with a dark mass;
-//                      `then` grows on the whole polygon at its top
+//                      `then` grows on the whole polygon at its top;
+//                      `strange`: frames within frames, branching and
+//                      twisted pipes, vertebrae, nothing at human scale
 //
 // SITES: structures that grow out of the world by themselves.
 //   site_grid: (spacing: 768, chance: 0.5)
@@ -487,6 +489,13 @@
         "rack_block": Rack(height: (40, 55), core: true, then: "rack_setback"),
         "rack_setback": Inset(by: (5, 9), then: "rack_upper"),
         "rack_upper": Rack(height: (20, 35), core: true, depth: (2, 3)),
+        // Strange racks: frames within frames, branching and twisted pipes,
+        // vertebrae; nothing at human scale.
+        "rack_shaft_strange": Rack(height: (70, 90), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), strange: true),
+        "rack_block_strange": Rack(height: (40, 55), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), core: true,
+            strange: true, then: "rack_setback_strange"),
+        "rack_setback_strange": Inset(by: (5, 9), then: "rack_upper_strange"),
+        "rack_upper_strange": Rack(height: (20, 35), storey: (4, 7), depth: (2.5, 3.5), core: true, strange: true),
         "colossus_mountain": Extrude(height: (25, 45), taper: (0.12, 0.25), tone: -0.02, then: "mountain_ledge"),
         "mountain_ledge": Rim(width: 12, gates: 0.35, wall: "mountain_deco", inner: "mountain_up"),
         "mountain_up": Choose([(6, "colossus_mountain"), (1, "mountain_split"), (1, "mountain_crown")]),
@@ -594,8 +603,10 @@
             note: "A mountain of mountains: the same falling envelope at every scale"),
         (name: "rack_shaft", form: "rack_shaft", footprint: 34,
             note: "A hollow shaft lined with racks: pipes, tanks, hoses, machinery in the bays"),
-        (name: "rack_block", form: "rack_block", footprint: 50,
-            note: "Racks around a dark core, set back above"),
+        (name: "rack_shaft_strange", form: "rack_shaft_strange", footprint: 34,
+            note: "The shaft made strange: frames within frames, branching and twisted pipes, vertebrae"),
+        (name: "rack_block_strange", form: "rack_block_strange", footprint: 50,
+            note: "Strange racks around a dark core, set back above"),
         (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
         (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
             note: "The organ with pipework"),

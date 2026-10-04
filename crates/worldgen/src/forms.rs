@@ -42,6 +42,10 @@ pub enum Form {
         frame: f32,
         #[serde(default)]
         core: bool,
+        /// Frames within frames, branching and twisted pipes, vertebrae:
+        /// nothing at human scale.
+        #[serde(default)]
+        strange: bool,
         #[serde(default)]
         tone: f32,
         #[serde(default)]
@@ -340,7 +344,7 @@ impl Grower<'_> {
         let child = |i: u32| seed.wrapping_mul(0x9e37_79b9).wrapping_add(i.wrapping_mul(0x85eb_ca6b)) ^ depth;
         match form {
             Form::Nothing => {}
-            Form::Rack { height, storey, bay, depth: d, frame, core, tone: t, then } => {
+            Form::Rack { height, storey, bay, depth: d, frame, core, strange, tone: t, then } => {
                 let tone = tone + t;
                 let layout = crate::rack::Layout {
                     height: pick(*height, 1),
@@ -348,6 +352,8 @@ impl Grower<'_> {
                     bay: pick(*bay, 3),
                     depth: pick(*d, 4),
                     frame: *frame,
+                    strange: *strange,
+                    level: 0,
                 };
                 let rack = crate::rack::build(poly, floor, layout, tone, child(2));
                 let pieces = rack.solids.len() + rack.tubes.len();
