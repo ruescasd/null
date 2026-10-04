@@ -104,6 +104,10 @@
 //                      `strange`: no frame, but a network of pipes on the
 //                      core's faces (use with `core`), climbing, switching
 //                      lanes, splitting, with bare wall between its knots
+//   Roots(reach: (45, 70), depth: 2.5, tone: 0)
+//                      the same network spreading out across the ground
+//                      from each edge, `reach` metres, half sunk or on
+//                      supports, thinning and diving in as it goes
 //
 // SITES: structures that grow out of the world by themselves.
 //   site_grid: (spacing: 768, chance: 0.5)
@@ -493,6 +497,12 @@
         // Strange racks: no frame, a network of pipes on the core's faces,
         // climbing, switching lanes, splitting, with bare wall between.
         "rack_wall": Rack(height: (28, 36), depth: (2.5, 4), core: true, strange: true),
+        // Roots (lab): the network spreading out across the ground from a
+        // structure's footprint, thinning and diving in as it goes.
+        "roots": Roots(reach: (55, 85)),
+        "rooted_block": Stack(["rack_block_strange", "roots"]),
+        "rooted_spire": Stack(["rooted_spire_tower", "roots"]),
+        "rooted_spire_tower": Structure(style: "spire", height: (90, 120)),
         "rack_block_strange": Rack(height: (40, 55), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), core: true,
             strange: true, then: "rack_setback_strange"),
         "rack_setback_strange": Inset(by: (5, 9), then: "rack_upper_strange"),
@@ -608,6 +618,10 @@
             note: "A long wall with a pipe network on it: what a trench wall would carry"),
         (name: "rack_block_strange", form: "rack_block_strange", footprint: 50,
             note: "The network around a core, set back above"),
+        (name: "rooted_block", form: "rooted_block", footprint: 40,
+            note: "The network spreading out across the ground from the block, like roots"),
+        (name: "rooted_spire", form: "rooted_spire", footprint: 30,
+            note: "Roots from a spire: does it tie a tower to its ground?"),
         (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
         (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
             note: "The organ with pipework"),

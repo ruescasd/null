@@ -13,9 +13,10 @@
 //! Each edge stands to its own height, the corner cylinders above them all.
 //!
 //! A strange rack has no frame and no lanes: it is a network of pipes
-//! clinging to the wall it lines (see [`network`]).
+//! clinging to the wall it lines (see [`network`]). The same network can
+//! spread across the ground from a footprint's edges, like roots ([`roots`]).
 
-use glam::{Quat, Vec2, Vec3};
+use glam::{Mat3, Quat, Vec2, Vec3};
 
 use crate::dressing::Tube;
 use crate::forms::inward_normals;
@@ -70,14 +71,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
         if strange {
             // The wall is the core's face, `depth` in from the edge; the
             // network fills the space between.
-            let wall = Wall {
-                start: a + inn * depth + e * depth * 0.5,
-                along: e,
-                out: -inn,
-                length: length - depth,
-                floor,
-                height,
-            };
+            let wall = Surface::wall(a + inn * depth + e * depth * 0.5, e, -inn, length - depth, floor, height);
             network(&mut rack, &wall, depth, tone, seed ^ (i as u32).wrapping_mul(0x9e37_79b9));
             continue;
         }
@@ -320,29 +314,61 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
     rack
 }
 
-/// A vertical wall for a network to cling to: its foot runs from `start`
-/// along `along` for `length` metres at `floor`, `height` high, facing
-/// `out`.
-pub struct Wall {
-    pub start: Vec2,
-    pub along: Vec2,
-    pub out: Vec2,
-    pub length: f32,
-    pub floor: f32,
-    pub height: f32,
+/// A surface for a network to grow on: a wall it climbs, or the ground it
+/// spreads across. Points on it are `u` metres across (along the wall, or
+/// sideways on the ground), `y` metres in the direction it grows (up the
+/// wall, or out from where it starts) and `z` metres off it.
+pub struct Surface {
+    origin: Vec3,
+    across: Vec3,
+    grow: Vec3,
+    off: Vec3,
+    width: f32,
+    reach: f32,
+    ground: bool,
 }
 
-impl Wall {
-    /// A point `u` metres along the wall, `y` above its floor, `z` out
-    /// from its face.
+impl Surface {
+    /// A vertical wall whose foot runs from `start` along `along` for
+    /// `length` metres at `floor`, `height` high, facing `out`.
+    pub fn wall(start: Vec2, along: Vec2, out: Vec2, length: f32, floor: f32, height: f32) -> Self {
+        Surface {
+            origin: Vec3::new(start.x, floor, start.y),
+            across: Vec3::new(along.x, 0.0, along.y),
+            grow: Vec3::Y,
+            off: Vec3::new(out.x, 0.0, out.y),
+            width: length,
+            reach: height,
+            ground: false,
+        }
+    }
+
+    /// Level ground at `floor`, spreading `reach` metres out (`out`) from a
+    /// line that runs from `start` along `along` for `length` metres.
+    pub fn ground(start: Vec2, along: Vec2, out: Vec2, length: f32, floor: f32, reach: f32) -> Self {
+        Surface {
+            origin: Vec3::new(start.x, floor, start.y),
+            across: Vec3::new(along.x, 0.0, along.y),
+            grow: Vec3::new(out.x, 0.0, out.y),
+            off: Vec3::Y,
+            width: length,
+            reach,
+            ground: true,
+        }
+    }
+
     fn at(&self, u: f32, y: f32, z: f32) -> Vec3 {
-        let p = self.start + self.along * u + self.out * z;
-        Vec3::new(p.x, self.floor + y, p.y)
+        self.origin + self.across * u + self.grow * y + self.off * z
+    }
+
+    /// The rotation that turns a box's x, y, z to across, grow, off.
+    fn rotation(&self) -> Quat {
+        Quat::from_mat3(&Mat3::from_cols(self.across, self.grow, self.across.cross(self.grow)))
     }
 }
 
-/// How dense the network is `u` metres along a wall: smooth, with bare
-/// stretches between knots.
+/// How dense the network is `u` metres across its surface: smooth, with
+/// bare stretches between knots.
 fn density(u: f32, seed: u32) -> f32 {
     let cell = 7.0;
     let k = (u / cell).floor();
@@ -353,9 +379,22 @@ fn density(u: f32, seed: u32) -> f32 {
     ((v - 0.3) / 0.45).clamp(0.0, 1.0)
 }
 
-/// A route of the network as it grows: where its end is (`u` along the
-/// wall, `y` up, `z` off it), how thick its pipes are, how many run side by
-/// side in its bundle, how many times it has split, and its own number.
+/// Pipe kinds: plain, dark, pale, and banded (dark rings along it).
+const KINDS: u32 = 4;
+const BANDED: u32 = 3;
+
+fn kind_of(h: f32) -> u32 {
+    match h {
+        h if h < 0.45 => 0,
+        h if h < 0.65 => 1,
+        h if h < 0.85 => 2,
+        _ => BANDED,
+    }
+}
+
+/// A route of the network as it grows: where its end is, how thick its
+/// pipes are, how many run side by side in its bundle and of what kind,
+/// how many times it has split, and its own number.
 #[derive(Clone, Copy)]
 struct Route {
     u: f32,
@@ -363,38 +402,63 @@ struct Route {
     z: f32,
     radius: f32,
     strands: u32,
+    kind: u32,
     generation: u32,
     path: u32,
 }
 
-/// A network of pipes on a wall, no deeper than `depth` off it: bundles
-/// rooted at its foot where the wall is dense, climbing, jogging sideways
-/// at uneven angles from lane to lane (now and then running level), and
-/// splitting, the bundle shared out between its branches until single
-/// pipes split into thinner ones; now and then a route plugs back into the
-/// wall. Routes keep their own depth off the wall, so they cross in front
-/// of and behind each other; a few heavy brackets hold them. Between the
-/// knots, bare wall.
-pub fn network(rack: &mut Rack, wall: &Wall, depth: f32, tone: f32, seed: u32) {
+/// A network of pipes on a surface, no further than `depth` off it:
+/// bundles rooted along its start where it is dense, growing on (up a
+/// wall, out across the ground), jogging sideways at uneven angles from
+/// lane to lane (now and then square across), and splitting, the bundle
+/// shared out between its branches until single pipes split into thinner
+/// ones; now and then a route dives into the surface. Routes keep their own
+/// distance off it, so they cross over and under each other; brackets hold
+/// them (on the ground, supports). Pipes come in kinds: plain, dark, pale,
+/// banded; a wide bundle mixes them. On the ground some routes lie half
+/// sunk, and they thin out and dive in as they go. Between the knots, bare
+/// surface.
+pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: u32) {
     let budget = rack.tubes.len() + 5000;
     let collar_tone = (tone - 0.03).max(0.03);
-    let yaw = Quat::from_rotation_y((-wall.along.y).atan2(wall.along.x));
-    let top = wall.height - 0.3;
+    let rotation = surface.rotation();
+    let top = surface.reach - 0.3;
     let fits = |radius: f32, strands: u32| radius * 2.2 * strands as f32;
-    // How far off the wall a route of this thickness may run.
-    let depth_for = |radius: f32, h: f32| (radius + 0.15 + (depth - 2.0 * radius - 0.15).max(0.0) * h).max(radius + 0.1);
+    // How far off the surface a route of this thickness runs: on the ground,
+    // often half sunk.
+    let depth_for = |radius: f32, h: f32| {
+        if surface.ground && h < 0.3 {
+            radius * 0.4
+        } else {
+            let h = if surface.ground { (h - 0.3) / 0.7 } else { h };
+            (radius + 0.15 + (depth - 2.0 * radius - 0.15).max(0.0) * h).max(radius + 0.1)
+        }
+    };
+    let shade_of = |kind: u32, h: f32| {
+        let base = tone + 0.04 + (h - 0.5) * 0.05;
+        let shade = match kind {
+            1 => base - 0.06,
+            2 => base + 0.1,
+            _ => base,
+        };
+        shade.clamp(0.04, 0.45)
+    };
 
-    // Roots along the foot of the wall: in the knots, heavy bundles.
+    // Roots along the start: in the knots, heavy bundles.
     let mut stack: Vec<Route> = Vec::new();
     let mut u = 0.5;
     let mut k = 0;
-    while u < wall.length - 0.5 {
+    while u < surface.width - 0.5 {
         let h = |j: i32| hash01(k, j, 0x0e7, seed);
-        let d = density(u, seed);
+        // The ground near a structure is never bare, and its roots are
+        // heavier.
+        let d = if surface.ground { 0.35 + 0.65 * density(u, seed) } else { density(u, seed) };
+        let heavy = if surface.ground { 1.6 } else { 1.0 };
         if h(0) < d * 0.7 {
-            let radius = (0.15 + 0.5 * h(1) * h(1) * d).min(depth * 0.3);
-            let strands = 1 + (h(4) * h(4) * 6.0 * d) as u32;
-            stack.push(Route { u, y: 0.0, z: depth_for(radius, h(2)), radius, strands, generation: 0, path: k as u32 + 1 });
+            let radius = ((0.15 + 0.5 * h(1) * h(1) * d) * heavy).min(depth * 0.3);
+            let strands = 1 + (h(4) * h(4) * 6.0 * d * heavy) as u32;
+            let kind = kind_of(h(5));
+            stack.push(Route { u, y: 0.0, z: depth_for(radius, h(2)), radius, strands, kind, generation: 0, path: k as u32 + 1 });
             u += fits(radius, strands) + 0.3 + 2.0 * h(3);
         } else {
             u += 0.8;
@@ -403,21 +467,33 @@ pub fn network(rack: &mut Rack, wall: &Wall, depth: f32, tone: f32, seed: u32) {
     }
 
     // A segment of a route: each strand of the bundle, side by side across
-    // the segment's direction in the wall's plane.
-    let segment = |rack: &mut Rack, from: (f32, f32, f32), to: (f32, f32, f32), radius: f32, strands: u32, shade: f32| {
+    // the segment's direction on the surface; every third strand of a wide
+    // bundle of another kind; banded pipes ringed.
+    let segment = |rack: &mut Rack, from: (f32, f32, f32), to: (f32, f32, f32), route: &Route, h: f32| {
         let (du, dy) = (to.0 - from.0, to.1 - from.1);
         let length = (du * du + dy * dy).sqrt().max(1e-3);
         let (pu, py) = (-dy / length, du / length);
+        let radius = route.radius;
         let spacing = radius * 2.2;
-        for s in 0..strands {
-            let o = (s as f32 - (strands as f32 - 1.0) * 0.5) * spacing;
-            // Strands of a wide bundle step a little in depth too.
+        for s in 0..route.strands {
+            let o = (s as f32 - (route.strands as f32 - 1.0) * 0.5) * spacing;
+            let kind = if s % 3 == 2 { (route.kind + 2) % KINDS } else { route.kind };
+            // Strands of a wide bundle step a little off the surface too.
             let dz = if s % 2 == 1 { radius * 0.6 } else { 0.0 };
-            let a = wall.at(from.0 + pu * o, from.1 + py * o, from.2 + dz);
-            let b = wall.at(to.0 + pu * o, to.1 + py * o, to.2 + dz);
+            let a = surface.at(from.0 + pu * o, from.1 + py * o, from.2 + dz);
+            let b = surface.at(to.0 + pu * o, to.1 + py * o, to.2 + dz);
+            let dir = (b - a).normalize_or_zero();
             // A little overlap hides the joints at bends.
-            let d = (b - a).normalize_or_zero() * radius * 0.5;
-            rack.tubes.push(Tube { from: a - d, to: b + d, radius, albedo: shade });
+            let d = dir * radius * 0.5;
+            rack.tubes.push(Tube { from: a - d, to: b + d, radius, albedo: shade_of(kind, h) });
+            if kind == BANDED {
+                let span = (b - a).length();
+                let rings = (span / 1.1).floor() as i32;
+                for k in 1..=rings {
+                    let p = a + dir * (k as f32 * 1.1);
+                    rack.tubes.push(Tube { from: p - dir * 0.08, to: p + dir * 0.08, radius: radius * 1.18, albedo: collar_tone });
+                }
+            }
         }
     };
 
@@ -425,35 +501,45 @@ pub fn network(rack: &mut Rack, wall: &Wall, depth: f32, tone: f32, seed: u32) {
         if rack.tubes.len() > budget {
             return;
         }
-        let Route { u, y, z, radius, strands, generation, path } = route;
+        let Route { u, y, z, radius, strands, kind, generation, path } = route;
+        let r = |j: i32| hash01(path as i32, j, generation as i32, seed);
         if y >= top {
+            // On the ground, the end of the reach: into it.
+            if surface.ground {
+                segment(rack, (u, y, z), (u, y + 1.0, -radius * 2.0), &route, r(0));
+            }
             continue;
         }
-        let r = |j: i32| hash01(path as i32, j, generation as i32, seed);
-        let shade = (tone + 0.04 + (r(0) - 0.5) * 0.05).clamp(0.05, 0.4);
         let width = fits(radius, strands);
-        let clamp_u = |u: f32| u.clamp(width * 0.5 + 0.2, (wall.length - width * 0.5 - 0.2).max(width * 0.5 + 0.2));
+        // On a wall routes stay on it; on the ground they may fan out past
+        // the ends of the line they started from, the further out the more.
+        let spill = if surface.ground { y * 0.6 } else { 0.0 };
+        let (lo, hi) = (width * 0.5 + 0.2 - spill, surface.width - width * 0.5 - 0.2 + spill);
+        let clamp_u = |u: f32| u.clamp(lo, hi.max(lo));
         let action = r(1);
-        // A heavy bracket holding the bundle to the wall now and then.
-        if r(2) < 0.1 {
+        let sunk = z < radius;
+        // A heavy bracket holding the bundle (on the ground, a support).
+        let brackets = if surface.ground { 0.3 } else { 0.1 };
+        if !sunk && r(2) < brackets {
             rack.solids.push(Solid {
                 wedge: false,
-                center: wall.at(u, y + radius, z * 0.5),
-                rotation: yaw,
+                center: surface.at(u, y + radius, z * 0.5),
+                rotation,
                 half: Vec3::new(width * 0.5 + 0.15, radius * 1.1 + 0.08, z * 0.5),
                 albedo: collar_tone,
             });
         }
-        if generation > 0 && y > wall.height * 0.15 && action < 0.05 {
-            // Into the wall.
-            segment(rack, (u, y, z), (u, y, -0.2), radius, strands, shade);
+        // Into the surface: on the ground, more often the further out.
+        let dive = if surface.ground { 0.02 + 0.1 * (y / surface.reach).powi(2) } else { 0.05 };
+        if generation > 0 && y > surface.reach * 0.15 && action < dive {
+            segment(rack, (u, y, z), (u, y + radius * 2.0, -radius * 2.0), &route, r(0));
         } else if action < 0.3 && (strands > 1 || (radius > 0.18 && generation < 6)) {
             // A split: the bundle shared out between two or three branches
-            // leaning away across the wall, each at its own depth; a single
-            // pipe splits into thinner ones.
+            // leaning away across the surface, each at its own distance off
+            // it; a single pipe splits into thinner ones.
             rack.tubes.push(Tube {
-                from: wall.at(u, y - radius, z),
-                to: wall.at(u, y + radius, z),
+                from: surface.at(u, y - radius, z),
+                to: surface.at(u, y + radius, z),
                 radius: width * 0.5 + radius * 0.35,
                 albedo: collar_tone,
             });
@@ -472,38 +558,70 @@ pub fn network(rack: &mut Rack, wall: &Wall, depth: f32, tone: f32, seed: u32) {
                 if child_n == 0 {
                     continue;
                 }
+                let child_kind = if rc(4) < 0.2 { kind_of(rc(5)) } else { kind };
                 let side = if c % 2 == 0 { 1.0 } else { -1.0 };
-                let du = side * (1.5 + 5.0 * rc(1)) * (0.5 + child_r * 2.0);
+                let fan = if surface.ground { 2.0 } else { 1.0 };
+                let du = side * (1.5 + 5.0 * rc(1)) * (0.5 + child_r * 2.0) * fan;
                 let nu = clamp_u(u + du);
                 let nz = depth_for(child_r, rc(2));
                 let ny = (y + (nu - u).abs() * (0.3 + 1.4 * rc(3)) + 0.3).min(top);
-                segment(rack, (u, y, z), (nu, ny, nz), child_r, child_n, shade);
-                stack.push(Route { u: nu, y: ny, z: nz, radius: child_r, strands: child_n, generation: generation + 1, path: id });
+                let child = Route {
+                    u: nu,
+                    y: ny,
+                    z: nz,
+                    radius: child_r,
+                    strands: child_n,
+                    kind: child_kind,
+                    generation: generation + 1,
+                    path: id,
+                };
+                segment(rack, (u, y, z), (nu, ny, nz), &child, rc(0));
+                stack.push(child);
             }
         } else if action < 0.55 {
             // A jog sideways into another lane, at an uneven angle, now and
-            // then level; maybe nearer or further off the wall.
+            // then square across; maybe nearer or further off the surface.
             let side = if r(4) < 0.5 { -1.0 } else { 1.0 };
             let du = side * (1.0 + 5.0 * r(5));
             let nu = clamp_u(u + du);
-            let nz = (z + (r(6) - 0.5) * depth * 0.6).clamp(radius + 0.1, (depth - radius).max(radius + 0.1));
+            let low = if surface.ground && sunk { z } else { radius + 0.1 };
+            let nz = if sunk { z } else { (z + (r(6) - 0.5) * depth * 0.6).clamp(low, (depth - radius).max(low)) };
             let slope = if r(7) < 0.2 { 0.0 } else { 0.25 + 1.75 * r(9) };
             let ny = (y + (nu - u).abs() * slope).min(top);
-            segment(rack, (u, y, z), (nu, ny, nz), radius, strands, shade);
-            // A level run must still climb afterwards.
+            segment(rack, (u, y, z), (nu, ny, nz), &route, r(0));
+            // A square run must still go on afterwards.
             let ny = if slope == 0.0 {
                 let rise = (1.0 + 2.0 * r(10)).min(top - ny).max(0.0);
-                segment(rack, (nu, ny, nz), (nu, ny + rise, nz), radius, strands, shade);
+                segment(rack, (nu, ny, nz), (nu, ny + rise, nz), &route, r(0));
                 ny + rise.max(0.3)
             } else {
                 ny.max(y + 0.3)
             };
             stack.push(Route { u: nu, y: ny, z: nz, path: path.wrapping_mul(2).wrapping_add(1), ..route });
         } else {
-            // A straight climb.
+            // Straight on.
             let rise = (2.0 + 7.0 * r(8)).min(top - y);
-            segment(rack, (u, y, z), (u, y + rise, z), radius, strands, shade);
+            segment(rack, (u, y, z), (u, y + rise, z), &route, r(0));
             stack.push(Route { y: y + rise, path: path.wrapping_mul(2), ..route });
         }
     }
+}
+
+/// A network spreading across the ground from each edge of `poly`
+/// (convex), outwards for `reach` metres, no higher than `depth` off it:
+/// the city's pipes running out into the land, thinning and diving in.
+pub fn roots(poly: &[Vec2], floor: f32, reach: f32, depth: f32, tone: f32, seed: u32) -> Rack {
+    let mut rack = Rack::default();
+    let inward = inward_normals(poly);
+    let n = poly.len();
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        let length = (b - a).length();
+        if length < 2.0 {
+            continue;
+        }
+        let ground = Surface::ground(a, (b - a) / length, -inward[i], length, floor, reach);
+        network(&mut rack, &ground, depth, tone, seed ^ (i as u32).wrapping_mul(0x85eb_ca6b));
+    }
+    rack
 }

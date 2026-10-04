@@ -26,6 +26,16 @@ use crate::structure::{self, Library, Placement, Solid};
 pub enum Form {
     /// Nothing (also available as "nothing").
     Nothing,
+    /// A network of pipes spreading out across the ground from the polygon's
+    /// edges for `reach` metres, no higher than `depth` (see `rack.rs`):
+    /// the city's pipes running out into the land.
+    Roots {
+        reach: (f32, f32),
+        #[serde(default = "roots_depth")]
+        depth: f32,
+        #[serde(default)]
+        tone: f32,
+    },
     /// An open frame lining the polygon's edges, one bay `depth` deep, its
     /// bays packed with pipes, tanks, hoses and machinery (see `rack.rs`).
     /// With `core`, a dark mass fills the polygon inside the rack. `then`
@@ -165,6 +175,10 @@ pub enum Form {
     },
 }
 
+fn roots_depth() -> f32 {
+    2.5
+}
+
 fn rack_storey() -> (f32, f32) {
     (3.5, 5.0)
 }
@@ -211,6 +225,7 @@ pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
         Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
+        Form::Roots { .. } => vec![],
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
         }
@@ -344,6 +359,16 @@ impl Grower<'_> {
         let child = |i: u32| seed.wrapping_mul(0x9e37_79b9).wrapping_add(i.wrapping_mul(0x85eb_ca6b)) ^ depth;
         match form {
             Form::Nothing => {}
+            Form::Roots { reach, depth: d, tone: t } => {
+                let roots = crate::rack::roots(poly, floor, pick(*reach, 1), *d, tone + t, child(3));
+                let pieces = roots.solids.len() + roots.tubes.len();
+                if pieces > self.budget {
+                    return;
+                }
+                self.budget -= pieces;
+                self.out.solids.extend(roots.solids);
+                self.out.tubes.extend(roots.tubes);
+            }
             Form::Rack { height, storey, bay, depth: d, frame, core, strange, tone: t, then } => {
                 let tone = tone + t;
                 let layout = crate::rack::Layout {
