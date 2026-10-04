@@ -89,8 +89,9 @@
 //                      grows on the whole polygon at their top
 //   Choose([(2, "a"), (1, "b")])   one of these, by weight
 //   Stack(["a", "b"])              all of these on the same polygon
-//   Structure(style: "name", height: (20, 40))
-//                      a structure of a box style in the biggest box that fits
+//   Structure(style: "name", height: (20, 40))   or   proportion: (1.5, 3)
+//                      a structure of a box style in the biggest box that
+//                      fits, so high, or that many times its narrower side
 //
 // SITES: structures that grow out of the world by themselves.
 //   site_grid: (spacing: 768, chance: 0.5)
@@ -177,6 +178,32 @@
     },
 
     styles: {
+        // Town buildings: a lattice of floors, needles and blades at the
+        // corners and edges, louvres on the faces, cages inside.
+        "tower_block": (
+            divisions: (3, 5, 3), keep: Lattice, depth: 2, gap: 0.9,
+            stop_chance: 0.25, albedo: 0.12, albedo_spread: 0.05,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 2),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 2),
+                (on: Interior, module: "cage", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
+        // A lower, wider mass with voids, louvres and fins.
+        "slab_block": (
+            divisions: (4, 3, 2), keep: Random(0.8), depth: 2, gap: 0.92,
+            stop_chance: 0.3, albedo: 0.14, albedo_spread: 0.05,
+            leaves: [
+                (on: Top, module: "terrace", weight: 1, turn: Outward),
+                (on: Outside, module: "louvres", weight: 2),
+                (on: Outside, module: "blade", weight: 1),
+                (on: Early, module: "box", weight: 3),
+                (on: Any, module: "box", weight: 2),
+            ],
+        ),
         // A Menger-like lattice; its interior cells become open cages.
         "lattice": (
             divisions: (3, 3, 3), keep: Lattice, depth: 3, gap: 0.93, twist: 2,
@@ -285,8 +312,13 @@
         "monolith_groove": Neck(by: (0.8, 1.6), height: (1.2, 2.4), then: "monolith"),
 
         // Blocks cut along the plate's own lines, with streets between.
-        "blocks": Split(depth: 3, gap: 3, min_width: 7, then: "block_or_gap"),
-        "block_or_gap": Choose([(8, "block"), (1, "nothing"), (1, "monolith")]),
+        "blocks": Split(depth: 2, gap: 2.5, min_width: 16, then: "block_or_gap"),
+        "block_or_gap": Choose([(6, "town_tower"), (4, "town_slab"), (0.5, "nothing")]),
+        // Buildings of the box styles in the pieces of a plate.
+        "town_tower": Inset(by: (0.5, 1.5), then: "town_tower_box"),
+        "town_tower_box": Structure(style: "tower_block", proportion: (2, 4.5)),
+        "town_slab": Inset(by: (0.5, 1.5), then: "town_slab_box"),
+        "town_slab_box": Structure(style: "slab_block", proportion: (0.4, 0.9)),
         // A screen of slender fins.
         "screen": Split(depth: 4, gap: 1.4, min_width: 2.5, then: "fin"),
         "fin": Extrude(height: (8, 22), tone: 0.02),
@@ -305,12 +337,28 @@
         "lattice_block": Inset(by: (2, 4), then: "lattice_box"),
         "lattice_box": Structure(style: "lattice", height: (20, 50)),
 
+        // Terrain pillars (the stacks' ground): the mesher grows this on each
+        // pillar plate and scales it to the pillar's height. Banded shafts,
+        // sometimes split by a slot, with grooves, setbacks and small crowns.
+        "pillar": Choose([(3, "pillar_band"), (2, "pillar_split"), (1, "pillar_cells")]),
+        "pillar_split": Split(depth: 1, gap: 0.6, min_width: 2.5, then: "pillar_band"),
+        "pillar_cells": Cells(size: 2.5, gap: 0.3, then: "pillar_band"),
+        "pillar_band": Facade(height: (2, 5), panel: 1.7, storey: 1.9, depth: (0.1, 0.5), fill: 0.45,
+            then: "pillar_next"),
+        "pillar_next": Choose([(6, "pillar_neck"), (2, "pillar_setback"), (1, "pillar_crown")]),
+        "pillar_neck": Neck(by: (0.2, 0.5), height: (0.4, 1), then: "pillar_band"),
+        "pillar_setback": Inset(by: (0.4, 1.2), then: "pillar_band"),
+        "pillar_crown": Cells(size: 1.5, gap: 0.3, then: "pillar_crown_piece"),
+        "pillar_crown_piece": Choose([(1, "nothing"), (2, "pillar_crown_block")]),
+        "pillar_crown_block": Extrude(height: (0.5, 2.5), tone: 0.02),
+
         // What grows on a plate, by kind of site.
         "plaza": Choose([(6, "nothing"), (1, "dais"), (1, "court"), (1, "paving")]),
-        "town": Inset(by: (1, 2.5), then: "town_plate"),
-        "town_plate": Choose([(6, "blocks"), (1, "court"), (1, "dais"), (1, "screen"), (1, "monolith"), (1, "nothing")]),
+        "town": Inset(by: (0.5, 1.5), then: "town_plate"),
+        "town_plate": Choose([(7, "blocks"), (1, "court"), (1, "dais"), (1, "nothing")]),
         "towers": Inset(by: (1.5, 4), then: "towers_plate"),
-        "towers_plate": Choose([(3, "monolith"), (3, "blocks"), (1, "lattice_block"), (1, "nothing")]),
+        "towers_plate": Choose([(3, "towers_spire"), (3, "blocks"), (1, "lattice_block"), (1, "nothing")]),
+        "towers_spire": Structure(style: "tower_block", proportion: (3, 6)),
         "ruin": Choose([(3, "paving"), (1, "court"), (3, "nothing"), (1, "low_block"), (1, "dais")]),
         "terrace": Choose([(2, "paving"), (1, "court"), (2, "dais"), (1, "low_block")]),
 

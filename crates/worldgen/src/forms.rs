@@ -119,10 +119,15 @@ pub enum Form {
     Choose(Vec<(f32, String)>),
     /// All of these, on the same polygon.
     Stack(Vec<String>),
-    /// A structure of a box style, in the biggest box that fits.
+    /// A structure of a box style, in the biggest box that fits: `height`
+    /// metres high, or with `proportion`, that many times the box's
+    /// narrower side.
     Structure {
         style: String,
+        #[serde(default)]
         height: (f32, f32),
+        #[serde(default)]
+        proportion: Option<(f32, f32)>,
     },
 }
 
@@ -515,9 +520,13 @@ impl Grower<'_> {
                     self.grow(name, poly, floor, tone, child(i as u32), depth + 1);
                 }
             }
-            Form::Structure { style, height } => {
+            Form::Structure { style, height, proportion } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
-                let size = (half.x * 2.0, pick(*height, 1), half.y * 2.0);
+                let tall = match proportion {
+                    Some(p) => pick(*p, 1) * half.min_element() * 2.0,
+                    None => pick(*height, 1),
+                };
+                let size = (half.x * 2.0, tall, half.y * 2.0);
                 let placement = Placement {
                     style: style.clone(),
                     at: (0.0, 0.0),

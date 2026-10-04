@@ -13,7 +13,7 @@
 //! the plates and bring their own geometry. Sites (see `sites.rs`) reshape
 //! the plates around them into a flat core and terraces.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use glam::{DVec2, Vec3};
 
@@ -21,6 +21,7 @@ use crate::canal::{CanalHit, Canals, PIPE_RADIUS};
 use crate::district::{District, DistrictMap};
 use crate::mesh::{ColumnMesh, column_size};
 use crate::noise::{Fbm, hash01};
+use crate::forms::{self, Growth, Grower};
 use crate::sites::{SiteGround, SiteTable};
 use crate::structure::Library;
 
@@ -46,6 +47,8 @@ pub struct PlateWorld {
     pub districts: DistrictMap,
     pub canals: Canals,
     sites: SiteTable,
+    /// The structure library, for the form pillars grow (see `emit_pillar`).
+    library: Option<Arc<Library>>,
 }
 
 /// Flow inside a canal at a point.
@@ -70,6 +73,9 @@ pub struct Plate {
     pub level: usize,
     /// Grid index of the site at each level down to `level`.
     pub sites: [(i32, i32); 3],
+    /// How much of its height is a pillar raised above the ground's own
+    /// level (0 for most plates).
+    pub pillar: f64,
 }
 
 /// A plate belonging to a site: its outline (world coordinates near the
@@ -110,19 +116,22 @@ impl PlateWorld {
             districts: DistrictMap::new(size as f64, seed),
             canals: Canals::new(size as f64, seed),
             sites: SiteTable::default(),
+            library: None,
         }
     }
 
     /// The same world with the ground reshaped by the library's sites.
     pub fn with_sites(mut self, library: &Library) -> Self {
         self.sites = SiteTable::new(library, &self);
+        self.library = Some(Arc::new(library.clone()));
         self
     }
 
     /// Whether two worlds' sites shape the ground alike (if not, terrain
     /// meshed for one is wrong for the other).
     pub fn same_ground(&self, other: &PlateWorld) -> bool {
-        self.sites == other.sites
+        let forms = |w: &PlateWorld| w.library.as_ref().map(|l| format!("{:?}", l.forms));
+        self.sites == other.sites && forms(self) == forms(other)
     }
 
     /// The world's seed (scrambled), for things derived from it.
@@ -279,6 +288,7 @@ impl PlateWorld {
 
         let l0 = self.landform_at_site(cache, 0, sites[0]);
         let mut height = step(l0, rules.quantum0);
+        let mut pillar = 0.0;
         let r = self.rand(0, sites[0], 4);
         if r < rules.mesa_chance {
             height += 25.0 + self.rand(0, sites[0], 5) * 60.0;
@@ -299,7 +309,8 @@ impl PlateWorld {
             height += step((l2 - l1) * 0.85, rules.quantum);
             if self.rand(2, sites[2], 4) < rules.pillar_chance {
                 let (lo, hi) = rules.pillar_height;
-                height += step(lo + self.rand(2, sites[2], 5) * (hi - lo), rules.quantum);
+                pillar = step(lo + self.rand(2, sites[2], 5) * (hi - lo), rules.quantum);
+                height += pillar;
             }
             albedo += rules.albedo_spread * 0.6 * (self.rand(2, sites[2], 6) - 0.5);
         }
@@ -309,6 +320,7 @@ impl PlateWorld {
             let natural = self.landform_at_site(cache, level, sites[level]);
             if let Some(h) = ground.height(distance, natural) {
                 height = h;
+                pillar = 0.0;
             }
         }
         let marking = self.rand(level, sites[level], 7);
@@ -317,7 +329,7 @@ impl PlateWorld {
         } else if marking < rules.marking_chance {
             albedo = 0.26;
         }
-        Plate { height, albedo: albedo as f32, level, sites }
+        Plate { height, albedo: albedo as f32, level, sites, pillar }
     }
 
     /// The plate covering (x, z), using at most `max_level` levels of detail.
@@ -550,6 +562,18 @@ impl PlateWorld {
         max_level: usize,
         origin: (f64, f64),
     ) {
+        // At full detail a pillar is grown from the `pillar` form on its
+        // base, rather than drawn as one plain prism.
+        if max_level == 2
+            && plate.pillar > 0.0
+            && let Some(library) = &self.library
+            && library.forms.contains_key(PILLAR_FORM)
+        {
+            let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, ..*plate };
+            self.emit_prism(cache, mesh, poly, &base, max_level, origin);
+            self.emit_pillar(library, mesh, poly, plate, origin);
+            return;
+        }
         let h = plate.height;
         let n = poly.len();
         let centroid = poly.iter().copied().sum::<DVec2>() / n as f64;
@@ -622,6 +646,41 @@ impl PlateWorld {
             tri(mesh, [top_a, bot_a, bot_b], normal);
             tri(mesh, [top_a, bot_b, top_b], normal);
         }
+    }
+}
+
+/// The form terrain pillars grow, if the library has it.
+const PILLAR_FORM: &str = "pillar";
+/// Pieces per pillar at most.
+const PILLAR_PIECES: usize = 120;
+
+impl PlateWorld {
+    /// Grows the pillar form on a pillar plate's outline, from its base up,
+    /// and scales the result to the pillar's height exactly (so it matches
+    /// coarser levels of detail, collision and `height_at`).
+    fn emit_pillar(&self, library: &Library, mesh: &mut ColumnMesh, poly: &[DVec2], plate: &Plate, origin: (f64, f64)) {
+        let local: Vec<glam::Vec2> =
+            poly.iter().map(|p| glam::Vec2::new((p.x - origin.0) as f32, (p.y - origin.1) as f32)).collect();
+        let floor = (plate.height - plate.pillar) as f32;
+        let site = plate.sites[plate.level];
+        let seed = (site.0 as u32).wrapping_mul(0x2c1b_3c6d) ^ (site.1 as u32).wrapping_mul(0x297a_2d39) ^ self.seed;
+        let mut grower = Grower { library, budget: PILLAR_PIECES, leaves: 0, out: Growth::default() };
+        grower.grow(PILLAR_FORM, &local, floor, plate.albedo, seed, 0);
+        let mut prisms = grower.out.prisms;
+        let top = prisms.iter().map(|p| p.y1).fold(floor, f32::max);
+        if top <= floor + 0.01 {
+            return;
+        }
+        let k = plate.pillar as f32 / (top - floor);
+        for p in &mut prisms {
+            p.y0 = floor + (p.y0 - floor) * k;
+            p.y1 = floor + (p.y1 - floor) * k;
+            // Into the base, so nothing shows a seam.
+            if p.y0 <= floor + 1e-3 {
+                p.y0 = floor - 0.5;
+            }
+        }
+        forms::mesh_into(mesh, &prisms);
     }
 }
 

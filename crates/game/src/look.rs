@@ -13,7 +13,7 @@ use bevy::{
         CascadeShadowConfigBuilder, DirectionalLightShadowMap, NotShadowCaster, NotShadowReceiver,
         ShadowFilteringMethod, Skybox,
     },
-    pbr::{ContactShadows, ScreenSpaceAmbientOcclusion},
+    pbr::{ContactShadows, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion},
     post_process::bloom::Bloom,
     prelude::*,
     render::{
@@ -44,6 +44,8 @@ impl Plugin for LookPlugin {
             fill: args.num("fill", 6000.0),
             night_fill: args.num("night_fill", 2500.0),
             softness: [args.num("soft0", 1.0), args.num("soft1", 1.0)],
+            fog_day: args.num("fog_day", 0.25),
+            fog_night: args.num("fog_night", 0.01),
         })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight::NONE)
@@ -129,6 +131,9 @@ struct Tuning {
     fill: f32,
     night_fill: f32,
     softness: [f32; 2],
+    /// Brightness of the haze by day and by night.
+    fog_day: f32,
+    fog_night: f32,
 }
 
 #[derive(Component)]
@@ -194,6 +199,19 @@ fn setup(
         ))
         .id();
     let mut cam = commands.entity(camera);
+    // Haze. There is no air, but layers fading with distance are what
+    // make the scale read (drama over correctness): distant things sink
+    // into a haze that is lit by day, dark at night and glows towards the
+    // suns. `--set fog=0` turns it off.
+    let visibility = args.num("fog", 7000.0);
+    if visibility > 0.0 {
+        cam.insert(DistanceFog {
+            color: Color::BLACK,
+            directional_light_color: Color::srgba(1.0, 1.0, 1.0, args.num("fog_glow", 0.35)),
+            directional_light_exponent: 10.0,
+            falloff: FogFalloff::from_visibility_squared(visibility),
+        });
+    }
     if !args.opt("notaa") {
         cam.insert((TemporalAntiAliasing::default(), ShadowFilteringMethod::Temporal));
     }
@@ -313,12 +331,12 @@ fn move_suns(
     tuning: Res<Tuning>,
     // Bevy turns the generated light into an `EnvironmentMapLight` once the
     // cubemap is filtered; from then on that component carries the intensity.
-    camera: Single<(&Transform, Option<&mut EnvironmentMapLight>), With<FlyCam>>,
+    camera: Single<(&Transform, Option<&mut EnvironmentMapLight>, Option<&mut DistanceFog>), With<FlyCam>>,
     mut suns: Query<(&Sun, &mut Transform, &mut DirectionalLight), Without<FlyCam>>,
     fill: Single<(&mut Transform, &mut DirectionalLight), (With<Fill>, Without<Sun>, Without<FlyCam>)>,
     mut discs: Query<(&SunDisc, &mut Transform), (Without<Sun>, Without<FlyCam>, Without<Fill>)>,
 ) {
-    let (cam_transform, bounce) = camera.into_inner();
+    let (cam_transform, bounce, fog) = camera.into_inner();
     let mut bounced = 0.0;
     // How much daylight there is (0 when both suns are down), and which sun
     // dominates it.
@@ -358,6 +376,10 @@ fn move_suns(
     let from = Vec3::Y.lerp(day_from, daylight).normalize();
     *fill_transform = Transform::IDENTITY.looking_to(-from, Vec3::Y);
     fill_light.illuminance = tuning.night_fill + (tuning.fill - tuning.night_fill) * daylight;
+    if let Some(mut fog) = fog {
+        let luma = tuning.fog_night + (tuning.fog_day - tuning.fog_night) * daylight;
+        fog.color = Color::linear_rgb(luma, luma, luma);
+    }
 
     for (disc, mut transform) in &mut discs {
         let dir = SUNS[disc.0].direction(sky.time);
