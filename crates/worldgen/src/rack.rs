@@ -100,7 +100,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
             let p = start + e * along + inn * across;
             Vec3::new(p.x, y, p.y)
         };
-        let solid = |center: Vec3, half: Vec3, albedo: f32| Solid { wedge: false, center, rotation: yaw, half, albedo };
+        let solid = |center: Vec3, half: Vec3, albedo: f32| Solid { wedge: false, round: false, center, rotation: yaw, half, albedo };
         let r = |k: i32, j: i32| hash01(i as i32 * 131 + k, j, 0x7ac, seed);
 
         // The frame: columns, beams along both lines and across.
@@ -305,6 +305,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                             let rotation = yaw * Quat::from_rotation_z(tilt * sign);
                             rack.solids.push(Solid {
                                 wedge: false,
+                                round: false,
                                 center: at((x0 + x1) * 0.5, c * 0.5, y + s * 0.5),
                                 rotation,
                                 half: Vec3::new(length * 0.5, c * 0.25, c * 0.25),
@@ -529,6 +530,7 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
         if !sunk && r(2) < brackets {
             rack.solids.push(Solid {
                 wedge: false,
+                round: false,
                 center: surface.at(u, y + radius, z * 0.5),
                 rotation,
                 half: Vec3::new(width * 0.5 + 0.15, radius * 1.1 + 0.08, z * 0.5),
@@ -658,6 +660,7 @@ pub fn conduits(poly: &[Vec2], floor: f32, reach: f32, tone: f32, seed: u32) -> 
         let hatch = |rack: &mut Rack, u: f32, y: f32, size: f32| {
             rack.solids.push(Solid {
                 wedge: false,
+                round: false,
                 center: ground.at(u, y, 0.0),
                 rotation,
                 half: Vec3::new(size, size, 0.08),

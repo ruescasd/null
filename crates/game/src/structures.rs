@@ -282,7 +282,9 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
     let shapes: Vec<(Position, Rotation, Collider)> = solids
         .iter()
         .filter_map(|s| {
-            let shape = if s.wedge {
+            let shape = if s.round {
+                Collider::convex_hull(structure::round_points(s.half))?
+            } else if s.wedge {
                 Collider::convex_hull(structure::wedge_points(s.half))?
             } else {
                 Collider::cuboid(s.half.x * 2.0, s.half.y * 2.0, s.half.z * 2.0)

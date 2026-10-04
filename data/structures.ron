@@ -18,6 +18,12 @@
 //   Column(width: 0.3)           a full-height square column
 //   Fin(thickness: 0.1)          a full-height plate; add axis: Z to turn it
 //   Frame(bar: 0.1)              the cell's twelve edges as bars
+//   Conduits(core: 0.45, bow: 0.25)
+//                                the cell made of conduits: a core (fraction
+//                                of its cross-section, 0 for none) wrapped in
+//                                tubes packed along its longest side, some
+//                                bowing out loose (chance `bow`); cells under
+//                                1.2 m across stay solid
 //   Ramp                         a wedge rising towards +x; only where it is
 //                                walkable (45 degrees or less), otherwise it
 //                                becomes stairs
@@ -104,6 +110,14 @@
 //                      `strange`: no frame, but a network of pipes on the
 //                      core's faces (use with `core`), climbing, switching
 //                      lanes, splitting, with bare wall between its knots
+//   Relief(height: (45, 65), depth: 2, tone: 0, then: "name")
+//                      a prism whose faces are carved into themselves: a
+//                      skin `depth` thick cut into recesses within recesses
+//                      (sunk relief); `then` grows on top
+//   Cluster(height: (55, 80), tone: 0)
+//                      a mass made of cylinders: drums of very different
+//                      sizes packed and fused, taller in the middle, a few
+//                      lying across, small tubes sagging and winding over them
 //   Roots(reach: (45, 70), depth: 2.5, buried: false, tone: 0)
 //                      the same network spreading out across the ground
 //                      from each edge, `reach` metres, half sunk or on
@@ -158,6 +172,10 @@
         "roof": Slab(thickness: 0.15, at: Top),
         "pier": Column(width: 0.35),
         "needle": Column(width: 0.12),
+        // Cells made of conduits: a core wrapped in a loom of tubes, or a
+        // loose bundle of tubes with no core.
+        "loom": Conduits(core: 0.45, bow: 0.2),
+        "cables": Conduits(core: 0, bow: 0.45),
         "blade": Fin(thickness: 0.08),
         "blade_z": Fin(thickness: 0.08, axis: Z),
         "cage": Frame(bar: 0.08),
@@ -325,6 +343,44 @@
                 (on: Summit, module: "ramp", weight: 1, turn: Inward),
                 (on: Corner, module: "needle", weight: 1),
                 (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Early, module: "box", weight: 3),
+                (on: Any, module: "box", weight: 3),
+            ],
+        ),
+        // Lab: made of conduits. The spire's recipe with looms of tubes
+        // among its cells; a wall of looms and blocks; the massif with
+        // looms. The tubes are part of the mass, not laid on it.
+        "loom_spire": (
+            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 10,
+            stop_chance: 0.2, albedo: 0.1,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "loom", weight: 1),
+                (on: Edge, module: "loom", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 2),
+                (on: Early, module: "loom", weight: 1),
+                (on: Interior, module: "cables", weight: 1),
+            ],
+        ),
+        "loom_wall": (
+            divisions: (5, 4, 2), keep: Lattice, depth: 3, gap: 0.94,
+            stop_chance: 0.15, albedo: 0.11,
+            leaves: [
+                (on: Any, module: "loom", weight: 3),
+                (on: Any, module: "box", weight: 2),
+                (on: Edge, module: "cables", weight: 1),
+                (on: Early, module: "box", weight: 2),
+            ],
+        ),
+        "loom_massif": (
+            divisions: (4, 3, 4), keep: Massif(0.85), depth: 3, gap: 0.96,
+            stop_chance: 0.03, min_size: 3, albedo: 0.12, albedo_spread: 0.04,
+            leaves: [
+                (on: Summit, module: "ramp", weight: 2, turn: Inward),
+                (on: Any, module: "loom", weight: 2),
+                (on: Outside, module: "cables", weight: 1),
                 (on: Early, module: "box", weight: 3),
                 (on: Any, module: "box", weight: 3),
             ],
@@ -498,6 +554,16 @@
         "rack_upper": Rack(height: (20, 35), core: true, depth: (2, 3)),
         // Strange racks: no frame, a network of pipes on the core's faces,
         // climbing, switching lanes, splitting, with bare wall between.
+        // Clusters (lab): masses made of cylinders, a tangle of tubes over
+        // them.
+        // Sunk relief (lab): faces carved into themselves, recesses within
+        // recesses.
+        "relief_block": Relief(height: (45, 65), depth: 2.5, then: "relief_setback"),
+        "relief_setback": Inset(by: (5, 9), then: "relief_upper"),
+        "relief_upper": Relief(height: (20, 35), depth: 2),
+        "relief_wall": Relief(height: (30, 40), depth: 2.5),
+        "drums": Cluster(height: (55, 80)),
+        "drums_tall": Cluster(height: (100, 140)),
         "rack_wall": Rack(height: (28, 36), depth: (2.5, 4), core: true, strange: true),
         // Roots (lab): the network spreading out across the ground from a
         // structure's footprint, thinning and diving in as it goes.
@@ -611,29 +677,24 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
-        (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Bare"),
-        (name: "truss_dressed", style: "truss", size: (40, 160, 40), dress: "industrial",
-            note: "Pipes along its members, clamped; rising pipes with brackets; cables"),
-        (name: "mountain", form: "colossus_mountain", footprint: 120, variants: 1,
-            note: "The old sloped mountain, for comparison"),
-        (name: "massif", style: "massif", size: (150, 120, 150),
-            note: "A mountain of mountains: the same falling envelope at every scale"),
-        (name: "rack_shaft", form: "rack_shaft", footprint: 34,
-            note: "A hollow shaft lined with racks: pipes, tanks, hoses, machinery in the bays"),
-        (name: "rack_wall", form: "rack_wall", footprint: 22, stretch: 4,
-            note: "A long wall with a pipe network on it: what a trench wall would carry"),
-        (name: "rack_block_strange", form: "rack_block_strange", footprint: 50,
-            note: "The network around a core, set back above"),
-        (name: "rooted_block", form: "rooted_block", footprint: 40,
-            note: "The network spreading out across the ground from the block, like roots"),
-        (name: "rooted_spire", form: "rooted_spire", footprint: 30,
-            note: "Roots from a spire: does it tie a tower to its ground?"),
-        (name: "conduit_spire", form: "conduit_spire", footprint: 30,
-            note: "Buried conduits from a spire: straight, sparse, only their crowns showing"),
-        (name: "conduit_block", form: "conduit_block", footprint: 40,
-            note: "Buried conduits from the strange block"),
-        (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
-        (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
-            note: "The organ with pipework"),
+        (name: "spire", style: "spire", size: (30, 120, 30), variants: 1,
+            note: "Reference: the spire that works"),
+        (name: "loom_spire", style: "loom_spire", size: (30, 120, 30),
+            note: "The spire with cells made of conduits"),
+        (name: "loom_wall", style: "loom_wall", size: (110, 45, 14),
+            note: "A wall made of conduits and blocks"),
+        (name: "relief_block", form: "relief_block", footprint: 35,
+            note: "Sunk relief: faces carved into themselves, recesses within recesses"),
+        (name: "relief_wall", form: "relief_wall", footprint: 20, stretch: 4,
+            note: "A long wall in sunk relief"),
+        (name: "drums", form: "drums", footprint: 55,
+            note: "A mass made of cylinders, a tangle of tubes over them"),
+        (name: "drums_tall", form: "drums_tall", footprint: 30,
+            note: "The same, tall and narrow"),
+        (name: "massif", style: "massif", size: (150, 120, 150), variants: 1,
+            note: "Reference: the massif"),
+        (name: "loom_massif", style: "loom_massif", size: (150, 120, 150),
+            note: "The massif, partly made of conduits"),
+        (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Reference: the truss"),
     ],
 )

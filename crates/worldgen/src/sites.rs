@@ -666,6 +666,7 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
             let (sx, _, sz) = placement.size;
             solids.push(Solid {
                 wedge: false,
+                round: false,
                 center: Vec3::Y * -FOUNDATION * 0.5,
                 rotation: Quat::from_rotation_y(placement.yaw.to_radians()),
                 half: Vec3::new(sx * 0.49, FOUNDATION * 0.5, sz * 0.49),

@@ -26,6 +26,27 @@ use crate::structure::{self, Library, Placement, Solid};
 pub enum Form {
     /// Nothing (also available as "nothing").
     Nothing,
+    /// A prism whose faces are carved into themselves (see `relief.rs`): a
+    /// core, and a skin `depth` thick cut into recesses within recesses.
+    /// `then` grows on top, on the whole polygon.
+    Relief {
+        height: (f32, f32),
+        #[serde(default = "relief_depth")]
+        depth: f32,
+        #[serde(default)]
+        tone: f32,
+        #[serde(default)]
+        then: Option<String>,
+    },
+    /// A mass made of cylinders (see `cluster.rs`): drums packed and fused
+    /// on the polygon, about `height` tall at its middle, a few lying across,
+    /// and a tangle of small tubes sagging between them and winding down
+    /// their sides.
+    Cluster {
+        height: (f32, f32),
+        #[serde(default)]
+        tone: f32,
+    },
     /// A network of pipes spreading out across the ground from the polygon's
     /// edges for `reach` metres, no higher than `depth` (see `rack.rs`):
     /// the city's pipes running out into the land.
@@ -178,6 +199,10 @@ pub enum Form {
     },
 }
 
+fn relief_depth() -> f32 {
+    2.0
+}
+
 fn roots_depth() -> f32 {
     2.5
 }
@@ -228,7 +253,8 @@ pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
         Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Roots { .. } => vec![],
+        Form::Roots { .. } | Form::Cluster { .. } => vec![],
+        Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
         }
@@ -362,6 +388,35 @@ impl Grower<'_> {
         let child = |i: u32| seed.wrapping_mul(0x9e37_79b9).wrapping_add(i.wrapping_mul(0x85eb_ca6b)) ^ depth;
         match form {
             Form::Nothing => {}
+            Form::Relief { height, depth: d, tone: t, then } => {
+                let tone = tone + t;
+                let h = pick(*height, 1);
+                let (core, solids) = crate::relief::build(poly, floor, h, *d, tone, child(5));
+                if solids.len() + 1 > self.budget {
+                    return;
+                }
+                self.budget -= solids.len() + 1;
+                self.out.prisms.push(Prism {
+                    points: core,
+                    y0: floor,
+                    y1: floor + h,
+                    top_scale: 1.0,
+                    lean: Vec2::ZERO,
+                    albedo: (tone - 0.02).clamp(0.03, 0.4),
+                });
+                self.out.solids.extend(solids);
+                if let Some(then) = then {
+                    self.grow(then, poly, floor + h, tone, child(1), depth + 1);
+                }
+            }
+            Form::Cluster { height, tone: t } => {
+                let solids = crate::cluster::build(poly, floor, pick(*height, 1), tone + t, child(4));
+                if solids.len() > self.budget {
+                    return;
+                }
+                self.budget -= solids.len();
+                self.out.solids.extend(solids);
+            }
             Form::Roots { reach, depth: d, buried, tone: t } => {
                 let roots = if *buried {
                     crate::rack::conduits(poly, floor, pick(*reach, 1), tone + t, child(3))

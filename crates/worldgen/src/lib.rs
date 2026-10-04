@@ -6,6 +6,7 @@
 pub mod mesh;
 pub mod noise;
 pub mod canal;
+pub mod cluster;
 pub mod district;
 pub mod dressing;
 pub mod forms;
@@ -14,6 +15,7 @@ pub mod ifs;
 pub mod lab;
 pub mod plates;
 pub mod rack;
+pub mod relief;
 pub mod sites;
 pub mod structure;
 pub mod world;

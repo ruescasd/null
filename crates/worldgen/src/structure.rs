@@ -166,6 +166,16 @@ pub enum Module {
     },
     /// The cell's twelve edges as bars `bar` (fraction) thick: a hollow frame.
     Frame { bar: f32 },
+    /// The cell made of conduits: a core (`core`, fraction of the cell's
+    /// cross-section; 0 for none) wrapped in a loom of tubes packed side by
+    /// side along the cell's longest side, of mixed thickness, no fittings;
+    /// with chance `bow`, a tube bows out a little, hanging loose.
+    Conduits {
+        #[serde(default = "default_core")]
+        core: f32,
+        #[serde(default = "default_bow")]
+        bow: f32,
+    },
     /// A wedge filling the cell, rising towards +x. Only where it is walkable
     /// (no steeper than 45 degrees); in a steeper cell it becomes stairs.
     Ramp,
@@ -185,6 +195,17 @@ pub enum Module {
         #[serde(default = "full_height")]
         height: (f32, f32),
     },
+}
+
+fn default_core() -> f32 {
+    0.45
+}
+
+/// Cells narrower than this (metres) are too thin for conduits.
+const LOOM_MIN: f32 = 1.2;
+
+fn default_bow() -> f32 {
+    0.25
 }
 
 fn default_rise() -> f32 {
@@ -341,11 +362,13 @@ pub struct Placement {
     pub sink: f32,
 }
 
-/// A piece of geometry: an oriented box, or a wedge (a box whose top slopes
-/// from its -x bottom edge up to its +x top edge).
+/// A piece of geometry: an oriented box, a wedge (a box whose top slopes
+/// from its -x bottom edge up to its +x top edge), or a round tube (along
+/// its x, `half.y` and `half.z` its radii).
 #[derive(Clone, Copy, Debug)]
 pub struct Solid {
     pub wedge: bool,
+    pub round: bool,
     pub center: Vec3,
     pub rotation: Quat,
     pub half: Vec3,
@@ -391,7 +414,7 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
             s.center.y -= drop;
             // What stands on the ground reaches into it, so it meets lower
             // plates under its footprint instead of hovering over them.
-            if !s.wedge && s.bottom() < -placement.sink + 0.01 {
+            if !s.wedge && !s.round && s.bottom() < -placement.sink + 0.01 {
                 s.center.y -= FOUNDATION * 0.5;
                 s.half.y += FOUNDATION * 0.5;
             }
@@ -519,6 +542,7 @@ impl Builder<'_> {
             let Some((module, turn)) = choose(style, leaf, r(1), r(2)) else {
                 self.out.push(Solid {
                     wedge: false,
+                    round: false,
                     center: leaf.block.center,
                     rotation: leaf.block.rotation,
                     half: leaf.block.half,
@@ -543,7 +567,21 @@ impl Builder<'_> {
     }
 
     fn push(&mut self, b: Block, wedge: bool, albedo: f32) {
-        self.out.push(Solid { wedge, center: b.center, rotation: b.rotation, half: b.half, albedo });
+        self.out.push(Solid { wedge, round: false, center: b.center, rotation: b.rotation, half: b.half, albedo });
+    }
+
+    /// A round tube from `a` to `b`.
+    fn tube(&mut self, a: Vec3, b: Vec3, radius: f32, albedo: f32) {
+        let d = b - a;
+        let Some(dir) = d.try_normalize() else { return };
+        self.out.push(Solid {
+            wedge: false,
+            round: true,
+            center: (a + b) * 0.5,
+            rotation: Quat::from_rotation_arc(Vec3::X, dir),
+            half: Vec3::new(d.length() * 0.5, radius, radius),
+            albedo,
+        });
     }
 
     fn expand(&mut self, module: &Module, cell: Block, albedo: f32, depth: u32, nesting: u32, seed: u32) {
@@ -579,6 +617,76 @@ impl Builder<'_> {
                     Axis::Z => ([-1.0, -1.0, -t], [1.0, 1.0, t]),
                 };
                 self.push(sub(min, max), false, albedo);
+            }
+            Module::Conduits { core, bow } => {
+                // Along the cell's longest side; u and v across it.
+                let h = cell.half;
+                let axis = if h.y >= h.x && h.y >= h.z { 1 } else if h.x >= h.z { 0 } else { 2 };
+                let (a1, a2) = match axis {
+                    0 => (1, 2),
+                    1 => (0, 2),
+                    _ => (0, 1),
+                };
+                let unit = |i: usize| match i {
+                    0 => Vec3::X,
+                    1 => Vec3::Y,
+                    _ => Vec3::Z,
+                };
+                let (along, u, v) = (unit(axis), unit(a1), unit(a2));
+                let (ha, hu, hv) = (h[axis], h[a1], h[a2]);
+                // Too thin to hold a loom: solid.
+                if hu.min(hv) < LOOM_MIN * 0.5 {
+                    self.push(cell, false, albedo);
+                    return;
+                }
+                let world = |p: Vec3| cell.center + cell.rotation * p;
+                let r = |k: i32| hash01(seed as i32, k, depth as i32, 0xc0d);
+                // The core, a mass the loom wraps.
+                let core = core.clamp(0.0, 0.95);
+                let (cu, cv) = (hu * core, hv * core);
+                if core > 0.0 {
+                    let half = along * ha + u * cu + v * cv;
+                    self.push(Block { half, ..cell }, false, (albedo - 0.02).max(0.03));
+                }
+                // The loom: tubes side by side round the core (or filling the
+                // cell), as thick as the space allows, of mixed thickness.
+                let max_r = if core > 0.0 { ((hu - cu).min(hv - cv) * 0.5).max(0.02) } else { hu.min(hv) * 0.3 };
+                let (ru, rv) = (cu + max_r, cv + max_r);
+                let perimeter = 4.0 * (ru + rv);
+                let mut s = r(0) * max_r;
+                let mut k = 0;
+                while s < perimeter && k < 14 {
+                    let radius = max_r * (0.55 + 0.45 * r(k + 1));
+                    // A point on the rectangle's outline at distance s.
+                    let t = s % perimeter;
+                    let (pu, pv) = if t < 2.0 * ru {
+                        (-ru + t, -rv)
+                    } else if t < 2.0 * ru + 2.0 * rv {
+                        (ru, -rv + (t - 2.0 * ru))
+                    } else if t < 4.0 * ru + 2.0 * rv {
+                        (ru - (t - 2.0 * ru - 2.0 * rv), rv)
+                    } else {
+                        (-ru, rv - (t - 4.0 * ru - 2.0 * rv))
+                    };
+                    // Sunk a little into the core.
+                    let inward = (max_r - radius) + max_r * 0.15;
+                    let out = (u * pu + v * pv).normalize_or_zero();
+                    let at = u * pu + v * pv - out * inward;
+                    let shade = (albedo * (0.75 + 0.6 * r(k + 100))).clamp(0.03, 0.4);
+                    let (a, b) = (at - along * ha, at + along * ha);
+                    if r(k + 200) < *bow && ha > radius * 4.0 {
+                        // Bowing out a little between its ends, hanging loose.
+                        let sag = out * radius * (0.8 + 1.2 * r(k + 300));
+                        let (m1, m2) = (at - along * ha * 0.35 + sag, at + along * ha * 0.35 + sag);
+                        self.tube(world(a), world(m1), radius, shade);
+                        self.tube(world(m1), world(m2), radius, shade);
+                        self.tube(world(m2), world(b), radius, shade);
+                    } else {
+                        self.tube(world(a), world(b), radius, shade);
+                    }
+                    s += radius * 2.05;
+                    k += 1;
+                }
             }
             Module::Frame { bar } => {
                 let b = bar.clamp(0.01, 0.5) * 2.0;
@@ -714,7 +822,9 @@ pub fn mesh(solids: &[Solid]) -> ColumnMesh {
                 mesh.indices.extend_from_slice(&[base, base + k, base + k + 1]);
             }
         };
-        if s.wedge {
+        if s.round {
+            round(&mut mesh, s);
+        } else if s.wedge {
             // Bottom, back (+x), the slope, and the two triangular sides.
             face(&[[-1., -1., 1.], [-1., -1., -1.], [1., -1., -1.], [1., -1., 1.]]);
             face(&[[1., -1., -1.], [1., 1., -1.], [1., 1., 1.], [1., -1., 1.]]);
@@ -731,6 +841,69 @@ pub fn mesh(solids: &[Solid]) -> ColumnMesh {
         }
     }
     mesh
+}
+
+/// Sides of a round solid.
+const ROUND_SIDES: usize = 10;
+
+/// A round solid: a smooth-shaded tube along its x, capped.
+fn round(mesh: &mut ColumnMesh, s: &Solid) {
+    let ring = |x: f32| -> Vec<(Vec3, Vec3)> {
+        (0..ROUND_SIDES)
+            .map(|k| {
+                let a = k as f32 / ROUND_SIDES as f32 * std::f32::consts::TAU;
+                let local = Vec3::new(x * s.half.x, a.cos() * s.half.y, a.sin() * s.half.z);
+                let normal = s.rotation * Vec3::new(0.0, a.cos(), a.sin());
+                (s.center + s.rotation * local, normal)
+            })
+            .collect()
+    };
+    let (a, b) = (ring(-1.0), ring(1.0));
+    // Narrow, as far as the panelling goes: round surfaces carry no bands.
+    let width = (2.0 * s.half.y.min(s.half.z)).min(1.0);
+    let base = mesh.positions.len() as u32;
+    for (p, n) in a.iter().chain(&b) {
+        mesh.positions.push(p.to_array());
+        mesh.normals.push(n.to_array());
+        mesh.albedo.push(s.albedo);
+        mesh.ao.push(0.75 + 0.25 * n.y.max(0.0));
+    }
+    mesh.face_size(2 * ROUND_SIDES, width);
+    let n = ROUND_SIDES as u32;
+    for k in 0..n {
+        let j = (k + 1) % n;
+        mesh.indices.extend_from_slice(&[base + k, base + n + j, base + n + k, base + k, base + j, base + n + j]);
+    }
+    // Caps.
+    for (ring, sign) in [(&a, -1.0f32), (&b, 1.0)] {
+        let normal = s.rotation * Vec3::X * sign;
+        let start = mesh.positions.len() as u32;
+        for (p, _) in ring.iter() {
+            mesh.positions.push(p.to_array());
+            mesh.normals.push(normal.to_array());
+            mesh.albedo.push(s.albedo);
+            mesh.ao.push(0.7);
+        }
+        mesh.face_size(ROUND_SIDES, width);
+        for k in 1..n - 1 {
+            if sign > 0.0 {
+                mesh.indices.extend_from_slice(&[start, start + k, start + k + 1]);
+            } else {
+                mesh.indices.extend_from_slice(&[start, start + k + 1, start + k]);
+            }
+        }
+    }
+}
+
+/// The points of a round solid's outline in its own frame (for a convex
+/// collider).
+pub fn round_points(half: Vec3) -> Vec<Vec3> {
+    (0..8)
+        .flat_map(|k| {
+            let a = k as f32 / 8.0 * std::f32::consts::TAU;
+            [-1.0, 1.0].map(|x| Vec3::new(x * half.x, a.cos() * half.y, a.sin() * half.z))
+        })
+        .collect()
 }
 
 impl Solid {
@@ -847,7 +1020,7 @@ mod tests {
     #[test]
     fn faces_point_outward() {
         for wedge in [false, true] {
-            let s = Solid { wedge, center: Vec3::new(3.0, 1.0, -2.0), rotation: Quat::from_rotation_y(0.7), half: Vec3::new(2.0, 1.0, 3.0), albedo: 0.1 };
+            let s = Solid { wedge, round: false, center: Vec3::new(3.0, 1.0, -2.0), rotation: Quat::from_rotation_y(0.7), half: Vec3::new(2.0, 1.0, 3.0), albedo: 0.1 };
             let m = mesh(&[s]);
             for tri in m.indices.chunks(3) {
                 let p = |i: u32| Vec3::from(m.positions[i as usize]);
