@@ -126,8 +126,13 @@ fn lab_tour(
         if !streamer.settled || !building.is_empty() || items.is_empty() {
             return;
         }
-        let mut stops: Vec<_> =
-            items.iter().map(|(item, t, d)| (item.0.clone(), t.translation, d.radius, d.height.max(1.0))).collect();
+        // With --focus, only the candidates whose names start with it.
+        let focus = args.focus.as_deref().unwrap_or("");
+        let mut stops: Vec<_> = items
+            .iter()
+            .filter(|(item, _, _)| item.0.starts_with(focus))
+            .map(|(item, t, d)| (item.0.clone(), t.translation, d.radius, d.height.max(1.0)))
+            .collect();
         stops.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
         info!("lab tour: {} candidates", stops.len());
         tour.stops = stops;
@@ -189,7 +194,7 @@ fn lab_focus(
     camera: Single<(&mut Transform, &mut crate::camera::FlyCam), Without<crate::structures::LabItem>>,
 ) {
     let Some(focus) = &args.focus else { return };
-    if *done {
+    if *done || args.opt("labshots") {
         return;
     }
     let Some((_, t, d)) = items.iter().find(|(item, _, _)| &item.0 == focus) else { return };

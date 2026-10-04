@@ -31,7 +31,7 @@ use crate::{
     Args,
     camera::FlyCam,
     landmarks::Landmark,
-    terrain::{Streamer, StreamSet, TerrainMaterialHandle, WorldGen, bounds, to_bevy_mesh},
+    terrain::{StreamSet, Streamer, StructureMaterialHandle, WorldGen, bounds, to_bevy_mesh},
 };
 use bevy::camera::visibility::NoAutoAabb;
 
@@ -299,7 +299,7 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
 fn receive(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut Building)>,
-    material: Res<TerrainMaterialHandle>,
+    material: Res<StructureMaterialHandle>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (entity, mut task) in &mut tasks {

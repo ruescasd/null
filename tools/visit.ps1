@@ -4,10 +4,12 @@
 #   .\tools\visit.ps1 <place>        (no place: lists them)
 #   .\tools\visit.ps1 lab <name>     straight to a lab candidate, e.g. organ_dressed
 #                                    (names: cargo run -p worldgen --release --example lab)
+#   .\tools\visit.ps1 <place> [<name>] --set detail=0 ...   extra flags go to the game
 #
 # In the game: Shift flies fast, Left/Right scrub the time of day, T pauses
-# the suns, F12 saves a screenshot to screenshots/.
-param([string]$Place, [string]$Name)
+# the suns, F2 turns the structures' panelling off and on, F12 saves a
+# screenshot to screenshots/.
+param([string]$Place, [string]$Name, [Parameter(ValueFromRemainingArguments)][string[]]$Rest)
 
 # name = x, height above the ground, z, yaw, pitch (degrees)
 $places = [ordered]@{
@@ -32,5 +34,7 @@ if (-not $Place -or -not $places.Contains($Place)) {
 }
 Set-Location (Join-Path $PSScriptRoot "..")
 $extra = if ($Place -eq "lab") { @("--opt", "lab") } else { @() }
-if ($Place -eq "lab" -and $Name) { $extra += @("--focus", $Name) }
+if ($Place -eq "lab" -and $Name -and -not $Name.StartsWith("-")) { $extra += @("--focus", $Name) }
+elseif ($Name) { $extra += @($Name) }
+if ($Rest) { $extra += $Rest }
 cargo run -p game --release -- --opt noclip --time 40 --cam $places[$Place] @extra

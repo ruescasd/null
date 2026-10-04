@@ -150,6 +150,10 @@ pub struct TerrainExtension {
     /// x: albedo grain strength, y: world wrap period (m), z: relief strength.
     #[uniform(101)]
     pub grain: Vec4,
+    /// Panelling (see terrain.wgsl). x: strength (0 off), y: inlay glow,
+    /// z: largest panel (m), w: seam width (m).
+    #[uniform(102)]
+    pub detail: Vec4,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -168,6 +172,10 @@ impl MaterialExtension for TerrainExtension {
 
 #[derive(Resource)]
 pub struct TerrainMaterialHandle(pub Handle<TerrainMaterial>);
+
+/// The same surface for structures, with its own panelling.
+#[derive(Resource)]
+pub struct StructureMaterialHandle(pub Handle<TerrainMaterial>);
 
 #[derive(Component)]
 pub struct TerrainColumn;
@@ -220,7 +228,7 @@ fn setup_material(
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // Albedo comes from vertex colours; the material only sets the surface response.
-    let material = materials.add(ExtendedMaterial {
+    let make = |detail: Vec4| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
@@ -234,21 +242,41 @@ fn setup_material(
             } else {
                 Vec4::new(args.num("grain", 0.2), world.size(), args.num("relief", 2.5), 0.0)
             },
+            detail,
         },
-    });
-    commands.insert_resource(TerrainMaterialHandle(material));
+    };
+    // Panelling: `--set detail=0` turns it off on structures, `ground_detail`
+    // on the ground; `glow` is the inlays' brightness.
+    let panel = args.num("panel", 12.0);
+    let seam = args.num("seam", 0.06);
+    let ground = make(Vec4::new(args.num("ground_detail", 0.0), 0.0, panel, seam));
+    let structures = make(Vec4::new(args.num("detail", 1.0), args.num("glow", 3000.0), panel, seam));
+    commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
+    commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
 }
 
 fn update_material(
     args: Res<Args>,
-    handle: Res<TerrainMaterialHandle>,
+    keys: Res<ButtonInput<KeyCode>>,
+    terrain: Res<TerrainMaterialHandle>,
+    structures: Res<StructureMaterialHandle>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     anchor: Single<&Transform, With<StreamAnchor>>,
 ) {
-    let Some(mut material) = materials.get_mut(&handle.0) else { return };
+    // F2 turns the structures' panelling off and on, to compare.
+    if keys.just_pressed(KeyCode::F2)
+        && let Some(mut material) = materials.get_mut(&structures.0)
+    {
+        let on = material.extension.detail.x > 0.0;
+        material.extension.detail.x = if on { 0.0 } else { args.num("detail", 1.0).max(1.0) };
+        info!("panelling {}", if on { "off" } else { "on" });
+    }
     let curvature = if args.opt("flat") { 0.0 } else { 0.5 / PLANET_RADIUS };
     let p = anchor.translation;
-    material.extension.params = Vec4::new(material.extension.params.x, curvature, p.x, p.z);
+    for handle in [&terrain.0, &structures.0] {
+        let Some(mut material) = materials.get_mut(handle) else { continue };
+        material.extension.params = Vec4::new(material.extension.params.x, curvature, p.x, p.z);
+    }
 }
 
 fn wrap_key(key: IVec2, n: i32) -> IVec2 {

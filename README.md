@@ -22,6 +22,7 @@ Click to capture the mouse, Esc to release. F1 toggles the help overlay.
 | Left / Right | scrub time |
 | Up / Down | time speed |
 | P | soft / hard shadows |
+| F2 | structures' surface panelling off / on |
 | F12 | screenshot to `screenshots/` |
 
 Command-line options, mostly for tuning and capturing reference frames:
@@ -78,7 +79,13 @@ shadowless fill with no visible source: opposite the dominant sun by day,
 scaled with how much sun is up, and a faint glow from overhead at night.
 Surfaces get procedural grain in the terrain shader (albedo mottling and a
 faint micro-relief, fixed in the world, tiling with the wrap) so motion reads
-even with nothing else in view.
+even with nothing else in view. Structures also get procedural panelling,
+all in the shading: every face layered in bands that run its whole width
+(plates, ribs, conduits, rows of openings, vents, light strips), divided
+into bays by regular frames, with weathering streaks below each band. Each
+detail fades out before it reaches the pixel size. `--set detail=0` turns
+it off (F2 in game), `glow` sets the lights' brightness, `panel` the
+largest band (metres).
 
 ## The world
 
@@ -141,7 +148,7 @@ the ground rather than standing on it.
 `lab` candidates stand in a row on flat, empty ground, two samples (seeds)
 of each, so a pattern is judged on its own rather than for whether it
 rescues a place. `--opt lab --opt labshots` photographs every candidate
-from the same three angles into `screenshots/lab/` and exits. Patterns that
+from the same four angles (the last one close up) into `screenshots/lab/` and exits; with `--focus name` only the candidates whose names start with it. Patterns that
 pass join the catalogue the world draws on. The forms grammar has `Shift`
 (cantilevers) and negative tapers (forms widening upwards) for them.
 
