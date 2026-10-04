@@ -116,6 +116,12 @@
 //     instead (0.45 m steps: walkable without jumping).
 //     Optionally a centrepiece of a box `style` stands in the middle, of a
 //     size between min and max; the core then fits around it.
+//     earthwork: (shape: Square, ramps: 1)
+//       slopes the ground continuously instead of in terraces, over the
+//       same rings x ring_width: crisp tilted facets from the core's edge
+//       to the natural ground (a mound if the core is raised, a bowl if
+//       sunk); shape Round or Square, ramps reach that much further along
+//       the four axes (0 none, 1 twice as far).
 //     plinth: false leaves the ground alone (centrepiece only).
 //     form: "name", footprint: (60, 120)
 //       grows a form on the whole footprint instead: the big plate at the
@@ -410,38 +416,45 @@
 
     site_grid: (spacing: 768, chance: 0.55),
     sites: [
-        // Floor: vast plazas barely raised; towns; the odd hall.
+        // Floor: vast plazas and towns on low square platforms with ramps;
+        // the odd hall.
         (district: Floor, weight: 3, plates: "plaza", terraces: "terrace", core: (70, 130),
-            lift: (0.5, 3), rings: 2, ring_width: 30),
+            lift: (1.5, 5), rings: 2, ring_width: 30, earthwork: (shape: Square, ramps: 1)),
         (district: Floor, weight: 2, plates: "town", terraces: "terrace", core: (80, 140),
-            lift: (0.5, 3), rings: 2, ring_width: 30),
+            lift: (3, 8), rings: 2, ring_width: 30, earthwork: (shape: Square, ramps: 1)),
         (district: Floor, weight: 1, style: "hall", size: ((120, 30, 80), (220, 60, 140)), plates: "plaza",
-            terraces: "terrace", lift: (0.5, 3), rings: 2, ring_width: 30),
+            terraces: "terrace", lift: (1.5, 5), rings: 2, ring_width: 30, earthwork: (shape: Square, ramps: 0.6)),
         // Tiers: high stepped mounds in mantle-height steps, crowned.
         (district: Tiers, weight: 2, style: "ziggurat", size: ((60, 50, 80), (140, 110, 180)), plates: "ruin",
             terraces: "terrace", terrace_chance: 0.5, lift: (8, 16), rings: 5, ring_width: 16, step: 2),
         (district: Tiers, weight: 2, plates: "town", terraces: "terrace", terrace_chance: 0.5, core: (50, 90),
             lift: (8, 16), rings: 5, ring_width: 16, step: 2),
-        // Stacks: towers in clearings among the pillars.
-        (district: Stacks, weight: 3, plates: "towers", terraces: "ruin", core: (50, 100), lift: (2, 6)),
+        // Stacks: towers on round mounds among the pillars.
+        (district: Stacks, weight: 3, plates: "towers", terraces: "ruin", core: (50, 100), lift: (4, 10),
+            earthwork: (shape: Round)),
         (district: Stacks, weight: 1, style: "spire", size: ((40, 200, 40), (80, 420, 80)), plates: "towers",
-            terraces: "ruin", lift: (2, 6)),
-        // Broken: ruins, sometimes sunk into courts.
-        (district: Broken, weight: 3, plates: "ruin", terraces: "ruin", core: (60, 110), lift: (-10, 8)),
-        (district: Broken, weight: 1, plates: "town", terraces: "ruin", core: (60, 100), lift: (-8, 4)),
+            terraces: "ruin", lift: (4, 10), earthwork: (shape: Round, ramps: 0.5)),
+        // Broken: ruins on mounds or sunk into bowls.
+        (district: Broken, weight: 3, plates: "ruin", terraces: "ruin", core: (60, 110), lift: (-10, 8),
+            earthwork: (shape: Round)),
+        (district: Broken, weight: 1, plates: "town", terraces: "ruin", core: (60, 100), lift: (-8, 4),
+            earthwork: (shape: Square)),
         (district: Broken, weight: 1, style: "lattice", size: ((100, 60, 100), (180, 120, 180)), plates: "ruin",
-            terraces: "ruin", lift: (-10, 8)),
+            terraces: "ruin", lift: (-10, 8), earthwork: (shape: Round, ramps: 0.4)),
     ],
 
     colossus_grid: (spacing: 2048, chance: 0.85),
     colossi: [
-        (district: Stacks, form: "colossus_needles", footprint: (90, 160), lift: (2, 6), rings: 3, ring_width: 30,
-            terraces: "ruin"),
-        (district: Tiers, form: "colossus_mountain", footprint: (140, 220), lift: (6, 14), rings: 4, ring_width: 24,
-            step: 2, terraces: "terrace", terrace_chance: 0.5),
-        (district: Floor, form: "colossus_enclosure", footprint: (180, 260), lift: (0.5, 2), rings: 2, ring_width: 40,
-            terraces: "terrace"),
-        (district: Broken, form: "colossus_ruin", footprint: (140, 220), lift: (-6, 6), rings: 3, ring_width: 30,
-            terraces: "ruin"),
+        // Each colossus emerges from an earthwork: needles from square
+        // mounds with ramps, mountains from round ones, enclosures sunk in
+        // square bowls, shattered shafts from low mounds.
+        (district: Stacks, form: "colossus_needles", footprint: (90, 160), lift: (12, 25), rings: 3, ring_width: 30,
+            terraces: "ruin", earthwork: (shape: Square, ramps: 0.6)),
+        (district: Tiers, form: "colossus_mountain", footprint: (140, 220), lift: (10, 20), rings: 4, ring_width: 24,
+            step: 2, terraces: "terrace", terrace_chance: 0.5, earthwork: (shape: Round, ramps: 1)),
+        (district: Floor, form: "colossus_enclosure", footprint: (180, 260), lift: (-10, -4), rings: 2, ring_width: 40,
+            terraces: "terrace", earthwork: (shape: Square)),
+        (district: Broken, form: "colossus_ruin", footprint: (140, 220), lift: (8, 18), rings: 3, ring_width: 30,
+            terraces: "ruin", earthwork: (shape: Round, ramps: 0.3)),
     ],
 )

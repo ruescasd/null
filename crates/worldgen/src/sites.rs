@@ -120,6 +120,23 @@ fn default_footprint() -> (f32, f32) {
     (60.0, 120.0)
 }
 
+/// An earthwork instead of terraces: `shape` Round or Square, `ramps` how
+/// much further the slope reaches along the four axes (0 none, 1 twice).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct EarthworkRule {
+    #[serde(default)]
+    pub shape: EarthworkShape,
+    #[serde(default)]
+    pub ramps: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+pub enum EarthworkShape {
+    Round,
+    #[default]
+    Square,
+}
+
 /// "In this district, structures of this style grow, this often, this big,
 /// on this kind of ground."
 #[derive(Clone, Debug, Deserialize)]
@@ -155,6 +172,10 @@ pub struct SiteRule {
     pub form: Option<String>,
     #[serde(default = "default_footprint")]
     pub footprint: (f32, f32),
+    /// Slope the ground continuously instead of in terraces (over the same
+    /// `rings` x `ring_width`).
+    #[serde(default)]
+    pub earthwork: Option<EarthworkRule>,
     /// Reshape the ground into a core and terraces (default), or stand
     /// straight on the ground as it is.
     #[serde(default = "yes")]
@@ -188,9 +209,51 @@ pub struct SiteGround {
     pub radius: f64,
     pub rings: u32,
     pub step: f64,
+    /// A continuous earthwork instead of stepped terraces.
+    pub earthwork: Option<Earthwork>,
+}
+
+/// An earthwork: the ground sloping in crisp planes from the core's edge
+/// to the natural ground, instead of stepping down in terraces. Raised
+/// cores become mounds, sunk ones bowls; plates on the slope are tilted
+/// facets that meet their neighbours seamlessly (see `plates.rs`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Earthwork {
+    pub square: bool,
+    /// Orientation (radians) of the square and of the ramps.
+    pub yaw: f64,
+    /// How far the slope reaches beyond the core, metres...
+    pub width: f64,
+    /// ...and how much further along the four axes (0: none, 1: twice).
+    pub ramps: f64,
 }
 
 impl SiteGround {
+    /// The earthwork's surface at a point (any wrapped copy), where the
+    /// ground's smooth landform is `natural`: the core's height on the
+    /// core, the natural ground beyond the slope. None without an
+    /// earthwork, or outside the site.
+    pub fn surface(&self, p: DVec2, natural: f64, world_size: f64) -> Option<f64> {
+        let e = self.earthwork?;
+        let wrap = |d: f64| d - (d / world_size).round() * world_size;
+        let rel = DVec2::new(wrap(p.x - self.center.x), wrap(p.y - self.center.y));
+        if rel.length() >= self.radius {
+            return None;
+        }
+        let (s, c) = e.yaw.sin_cos();
+        let local = DVec2::new(rel.x * c + rel.y * s, -rel.x * s + rel.y * c);
+        let d = if e.square { local.x.abs().max(local.y.abs()) } else { local.length() };
+        if d <= self.core {
+            return Some(self.top);
+        }
+        // On an axis 1, on a diagonal 0: ramps reach further along the axes.
+        let axis = local.x.abs().max(local.y.abs()) / local.length().max(1e-6);
+        let along = ((axis - std::f64::consts::FRAC_1_SQRT_2) / (1.0 - std::f64::consts::FRAC_1_SQRT_2)).clamp(0.0, 1.0);
+        let width = e.width * (1.0 + e.ramps * along.powi(6));
+        let t = ((d - self.core) / width).clamp(0.0, 1.0);
+        Some(self.top + (natural - self.top) * t)
+    }
+
     /// The height of a plate whose site is `distance` from the centre, where
     /// the ground's smooth landform is `natural`; None outside the site.
     pub fn height(&self, distance: f64, natural: f64) -> Option<f64> {
@@ -306,7 +369,9 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
             reach = reach.min(distance - ground.radius as f32 - CANAL_CLEARANCE);
         }
     }
-    let terraces = if rule.plinth { rule.rings as f32 * rule.ring_width } else { 0.0 };
+    // The terraces' (or earthwork's) width, ramps included.
+    let slope = if rule.plinth { rule.rings as f32 * rule.ring_width } else { 0.0 };
+    let terraces = slope * (1.0 + rule.earthwork.map_or(0.0, |e| e.ramps.max(0.0)));
     let seed = (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed;
 
     // A centrepiece shrinks (keeping its proportions) to fit what the
@@ -368,6 +433,12 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
             radius: (core + terraces) as f64,
             rings: rule.rings.max(1),
             step,
+            earthwork: rule.earthwork.map(|e| Earthwork {
+                square: e.shape == EarthworkShape::Square,
+                yaw: (r(7) * 360.0).to_radians() as f64,
+                width: slope as f64,
+                ramps: e.ramps.max(0.0) as f64,
+            }),
         }
     });
     Some(Site {
@@ -442,10 +513,17 @@ pub struct SiteTable {
 const PLACED_RINGS: u32 = 2;
 const PLACED_RING_WIDTH: f32 = 22.0;
 
-/// How far a hand-placed structure's ground reaches from its centre.
+/// How far a hand-placed structure's ground reaches from its centre (its
+/// earthwork's ramps included).
 fn placed_ground_radius(placement: &Placement) -> f32 {
-    placement.size.0.hypot(placement.size.2) * 0.5 + CORE_MARGIN + PLACED_RINGS as f32 * PLACED_RING_WIDTH
+    placement.size.0.hypot(placement.size.2) * 0.5
+        + CORE_MARGIN
+        + PLACED_RINGS as f32 * PLACED_RING_WIDTH * (1.0 + PLACED_RAMPS)
 }
+
+/// Hand-placed structures stand on a low square mound with short ramps.
+const PLACED_LIFT: f64 = 5.0;
+const PLACED_RAMPS: f32 = 0.5;
 
 impl SiteTable {
     pub fn new(library: &Library, world: &PlateWorld) -> Self {
@@ -466,11 +544,17 @@ impl SiteTable {
                 let core = (p.size.0.hypot(p.size.2) * 0.5 + CORE_MARGIN) as f64;
                 SiteGround {
                     center: DVec2::new(x as f64, z as f64),
-                    top: (world.shaped(x as f64, z as f64) / step).round() * step,
+                    top: ((world.shaped(x as f64, z as f64) + PLACED_LIFT) / step).round() * step,
                     core,
                     radius: placed_ground_radius(p) as f64,
                     rings: PLACED_RINGS,
                     step,
+                    earthwork: Some(Earthwork {
+                        square: true,
+                        yaw: p.yaw.to_radians() as f64,
+                        width: (PLACED_RINGS as f32 * PLACED_RING_WIDTH) as f64,
+                        ramps: PLACED_RAMPS as f64,
+                    }),
                 }
             })
             .collect();
@@ -627,6 +711,9 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
                 plate.points.iter().map(|p| Vec2::new((p.x - center.x) as f32, (p.y - center.y) as f32)).collect();
             let k = |i: i32| hash01(plate.key.0, i, plate.key.1, site.seed);
             let floor = (plate.height - base as f64) as f32;
+            if plate.sloped {
+                continue;
+            }
             if k(1) < site.stairs
                 && let Some((steps, flight)) = stairs(world, &local, center, plate.height as f32, floor, tone)
             {
@@ -771,7 +858,7 @@ mod tests {
         let mut best: Option<f32> = None;
         for t in mesh.indices.chunks_exact(3) {
             let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
-            if mesh.normals[t[0] as usize][1] < 0.9 {
+            if mesh.normals[t[0] as usize][1] < 0.3 {
                 continue;
             }
             let d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
@@ -843,6 +930,70 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn earthworks_slope_without_holes() {
+        let library = Library::parse(
+            r#"(
+                styles: {},
+                forms: { "block": Extrude(height: (5, 10)) },
+                site_grid: (spacing: 768, chance: 1),
+                sites: [
+                    (district: Floor, plates: "block", lift: (20, 20), rings: 3, ring_width: 25,
+                        earthwork: (shape: Square, ramps: 1)),
+                    (district: Tiers, plates: "block", lift: (20, 20), rings: 3, ring_width: 25,
+                        earthwork: (shape: Round)),
+                    (district: Stacks, plates: "block", lift: (-15, -15), rings: 3, ring_width: 25,
+                        earthwork: (shape: Square)),
+                    (district: Broken, plates: "block", lift: (20, 20), rings: 3, ring_width: 25,
+                        earthwork: (shape: Round, ramps: 0.5)),
+                ],
+            )"#,
+        )
+        .unwrap();
+        let world = PlateWorld::new(16384.0, 7).with_sites(&library);
+        let size = crate::column_size(0);
+        for site in all(&library, &world).iter().take(4) {
+            let ground = site.ground.unwrap();
+            let (x, z) = site.at;
+            let mut columns = std::collections::HashMap::new();
+            let (mut close, mut total) = (0, 0);
+            for i in 0..600 {
+                let a = i as f32 * 2.399;
+                let r = ground.radius as f32 * (i as f32 / 600.0);
+                let (px, pz) = (x + r * a.cos(), z + r * a.sin());
+                // A column holds the plates whose big (128 m) site lies in it;
+                // they reach several columns away, so look around.
+                let (kx, kz) = ((px / size).floor() as i32, (pz / size).floor() as i32);
+                let mut m: Option<f32> = None;
+                for dz in -5..=5 {
+                    for dx in -5..=5 {
+                        let key = (kx + dx, kz + dz);
+                        let mesh = columns.entry(key).or_insert_with(|| world.mesh_column(0, key.0, key.1));
+                        let origin = (key.0 as f32 * size, key.1 as f32 * size);
+                        if let Some(h) = mesh_height(mesh, origin, px, pz) {
+                            m = Some(m.map_or(h, |o: f32| o.max(h)));
+                        }
+                    }
+                }
+                assert!(m.is_some(), "{:?}: no ground at ({px:.1}, {pz:.1})", site.cell);
+                total += 1;
+                // Facets interpolate the slope linearly between their
+                // corners, where the slope bends (the core's edge, corners,
+                // ramps): close, not exact.
+                let error = (m.unwrap() - world.height_at(px, pz)).abs();
+                // Towards the edge the slope blends into the natural
+                // landform, which is not linear at all (ridges): looser there.
+                if r < ground.radius as f32 * 0.8 {
+                    assert!(error < 3.0, "{:?}: mesh {error} m off at ({px:.1}, {pz:.1})", site.cell);
+                }
+                if error < 1.2 {
+                    close += 1;
+                }
+            }
+            assert!(close as f32 > total as f32 * 0.95, "{:?}: only {close} of {total} close", site.cell);
+        }
     }
 
     #[test]

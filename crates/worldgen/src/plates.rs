@@ -76,6 +76,9 @@ pub struct Plate {
     /// How much of its height is a pillar raised above the ground's own
     /// level (0 for most plates).
     pub pillar: f64,
+    /// On an earthwork's slope: its top follows the earthwork's surface
+    /// (see `slope_at`) rather than lying flat at `height`.
+    pub sloped: bool,
 }
 
 /// A plate belonging to a site: its outline (world coordinates near the
@@ -87,6 +90,8 @@ pub struct SitePlate {
     pub distance: f64,
     /// Its level-1 grid index, which identifies it.
     pub key: (i32, i32),
+    /// On an earthwork's slope (its top is not flat).
+    pub sloped: bool,
 }
 
 /// Per-call memo of landform heights at sites; they are the expensive part.
@@ -149,6 +154,14 @@ impl PlateWorld {
         self.landform(x, z) * self.districts.blended(x, z).0
     }
 
+    /// The broad shape of the ground at a point: the landform without its
+    /// ridges and warping, gently sloped everywhere.
+    pub fn broad(&self, c: DVec2) -> f64 {
+        let base = self.base.sample2(c.x as f32, c.y as f32, self.size as f32) as f64;
+        let base = if base < 0.0 { base * 0.25 } else { base };
+        base * 90.0 * self.districts.blended(c.x, c.y).0
+    }
+
     /// Height of a canal's floor at a point on its centreline: the broad
     /// shape of the ground (no ridges), so canals run in trenches through
     /// high ground and on embankments over low ground, with gentle grades.
@@ -187,7 +200,22 @@ impl PlateWorld {
         if let Some(h) = self.canals.surface(p, &|c| self.canal_floor(c)) {
             return h;
         }
-        self.plate_at(cache, x, z, max_level).height
+        let plate = self.plate_at(cache, x, z, max_level);
+        if plate.sloped {
+            return self.slope_at(p);
+        }
+        plate.height
+    }
+
+    /// The height of an earthwork's slope at a point: its surface inside a
+    /// site, the smooth landform beyond it. Continuous, so the tilted plates
+    /// that sample it at their corners meet seamlessly.
+    fn slope_at(&self, p: DVec2) -> f64 {
+        // Towards the broad shape of the land, not its ridges: slopes stay
+        // clean planes, and where an earthwork meets ridged ground its edge
+        // is a crisp cut rather than a field of spikes.
+        let natural = self.broad(p);
+        self.sites.at(p, 0.0).and_then(|(ground, _)| ground.surface(p, natural, self.size)).unwrap_or(natural)
     }
 
     pub fn size(&self) -> f32 {
@@ -289,6 +317,7 @@ impl PlateWorld {
         let l0 = self.landform_at_site(cache, 0, sites[0]);
         let mut height = step(l0, rules.quantum0);
         let mut pillar = 0.0;
+        let mut sloped = false;
         let r = self.rand(0, sites[0], 4);
         if r < rules.mesa_chance {
             height += 25.0 + self.rand(0, sites[0], 5) * 60.0;
@@ -318,7 +347,11 @@ impl PlateWorld {
         let p = self.site(level, sites[level]);
         if let Some((ground, distance)) = self.sites.at(p, 0.0) {
             let natural = self.landform_at_site(cache, level, sites[level]);
-            if let Some(h) = ground.height(distance, natural) {
+            if ground.earthwork.is_some() && distance > ground.core && distance < ground.radius {
+                height = self.slope_at(p);
+                pillar = 0.0;
+                sloped = true;
+            } else if let Some(h) = ground.height(distance, natural) {
                 height = h;
                 pillar = 0.0;
             }
@@ -329,7 +362,7 @@ impl PlateWorld {
         } else if marking < rules.marking_chance {
             albedo = 0.26;
         }
-        Plate { height, albedo: albedo as f32, level, sites, pillar }
+        Plate { height, albedo: albedo as f32, level, sites, pillar, sloped }
     }
 
     /// The plate covering (x, z), using at most `max_level` levels of detail.
@@ -398,8 +431,14 @@ impl PlateWorld {
                         if piece.len() < 3 || area(&piece) < 0.5 {
                             continue;
                         }
-                        let height = self.plate(&mut cache, [g, (ix, iz), (0, 0)], 1).height;
-                        out.push(SitePlate { points: piece, height, distance, key: (ix, iz) });
+                        let plate = self.plate(&mut cache, [g, (ix, iz), (0, 0)], 1);
+                        out.push(SitePlate {
+                            points: piece,
+                            height: plate.height,
+                            distance,
+                            key: (ix, iz),
+                            sloped: plate.sloped,
+                        });
                     }
                 }
             }
@@ -569,7 +608,7 @@ impl PlateWorld {
             && let Some(library) = &self.library
             && library.forms.contains_key(PILLAR_FORM)
         {
-            let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, ..*plate };
+            let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, ..*plate };
             self.emit_prism(cache, mesh, poly, &base, max_level, origin);
             self.emit_pillar(library, mesh, poly, plate, origin);
             return;
@@ -577,17 +616,29 @@ impl PlateWorld {
         let h = plate.height;
         let n = poly.len();
         let centroid = poly.iter().copied().sum::<DVec2>() / n as f64;
+        // The top's height at each corner and at the centroid: flat, or on
+        // an earthwork's slope.
+        let top = |p: DVec2| if plate.sloped { self.slope_at(p) } else { h };
+        let tops: Vec<f64> = poly.iter().map(|&p| top(p)).collect();
+        let center_top = top(centroid);
 
-        // Walls reach just below the lowest neighbouring plate.
-        let mut lowest = h;
+        // What lies just beyond each edge (at its ends and middle), for the
+        // walls: they reach just below the lowest of it, and are left out
+        // where it stands as high as the top (they would never be seen).
+        let mut lowest = tops.iter().copied().fold(h, f64::min);
+        let mut beyond = Vec::with_capacity(n);
         for i in 0..n {
             let (a, b) = (poly[i], poly[(i + 1) % n]);
-            for p in [a, (a + b) * 0.5] {
+            let mut edge_low = f64::MAX;
+            for p in [a, (a + b) * 0.5, b] {
                 let out = p + (p - centroid).normalize_or_zero() * 0.75;
-                lowest = lowest.min(self.surface(cache, out.x, out.y, max_level));
+                let s = self.surface(cache, out.x, out.y, max_level);
+                edge_low = edge_low.min(s);
             }
+            lowest = lowest.min(edge_low);
+            beyond.push(edge_low);
         }
-        let depth = (h - lowest + 1.0).max(1.0);
+        let foot = lowest - 1.0;
 
         let local = |p: DVec2, y: f64| [(p.x - origin.0) as f32, y as f32, (p.y - origin.1) as f32];
         let push = |mesh: &mut ColumnMesh, pos: [f32; 3], normal: Vec3, albedo: f32, ao: f32| {
@@ -611,19 +662,40 @@ impl PlateWorld {
         // Top: a fan around the centroid, so the interior gets its own AO.
         let corner_ao: Vec<f32> = poly
             .iter()
-            .map(|&p| {
+            .enumerate()
+            .map(|(i, &p)| {
                 let inset = p + (centroid - p).normalize_or_zero() * 0.4;
-                self.sky_visibility(cache, inset, h, max_level)
+                self.sky_visibility(cache, inset, tops[i], max_level)
             })
             .collect();
-        let center_ao = self.sky_visibility(cache, centroid, h, max_level);
-        let c = push(mesh, local(centroid, h), Vec3::Y, plate.albedo, center_ao);
-        let first = mesh.positions.len() as u32;
-        for (i, &p) in poly.iter().enumerate() {
-            push(mesh, local(p, h), Vec3::Y, plate.albedo, corner_ao[i]);
-        }
-        for i in 0..n as u32 {
-            tri(mesh, [c, first + i, first + (i + 1) % n as u32], Vec3::Y);
+        let center_ao = self.sky_visibility(cache, centroid, center_top, max_level);
+        if plate.sloped {
+            // Each triangle its own flat facet: crisp, geometric slopes.
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let (pc, pa, pb) = (
+                    Vec3::from(local(centroid, center_top)),
+                    Vec3::from(local(poly[i], tops[i])),
+                    Vec3::from(local(poly[j], tops[j])),
+                );
+                let mut normal = (pa - pc).cross(pb - pc).normalize_or(Vec3::Y);
+                if normal.y < 0.0 {
+                    normal = -normal;
+                }
+                let c = push(mesh, pc.to_array(), normal, plate.albedo, center_ao);
+                let a = push(mesh, pa.to_array(), normal, plate.albedo, corner_ao[i]);
+                let b = push(mesh, pb.to_array(), normal, plate.albedo, corner_ao[j]);
+                tri(mesh, [c, a, b], normal);
+            }
+        } else {
+            let c = push(mesh, local(centroid, h), Vec3::Y, plate.albedo, center_ao);
+            let first = mesh.positions.len() as u32;
+            for (i, &p) in poly.iter().enumerate() {
+                push(mesh, local(p, h), Vec3::Y, plate.albedo, corner_ao[i]);
+            }
+            for i in 0..n as u32 {
+                tri(mesh, [c, first + i, first + (i + 1) % n as u32], Vec3::Y);
+            }
         }
 
         // Walls, darkening towards their foot.
@@ -639,10 +711,14 @@ impl PlateWorld {
                 normal = -normal;
             }
             let normal = Vec3::new(normal.x as f32, 0.0, normal.y as f32);
-            let top_a = push(mesh, local(a, h), normal, wall_albedo, corner_ao[i]);
-            let top_b = push(mesh, local(b, h), normal, wall_albedo, corner_ao[(i + 1) % n]);
-            let bot_a = push(mesh, local(a, h - depth), normal, wall_albedo, 0.0);
-            let bot_b = push(mesh, local(b, h - depth), normal, wall_albedo, 0.0);
+            let j = (i + 1) % n;
+            if beyond[i] >= tops[i].max(tops[j]) - 1e-3 {
+                continue;
+            }
+            let top_a = push(mesh, local(a, tops[i]), normal, wall_albedo, corner_ao[i]);
+            let top_b = push(mesh, local(b, tops[j]), normal, wall_albedo, corner_ao[j]);
+            let bot_a = push(mesh, local(a, foot), normal, wall_albedo, 0.0);
+            let bot_b = push(mesh, local(b, foot), normal, wall_albedo, 0.0);
             tri(mesh, [top_a, bot_a, bot_b], normal);
             tri(mesh, [top_a, bot_b, top_b], normal);
         }

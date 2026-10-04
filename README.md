@@ -40,6 +40,10 @@ Command-line options, mostly for tuning and capturing reference frames:
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
     --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)
 
+`toolsisit.ps1 <place>` opens the game at a place from the review pages
+(without one it lists them); `tools\haze.ps1 none|light|dense|dark` runs a
+haze variant.
+
 Run only one capture at a time: two instances starting together have
 crashed the GPU driver.
 
@@ -126,6 +130,13 @@ convex polygon prism, with one hull for collision. Forms are named in
 setbacks, the next a walled court, the next a field of shards; a site may
 also keep a box-style centrepiece. Plates next to a higher one may get a
 flight of stairs up to it instead (0.45 m steps, walkable without jumping).
+A site may shape its ground as an earthwork instead of terraces: the plates
+around its core tilt into crisp facets whose corners follow one continuous
+slope from the core's edge down to the broad shape of the land, so
+neighbours meet seamlessly. Raised cores become mounds, sunk ones bowls,
+round or square, with ramps along their axes; the structures rise out of
+the ground rather than standing on it.
+
 Colossi are megastructures on the same rules over a much coarser grid,
 about one per district and a few hundred metres tall, seen from 4.5 km:
 a form grown on a whole footprint (the big plate there, scaled up),
