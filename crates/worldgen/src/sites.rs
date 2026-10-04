@@ -193,6 +193,12 @@ pub struct SiteRule {
     /// Terrace heights are multiples of this, metres.
     #[serde(default = "default_step")]
     pub step: f32,
+    /// An ordered site: square terraces on a regular grid of plates, the
+    /// centrepiece square to it, stairs up the four axes; and the plates
+    /// around it regular too, their order fading over this many metres
+    /// beyond the terraces (0: an ordinary site).
+    #[serde(default)]
+    pub order: f32,
 }
 
 /// The ground a site reshapes: circles around its centre, though the plates
@@ -211,7 +217,14 @@ pub struct SiteGround {
     pub step: f64,
     /// A continuous earthwork instead of stepped terraces.
     pub earthwork: Option<Earthwork>,
+    /// Ordered: square, on the world's grid, its order fading over this
+    /// many metres beyond `radius` (0: an ordinary, round site).
+    pub order: f64,
 }
+
+/// An ordered site's square reaches this fraction of its radius, so its
+/// corners stay about as far out as a round site's edge.
+const SQUARE: f64 = 0.85;
 
 /// An earthwork: the ground sloping in crisp planes from the core's edge
 /// to the natural ground, instead of stepping down in terraces. Raised
@@ -229,6 +242,23 @@ pub struct Earthwork {
 }
 
 impl SiteGround {
+    /// How far an offset from the centre lies, as the site measures it:
+    /// round, or (ordered) square on the world's axes.
+    pub fn measure(&self, rel: DVec2) -> f64 {
+        if self.order > 0.0 { rel.x.abs().max(rel.y.abs()) / SQUARE } else { rel.length() }
+    }
+
+    /// How ordered the plates are at an offset from the centre: 1 on the
+    /// site, fading to 0 over `order` metres beyond it.
+    pub fn orderliness(&self, rel: DVec2) -> f64 {
+        if self.order <= 0.0 {
+            return 0.0;
+        }
+        let d = self.measure(rel);
+        let t = ((d - self.radius) / self.order).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    }
+
     /// The earthwork's surface at a point (any wrapped copy), where the
     /// ground's smooth landform is `natural`: the core's height on the
     /// core, the natural ground beyond the slope. None without an
@@ -395,7 +425,8 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
                 style: style.clone(),
                 at: (x, z),
                 size: (sx, sy, sz),
-                yaw: r(7) * 360.0,
+                // An ordered site's stands square to the grid.
+                yaw: if rule.order > 0.0 { (r(7) * 4.0).floor() * 90.0 } else { r(7) * 360.0 },
                 seed,
                 sink: 0.0,
             };
@@ -433,12 +464,13 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
             radius: (core + terraces) as f64,
             rings: rule.rings.max(1),
             step,
-            earthwork: rule.earthwork.map(|e| Earthwork {
+            earthwork: rule.earthwork.filter(|_| rule.order <= 0.0).map(|e| Earthwork {
                 square: e.shape == EarthworkShape::Square,
                 yaw: (r(7) * 360.0).to_radians() as f64,
                 width: slope as f64,
                 ramps: e.ramps.max(0.0) as f64,
             }),
+            order: rule.order.max(0.0) as f64,
         }
     });
     Some(Site {
@@ -507,6 +539,8 @@ pub struct SiteTable {
     big: Vec<Option<SiteGround>>,
     /// The ground under the hand-placed structures.
     placed: Vec<SiteGround>,
+    /// Whether any site is ordered.
+    ordered: bool,
 }
 
 /// Terraces around a hand-placed structure's core.
@@ -528,7 +562,7 @@ const PLACED_RAMPS: f32 = 0.5;
 impl SiteTable {
     pub fn new(library: &Library, world: &PlateWorld) -> Self {
         let (n, cell) = cells(world.size(), library.site_grid.spacing);
-        let grounds = (0..n * n).map(|i| plan(library, world, (i % n, i / n)).and_then(|s| s.ground)).collect();
+        let grounds: Vec<Option<SiteGround>> = (0..n * n).map(|i| plan(library, world, (i % n, i / n)).and_then(|s| s.ground)).collect();
         let (big_n, big_cell) = cells(world.size(), library.colossus_grid.spacing);
         let big = (0..big_n * big_n)
             .map(|i| plan_in(Layer::Colossi, library, world, (i % big_n, i / big_n)).and_then(|s| s.ground))
@@ -555,10 +589,13 @@ impl SiteTable {
                         width: (PLACED_RINGS as f32 * PLACED_RING_WIDTH) as f64,
                         ramps: PLACED_RAMPS as f64,
                     }),
+                    order: 0.0,
                 }
             })
             .collect();
+        let ordered = grounds.iter().flatten().any(|g: &SiteGround| g.order > 0.0);
         Self {
+            ordered,
             n,
             cell: cell as f64,
             size: world.size() as f64,
@@ -568,6 +605,25 @@ impl SiteTable {
             big,
             placed,
         }
+    }
+
+    /// How ordered the plates are at `p`: the most any ordered site there
+    /// makes them (see `SiteGround::orderliness`).
+    pub fn order_at(&self, p: DVec2) -> f64 {
+        if !self.ordered {
+            return 0.0;
+        }
+        let (cx, cz) = ((p.x / self.cell).floor() as i32, (p.y / self.cell).floor() as i32);
+        let wrap = |d: f64| d - (d / self.size).round() * self.size;
+        let mut order: f64 = 0.0;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let (gx, gz) = ((cx + dx).rem_euclid(self.n), (cz + dz).rem_euclid(self.n));
+                let Some(ground) = &self.grounds[(gz * self.n + gx) as usize] else { continue };
+                order = order.max(ground.orderliness(DVec2::new(wrap(p.x - ground.center.x), wrap(p.y - ground.center.y))));
+            }
+        }
+        order
     }
 
     /// The site whose ground (grown by `margin`) contains `p`, at any
@@ -582,7 +638,7 @@ impl SiteTable {
             for dx in -1..=1 {
                 let (gx, gz) = ((cx + dx).rem_euclid(self.n), (cz + dz).rem_euclid(self.n));
                 let Some(ground) = &self.grounds[(gz * self.n + gx) as usize] else { continue };
-                let distance = wrap(ground.center.x - p.x).hypot(wrap(ground.center.y - p.y));
+                let distance = ground.measure(DVec2::new(wrap(p.x - ground.center.x), wrap(p.y - ground.center.y)));
                 if distance < ground.radius + margin {
                     return Some((ground, distance));
                 }
@@ -715,7 +771,10 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
             if plate.sloped {
                 continue;
             }
-            if k(1) < site.stairs
+            // On an ordered site, every plate on the four axes gets stairs.
+            let c = forms::centroid(&local);
+            let on_axis = ground.order > 0.0 && c.x.abs().min(c.y.abs()) < 12.0 && plate.distance > ground.core;
+            if (on_axis || k(1) < site.stairs)
                 && let Some((steps, flight)) = stairs(world, &local, center, plate.height as f32, floor, tone)
             {
                 grower.out.prisms.extend(steps);

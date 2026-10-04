@@ -259,8 +259,12 @@ impl PlateWorld {
 
     fn site(&self, level: usize, g: (i32, i32)) -> DVec2 {
         let grid = GRID[level];
-        let jx = (self.rand(level, g, 1) - 0.5) * JITTER;
-        let jz = (self.rand(level, g, 2) - 0.5) * JITTER;
+        // Near an ordered site the sites fall back onto the grid, and the
+        // plates become regular squares.
+        let cell = DVec2::new((g.0 as f64 + 0.5) * grid, (g.1 as f64 + 0.5) * grid);
+        let jitter = JITTER * (1.0 - self.sites.order_at(cell));
+        let jx = (self.rand(level, g, 1) - 0.5) * jitter;
+        let jz = (self.rand(level, g, 2) - 0.5) * jitter;
         DVec2::new((g.0 as f64 + 0.5 + jx) * grid, (g.1 as f64 + 0.5 + jz) * grid)
     }
 
@@ -444,7 +448,7 @@ impl PlateWorld {
                 }
                 for iz in (min.y / g1).floor() as i32 - 1..=(max.y / g1).ceil() as i32 + 1 {
                     for ix in (min.x / g1).floor() as i32 - 1..=(max.x / g1).ceil() as i32 + 1 {
-                        let distance = self.site(1, (ix, iz)).distance(c);
+                        let distance = ground.measure(self.site(1, (ix, iz)) - c);
                         if distance >= ground.radius {
                             continue;
                         }

@@ -167,6 +167,11 @@
 //       to the natural ground (a mound if the core is raised, a bowl if
 //       sunk); shape Round or Square, ramps reach that much further along
 //       the four axes (0 none, 1 twice as far).
+//     order: 300
+//       an ordered site: square terraces on a regular grid of plates, the
+//       centrepiece square to it, stairs up the four axes; the plates
+//       around it regular too, the order fading over that many metres
+//       beyond the terraces (no earthwork)
 //     plinth: false leaves the ground alone (centrepiece only).
 //     form: "name", footprint: (60, 120)
 //       grows a form on the whole footprint instead: the big plate at the
@@ -671,8 +676,10 @@
         // Stacks: towers on round mounds among the pillars.
         (district: Stacks, weight: 3, plates: "towers", terraces: "ruin", core: (50, 100), lift: (4, 10),
             earthwork: (shape: Round)),
+        // An ordered site: square terraces climbed by stairs on the four
+        // axes, the plates around it regular, the order fading outwards.
         (district: Stacks, weight: 1, style: "spire", size: ((40, 200, 40), (80, 420, 80)), plates: "towers",
-            terraces: "ruin", lift: (4, 10), earthwork: (shape: Round, ramps: 0.5)),
+            terraces: "ruin", terrace_chance: 0.2, lift: (10, 16), rings: 4, ring_width: 20, step: 3, order: 300),
         // Broken: ruins on mounds or sunk into bowls.
         (district: Broken, weight: 3, plates: "ruin", terraces: "ruin", core: (60, 110), lift: (-10, 8),
             earthwork: (shape: Round)),
