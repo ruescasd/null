@@ -63,6 +63,15 @@ pub enum Form {
     },
     /// The polygon shrunk by `by` on every side.
     Inset { by: (f32, f32), then: String },
+    /// The polygon moved `by` metres sideways, in a random direction (or
+    /// along the polygon's longest edge with `along`): stacked, this makes
+    /// cantilevers and overhangs.
+    Shift {
+        by: (f32, f32),
+        #[serde(default)]
+        along: bool,
+        then: String,
+    },
     /// A recessed band: a prism of the polygon shrunk by `by`, `height`
     /// high; `then` grows on top of it on the whole polygon again. Stacked
     /// between bands it makes the grooves that give tall things a scale.
@@ -164,7 +173,9 @@ pub fn references(form: &Form) -> Vec<&str> {
             then.iter().map(|s| s.as_str()).collect()
         }
         Form::Rim { inner, wall, .. } => inner.iter().chain(wall).map(|s| s.as_str()).collect(),
-        Form::Inset { then, .. } | Form::Split { then, .. } | Form::Cells { then, .. } => vec![then],
+        Form::Inset { then, .. } | Form::Split { then, .. } | Form::Cells { then, .. } | Form::Shift { then, .. } => {
+            vec![then]
+        }
         Form::Choose(options) => options.iter().map(|(_, s)| s.as_str()).collect(),
         Form::Stack(forms) => forms.iter().map(|s| s.as_str()).collect(),
     }
@@ -295,7 +306,8 @@ impl Grower<'_> {
                     points: poly.to_vec(),
                     y0: floor,
                     y1: floor + pick(*height, 1),
-                    top_scale: (1.0 - pick(*taper, 2)).clamp(0.0, 1.0),
+                    // A negative taper widens it towards the top.
+                    top_scale: (1.0 - pick(*taper, 2)).clamp(0.0, 8.0),
                     lean: Vec2::new(a.cos(), a.sin()) * lean * r(3),
                     albedo: (tone + (r(5) - 0.5) * 0.03).clamp(0.03, 0.4),
                 };
@@ -369,6 +381,25 @@ impl Grower<'_> {
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
+            }
+            Form::Shift { by, along, then } => {
+                let dir = if *along {
+                    let n = poly.len();
+                    let i = (0..n)
+                        .max_by(|&a, &b| {
+                            let len = |i: usize| (poly[(i + 1) % n] - poly[i]).length_squared();
+                            len(a).total_cmp(&len(b))
+                        })
+                        .unwrap_or(0);
+                    let e = (poly[(i + 1) % n] - poly[i]).normalize_or_zero();
+                    if r(2) < 0.5 { e } else { -e }
+                } else {
+                    let a = r(2) * std::f32::consts::TAU;
+                    Vec2::new(a.cos(), a.sin())
+                };
+                let offset = dir * pick(*by, 1);
+                let moved: Vec<Vec2> = poly.iter().map(|&p| p + offset).collect();
+                self.grow(then, &moved, floor, tone, child(1), depth + 1);
             }
             Form::Inset { by, then } => {
                 let inner = inset(poly, pick(*by, 1));

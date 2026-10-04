@@ -69,7 +69,8 @@ fn main() {
     let args = Args::parse();
     // Measurements and captures run flat out even without focus (Bevy
     // otherwise slows an unfocused window to 60 fps).
-    let unattended = args.opt("bench") || args.shot.is_some() || args.opt("bot") || args.opt("stairbot");
+    let unattended =
+        args.opt("bench") || args.shot.is_some() || args.opt("bot") || args.opt("stairbot") || args.opt("labshots");
     let mut app = App::new();
     if unattended {
         app.insert_resource(bevy::winit::WinitSettings {

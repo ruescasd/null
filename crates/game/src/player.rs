@@ -720,7 +720,7 @@ struct Readout;
 struct Crosshair;
 
 fn setup_hud(mut commands: Commands, args: Res<Args>) {
-    if args.shot.is_some() {
+    if args.shot.is_some() || args.opt("labshots") {
         return;
     }
     // Crosshair: a small dot at the centre of the screen.

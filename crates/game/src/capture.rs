@@ -15,7 +15,8 @@ impl Plugin for CapturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AutoShot>()
             .init_resource::<Bench>()
-            .add_systems(Update, (manual_shot, auto_shot, bench));
+            .init_resource::<Tour>()
+            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour));
     }
 }
 
@@ -80,6 +81,94 @@ fn bench(
         info!("bench: {path} {ms:.2} ms");
     }
     exit.write(AppExit::Success);
+}
+
+/// The lab tour (`--opt lab --opt labshots`): every candidate from the same
+/// three framings, saved to `screenshots/lab/<name>_<view>.png`.
+#[derive(Resource, Default)]
+struct Tour {
+    /// (name, origin, radius, height) of each candidate, along the row.
+    stops: Vec<(String, Vec3, f32, f32)>,
+    step: usize,
+    frames: u32,
+    done_at: Option<u32>,
+}
+
+/// The views: name, compass angle (degrees), distance in radii and in
+/// heights (the larger wins), eye height in heights (plus metres), and the
+/// height looked at, in heights.
+const VIEWS: [(&str, f32, f32, f32, f32, f32, f32); 3] = [
+    ("ground", 30.0, 2.2, 0.6, 0.0, 2.0, 0.45),
+    ("three_quarter", 150.0, 3.0, 1.1, 0.45, 10.0, 0.4),
+    ("wide", 260.0, 4.5, 1.8, 0.6, 20.0, 0.35),
+];
+/// Frames to let the view settle (temporal effects, streaming) per shot.
+const TOUR_SETTLE: u32 = 150;
+
+#[allow(clippy::too_many_arguments)]
+fn lab_tour(
+    mut commands: Commands,
+    args: Res<Args>,
+    streamer: Res<Streamer>,
+    building: Query<(), With<crate::structures::Building>>,
+    items: Query<(&crate::structures::LabItem, &Transform, &crate::structures::Detail)>,
+    mut tour: ResMut<Tour>,
+    camera: Single<(&mut Transform, &mut crate::camera::FlyCam), Without<crate::structures::LabItem>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !args.opt("labshots") {
+        return;
+    }
+    if tour.stops.is_empty() {
+        // Start once everything is built.
+        if !streamer.settled || !building.is_empty() || items.is_empty() {
+            return;
+        }
+        let mut stops: Vec<_> =
+            items.iter().map(|(item, t, d)| (item.0.clone(), t.translation, d.radius, d.height.max(1.0))).collect();
+        stops.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
+        info!("lab tour: {} candidates", stops.len());
+        tour.stops = stops;
+    }
+    if let Some(at) = tour.done_at {
+        // Let the last screenshots reach the disk.
+        tour.frames += 1;
+        if tour.frames > at + 30 {
+            exit.write(AppExit::Success);
+        }
+        return;
+    }
+    let (stop, view) = (tour.step / VIEWS.len(), tour.step % VIEWS.len());
+    let (name, origin, radius, height) = tour.stops[stop].clone();
+    let (label, angle, by_radius, by_height, eye, eye_metres, look) = VIEWS[view];
+    let (mut transform, mut fly) = camera.into_inner();
+    if tour.frames == 0 {
+        let distance = (radius * by_radius).max(height * by_height);
+        let a = angle.to_radians();
+        let at = origin + Vec3::new(a.cos(), 0.0, a.sin()) * distance + Vec3::Y * (height * eye + eye_metres);
+        let target = origin + Vec3::Y * height * look;
+        let to = target - at;
+        fly.yaw = (-to.x).atan2(-to.z);
+        fly.pitch = to.y.atan2(Vec2::new(to.x, to.z).length());
+        transform.translation = at;
+        transform.rotation = fly.rotation();
+    }
+    if !streamer.settled {
+        return;
+    }
+    tour.frames += 1;
+    if tour.frames < TOUR_SETTLE {
+        return;
+    }
+    let _ = std::fs::create_dir_all("screenshots/lab");
+    let path = format!("screenshots/lab/{name}_{label}.png");
+    info!("lab tour: {path}");
+    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+    tour.frames = 0;
+    tour.step += 1;
+    if tour.step >= tour.stops.len() * VIEWS.len() {
+        tour.done_at = Some(0);
+    }
 }
 
 fn manual_shot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {

@@ -20,6 +20,8 @@ $places = [ordered]@{
     "towers"      = "2450,30,560,-59.3,-4.0"
     "pillars"     = "2350,25,1150,108.4,-2.7"
     "spire"       = "2333,30,2204,-56.3,17.0"
+    # The lab: candidates in a row along +x on flat ground (--opt lab).
+    "lab"         = "1350,40,700,-68.2,-4.2"
 }
 
 if (-not $Place -or -not $places.Contains($Place)) {
@@ -27,4 +29,5 @@ if (-not $Place -or -not $places.Contains($Place)) {
     exit 1
 }
 Set-Location (Join-Path $PSScriptRoot "..")
-cargo run -p game --release -- --opt noclip --time 40 --cam $places[$Place]
+$extra = if ($Place -eq "lab") { @("--opt", "lab") } else { @() }
+cargo run -p game --release -- --opt noclip --time 40 --cam $places[$Place] @extra

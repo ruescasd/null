@@ -21,6 +21,7 @@ use worldgen::{
     ColumnMesh,
     plates::PlateWorld,
     forms::{self, Prism},
+    lab,
     sites::{self, Layer},
     structure::{self, Library, Solid},
 };
@@ -71,7 +72,7 @@ const LEVEL_DISTANCE: [f32; 2] = [350.0, 900.0];
 /// A structure built in the background: the mesh of its box solids (always
 /// shown), its plate pieces' meshes from fine to coarse, the collider and
 /// the structure's radius.
-type Levels = (ColumnMesh, Vec<ColumnMesh>, Option<Collider>, f32);
+type Levels = (ColumnMesh, Vec<ColumnMesh>, Option<Collider>, f32, f32);
 
 /// A structure still being built in the background.
 #[derive(Component)]
@@ -80,9 +81,15 @@ pub struct Building(Task<Levels>);
 /// A structure's versions are its children; `radius` is how far it reaches
 /// from its origin.
 #[derive(Component)]
-struct Detail {
-    radius: f32,
+pub struct Detail {
+    pub radius: f32,
+    /// How high it reaches above its origin.
+    pub height: f32,
 }
+
+/// A candidate in the lab (`--opt lab`), by name.
+#[derive(Component)]
+pub struct LabItem(pub String);
 
 /// Which version a child mesh is.
 #[derive(Component)]
@@ -192,6 +199,7 @@ fn watch(
     // (what is shown stays up until its replacement is ready).
     if let WorldGen::Plates(old) = &*world
         && !args.opt("nosites")
+        && !args.opt("lab")
     {
         let new = PlateWorld::new(old.size(), args.seed).with_sites(&library);
         if !old.same_ground(&new) {
@@ -204,6 +212,30 @@ fn watch(
         commands.entity(entity).despawn();
     }
     let pool = AsyncComputeTaskPool::get();
+    // The lab: its candidates in a row on flat ground, nothing else.
+    if args.opt("lab") {
+        let entries = lab::layout(&library);
+        for (entry, (x, z)) in entries.iter().cloned() {
+            let origin = Vec3::new(x, world.ground_height(x, z), z);
+            let library = library.clone();
+            let name = entry.label();
+            let task = pool.spawn(async move {
+                let (solids, prisms) = lab::build(&library, &entry, MAX_LEAVES);
+                finish(solids, prisms)
+            });
+            commands.spawn((
+                Structure,
+                LabItem(name),
+                Building(task),
+                Landmark { origin },
+                Transform::from_translation(origin),
+            ));
+        }
+        state.library = Some(library.clone());
+        text.0 = format!("structures.ron loaded: {} lab candidates", entries.len());
+        info!("{}: {} lab candidates", path.display(), entries.len());
+        return;
+    }
     for placement in library.structures.iter().cloned() {
         let (x, z) = placement.at;
         let origin = Vec3::new(x, world.ground_height(x, z), z);
@@ -239,6 +271,7 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
         .chain(&levels[0].positions)
         .map(|p| Vec2::new(p[0], p[2]).length())
         .fold(0.0, f32::max);
+    let height = fixed.positions.iter().chain(&levels[0].positions).map(|p| p[1]).fold(0.0, f32::max);
     let hulls = prisms
         .iter()
         .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
@@ -255,7 +288,7 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
         .chain(hulls)
         .collect();
     let collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
-    (fixed, levels, collider, radius)
+    (fixed, levels, collider, radius, height)
 }
 
 /// Puts finished structures in the world: one child mesh per version.
@@ -266,9 +299,9 @@ fn receive(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (entity, mut task) in &mut tasks {
-        let Some((fixed, levels, collider, radius)) = check_ready(&mut task.0) else { continue };
+        let Some((fixed, levels, collider, radius, height)) = check_ready(&mut task.0) else { continue };
         let mut e = commands.entity(entity);
-        e.remove::<Building>().insert((Detail { radius }, Visibility::default()));
+        e.remove::<Building>().insert((Detail { radius, height }, Visibility::default()));
         if let Some(collider) = collider {
             e.insert(Solidity { collider, active: false });
         }
@@ -345,7 +378,7 @@ fn stream_sites(
 ) {
     let WorldGen::Plates(plates) = &*world else { return };
     let Some(library) = state.library.clone() else { return };
-    if args.opt("nosites") {
+    if args.opt("nosites") || args.opt("lab") {
         return;
     }
     let now = time.elapsed_secs();

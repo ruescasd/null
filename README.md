@@ -137,6 +137,14 @@ neighbours meet seamlessly. Raised cores become mounds, sunk ones bowls,
 round or square, with ramps along their axes; the structures rise out of
 the ground rather than standing on it.
 
+**The pattern lab** (`--opt lab`, or `toolsisit.ps1 lab`): the data file's
+`lab` candidates stand in a row on flat, empty ground, two samples (seeds)
+of each, so a pattern is judged on its own rather than for whether it
+rescues a place. `--opt lab --opt labshots` photographs every candidate
+from the same three angles into `screenshots/lab/` and exits. Patterns that
+pass join the catalogue the world draws on. The forms grammar has `Shift`
+(cantilevers) and negative tapers (forms widening upwards) for them.
+
 Colossi are megastructures on the same rules over a much coarser grid,
 about one per district and a few hundred metres tall, seen from 4.5 km:
 a form grown on a whole footprint (the big plate there, scaled up),

@@ -21,6 +21,7 @@ use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
 use crate::forms::{self, Form};
+use crate::lab::LabEntry;
 use crate::sites::{SiteGrid, SiteRule};
 
 /// The whole data file.
@@ -44,6 +45,9 @@ pub struct Library {
     pub colossus_grid: SiteGrid,
     #[serde(default)]
     pub colossi: Vec<SiteRule>,
+    /// Candidate patterns for the lab (see `lab.rs`).
+    #[serde(default)]
+    pub lab: Vec<LabEntry>,
 }
 
 impl Library {
@@ -86,6 +90,18 @@ impl Library {
             }
         }
         forms::check(&self.forms, &self.styles)?;
+        for entry in &self.lab {
+            if let Some(style) = &entry.style
+                && !self.styles.contains_key(style)
+            {
+                return Err(format!("lab '{}': unknown style '{style}'", entry.name));
+            }
+            if let Some(form) = &entry.form
+                && !self.forms.contains_key(form)
+            {
+                return Err(format!("lab '{}': unknown form '{form}'", entry.name));
+            }
+        }
         for site in self.sites.iter().chain(&self.colossi) {
             if let Some(style) = &site.style
                 && !self.styles.contains_key(style)

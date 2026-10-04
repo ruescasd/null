@@ -49,6 +49,8 @@ pub struct PlateWorld {
     sites: SiteTable,
     /// The structure library, for the form pillars grow (see `emit_pillar`).
     library: Option<Arc<Library>>,
+    /// The lab's ground: flat plates, no canals (see `lab.rs`).
+    lab: bool,
 }
 
 /// Flow inside a canal at a point.
@@ -122,7 +124,14 @@ impl PlateWorld {
             canals: Canals::new(size as f64, seed),
             sites: SiteTable::default(),
             library: None,
+            lab: false,
         }
+    }
+
+    /// The lab's ground: the same tessellation of plates, all flat at 0, no
+    /// canals or sites; candidates are judged on it (see `lab.rs`).
+    pub fn lab(size: f32, seed: u32) -> Self {
+        Self { lab: true, ..Self::new(size, seed) }
     }
 
     /// The same world with the ground reshaped by the library's sites.
@@ -174,6 +183,9 @@ impl PlateWorld {
 
     /// The canal flow at a point, if it is inside a canal's pipe.
     pub fn canal_at(&self, x: f32, z: f32) -> Option<CanalFlow> {
+        if self.lab {
+            return None;
+        }
         let hit: CanalHit = self.canals.hit(DVec2::new(x as f64, z as f64), 0.0)?;
         (hit.offset.abs() < PIPE_RADIUS).then(|| CanalFlow {
             dir: glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
@@ -186,6 +198,9 @@ impl PlateWorld {
     /// The nearest point on any canal's centreline, its flow direction and
     /// floor height there.
     pub fn nearest_canal(&self, x: f32, z: f32) -> Option<(glam::Vec2, glam::Vec2, f32)> {
+        if self.lab {
+            return None;
+        }
         let hit = self.canals.nearest(DVec2::new(x as f64, z as f64))?;
         Some((
             glam::Vec2::new(hit.center.x as f32, hit.center.y as f32),
@@ -197,7 +212,9 @@ impl PlateWorld {
     /// Height of whatever surface is at (x, z): a canal, or a plate.
     fn surface(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> f64 {
         let p = DVec2::new(x, z);
-        if let Some(h) = self.canals.surface(p, &|c| self.canal_floor(c)) {
+        if !self.lab
+            && let Some(h) = self.canals.surface(p, &|c| self.canal_floor(c))
+        {
             return h;
         }
         let plate = self.plate_at(cache, x, z, max_level);
@@ -309,6 +326,10 @@ impl PlateWorld {
     /// Height and look of the plate with the given site chain, following
     /// the rules of the district its biggest plate belongs to.
     fn plate(&self, cache: &mut Cache, sites: [(i32, i32); 3], level: usize) -> Plate {
+        if self.lab {
+            let albedo = 0.19 + 0.04 * (self.rand(level, sites[level], 6) as f32 - 0.5);
+            return Plate { height: 0.0, albedo, level, sites, pillar: 0.0, sloped: false };
+        }
         let s0 = self.site(0, sites[0]);
         let rules = self.districts.at(s0.x, s0.y).rules();
         let base_albedo = self.districts.blended(s0.x, s0.y).1;
@@ -522,7 +543,9 @@ impl PlateWorld {
             }
         }
         let scale = 4f64.powi(lod as i32);
-        self.canals.mesh_square(&mut mesh, (x0, z0), size, scale, &|c| self.canal_floor(c));
+        if !self.lab {
+            self.canals.mesh_square(&mut mesh, (x0, z0), size, scale, &|c| self.canal_floor(c));
+        }
         mesh
     }
 
@@ -542,7 +565,8 @@ impl PlateWorld {
         }
         if (level >= max_level && !self.site_detail(level, sites[level])) || !self.splits(level, sites[level]) {
             let plate = self.plate(cache, *sites, level);
-            for piece in self.canals.cut(poly.to_vec()) {
+            let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec()) };
+            for piece in pieces {
                 if area(&piece) > 0.5 {
                     self.emit_prism(cache, mesh, &piece, &plate, max_level, origin);
                 }

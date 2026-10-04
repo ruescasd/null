@@ -36,7 +36,7 @@ impl Plugin for LookPlugin {
         app.insert_resource(Sky {
             time: args.time.unwrap_or(150.0),
             speed: 1.0,
-            paused: args.shot.is_some(),
+            paused: args.shot.is_some() || args.opt("labshots"),
             soft_shadows: !args.opt("hard"),
         })
         .insert_resource(Tuning {
@@ -165,7 +165,7 @@ fn setup(
         yaw: yaw.to_radians(),
         pitch: pitch.to_radians(),
         speed: 25.0,
-        noclip: args.shot.is_some() || args.opt("noclip"),
+        noclip: args.shot.is_some() || args.opt("noclip") || args.opt("labshots"),
     };
 
     let stars = star_cubemap(&mut images);
@@ -287,7 +287,7 @@ fn setup(
 
     commands.spawn((
         Hud,
-        if args.shot.is_some() { Visibility::Hidden } else { Visibility::Visible },
+        if args.shot.is_some() || args.opt("labshots") { Visibility::Hidden } else { Visibility::Visible },
         Text::new(""),
         TextFont { font_size: FontSize::Px(14.0), ..default() },
         TextColor(Color::srgb(0.75, 0.75, 0.75)),

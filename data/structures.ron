@@ -184,6 +184,27 @@
     },
 
     styles: {
+        // Lab: an open lattice tower of frames (BLAME!'s trusses).
+        "truss": (
+            divisions: (2, 6, 2), keep: All, depth: 2, gap: 0.96, albedo: 0.1,
+            leaves: [
+                (on: Any, module: "cage", weight: 6),
+                (on: Bottom, module: "box", weight: 1),
+                (on: Early, module: "box", weight: 2),
+            ],
+        ),
+        // The spire's recipe, a little lighter, for colossal needles.
+        "needle": (
+            divisions: (3, 5, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 6,
+            stop_chance: 0.3, albedo: 0.1,
+            leaves: [
+                (on: Corner, module: "needle", weight: 1),
+                (on: Corner, module: "box", weight: 1),
+                (on: Edge, module: "blade", weight: 1, turn: Random),
+                (on: Edge, module: "louvres", weight: 1),
+                (on: Early, module: "box", weight: 3),
+            ],
+        ),
         // Town buildings: a lattice of floors, needles and blades at the
         // corners and edges, louvres on the faces, cages inside.
         "tower_block": (
@@ -305,6 +326,38 @@
     ],
 
     forms: {
+        // ---- Lab candidates (see `lab:` at the end) ----
+        // A blank shaft circled by projecting walkway rings.
+        "lab_ring": Extrude(height: (1.2, 2), tone: 0.03, then: "lab_shaft_body"),
+        "lab_shaft_body": Neck(by: (5, 7), height: (8, 22), then: "lab_shaft_next"),
+        "lab_shaft_next": Choose([(40, "lab_ring"), (1, "lab_shaft_top")]),
+        "lab_shaft_top": Inset(by: (5, 7), then: "c_crown_split"),
+        // A bundle of pipe-like prisms of different heights.
+        "lab_organ": Cells(size: 5, gap: 0.4, then: "lab_pipe"),
+        "lab_pipe": Extrude(height: (20, 140), then: "lab_pipe_cap"),
+        "lab_pipe_cap": Choose([(3, "nothing"), (1, "lab_pipe_crown")]),
+        "lab_pipe_crown": Inset(by: (0.4, 0.8), then: "lab_pipe_crown_block"),
+        "lab_pipe_crown_block": Extrude(height: (1, 4), tone: 0.03),
+        // Slabs stacked, each shifted along the long axis: cantilevers.
+        "lab_cant": Extrude(height: (5, 9), then: "lab_cant_next"),
+        "lab_cant_next": Choose([(8, "lab_cant_shift"), (1, "nothing")]),
+        "lab_cant_shift": Shift(by: (4, 10), along: true, then: "lab_cant"),
+        // A slender stem carrying a wide cap.
+        "lab_stem": Inset(by: (16, 19), then: "lab_stem_shaft"),
+        "lab_stem_shaft": Extrude(height: (60, 110), then: "lab_cap"),
+        "lab_cap": Extrude(height: (10, 16), taper: (-5, -4), then: "lab_cap_top"),
+        "lab_cap_top": Extrude(height: (2, 4), taper: (0.15, 0.3)),
+        // Earthworks and frames on a flat complex.
+        "lab_heizer": Split(depth: 2, gap: 10, min_width: 20, then: "lab_heizer_piece"),
+        "lab_heizer_piece": Choose([(3, "lab_berm"), (1, "lab_frame"), (1, "nothing")]),
+        "lab_berm": Extrude(height: (6, 16), taper: (0.4, 0.7), tone: 0.02),
+        "lab_frame": Rim(width: 2.5, height: (10, 18), gates: 1),
+        // Vertebrae: segments of dense ribs with necks between.
+        "lab_rib_seg": Facade(height: (6, 10), panel: 1.0, storey: 20, depth: (1, 2.5), fill: 0.9,
+            then: "lab_rib_neck"),
+        "lab_rib_neck": Neck(by: (2, 3.5), height: (1.5, 3), then: "lab_rib_next"),
+        "lab_rib_next": Choose([(10, "lab_rib_seg"), (1, "nothing")]),
+
         // Blocks: a few storeys; the top may set back and rise again.
         "block": Facade(height: (5, 18), panel: 3, storey: 3.2, depth: (0.25, 1.1), fill: 0.6, then: "block_top"),
         "block_top": Choose([(4, "nothing"), (3, "setback"), (1, "parapet")]),
@@ -375,25 +428,32 @@
         "c_band_next": Choose([(14, "c_groove"), (3, "c_setback"), (1, "c_crown")]),
         "c_groove": Neck(by: (1.2, 2.5), height: (2, 4), then: "c_band"),
         "c_setback": Inset(by: (4, 12), then: "c_band"),
-        "c_crown": Choose([(2, "c_crown_split"), (1, "c_crown_batter"), (1, "nothing")]),
+        "c_crown": Choose([(2, "c_crown_split"), (1, "nothing")]),
         "c_crown_split": Split(depth: 2, gap: 3, min_width: 10, then: "c_crown_piece"),
         "c_crown_piece": Extrude(height: (6, 40), then: "c_crown_more"),
         "c_crown_more": Choose([(2, "nothing"), (1, "c_crown_up")]),
         "c_crown_up": Inset(by: (2, 5), then: "c_crown_piece"),
-        "c_crown_batter": Extrude(height: (20, 60), taper: (0.3, 0.6), tone: -0.02),
 
-        // Stacks: a cluster of needles on a plinth, split by deep slots.
-        "colossus_needles": Extrude(height: (8, 16), then: "needles_base"),
-        "needles_base": Inset(by: (10, 20), then: "needles"),
-        "needles": Split(depth: 2, gap: 8, min_width: 30, then: "needle"),
-        "needle": Choose([(5, "c_band"), (1, "nothing")]),
+        // Stacks: colossal spires of the box style that works in the spire
+        // site, two or so side by side, straight out of the mound.
+        "colossus_needles": Inset(by: (5, 15), then: "needles"),
+        "needles": Split(depth: 1, gap: 12, min_width: 35, then: "needle"),
+        "needle": Choose([(4, "needle_spire"), (1, "needle_tall")]),
+        "needle_spire": Structure(style: "needle", proportion: (4, 7)),
+        "needle_tall": Structure(style: "needle", proportion: (7, 10)),
 
-        // Tiers: a stepped mountain, sometimes split into twin peaks.
-        "colossus_mountain": Facade(height: (18, 30), panel: 7, storey: 5, depth: (0.6, 2.5), fill: 0.45,
-            then: "mountain_up"),
-        "mountain_up": Choose([(8, "mountain_step"), (1, "mountain_split"), (1, "c_crown")]),
-        "mountain_step": Inset(by: (8, 16), then: "colossus_mountain"),
-        "mountain_split": Split(depth: 1, gap: 8, min_width: 40, then: "mountain_step"),
+        // Tiers: a mountain of sloped tiers. Each tier battered back like a
+        // pyramid's face; each ledge carries platforms and blocks along its
+        // edge, broken by gaps; sometimes twin peaks; a crown or a tower on top.
+        "colossus_mountain": Extrude(height: (25, 45), taper: (0.12, 0.25), tone: -0.02, then: "mountain_ledge"),
+        "mountain_ledge": Rim(width: 12, gates: 0.35, wall: "mountain_deco", inner: "mountain_up"),
+        "mountain_up": Choose([(6, "colossus_mountain"), (1, "mountain_split"), (1, "mountain_crown")]),
+        "mountain_split": Split(depth: 1, gap: 10, min_width: 40, then: "colossus_mountain"),
+        "mountain_crown": Choose([(1, "c_crown_split"), (1, "towers_spire")]),
+        "mountain_deco": Choose([(2, "nothing"), (3, "mountain_blocks"), (1, "mountain_platform")]),
+        "mountain_blocks": Split(depth: 2, gap: 2, min_width: 8, then: "mountain_block"),
+        "mountain_block": Choose([(3, "town_slab"), (1, "town_tower"), (1, "nothing")]),
+        "mountain_platform": Extrude(height: (1.5, 4)),
 
         // Floor: a vast walled enclosure, banded walls broken by gates, and
         // something inside.
@@ -456,5 +516,29 @@
             terraces: "terrace", earthwork: (shape: Square)),
         (district: Broken, form: "colossus_ruin", footprint: (140, 220), lift: (8, 18), rings: 3, ring_width: 30,
             terraces: "ruin", earthwork: (shape: Round, ramps: 0.3)),
+    ],
+
+    // The lab (`--opt lab`): candidate patterns in a row on flat ground,
+    // judged on their own. `form` + `footprint` (metres to the corners), or
+    // `style` + `size`; `note` says what each tries.
+    lab: [
+        (name: "shaft_rings", form: "lab_ring", footprint: 30,
+            note: "BLAME!: a blank shaft circled by projecting walkway rings"),
+        (name: "organ", form: "lab_organ", footprint: 35,
+            note: "BLAME!/basalt: a bundle of pipe-like prisms of different heights"),
+        (name: "cantilever_stack", form: "lab_cant", footprint: 25,
+            note: "Brutalism: slabs stacked, each shifted along the long axis to overhang"),
+        (name: "stem_cap", form: "lab_stem", footprint: 30,
+            note: "Moebius: a slender stem carrying a wide cap"),
+        (name: "earthworks", form: "lab_heizer", footprint: 90,
+            note: "Heizer's City: battered berms and gated frames on a flat complex"),
+        (name: "mountain", form: "colossus_mountain", footprint: 120,
+            note: "Your idea: sloped tiers whose ledges carry platforms and blocks"),
+        (name: "truss", style: "truss", size: (40, 160, 40),
+            note: "BLAME!: an open lattice tower of frames"),
+        (name: "ribbed", form: "lab_rib_seg", footprint: 14,
+            note: "Giger: vertebra-like segments of dense ribs with necks between"),
+        (name: "spire_reference", style: "spire", size: (60, 300, 60),
+            note: "Reference: the box-style spire that works"),
     ],
 )

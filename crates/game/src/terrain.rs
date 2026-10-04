@@ -46,7 +46,10 @@ impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         let args = app.world().resource::<Args>();
         let config = WorldConfig { seed: args.seed, ..default() };
-        let world = if args.opt("voxel") {
+        let world = if args.opt("lab") {
+            // The lab: flat plates, nothing else (see `structures.rs`).
+            WorldGen::Plates(Arc::new(PlateWorld::lab(config.size, config.seed)))
+        } else if args.opt("voxel") {
             WorldGen::Voxel(Arc::new(World::new(config)))
         } else {
             // The sites in the structure library reshape the ground.

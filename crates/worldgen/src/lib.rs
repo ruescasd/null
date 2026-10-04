@@ -10,6 +10,7 @@ pub mod district;
 pub mod forms;
 pub mod fractal;
 pub mod ifs;
+pub mod lab;
 pub mod plates;
 pub mod sites;
 pub mod structure;
