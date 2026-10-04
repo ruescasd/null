@@ -29,6 +29,8 @@ pub const BAY: f32 = 6.0;
 /// A level (metres): ten steps of 0.45.
 pub const LEVEL: f32 = 4.5;
 const STEPS: i32 = 10;
+/// The highest level anything reaches.
+const MAX_LEVEL: i32 = 30;
 /// How far everything reaches into the ground.
 const FOUNDATION: f32 = 6.0;
 
@@ -65,6 +67,8 @@ struct Rect {
     /// A tower: a stair winds up its faces from `base`.
     tower: bool,
     base: i32,
+    /// 1: a court, 2: a shaft (a ring round a void).
+    void: u8,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -114,6 +118,9 @@ struct Composer {
     bridges: Vec<(Vec<(i32, i32)>, std::ops::Range<usize>)>,
     tone: f32,
     seed: u32,
+    /// How central the rect being grown from is (1 at the centre, 0 at
+    /// the edge).
+    focus: f32,
 }
 
 /// The frame of a direction: along it, and across it.
@@ -185,7 +192,7 @@ impl Composer {
     /// `c0..=c1`.
     fn rect_in(d: (i32, i32), a0: i32, a1: i32, c0: i32, c1: i32, level: i32, raised: bool) -> Rect {
         let (p, q) = (from_frame(d, a0, c0), from_frame(d, a1, c1));
-        Rect { x0: p.0.min(q.0), z0: p.1.min(q.1), x1: p.0.max(q.0), z1: p.1.max(q.1), level, raised, tower: false, base: level }
+        Rect { x0: p.0.min(q.0), z0: p.1.min(q.1), x1: p.0.max(q.0), z1: p.1.max(q.1), level, raised, tower: false, base: level, void: 0 }
     }
 
     /// A rect's extent in a direction's frame: (along min, along max,
@@ -259,7 +266,7 @@ impl Composer {
             }
             Op::Tower => {
                 let size = 2 + (r1 * 2.0) as i32;
-                let level = r.level + 3 + (r2 * 4.0) as i32;
+                let level = (r.level + 2 + (r2 * 3.0 + self.focus * 6.0) as i32).min(MAX_LEVEL);
                 let mut new = Self::rect_in(d, amax + 1, amax + size, cs - size / 2, cs - size / 2 + size - 1, level, false);
                 new.tower = true;
                 new.base = r.level;
@@ -268,8 +275,9 @@ impl Composer {
             Op::Court | Op::Shaft => {
                 let inner = if op == Op::Shaft { 1 + (r1 * 2.0) as i32 } else { 2 + (r1 * 3.0) as i32 };
                 let size = inner + 2;
-                let level = if op == Op::Shaft { r.level + 2 + (r2 * 4.0) as i32 } else { r.level };
-                let new = Self::rect_in(d, amax + 1, amax + size, cs - size / 2, cs - size / 2 + size - 1, level, false);
+                let level = if op == Op::Shaft { (r.level + 2 + (r2 * 4.0) as i32).min(MAX_LEVEL) } else { r.level };
+                let mut new = Self::rect_in(d, amax + 1, amax + size, cs - size / 2, cs - size / 2 + size - 1, level, false);
+                new.void = if op == Op::Shaft { 2 } else { 1 };
                 for x in new.x0..=new.x1 {
                     for z in new.z0..=new.z1 {
                         if !self.free(x, z) {
@@ -360,8 +368,44 @@ impl Composer {
 
     /// Draws the grid: platforms, decks on pillars with arches, stairs,
     /// parapets, porticos.
+    /// Covered passages: cells with an arched way through them at the
+    /// bottom, along an axis, and the passage's floor.
+    fn passages(&self) -> HashMap<(i32, i32), ((i32, i32), f32)> {
+        let mut out = HashMap::new();
+        for (i, r) in self.rects.iter().enumerate() {
+            if r.raised || r.tower || r.void > 0 || hash01(i as i32, 5, 0x9a5, self.seed) > 0.45 {
+                continue;
+            }
+            // Across the rect's shorter side, through its middle.
+            let along_x = r.x1 - r.x0 <= r.z1 - r.z0;
+            let axis = if along_x { (1, 0) } else { (0, 1) };
+            let cells: Vec<(i32, i32)> = if along_x {
+                let z = (r.z0 + r.z1) / 2;
+                (r.x0..=r.x1).map(|x| (x, z)).collect()
+            } else {
+                let x = (r.x0 + r.x1) / 2;
+                (r.z0..=r.z1).map(|z| (x, z)).collect()
+            };
+            let (first, last) = (cells[0], *cells.last().unwrap());
+            let top = r.level as f32 * LEVEL;
+            let ends = [self.drop(first.0, first.1, (-axis.0, -axis.1)), self.drop(last.0, last.1, axis)];
+            if ends[0] < 2 || ends[0] != ends[1] {
+                continue;
+            }
+            if !cells.iter().all(|c| self.cells.get(c).is_some_and(|c| c.rect == i as i32)) {
+                continue;
+            }
+            let floor = top - ends[0] as f32 * LEVEL;
+            for c in cells {
+                out.insert(c, (axis, floor));
+            }
+        }
+        out
+    }
+
     fn draw(&self, porticos: &HashSet<usize>) -> Vec<Solid> {
         let mut out = self.extra.clone();
+        let passages = self.passages();
         let tone = self.tone;
         let top_of = |c: &Cell| match c.kind {
             Kind::Stair { .. } => (c.level + 1) as f32 * LEVEL,
@@ -371,6 +415,30 @@ impl Composer {
         for (&(x, z), cell) in &self.cells {
             let top = cell.level as f32 * LEVEL;
             match cell.kind {
+                Kind::Ground if passages.contains_key(&(x, z)) => {
+                    // Solid below the passage and above it; walls either
+                    // side; an arched head.
+                    let (axis, floor) = passages[&(x, z)];
+                    let side = if axis.0 != 0 { Vec3::Z } else { Vec3::X };
+                    let c = cell_at(x, z, 0.0);
+                    out.push(boxed(c + Vec3::Y * ((floor - FOUNDATION) * 0.5), Vec3::new(BAY * 0.5, (floor + FOUNDATION) * 0.5, BAY * 0.5), tone));
+                    let roof = floor + LEVEL;
+                    out.push(boxed(c + Vec3::Y * ((roof + top) * 0.5), Vec3::new(BAY * 0.5, (top - roof) * 0.5, BAY * 0.5), tone));
+                    let wall = 1.4;
+                    for sgn in [-1.0, 1.0] {
+                        let half = if axis.0 != 0 { Vec3::new(BAY * 0.5, LEVEL * 0.5, wall * 0.5) } else { Vec3::new(wall * 0.5, LEVEL * 0.5, BAY * 0.5) };
+                        out.push(boxed(c + side * (sgn * (BAY * 0.5 - wall * 0.5)) + Vec3::Y * (floor + LEVEL * 0.5), half, tone));
+                    }
+                    let rad = BAY * 0.5 - wall;
+                    for j in 0..8 {
+                        let u0 = -rad + 2.0 * rad * j as f32 / 8.0;
+                        let u1 = u0 + 2.0 * rad / 8.0;
+                        let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
+                        let arc = roof - rad * 0.8 + 0.8 * (rad * rad - ui * ui).max(0.0).sqrt();
+                        let half = if axis.0 != 0 { Vec3::new(BAY * 0.5, (roof - arc) * 0.5 + 0.01, (u1 - u0) * 0.5) } else { Vec3::new((u1 - u0) * 0.5, (roof - arc) * 0.5 + 0.01, BAY * 0.5) };
+                        out.push(boxed(c + side * ((u0 + u1) * 0.5) + Vec3::Y * ((arc + roof) * 0.5), half, tone));
+                    }
+                }
                 Kind::Ground => {
                     // Inset by the openings' depth on faces whose wall is
                     // open, so arcades and slots have real depth; the deck
@@ -447,11 +515,21 @@ impl Composer {
             }
             let top = cell.level as f32 * LEVEL;
             for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let storeys = self.drop(x, z, (dx, dz));
+                let mut storeys = self.drop(x, z, (dx, dz));
                 if storeys < 1 {
                     continue;
                 }
-                let below = top - storeys as f32 * LEVEL;
+                let mut below = top - storeys as f32 * LEVEL;
+                if let Some(&(axis, floor)) = passages.get(&(x, z))
+                    && (axis == (dx, dz) || axis == (-dx, -dz))
+                    && (below - floor).abs() < 0.1
+                {
+                    below += LEVEL;
+                    storeys -= 1;
+                    if storeys < 1 {
+                        continue;
+                    }
+                }
                 let n = Vec3::new(dx as f32, 0.0, dz as f32);
                 let along = Vec3::new(-dz as f32, 0.0, dx as f32);
                 let face = cell_at(x, z, 0.0) + n * (BAY * 0.5);
@@ -571,6 +649,52 @@ impl Composer {
                 }
             }
         }
+        // Courts: a cloister of columns along the ring's inner edge, a
+        // lintel over them. Shafts: galleries cantilevered into the void
+        // every other storey along the walls.
+        for (i, r) in self.rects.iter().enumerate() {
+            if r.void == 0 {
+                continue;
+            }
+            let top = r.level as f32 * LEVEL;
+            for x in r.x0..=r.x1 {
+                for z in r.z0..=r.z1 {
+                    if !self.cells.get(&(x, z)).is_some_and(|c| c.rect == i as i32 && c.kind == Kind::Ground) {
+                        continue;
+                    }
+                    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        if !self.cells.get(&(x + dx, z + dz)).is_some_and(|c| c.kind == Kind::Void) {
+                            continue;
+                        }
+                        let n = Vec3::new(dx as f32, 0.0, dz as f32);
+                        let along = Vec3::new(-dz as f32, 0.0, dx as f32);
+                        let edge = cell_at(x, z, 0.0) + n * (BAY * 0.5);
+                        let sized = |a: f32, h: f32, d: f32| if dx != 0 { Vec3::new(d, h, a) } else { Vec3::new(a, h, d) };
+                        if r.void == 1 {
+                            for s in [-0.5f32, 0.0] {
+                                let c = edge - n * 0.7 + along * (s * BAY) + Vec3::Y * (top + LEVEL * 0.5);
+                                out.push(boxed(c, Vec3::new(0.3, LEVEL * 0.5, 0.3), tone + 0.06));
+                            }
+                            let c = edge - n * 0.7 + Vec3::Y * (top + LEVEL + 0.3);
+                            out.push(boxed(c, sized(BAY * 0.5 + 0.3, 0.3, 0.4), tone + 0.06));
+                            // The roof over the walk.
+                            let c = edge - n * (BAY * 0.5 - 0.35) + Vec3::Y * (top + LEVEL + 0.65);
+                            out.push(boxed(c, sized(BAY * 0.5, 0.15, BAY * 0.5 - 0.3), tone + 0.04));
+                        } else {
+                            let mut k = 1;
+                            while (k as f32) * LEVEL < top - 0.1 {
+                                let y = k as f32 * LEVEL;
+                                let c = edge + n * 0.9 + Vec3::Y * (y - 0.25);
+                                out.push(boxed(c, sized(BAY * 0.5, 0.25, 0.9), tone + 0.05));
+                                let c = edge + n * 1.7 + Vec3::Y * (y + 0.5);
+                                out.push(boxed(c, sized(BAY * 0.5, 0.5, 0.1), tone + 0.05));
+                                k += 2;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Stairs winding up the towers' faces from their base to their top,
         // a landing at each corner.
         for (i, r) in self.rects.iter().enumerate() {
@@ -675,6 +799,7 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
         bridges: Vec::new(),
         tone,
         seed,
+        focus: 1.0,
     };
     if c.nx < 3 || c.nz < 3 {
         return Vec::new();
@@ -682,26 +807,10 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
     // The root: a platform in the middle, a few levels up.
     let (w, d) = (2 + (r(0, 0) * 3.0) as i32, 2 + (r(0, 1) * 3.0) as i32);
     let level = 3 + (r(0, 2) * 3.0) as i32;
-    let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level };
+    let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level, void: 0 };
     c.place(root);
     let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     // Weighted towards climbing: the complex grows up as well as out.
-    let ops = [
-        Op::Up,
-        Op::Up,
-        Op::Up,
-        Op::Down,
-        Op::Raised,
-        Op::Raised,
-        Op::Bridge,
-        Op::Tower,
-        Op::Tower,
-        Op::Court,
-        Op::Court,
-        Op::Shaft,
-        Op::TowerBridge,
-        Op::TowerBridge,
-    ];
     let mut k = 0;
     let mut attempts = 0;
     while k < steps && attempts < steps * 20 {
@@ -710,17 +819,53 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool,
         // A run: one operation repeated off the newest rect in one
         // direction, each copy perhaps mutated.
         let from = c.rects[(q(0) * c.rects.len() as f32) as usize % c.rects.len()];
-        let mut dir = dirs[(q(1) * 4.0) as usize % 4];
-        let mut op = ops[(q(2) * ops.len() as f32) as usize % ops.len()];
+        // Composition by position: towers, shafts and bridges at height
+        // near the centre, courts between, terraces stepping down and
+        // bridges out at the edges; growth mostly outwards.
+        let mid = Vec2::new((from.x0 + from.x1 + 1) as f32, (from.z0 + from.z1 + 1) as f32) * 0.5;
+        let t = (mid.x.abs() / c.nx as f32).max(mid.y.abs() / c.nz as f32).clamp(0.0, 1.0);
+        c.focus = 1.0 - t;
+        let mut dir = if q(1) < 0.6 && mid.length() > 0.5 {
+            if mid.x.abs() > mid.y.abs() { (mid.x.signum() as i32, 0) } else { (0, mid.y.signum() as i32) }
+        } else {
+            dirs[(q(5) * 4.0) as usize % 4]
+        };
+        let pick = |h: f32| {
+            let u = 1.0 - t;
+            let weights = [
+                (Op::Tower, 3.0 * u * u),
+                (Op::Shaft, 1.5 * u),
+                (Op::TowerBridge, 1.5 * u),
+                (Op::Raised, 0.5 + u),
+                (Op::Up, 0.4 + 1.5 * u),
+                (Op::Court, 2.0 * (1.0 - (t - 0.5).abs() * 2.0).max(0.0) + 0.2),
+                (Op::Down, 0.3 + 2.5 * t),
+                (Op::Bridge, 0.2 + 1.5 * t),
+            ];
+            let total: f32 = weights.iter().map(|w| w.1).sum();
+            let mut x = h * total;
+            for (op, w) in weights {
+                if x < w {
+                    return op;
+                }
+                x -= w;
+            }
+            Op::Down
+        };
+        let mut op = pick(q(2));
         let run = 1 + (q(3) * q(3) * 4.0) as u32;
         let mut cur = from;
         for n in 0..run {
             let m = |j: i32| r(attempts as i32 * 16 + n as i32, 10 + j);
             if n > 0 && m(0) < 0.2 {
-                op = ops[(m(1) * ops.len() as f32) as usize % ops.len()];
+                op = pick(m(1));
             }
             if n > 0 && m(2) < 0.15 {
                 dir = (-dir.1, dir.0);
+            }
+            // Towers are ends: only a bridge at height leaves one.
+            if cur.tower && op != Op::TowerBridge {
+                break;
             }
             match c.grow(cur, op, dir, m(3), m(4), m(5)) {
                 Some(next) => {
