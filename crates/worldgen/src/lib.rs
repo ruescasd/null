@@ -7,6 +7,7 @@ pub mod mesh;
 pub mod noise;
 pub mod canal;
 pub mod district;
+pub mod dressing;
 pub mod forms;
 pub mod fractal;
 pub mod ifs;

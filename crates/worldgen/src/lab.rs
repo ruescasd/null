@@ -46,6 +46,9 @@ pub struct LabEntry {
     /// judged on more than one roll of its dice.
     #[serde(default = "default_variants")]
     pub variants: u32,
+    /// Pipework to dress it with (a name from `dressings`).
+    #[serde(default)]
+    pub dress: Option<String>,
     /// Which sample this is (set by `layout`).
     #[serde(skip)]
     pub variant: u32,
@@ -105,8 +108,19 @@ pub fn footprint(radius: f32, seed: u32) -> Vec<Vec2> {
         .collect()
 }
 
-/// Everything a candidate is made of, its base centre at the origin.
+/// Everything a candidate is made of, its base centre at the origin, dressed
+/// with its pipework if it has any.
 pub fn build(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>) {
+    let (mut solids, prisms) = build_bare(library, entry, max_leaves);
+    if let Some(dressing) = entry.dress.as_ref().and_then(|d| library.dressings.get(d)) {
+        let tone = 0.13;
+        let pipes = crate::dressing::dress(dressing, &solids, &prisms, tone, entry.seed() ^ 0xd1e5);
+        solids.extend(pipes);
+    }
+    (solids, prisms)
+}
+
+fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>) {
     let seed = entry.seed();
     if let Some(style) = &entry.style {
         let placement = Placement { style: style.clone(), at: (0.0, 0.0), size: entry.size, yaw: 0.0, seed, sink: 0.0 };

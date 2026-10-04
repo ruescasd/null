@@ -21,6 +21,7 @@ use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
 use crate::forms::{self, Form};
+use crate::dressing::Dressing;
 use crate::lab::LabEntry;
 use crate::sites::{SiteGrid, SiteRule};
 
@@ -48,6 +49,9 @@ pub struct Library {
     /// Candidate patterns for the lab (see `lab.rs`).
     #[serde(default)]
     pub lab: Vec<LabEntry>,
+    /// Pipework that belongs to structures (see `dressing.rs`).
+    #[serde(default)]
+    pub dressings: BTreeMap<String, Dressing>,
 }
 
 impl Library {
@@ -100,6 +104,11 @@ impl Library {
                 && !self.forms.contains_key(form)
             {
                 return Err(format!("lab '{}': unknown form '{form}'", entry.name));
+            }
+            if let Some(dress) = &entry.dress
+                && !self.dressings.contains_key(dress)
+            {
+                return Err(format!("lab '{}': unknown dressing '{dress}'", entry.name));
             }
         }
         for site in self.sites.iter().chain(&self.colossi) {
