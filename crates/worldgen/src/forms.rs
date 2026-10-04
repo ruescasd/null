@@ -40,7 +40,8 @@ pub enum Form {
     },
     /// Wiring in its own right (see `curtain.rs`): a broken ring of walls
     /// round an open shaft, sheaves of long cables crossing the void and
-    /// hanging down the walls.
+    /// hanging down the walls, the walls carrying the pipe network sunk
+    /// into their faces.
     Curtains {
         height: (f32, f32),
         #[serde(default)]
@@ -425,13 +426,15 @@ impl Grower<'_> {
                 }
             }
             Form::Curtains { height, tone: t } => {
-                let (walls, cables) = crate::curtain::build(poly, floor, pick(*height, 1), tone + t, child(6));
-                if walls.len() + cables.len() > self.budget {
+                let (walls, cables, pipes) = crate::curtain::build(poly, floor, pick(*height, 1), tone + t, child(6));
+                let pieces = walls.len() + cables.len() + pipes.len();
+                if pieces > self.budget {
                     return;
                 }
-                self.budget -= walls.len() + cables.len();
+                self.budget -= pieces;
                 self.out.prisms.extend(walls);
                 self.out.solids.extend(cables);
+                self.out.tubes.extend(pipes);
             }
             Form::Cluster { height, tone: t } => {
                 let solids = crate::cluster::build(poly, floor, pick(*height, 1), tone + t, child(4));

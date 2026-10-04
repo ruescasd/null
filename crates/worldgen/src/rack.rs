@@ -378,6 +378,13 @@ impl Surface {
         }
     }
 
+    /// The same surface with the routes sunk into it, only their crowns
+    /// showing.
+    pub fn sunk(mut self) -> Self {
+        self.sunk = true;
+        self
+    }
+
     fn at(&self, u: f32, y: f32, z: f32) -> Vec3 {
         self.origin + self.across * u + self.grow * y + self.off * z
     }

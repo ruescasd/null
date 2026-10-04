@@ -268,8 +268,10 @@ fn relief_at(uv: vec2<f32>, pixel: f32, face: f32) -> Relief {
 // rows (`cell` metres high); a lane carries a groove for a run of rows at a
 // time; in each row it may bend over into a neighbouring lane in a soft S
 // (merging with whatever runs there), and where it bends it may also carry
-// straight on (a split). A route is a bundle of one to four grooves. x: how much of the groove covers the point, y: how
-// near its middle, z: whether its route is lit.
+// straight on (a split). A route is a bundle of one to four grooves; a
+// split shares the bundle out between the bend and the straight. x: how
+// much of the groove covers the point, y: how near its middle, z: whether
+// its route is lit.
 fn etch_layer(uv: vec2<f32>, pixel: f32, lane: f32, cell: f32, half: f32, salt: i32) -> vec3<f32> {
     let j = floor(uv.y / cell);
     let t = uv.y / cell - j;
@@ -285,24 +287,26 @@ fn etch_layer(uv: vec2<f32>, pixel: f32, lane: f32, cell: f32, half: f32, salt: 
             continue;
         }
         let h = hash(vec2<i32>(ki + salt * 3, ji * 5 + 1), 1 << 20);
-        let shift = select(select(0.0, 1.0, h > 0.84), -1.0, h < 0.16);
+        let shift = select(select(0.0, 1.0, h > 0.75), -1.0, h < 0.25);
         let s = t * t * (3.0 - 2.0 * t);
-        let x = (f32(ki) + 0.5) * lane + shift * lane * s;
+        let centre = (f32(ki) + 0.5) * lane;
+        let bend = centre + shift * lane * s;
         let slope = shift * lane * 6.0 * t * (1.0 - t) / cell;
-        // A bundle of one to four grooves side by side.
-        let strands = 1.0 + floor(hash(run + vec2<i32>(0, 57), 1 << 20) * 4.0);
+        // A bundle of one to four grooves side by side. Where it bends it may
+        // split: the first grooves bend away, the rest carry straight on.
+        let strands = 1 + i32(hash(run + vec2<i32>(0, 57), 1 << 20) * 4.0);
+        let splits = shift != 0.0 && hash(vec2<i32>(ki * 11 + salt, ji * 3 + 2), 1 << 20) < 0.55;
+        let bending = select(strands, max(strands / 2, 1), splits);
         let spacing = half * 3.2;
-        let offset = uv.x - x;
-        let nearest = clamp(round(offset / spacing + (strands - 1.0) * 0.5), 0.0, strands - 1.0);
-        let strand_x = (nearest - (strands - 1.0) * 0.5) * spacing;
-        var d = abs(offset - strand_x) / sqrt(1.0 + slope * slope);
-        // Where it bends it may also carry straight on.
-        if shift != 0.0 && hash(vec2<i32>(ki * 11 + salt, ji * 3 + 2), 1 << 20) < 0.35 {
-            d = min(d, abs(uv.x - (f32(ki) + 0.5) * lane));
-        }
-        if d < best {
-            best = d;
-            lit = step(hash(run + vec2<i32>(91, 0), 1 << 20), 0.07) * step(nearest, 0.5);
+        for (var i = 0; i < strands; i++) {
+            let o = (f32(i) - f32(strands - 1) * 0.5) * spacing;
+            let bends = i < bending || !splits;
+            let x = select(centre, bend, bends) + o;
+            let d = abs(uv.x - x) / select(1.0, sqrt(1.0 + slope * slope), bends);
+            if d < best {
+                best = d;
+                lit = step(hash(run + vec2<i32>(91, 0), 1 << 20), 0.07) * select(0.0, 1.0, i == 0);
+            }
         }
     }
     let coverage = saturate(2.0 * half / pixel);
@@ -312,13 +316,11 @@ fn etch_layer(uv: vec2<f32>, pixel: f32, lane: f32, cell: f32, half: f32, salt: 
 }
 
 fn etch_at(uv: vec2<f32>, pixel: f32, face: f32) -> Relief {
-    // Fine etchings everywhere but on the narrowest faces; wide grooves on
-    // broad ones.
-    let fine = etch_layer(uv, pixel, 0.9, 4.0, 0.045, 3) * smoothstep(0.6, 2.0, face);
+    // Wide grooves on broad faces (a finer layer read as wood grain).
     let wide = etch_layer(uv, pixel, 3.4, 13.0, 0.2, 17) * smoothstep(3.0, 8.0, face);
     var r = Relief(0.0, 1.0, 0.0);
-    r.height = -0.035 * fine.x - 0.18 * wide.x;
-    r.albedo = 1.0 - 0.35 * max(fine.x, wide.x);
+    r.height = -0.18 * wide.x;
+    r.albedo = 1.0 - 0.35 * wide.x;
     // A faint light deep in some wide grooves.
     r.glow = wide.z * wide.y * 0.12;
     return r;
