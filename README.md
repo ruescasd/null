@@ -38,7 +38,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt flat|hard|noao|nossao|nocontact|notaa|nograin|nosites   switch features off
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
-    --set fog=7000 --set fog_day=0.25 --set fog_night=0.01 --set fog_glow=0.35   haze (fog=0: none)
+    --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)
 
 Run only one capture at a time: two instances starting together have
 crashed the GPU driver.
@@ -67,8 +67,8 @@ crashed the GPU driver.
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 
 Lighting favours drama over physics. Though the world is airless, distant
-things sink into a haze (lit by day, dark at night, glowing towards the
-suns), because layers fading with distance are what make the scale read. Besides the two suns (each with a
+things sink into a dark haze (faintly lit by day, glowing a little towards
+the suns), because layers fading with distance are what make the scale read. Besides the two suns (each with a
 visible disc) and the light bounced off the sunlit ground, there is a
 shadowless fill with no visible source: opposite the dominant sun by day,
 scaled with how much sun is up, and a faint glow from overhead at night.

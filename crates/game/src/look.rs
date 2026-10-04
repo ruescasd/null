@@ -44,7 +44,7 @@ impl Plugin for LookPlugin {
             fill: args.num("fill", 6000.0),
             night_fill: args.num("night_fill", 2500.0),
             softness: [args.num("soft0", 1.0), args.num("soft1", 1.0)],
-            fog_day: args.num("fog_day", 0.25),
+            fog_day: args.num("fog_day", 0.04),
             fog_night: args.num("fog_night", 0.01),
         })
         .insert_resource(ClearColor(Color::BLACK))
@@ -201,13 +201,13 @@ fn setup(
     let mut cam = commands.entity(camera);
     // Haze. There is no air, but layers fading with distance are what
     // make the scale read (drama over correctness): distant things sink
-    // into a haze that is lit by day, dark at night and glows towards the
+    // into darkness, faintly lit by day and glowing a little towards the
     // suns. `--set fog=0` turns it off.
-    let visibility = args.num("fog", 7000.0);
+    let visibility = args.num("fog", 4500.0);
     if visibility > 0.0 {
         cam.insert(DistanceFog {
             color: Color::BLACK,
-            directional_light_color: Color::srgba(1.0, 1.0, 1.0, args.num("fog_glow", 0.35)),
+            directional_light_color: Color::srgba(1.0, 1.0, 1.0, args.num("fog_glow", 0.15)),
             directional_light_exponent: 10.0,
             falloff: FogFalloff::from_visibility_squared(visibility),
         });
