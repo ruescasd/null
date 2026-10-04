@@ -757,8 +757,8 @@
         "complex_monumental": Compose(steps: 60, grid: (12, 9)),
         "complex_colossal": Compose(steps: 60, grid: (20, 13.5)),
         // Mixed grids: a colossal core, a human-scale complex round it.
-        "complex_mixed": Compose(steps: 220, core: ((20, 13.5), 0.45, 40)),
-        "complex_mixed_symmetric": Compose(steps: 160, symmetric: true, core: ((20, 13.5), 0.45, 30)),
+        "complex_mixed": Compose(steps: 260, core: ((40, 27), 0.5, 24)),
+        "complex_mixed_symmetric": Compose(steps: 200, symmetric: true, core: ((40, 27), 0.5, 18)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
         // boxes, pyramids or tetrahedra; a stepped tower made of stepped
@@ -1025,9 +1025,9 @@
             note: "Bays twice as wide (12 m), levels as before"),
         (name: "complex_monumental", form: "complex_monumental", footprint: 380, variants: 1,
             note: "Both doubled: 12 m bays, 9 m levels"),
-        (name: "complex_mixed", form: "complex_mixed", footprint: 520,
-            note: "A colossal core (20 x 13.5 m), a 6 x 4.5 m complex round it"),
-        (name: "complex_mixed_symmetric", form: "complex_mixed_symmetric", footprint: 520, variants: 1,
+        (name: "complex_mixed", form: "complex_mixed", footprint: 760,
+            note: "A colossal core (40 x 27 m), a 6 x 4.5 m complex round it, grand stairs between"),
+        (name: "complex_mixed_symmetric", form: "complex_mixed_symmetric", footprint: 760, variants: 1,
             note: "The same, mirrored"),
         (name: "complex_colossal", form: "complex_colossal", footprint: 620, variants: 1,
             note: "20 m bays, 13.5 m levels"),

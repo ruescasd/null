@@ -50,8 +50,13 @@ fn thick() -> f32 {
 fn flight_steps() -> i32 {
     (level_m() / 0.45).round().max(1.0) as i32
 }
-/// The highest level anything reaches.
-const MAX_LEVEL: i32 = 30;
+/// The highest anything reaches (metres).
+const MAX_HEIGHT: f32 = 420.0;
+
+/// The highest level anything reaches on the current grid.
+fn max_level() -> i32 {
+    (MAX_HEIGHT / level_m()) as i32
+}
 /// How far everything reaches into the ground.
 const FOUNDATION: f32 = 6.0;
 
@@ -142,9 +147,12 @@ struct Composer {
     /// How central the rect being grown from is (1 at the centre, 0 at
     /// the edge).
     focus: f32,
-    /// A box (local metres, centred: half sizes) kept free: another
-    /// complex, on another grid, stands there.
-    blocked: Option<Vec2>,
+    /// A box (local metres: min, max) kept free: another complex, on
+    /// another grid, stands there.
+    blocked: Option<(Vec2, Vec2)>,
+    /// Faces of platforms (cell, direction) left without a parapet: a
+    /// stair from outside arrives there.
+    openings: HashSet<((i32, i32), (i32, i32))>,
 }
 
 /// The frame of a direction: along it, and across it.
@@ -191,10 +199,10 @@ impl Composer {
     }
 
     fn free(&self, x: i32, z: i32) -> bool {
-        let clear = self.blocked.is_none_or(|b| {
+        let clear = self.blocked.is_none_or(|(lo, hi)| {
             let (x0, x1) = (x as f32 * bay_m(), (x + 1) as f32 * bay_m());
             let (z0, z1) = (z as f32 * bay_m(), (z + 1) as f32 * bay_m());
-            x1 <= -b.x || x0 >= b.x || z1 <= -b.y || z0 >= b.y
+            x1 <= lo.x + 0.01 || x0 >= hi.x - 0.01 || z1 <= lo.y + 0.01 || z0 >= hi.y - 0.01
         });
         clear && x.abs() < self.nx && z.abs() < self.nz && !self.cells.contains_key(&(x, z))
     }
@@ -295,7 +303,7 @@ impl Composer {
             }
             Op::Tower => {
                 let size = 2 + (r1 * 2.0) as i32;
-                let level = (r.level + 2 + (r2 * 3.0 + self.focus * 6.0) as i32).min(MAX_LEVEL);
+                let level = (r.level + 2 + (r2 * 3.0 + self.focus * 6.0) as i32).min(max_level());
                 let mut new = Self::rect_in(d, amax + 1, amax + size, cs - size / 2, cs - size / 2 + size - 1, level, false);
                 new.tower = true;
                 new.base = r.level;
@@ -304,7 +312,7 @@ impl Composer {
             Op::Court | Op::Shaft => {
                 let inner = if op == Op::Shaft { 1 + (r1 * 2.0) as i32 } else { 2 + (r1 * 3.0) as i32 };
                 let size = inner + 2;
-                let level = if op == Op::Shaft { (r.level + 2 + (r2 * 4.0) as i32).min(MAX_LEVEL) } else { r.level };
+                let level = if op == Op::Shaft { (r.level + 2 + (r2 * 4.0) as i32).min(max_level()) } else { r.level };
                 let mut new = Self::rect_in(d, amax + 1, amax + size, cs - size / 2, cs - size / 2 + size - 1, level, false);
                 new.void = if op == Op::Shaft { 2 } else { 1 };
                 for x in new.x0..=new.x1 {
@@ -517,7 +525,7 @@ impl Composer {
             // or the same level continues.
             if matches!(cell.kind, Kind::Ground | Kind::Raised) {
                 for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                    let open = match self.cells.get(&(x + dx, z + dz)) {
+                    let open = self.openings.contains(&((x, z), (dx, dz))) || match self.cells.get(&(x + dx, z + dz)) {
                         None => false,
                         Some(n) => match n.kind {
                             Kind::Stair { dir } => {
@@ -829,27 +837,20 @@ pub struct Core {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn compose(
-    origin: Vec3,
-    dir: Vec2,
+/// Grows a complex on the current grid in a box `half` metres across:
+/// from a root in the middle, or (with `roots`, local metres and a level)
+/// from those, keeping `blocked` and the `taken` boxes free.
+#[allow(clippy::too_many_arguments)]
+fn grow_complex(
     half: Vec2,
-    grid: (f32, f32),
     steps: u32,
     symmetric: bool,
-    core: Option<Core>,
+    blocked: Option<(Vec2, Vec2)>,
+    taken: &[(Vec2, Vec2)],
+    roots: &[(Vec2, Vec2, i32)],
     tone: f32,
     seed: u32,
-) -> Vec<Solid> {
-    // With a core: the core first, on its grid; then this complex round it,
-    // rooted against its sides.
-    let mut core_solids = Vec::new();
-    let mut blocked = None;
-    if let Some(core) = core {
-        let inner = half * core.share.clamp(0.1, 0.9);
-        core_solids = compose(origin, dir, inner, core.grid, core.steps, symmetric, None, tone, seed ^ 0xc04e);
-        blocked = Some(inner);
-    }
-    GRID.with(|g| g.set((grid.0.max(3.0), grid.1.max(2.5))));
+) -> Option<(Composer, HashSet<usize>)> {
     let r = |a: i32, b: i32| hash01(a, b, 0xc0b, seed);
     let mut c = Composer {
         cells: HashMap::new(),
@@ -862,39 +863,43 @@ pub fn compose(
         seed,
         focus: 1.0,
         blocked,
+        openings: HashSet::new(),
     };
     if c.nx < 3 || c.nz < 3 {
-        return core_solids;
+        return None;
     }
-    match blocked {
-        None => {
-            // The root: a platform in the middle, a few levels up.
-            let (w, d) = (2 + (r(0, 0) * 3.0) as i32, 2 + (r(0, 1) * 3.0) as i32);
-            let level = 3 + (r(0, 2) * 3.0) as i32;
-            let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level, void: 0 };
-            c.place(root);
-        }
-        Some(b) => {
-            // Roots against the core's four sides, a level or a few up.
-            let (bx, bz) = ((b.x / bay_m()).ceil() as i32, (b.y / bay_m()).ceil() as i32);
-            for (k, d) in [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().enumerate() {
-                let k = k as i32;
-                let w = 2 + (r(k, 3) * 3.0) as i32;
-                let level = 1 + (r(k, 4) * 3.0) as i32;
-                let out = if d.0 != 0 { bx } else { bz };
-                let (a0, a1) = if d.0 + d.1 > 0 { (out, out + 1) } else { (-out - 2, -out - 1) };
-                let (c0, c1) = (-w, w - 1);
-                let rect = if d.0 != 0 {
-                    Rect { x0: a0, x1: a1, z0: c0, z1: c1, level, raised: false, tower: false, base: level, void: 0 }
-                } else {
-                    Rect { x0: c0, x1: c1, z0: a0, z1: a1, level, raised: false, tower: false, base: level, void: 0 }
-                };
-                c.place(rect);
-            }
-            if c.rects.is_empty() {
-                return core_solids;
+    // Boxes in metres to the cells they cover.
+    let cover = |lo: Vec2, hi: Vec2| {
+        let b = bay_m();
+        (
+            ((lo.x / b) + 0.01).floor() as i32,
+            ((hi.x / b) - 0.01).floor() as i32,
+            ((lo.y / b) + 0.01).floor() as i32,
+            ((hi.y / b) - 0.01).floor() as i32,
+        )
+    };
+    for &(lo, hi) in taken {
+        let (x0, x1, z0, z1) = cover(lo, hi);
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                c.cells.insert((x, z), Cell { level: 0, kind: Kind::Void, rect: -1 });
             }
         }
+    }
+    if roots.is_empty() {
+        // The root: a platform in the middle, a few levels up.
+        let (w, d) = (2 + (r(0, 0) * 3.0) as i32, 2 + (r(0, 1) * 3.0) as i32);
+        let level = 3 + (r(0, 2) * 3.0) as i32;
+        let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level, void: 0 };
+        c.place(root);
+    } else {
+        for &(lo, hi, level) in roots {
+            let (x0, x1, z0, z1) = cover(lo, hi);
+            c.place(Rect { x0, x1, z0, z1, level, raised: false, tower: false, base: level, void: 0 });
+        }
+    }
+    if c.rects.is_empty() {
+        return None;
     }
     let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     // Weighted towards climbing: the complex grows up as well as out.
@@ -996,8 +1001,170 @@ pub fn compose(
         c.rects.extend(rects);
     }
     let porticos: HashSet<usize> = (0..c.rects.len()).filter(|&i| r(i as i32 % (c.rects.len() / if symmetric { 2 } else { 1 }).max(1) as i32, 99) < 0.3).collect();
-    let solids = c.draw(&porticos);
+    Some((c, porticos))
+}
+
+fn set_grid(grid: (f32, f32)) {
+    GRID.with(|g| g.set((grid.0.max(3.0), grid.1.max(2.5))));
+}
+
+/// A grand stair from the fabric up a side of the core: the stair's
+/// solids, the fabric's root at its foot, the box it takes, and the core
+/// platform face it opens.
+struct GrandStair {
+    solids: Vec<Solid>,
+    root: (Vec2, Vec2, i32),
+    taken: (Vec2, Vec2),
+    opening: ((i32, i32), (i32, i32)),
+}
+
+/// Plans a grand stair on side `d` of the core: to its lowest platform at
+/// the outside, from a fabric terrace `fabric.1` metres up, the flight
+/// running along the side, aligned to the fabric's `fabric.0` m bays.
+fn grand_stair(core: &Composer, core_grid: (f32, f32), fabric: (f32, f32), d: (i32, i32), tone: f32) -> Option<GrandStair> {
+    let (cb, cl) = core_grid;
+    let (fb, fl) = fabric;
+    let p = (-d.1, d.0);
+    let dv = Vec2::new(d.0 as f32, d.1 as f32);
+    let pv = Vec2::new(p.0 as f32, p.1 as f32);
+    // A cell's extent outwards along `d`, and its centre along `p`.
+    let out = |x: i32, z: i32| {
+        let lo = Vec2::new(x as f32, z as f32) * cb;
+        let hi = lo + Vec2::splat(cb);
+        hi.dot(dv).max(lo.dot(dv))
+    };
+    let along = |x: i32, z: i32| (Vec2::new(x as f32 + 0.5, z as f32 + 0.5) * cb).dot(pv);
+    let o = core.cells.keys().map(|&(x, z)| out(x, z)).fold(f32::MIN, f32::max);
+    let y0 = fl;
+    let target = core
+        .cells
+        .iter()
+        .filter(|&(&(x, z), c)| {
+            c.kind == Kind::Ground
+                && (out(x, z) - o).abs() < 0.01
+                && !core.cells.contains_key(&(x + d.0, z + d.1))
+                && c.level as f32 * cl > y0 + 4.0
+        })
+        .min_by(|a, b| (a.1.level, a.0).cmp(&(b.1.level, b.0)))?;
+    let ((cx, cz), cell) = (*target.0, *target.1);
+    let top = cell.level as f32 * cl;
+    // The flight's band: the first fabric bay clear of the core's face.
+    let f0 = ((o / fb) - 0.01).ceil() * fb;
+    let (b0, b1) = (f0.max(o), f0.max(o) + fb);
+    let run = 0.5;
+    let rise = top - y0;
+    let steps = (rise / 0.45).ceil() as i32;
+    let rise_each = rise / steps as f32;
+    // A landing every twenty steps.
+    let landings = (steps - 1) / 20;
+    let length = steps as f32 * run + landings as f32 * 3.0;
+    // The landing at the top spans the target cell along `p`, the flight
+    // runs down away from it, then a flat stretch to a fabric bay edge.
+    let c_p = along(cx, cz);
+    let land_hi = c_p + cb * 0.5;
+    let land_lo = c_p - cb * 0.5;
+    let foot = land_lo - length;
+    let foot_al = (foot / fb).floor() * fb;
+    let mut solids = Vec::new();
+    let at = |o_: f32, p_: f32| dv * o_ + pv * p_;
+    let piece = |solids: &mut Vec<Solid>, o0: f32, o1: f32, p0: f32, p1: f32, y1: f32, shade: f32| {
+        let (lo_o, hi_o) = (o0.min(o1), o0.max(o1));
+        let (lo_p, hi_p) = (p0.min(p1), p0.max(p1));
+        let c = at((lo_o + hi_o) * 0.5, (lo_p + hi_p) * 0.5);
+        let (ho, hp) = ((hi_o - lo_o) * 0.5, (hi_p - lo_p) * 0.5);
+        let half = if d.0 != 0 { Vec3::new(ho, (y1 + FOUNDATION) * 0.5, hp) } else { Vec3::new(hp, (y1 + FOUNDATION) * 0.5, ho) };
+        solids.push(boxed(Vec3::new(c.x, (y1 - FOUNDATION) * 0.5, c.y), half, shade));
+    };
+    let shade = tone + 0.05;
+    // The top landing, from the core's face across the gap to the band.
+    piece(&mut solids, o, b1, land_lo, land_hi, top, shade);
+    // The flight, steps and landings, down from the top.
+    let mut pp = land_lo;
+    let mut y = top;
+    for k in 0..steps {
+        if k > 0 && k % 20 == 0 {
+            piece(&mut solids, b0, b1, pp - 3.0, pp, y, shade);
+            pp -= 3.0;
+        }
+        piece(&mut solids, b0, b1, pp - run, pp, y, shade);
+        pp -= run;
+        y -= rise_each;
+    }
+    // Flat to the fabric's bay edge, at the terrace's height.
+    piece(&mut solids, b0, b1, foot_al, pp, y0, shade);
+    // Parapets on the open side of the flight and its landing.
+    let rail = |solids: &mut Vec<Solid>, p0: f32, p1: f32, y: f32| {
+        let c = at(b1 - 0.2, (p0 + p1) * 0.5);
+        let half = if d.0 != 0 { Vec3::new(0.2, 0.55, (p1 - p0).abs() * 0.5) } else { Vec3::new((p1 - p0).abs() * 0.5, 0.55, 0.2) };
+        solids.push(boxed(Vec3::new(c.x, y + 0.55, c.y), half, shade + 0.02));
+    };
+    rail(&mut solids, land_lo, land_hi, top);
+    // The fabric's root: a terrace at the foot, two bays across, three
+    // along.
+    let root_lo = at(b0, foot_al - 3.0 * fb);
+    let root_hi = at(b0 + 2.0 * fb, foot_al);
+    let taken_lo = at(b0, foot_al);
+    let taken_hi = at(b1, land_hi);
+    let lohi = |a: Vec2, b: Vec2| (a.min(b), a.max(b));
+    let (rl, rh) = lohi(root_lo, root_hi);
+    let (tl, th) = lohi(taken_lo, taken_hi);
+    Some(GrandStair { solids, root: (rl, rh, 1), taken: (tl, th), opening: ((cx, cz), d) })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compose(
+    origin: Vec3,
+    dir: Vec2,
+    half: Vec2,
+    grid: (f32, f32),
+    steps: u32,
+    symmetric: bool,
+    core: Option<Core>,
+    tone: f32,
+    seed: u32,
+) -> Vec<Solid> {
     let rot = Quat::from_rotation_y((-dir.y).atan2(dir.x));
-    core_solids.extend(solids.into_iter().map(|s| Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }));
-    core_solids
+    let place = |solids: Vec<Solid>| -> Vec<Solid> {
+        solids.into_iter().map(|s| Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }).collect()
+    };
+    let Some(core) = core else {
+        set_grid(grid);
+        let Some((c, porticos)) = grow_complex(half, steps, symmetric, None, &[], &[], tone, seed) else { return Vec::new() };
+        return place(c.draw(&porticos));
+    };
+    // The core first, on its grid.
+    set_grid(core.grid);
+    let inner = half * core.share.clamp(0.1, 0.9);
+    let Some((mut cc, core_porticos)) = grow_complex(inner, core.steps, symmetric, None, &[], &[], tone, seed ^ 0xc04e) else {
+        set_grid(grid);
+        let Some((c, porticos)) = grow_complex(half, steps, symmetric, None, &[], &[], tone, seed) else { return Vec::new() };
+        return place(c.draw(&porticos));
+    };
+    // Its extent, kept free by the fabric.
+    let cb = core.grid.0;
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for &(x, z) in cc.cells.keys() {
+        lo = lo.min(Vec2::new(x as f32, z as f32) * cb);
+        hi = hi.max(Vec2::new((x + 1) as f32, (z + 1) as f32) * cb);
+    }
+    // Grand stairs up its four sides.
+    let stairs: Vec<GrandStair> =
+        [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().filter_map(|d| grand_stair(&cc, core.grid, grid, d, tone)).collect();
+    for s in &stairs {
+        cc.openings.insert(s.opening);
+    }
+    let mut out = place(cc.draw(&core_porticos));
+    // The fabric round it, rooted at the stairs' feet.
+    set_grid(grid);
+    let taken: Vec<(Vec2, Vec2)> = stairs.iter().map(|s| s.taken).collect();
+    let roots: Vec<(Vec2, Vec2, i32)> = stairs.iter().map(|s| s.root).collect();
+    if let Some((mut c, porticos)) = grow_complex(half, steps, symmetric, Some((lo, hi)), &taken, &roots, tone, seed) {
+        for s in &stairs {
+            c.extra.extend(s.solids.iter().copied());
+        }
+        out.extend(place(c.draw(&porticos)));
+    } else {
+        out.extend(place(stairs.into_iter().flat_map(|s| s.solids).collect()));
+    }
+    out
 }
