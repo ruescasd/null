@@ -150,7 +150,9 @@ of each, so a pattern is judged on its own rather than for whether it
 rescues a place. `--opt lab --opt labshots` photographs every candidate
 from the same four angles (the last one close up) into `screenshots/lab/` and exits; with `--focus name` only the candidates whose names start with it. Patterns that
 pass join the catalogue the world draws on. The forms grammar has `Shift`
-(cantilevers) and negative tapers (forms widening upwards) for them.
+(cantilevers) and negative tapers (forms widening upwards) for them. Box styles can keep a `Massif` (columns falling from the centre at every
+level: a mountain of mountains), and the `Rack` form lines a polygon with
+open frames whose bays hold pipes, tanks, hoses and machinery.
 
 Colossi are megastructures on the same rules over a much coarser grid,
 about one per district and a few hundred metres tall, seen from 4.5 km:
