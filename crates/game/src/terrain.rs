@@ -495,15 +495,16 @@ pub fn column_collider(column: &ColumnMesh) -> Option<Collider> {
 }
 
 pub fn to_bevy_mesh(mut column: ColumnMesh) -> Mesh {
-    // Albedo in red, the face's size in green, sky visibility in alpha (read
-    // by terrain.wgsl).
+    // Albedo in red, the face's size in green, glow in blue, sky visibility
+    // in alpha (read by terrain.wgsl).
     column.face.resize(column.positions.len(), worldgen::mesh::OPEN_GROUND);
+    column.glow.resize(column.positions.len(), 0.0);
     let colors: Vec<[f32; 4]> = column
         .albedo
         .iter()
         .zip(&column.ao)
-        .zip(&column.face)
-        .map(|((&a, &v), &f)| [a, f, a, v])
+        .zip(column.face.iter().zip(&column.glow))
+        .map(|((&a, &v), (&f, &g))| [a, f, g, v])
         .collect();
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, column.positions)

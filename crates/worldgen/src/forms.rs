@@ -33,6 +33,9 @@ pub enum Form {
         reach: (f32, f32),
         #[serde(default = "roots_depth")]
         depth: f32,
+        /// Buried conduits instead: few, straight, only their crowns showing.
+        #[serde(default)]
+        buried: bool,
         #[serde(default)]
         tone: f32,
     },
@@ -359,8 +362,12 @@ impl Grower<'_> {
         let child = |i: u32| seed.wrapping_mul(0x9e37_79b9).wrapping_add(i.wrapping_mul(0x85eb_ca6b)) ^ depth;
         match form {
             Form::Nothing => {}
-            Form::Roots { reach, depth: d, tone: t } => {
-                let roots = crate::rack::roots(poly, floor, pick(*reach, 1), *d, tone + t, child(3));
+            Form::Roots { reach, depth: d, buried, tone: t } => {
+                let roots = if *buried {
+                    crate::rack::conduits(poly, floor, pick(*reach, 1), tone + t, child(3))
+                } else {
+                    crate::rack::roots(poly, floor, pick(*reach, 1), *d, tone + t, child(3))
+                };
                 let pieces = roots.solids.len() + roots.tubes.len();
                 if pieces > self.budget {
                     return;

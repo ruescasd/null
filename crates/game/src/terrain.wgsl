@@ -11,7 +11,8 @@
 //   below every band. Geometry leads: the panelling is low in contrast and
 //   scales with the face it is on (the mesh gives each face's size), so a
 //   narrow face keeps only fine seams and a vast wall gets the full set.
-//   Light only deep in recesses.
+//   Light only deep in recesses, and from pieces of geometry the mesh marks
+//   as lit (light filaments along buried conduits).
 //   It is all in the shading (normal and albedo), no geometry; each detail
 //   fades out before it gets near the pixel size.
 
@@ -286,10 +287,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     var face = 1000.0;
+    var lit = 0.0;
 #ifdef VERTEX_COLORS
     let visibility = mix(1.0, in.color.a, params.x);
     pbr_input.material.base_color = vec4<f32>(vec3<f32>(in.color.r), 1.0);
     face = in.color.g;
+    lit = in.color.b;
     pbr_input.diffuse_occlusion *= visibility;
     pbr_input.specular_occlusion *= visibility;
 #endif
@@ -333,6 +336,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         }
         pbr_input.material.base_color = vec4<f32>(base * mix(1.0, albedo, detail.x), 1.0);
         pbr_input.material.emissive = vec4<f32>(vec3<f32>(r.glow * detail.y), 1.0);
+    }
+
+    // Lit pieces of geometry (light filaments): as bright as the light in
+    // the recesses.
+    if lit > 0.0 {
+        pbr_input.material.emissive = vec4<f32>(pbr_input.material.emissive.rgb + vec3<f32>(lit * detail.y), 1.0);
     }
 
     // Micro-relief: tilt the normal by the height field's slope, found with

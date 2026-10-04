@@ -14,7 +14,8 @@
 //!
 //! A strange rack has no frame and no lanes: it is a network of pipes
 //! clinging to the wall it lines (see [`network`]). The same network can
-//! spread across the ground from a footprint's edges, like roots ([`roots`]).
+//! spread across the ground from a footprint's edges, like roots ([`roots`]),
+//! or run buried under it, only their crowns showing ([`conduits`]).
 
 use glam::{Mat3, Quat, Vec2, Vec3};
 
@@ -138,7 +139,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
             let base = Vec3::new(p.x, floor, p.y);
             // Corners rise to the full height and a little over, like stacks.
             let top = layout.height + s * (0.3 + r0(-1, 2));
-            rack.tubes.push(Tube { from: base, to: base + Vec3::Y * top, radius, albedo: (tone + 0.02).min(0.4) });
+            rack.tubes.push(Tube { from: base, to: base + Vec3::Y * top, radius, albedo: (tone + 0.02).min(0.4), glow: 0.0 });
             for j in (2..storeys).step_by(2) {
                 let y = floor + j as f32 * s;
                 rack.tubes.push(Tube {
@@ -146,6 +147,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                     to: Vec3::new(p.x, y + 0.3, p.y),
                     radius: radius * 1.12,
                     albedo: frame_tone,
+                    glow: 0.0,
                 });
             }
         }
@@ -202,21 +204,22 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                                 let y = floor + escape_at as f32 * s + 0.6 + radius;
                                 let out = at(cx, -(0.6 + radius * 2.0), y);
                                 let turn = at(cx, c + inner * f, y);
-                                rack.tubes.push(Tube { from: base, to: turn, radius, albedo: shade });
-                                rack.tubes.push(Tube { from: turn, to: out, radius, albedo: shade });
+                                rack.tubes.push(Tube { from: base, to: turn, radius, albedo: shade, glow: 0.0 });
+                                rack.tubes.push(Tube { from: turn, to: out, radius, albedo: shade, glow: 0.0 });
                                 let top = Vec3::new(out.x, floor + height, out.z);
-                                rack.tubes.push(Tube { from: out - Vec3::Y * radius, to: top, radius, albedo: shade });
+                                rack.tubes.push(Tube { from: out - Vec3::Y * radius, to: top, radius, albedo: shade, glow: 0.0 });
                                 rack.tubes.push(Tube {
                                     from: out - Vec3::Y * (radius + 0.25),
                                     to: out + Vec3::Y * (radius + 0.25),
                                     radius: radius * 1.25,
                                     albedo: frame_tone,
+                                    glow: 0.0,
                                 });
                                 x += radius * 2.0 + 0.08;
                                 m += 1;
                                 continue;
                             }
-                            rack.tubes.push(Tube { from: base, to: base + Vec3::Y * height, radius, albedo: shade });
+                            rack.tubes.push(Tube { from: base, to: base + Vec3::Y * height, radius, albedo: shade, glow: 0.0 });
                             for j in 1..storeys {
                                 let y = floor + j as f32 * s;
                                 let p = at(cx, c + inner * f, y);
@@ -225,6 +228,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                                     to: p + Vec3::Y * 0.2,
                                     radius: radius * 1.3,
                                     albedo: frame_tone,
+                                    glow: 0.0,
                                 });
                             }
                             x += radius * 2.0 + 0.08;
@@ -244,7 +248,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                         }
                         let cy = y + 0.12 + radius;
                         let (ta, tb) = (at(x0 + 0.15, depth * 0.5, cy), at(x1 - 0.15, depth * 0.5, cy));
-                        rack.tubes.push(Tube { from: ta, to: tb, radius, albedo: lit + 0.03 });
+                        rack.tubes.push(Tube { from: ta, to: tb, radius, albedo: lit + 0.03, glow: 0.0 });
                         let dir = (tb - ta).normalize_or_zero();
                         for end in [ta + dir * 0.5, tb - dir * 0.5] {
                             rack.tubes.push(Tube {
@@ -252,6 +256,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                                 to: end + dir * 0.12,
                                 radius: radius * 1.06,
                                 albedo: frame_tone,
+                                glow: 0.0,
                             });
                         }
                     }
@@ -265,7 +270,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                         let z = c + radius + (inner - 2.0 * radius) * r(k as i32 * 64 + m, 42);
                         let base = at(x, z, floor);
                         let shade = (lit - 0.02 + 0.05 * r(k as i32 * 64 + m, 43)).clamp(0.05, 0.4);
-                        rack.tubes.push(Tube { from: base, to: base + Vec3::Y * height, radius, albedo: shade });
+                        rack.tubes.push(Tube { from: base, to: base + Vec3::Y * height, radius, albedo: shade, glow: 0.0 });
                     }
                 }
                 Fill::Machine => {
@@ -454,7 +459,8 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
         // heavier.
         let d = if surface.ground { 0.35 + 0.65 * density(u, seed) } else { density(u, seed) };
         let heavy = if surface.ground { 1.6 } else { 1.0 };
-        if h(0) < d * 0.7 {
+        let roots = if surface.ground { 0.7 } else { 0.5 };
+        if h(0) < d * roots {
             let radius = ((0.15 + 0.5 * h(1) * h(1) * d) * heavy).min(depth * 0.3);
             let strands = 1 + (h(4) * h(4) * 6.0 * d * heavy) as u32;
             let kind = kind_of(h(5));
@@ -485,13 +491,13 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
             let dir = (b - a).normalize_or_zero();
             // A little overlap hides the joints at bends.
             let d = dir * radius * 0.5;
-            rack.tubes.push(Tube { from: a - d, to: b + d, radius, albedo: shade_of(kind, h) });
+            rack.tubes.push(Tube { from: a - d, to: b + d, radius, albedo: shade_of(kind, h), glow: 0.0 });
             if kind == BANDED {
                 let span = (b - a).length();
                 let rings = (span / 1.1).floor() as i32;
                 for k in 1..=rings {
                     let p = a + dir * (k as f32 * 1.1);
-                    rack.tubes.push(Tube { from: p - dir * 0.08, to: p + dir * 0.08, radius: radius * 1.18, albedo: collar_tone });
+                    rack.tubes.push(Tube { from: p - dir * 0.08, to: p + dir * 0.08, radius: radius * 1.18, albedo: collar_tone, glow: 0.0 });
                 }
             }
         }
@@ -542,6 +548,7 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
                 to: surface.at(u, y + radius, z),
                 radius: width * 0.5 + radius * 0.35,
                 albedo: collar_tone,
+                glow: 0.0,
             });
             let children = if strands > 1 { 2 } else { 2 + (r(3) * 2.0) as u32 };
             let mut left = strands;
@@ -622,6 +629,118 @@ pub fn roots(poly: &[Vec2], floor: f32, reach: f32, depth: f32, tone: f32, seed:
         }
         let ground = Surface::ground(a, (b - a) / length, -inward[i], length, floor, reach);
         network(&mut rack, &ground, depth, tone, seed ^ (i as u32).wrapping_mul(0x85eb_ca6b));
+    }
+    rack
+}
+
+/// Buried conduits spreading across the ground from each edge of `poly`
+/// (convex), out to `reach` metres: few and far between, sunk until only
+/// their crowns show (low ridges, well under a step high), running straight
+/// for long stretches, turning now and then at an oblique angle, branching
+/// rarely, and fading further out; a flush hatch plate wherever one turns,
+/// branches or ends.
+pub fn conduits(poly: &[Vec2], floor: f32, reach: f32, tone: f32, seed: u32) -> Rack {
+    let mut rack = Rack::default();
+    let inward = inward_normals(poly);
+    let collar_tone = (tone - 0.03).max(0.03);
+    let n = poly.len();
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        let length = (b - a).length();
+        if length < 4.0 {
+            continue;
+        }
+        let ground = Surface::ground(a, (b - a) / length, -inward[i], length, floor, reach);
+        let rotation = ground.rotation();
+        let seed = seed ^ (i as u32).wrapping_mul(0x85eb_ca6b);
+        // A crown showing 0.35 of the radius above the ground.
+        let sink = |radius: f32| -radius * 0.65;
+        let hatch = |rack: &mut Rack, u: f32, y: f32, size: f32| {
+            rack.solids.push(Solid {
+                wedge: false,
+                center: ground.at(u, y, 0.0),
+                rotation,
+                half: Vec3::new(size, size, 0.08),
+                albedo: collar_tone,
+            });
+        };
+        // (u, y, heading, radius, strands, kind, path)
+        let mut stack = Vec::new();
+        let mut u = 2.0 + 6.0 * hash01(i as i32, 0, 0xc0d, seed);
+        let mut k = 0;
+        while u < length - 2.0 {
+            let h = |j: i32| hash01(k, j, 0xc0e, seed);
+            let radius = 0.35 + 0.55 * h(1);
+            let strands = 1 + (h(2) * h(2) * 3.0) as u32;
+            let heading = (h(3) - 0.5) * 0.5;
+            stack.push((u, 0.0f32, heading, radius, strands, kind_of(h(4)), k as u32 + 1));
+            u += 10.0 + 14.0 * h(0);
+            k += 1;
+        }
+        while let Some((u, y, heading, radius, strands, kind, path)) = stack.pop() {
+            if rack.tubes.len() > 3000 {
+                break;
+            }
+            let r = |j: i32| hash01(path as i32, j, 0xc0f, seed);
+            let size = radius * strands as f32 * 1.2 + 0.4;
+            let lit = hash01(path as i32 >> 2, 7, 0xc10, seed) < 0.45;
+            let run = (10.0 + 20.0 * r(0)).min(reach - y);
+            if run < 1.0 {
+                hatch(&mut rack, u, y, size);
+                continue;
+            }
+            let (du, dy) = (heading.sin() * run, heading.cos() * run);
+            let (nu, ny) = (u + du, y + dy);
+            // The strands side by side, crowns just showing.
+            let side = Vec2::new(dy, -du).normalize_or_zero();
+            for s in 0..strands {
+                let o = (s as f32 - (strands as f32 - 1.0) * 0.5) * radius * 2.3;
+                let kind = if s % 3 == 2 { (kind + 2) % KINDS } else { kind };
+                let lift = match kind {
+                    1 => -0.06,
+                    2 => 0.1,
+                    _ => 0.0,
+                };
+                let shade = (tone + 0.04 + (r(1) - 0.5) * 0.04 + lift).clamp(0.04, 0.45);
+                let from = ground.at(u + side.x * o, y + side.y * o, sink(radius));
+                let to = ground.at(nu + side.x * o, ny + side.y * o, sink(radius));
+                let dir = (to - from).normalize_or_zero();
+                rack.tubes.push(Tube { from: from - dir * radius, to: to + dir * radius, radius, albedo: shade, glow: 0.0 });
+                // Some conduits carry a light filament along their crowns.
+                if lit && s == 0 {
+                    let crown = Vec3::Y * (radius + 0.01);
+                    rack.tubes.push(Tube { from: from + crown, to: to + crown, radius: 0.06, albedo: 0.05, glow: 0.5 });
+                }
+                if kind == BANDED {
+                    let rings = ((to - from).length() / 1.5) as i32;
+                    for k in 1..=rings {
+                        let p = from + dir * (k as f32 * 1.5);
+                        rack.tubes.push(Tube { from: p - dir * 0.1, to: p + dir * 0.1, radius: radius * 1.15, albedo: collar_tone, glow: 0.0 });
+                    }
+                }
+            }
+            // At the node: end (more likely further out), branch, turn, or go
+            // straight on.
+            let action = r(2);
+            let far = ny / reach;
+            if action < 0.08 + 0.3 * far * far {
+                hatch(&mut rack, nu, ny, size);
+                continue;
+            }
+            let turn = |a: f32| (heading + a).clamp(-1.0, 1.0);
+            if action < 0.2 + 0.3 * far * far && radius > 0.3 {
+                hatch(&mut rack, nu, ny, size);
+                let side = if r(3) < 0.5 { -1.0 } else { 1.0 };
+                stack.push((nu, ny, turn(side * (0.5 + 0.5 * r(4))), radius * 0.7, 1, kind, path.wrapping_mul(4).wrapping_add(1)));
+                stack.push((nu, ny, heading, radius, strands, kind, path.wrapping_mul(4).wrapping_add(2)));
+            } else if action < 0.55 {
+                hatch(&mut rack, nu, ny, size);
+                let side = if r(5) < 0.5 { -1.0 } else { 1.0 };
+                stack.push((nu, ny, turn(side * (0.35 + 0.3 * r(6))), radius, strands, kind, path.wrapping_mul(4).wrapping_add(3)));
+            } else {
+                stack.push((nu, ny, heading, radius, strands, kind, path.wrapping_mul(4)));
+            }
+        }
     }
     rack
 }

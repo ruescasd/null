@@ -46,6 +46,9 @@ pub struct ColumnMesh {
     /// fill it in; it may run short of `positions`, and missing entries are
     /// [`OPEN_GROUND`].
     pub face: Vec<f32>,
+    /// How brightly each vertex glows; it may run short of `positions`,
+    /// and missing entries are 0.
+    pub glow: Vec<f32>,
     pub indices: Vec<u32>,
 }
 
@@ -55,6 +58,13 @@ pub const OPEN_GROUND: f32 = 1000.0;
 impl ColumnMesh {
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
+    }
+
+    /// Makes the `count` vertices just added glow.
+    pub fn glow_of(&mut self, count: usize, glow: f32) {
+        let end = self.positions.len();
+        self.glow.resize(end - count, 0.0);
+        self.glow.resize(end, glow);
     }
 
     /// Records the size of the face whose `count` vertices were just added.

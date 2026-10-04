@@ -104,10 +104,12 @@
 //                      `strange`: no frame, but a network of pipes on the
 //                      core's faces (use with `core`), climbing, switching
 //                      lanes, splitting, with bare wall between its knots
-//   Roots(reach: (45, 70), depth: 2.5, tone: 0)
+//   Roots(reach: (45, 70), depth: 2.5, buried: false, tone: 0)
 //                      the same network spreading out across the ground
 //                      from each edge, `reach` metres, half sunk or on
-//                      supports, thinning and diving in as it goes
+//                      supports, thinning and diving in as it goes; with
+//                      `buried`, conduits instead: few, straight, sunk to
+//                      their crowns, flush hatches where they turn or end
 //
 // SITES: structures that grow out of the world by themselves.
 //   site_grid: (spacing: 768, chance: 0.5)
@@ -503,6 +505,10 @@
         "rooted_block": Stack(["rack_block_strange", "roots"]),
         "rooted_spire": Stack(["rooted_spire_tower", "roots"]),
         "rooted_spire_tower": Structure(style: "spire", height: (90, 120)),
+        // Buried: conduits under the ground, only their crowns showing.
+        "conduits": Roots(reach: (90, 130), buried: true),
+        "conduit_block": Stack(["rack_block_strange", "conduits"]),
+        "conduit_spire": Stack(["rooted_spire_tower", "conduits"]),
         "rack_block_strange": Rack(height: (40, 55), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), core: true,
             strange: true, then: "rack_setback_strange"),
         "rack_setback_strange": Inset(by: (5, 9), then: "rack_upper_strange"),
@@ -622,6 +628,10 @@
             note: "The network spreading out across the ground from the block, like roots"),
         (name: "rooted_spire", form: "rooted_spire", footprint: 30,
             note: "Roots from a spire: does it tie a tower to its ground?"),
+        (name: "conduit_spire", form: "conduit_spire", footprint: 30,
+            note: "Buried conduits from a spire: straight, sparse, only their crowns showing"),
+        (name: "conduit_block", form: "conduit_block", footprint: 40,
+            note: "Buried conduits from the strange block"),
         (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
         (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
             note: "The organ with pipework"),

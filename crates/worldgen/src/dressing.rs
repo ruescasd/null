@@ -108,6 +108,8 @@ pub struct Tube {
     pub to: Vec3,
     pub radius: f32,
     pub albedo: f32,
+    /// How brightly it glows (0: not at all).
+    pub glow: f32,
 }
 
 const SIDES: usize = 8;
@@ -144,6 +146,9 @@ pub fn mesh_tubes(mesh: &mut ColumnMesh, tubes: &[Tube]) {
                 mesh.ao.push(ao);
             }
             mesh.face_size(points.len(), crate::mesh::polygon_width(points));
+            if tube.glow > 0.0 {
+                mesh.glow_of(points.len(), tube.glow);
+            }
             for k in 1..points.len() as u32 - 1 {
                 // Wind each triangle to face `normal`.
                 let (p0, p1, p2) = (points[0], points[k as usize], points[k as usize + 1]);
@@ -378,7 +383,7 @@ impl Out<'_> {
             return;
         }
         let albedo = self.albedo(shade);
-        self.work.tubes.push(Tube { from, to, radius, albedo });
+        self.work.tubes.push(Tube { from, to, radius, albedo, glow: 0.0 });
     }
 
     /// A pipe from `from` to `to`, `w` across, flanged at its ends and every
