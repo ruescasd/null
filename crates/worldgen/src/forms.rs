@@ -597,6 +597,7 @@ impl Grower<'_> {
                     let pointed = |points: Vec<Vec2>| Prism { points, y0, y1, top_scale: 0.0, lean: Vec2::ZERO, albedo: shade };
                     match piece_leaf {
                         FractalLeaf::Box | FractalLeaf::Wedge => self.out.solids.push(Solid {
+                            detail: false,
                             wedge: matches!(piece_leaf, FractalLeaf::Wedge),
                             round: false,
                             center: c,

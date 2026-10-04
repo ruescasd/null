@@ -730,6 +730,7 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
             // Its foundation, hidden in the core.
             let (sx, _, sz) = placement.size;
             solids.push(Solid {
+                detail: false,
                 wedge: false,
                 round: false,
                 center: Vec3::Y * -FOUNDATION * 0.5,

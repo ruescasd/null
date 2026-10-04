@@ -120,6 +120,7 @@ pub fn flights(solids: &[Solid], max: u32, seed: u32) -> Vec<Solid> {
                 let half_along = RUN * 0.5 + 0.02;
                 let half = if ax != 0 { Vec3::new(half_along, (top - low) * 0.5, WIDTH * 0.5) } else { Vec3::new(WIDTH * 0.5, (top - low) * 0.5, half_along) };
                 out.push(Solid {
+                    detail: false,
                     wedge: false,
                     round: false,
                     center: Vec3::new(w.x, (low + top) * 0.5, w.y),

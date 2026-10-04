@@ -70,10 +70,34 @@ const LEVEL_MIN_WIDTH: [f32; 2] = [3.0, 8.0];
 /// ...shown beyond these distances from the camera (to the structure's edge).
 const LEVEL_DISTANCE: [f32; 2] = [350.0, 900.0];
 
-/// A structure built in the background: the mesh of its box solids (always
-/// shown), its plate pieces' meshes from fine to coarse, the collider and
-/// the structure's radius.
-type Levels = (ColumnMesh, Vec<ColumnMesh>, Option<Collider>, f32, f32);
+/// A structure built in the background: the meshes of its solids by tile,
+/// its plate pieces' meshes from fine to coarse, the collider and the
+/// structure's radius.
+type Levels = (Vec<TileMeshes>, Vec<ColumnMesh>, Option<Collider>, f32, f32);
+
+/// Solids are meshed in tiles this many metres across, each culled and
+/// drawn at its own detail.
+const TILE: f32 = 64.0;
+/// Fine pieces smaller than this (metres)...
+const TILE_COARSE: f32 = 2.5;
+/// ...drop out of tiles farther than this from the camera (to the tile's
+/// edge).
+const TILE_DISTANCE: f32 = 400.0;
+
+/// A tile of a structure's solids: near and (if it differs) far meshes.
+struct TileMeshes {
+    near: ColumnMesh,
+    far: Option<ColumnMesh>,
+}
+
+/// A tile's version: its centre and radius (the structure's frame) and
+/// whether it is the far one.
+#[derive(Component)]
+struct Tile {
+    center: Vec3,
+    radius: f32,
+    far: bool,
+}
 
 /// A structure still being built in the background.
 #[derive(Component)]
@@ -258,8 +282,18 @@ fn watch(
 /// Meshes (box solids; plate pieces fine to coarse) and a collider: a box,
 /// wedge or hull per piece, robust for the player.
 fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
-    let mut fixed = structure::mesh(&solids);
+    let near = structure::mesh_tiles(&solids, TILE);
+    let coarse = structure::coarse(&solids, TILE_COARSE);
+    let mut far: std::collections::HashMap<(i32, i32), ColumnMesh> =
+        if coarse.len() < solids.len() { structure::mesh_tiles(&coarse, TILE).into_iter().collect() } else { Default::default() };
+    let detailed = coarse.len() < solids.len();
+    let mut tiles: Vec<TileMeshes> =
+        near.into_iter().map(|(k, near)| TileMeshes { near, far: detailed.then(|| far.remove(&k).unwrap_or_default()) }).collect();
+    let mut fixed = ColumnMesh::default();
     dressing::mesh_tubes(&mut fixed, &tubes);
+    if !fixed.is_empty() {
+        tiles.push(TileMeshes { near: fixed, far: None });
+    }
     let mut levels = vec![ColumnMesh::default()];
     forms::mesh_into(&mut levels[0], &prisms);
     for min_width in LEVEL_MIN_WIDTH {
@@ -267,13 +301,9 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
         forms::mesh_into(&mut mesh, &sites::wide_prisms(&prisms, min_width));
         levels.push(mesh);
     }
-    let radius = fixed
-        .positions
-        .iter()
-        .chain(&levels[0].positions)
-        .map(|p| Vec2::new(p[0], p[2]).length())
-        .fold(0.0, f32::max);
-    let height = fixed.positions.iter().chain(&levels[0].positions).map(|p| p[1]).fold(0.0, f32::max);
+    let positions = || tiles.iter().flat_map(|t| &t.near.positions).chain(&levels[0].positions);
+    let radius = positions().map(|p| Vec2::new(p[0], p[2]).length()).fold(0.0, f32::max);
+    let height = positions().map(|p| p[1]).fold(0.0, f32::max);
     let hulls = prisms
         .iter()
         .map(|p| p.hull_points())
@@ -294,7 +324,7 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
         .chain(hulls)
         .collect();
     let collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
-    (fixed, levels, collider, radius, height)
+    (tiles, levels, collider, radius, height)
 }
 
 /// Puts finished structures in the world: one child mesh per version.
@@ -305,20 +335,37 @@ fn receive(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (entity, mut task) in &mut tasks {
-        let Some((fixed, levels, collider, radius, height)) = check_ready(&mut task.0) else { continue };
+        let Some((tiles, levels, collider, radius, height)) = check_ready(&mut task.0) else { continue };
         let mut e = commands.entity(entity);
         e.remove::<Building>().insert((Detail { radius, height }, Visibility::default()));
         if let Some(collider) = collider {
             e.insert(Solidity { collider, active: false });
         }
-        if !fixed.is_empty() {
-            e.with_child((
-                bounds(&fixed),
-                NoAutoAabb,
-                Mesh3d(meshes.add(to_bevy_mesh(fixed))),
-                MeshMaterial3d(material.0.clone()),
-                Transform::default(),
-            ));
+        for tile in tiles {
+            let aabb = bounds(&tile.near);
+            let (center, radius) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents).xz().length());
+            // A tile with no far version is always shown.
+            let switched = tile.far.is_some();
+            let versions = [(tile.near, false)].into_iter().chain(tile.far.map(|m| (m, true)));
+            for (mesh, far) in versions {
+                if mesh.is_empty() {
+                    continue;
+                }
+                let bundle = (
+                    bounds(&mesh),
+                    NoAutoAabb,
+                    Mesh3d(meshes.add(to_bevy_mesh(mesh))),
+                    MeshMaterial3d(material.0.clone()),
+                    Transform::default(),
+                    if far { Visibility::Hidden } else { Visibility::Inherited },
+                );
+                e.with_children(|p| {
+                    let mut child = p.spawn(bundle);
+                    if switched {
+                        child.insert(Tile { center, radius, far });
+                    }
+                });
+            }
         }
         for (i, mesh) in levels.into_iter().enumerate() {
             if mesh.is_empty() {
@@ -343,7 +390,8 @@ fn choose_levels(
     mut commands: Commands,
     camera: Single<&Transform, With<FlyCam>>,
     mut structures: Query<(Entity, &Transform, &Detail, &Children, Option<&mut Solidity>), Without<FlyCam>>,
-    mut levels: Query<(&Level, &mut Visibility)>,
+    mut levels: Query<(&Level, &mut Visibility), Without<Tile>>,
+    mut tiles: Query<(&Tile, &mut Visibility), Without<Level>>,
 ) {
     let cam = camera.translation;
     for (entity, transform, detail, children, solidity) in &mut structures {
@@ -356,6 +404,15 @@ fn choose_levels(
             } else if solid.active && distance > COLLIDE_DISTANCE[1] {
                 solid.active = false;
                 commands.entity(entity).remove::<(RigidBody, Collider)>();
+            }
+        }
+        // Each tile near or far by its own distance.
+        for child in children.iter() {
+            if let Ok((tile, mut visibility)) = tiles.get_mut(child) {
+                let to = transform.translation + tile.center - cam;
+                let far = (Vec2::new(to.x, to.z).length() - tile.radius).max(0.0) > TILE_DISTANCE;
+                let want = if far == tile.far { Visibility::Inherited } else { Visibility::Hidden };
+                visibility.set_if_neq(want);
             }
         }
         let level = LEVEL_DISTANCE.iter().filter(|&&d| distance > d).count();

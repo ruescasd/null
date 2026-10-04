@@ -165,7 +165,12 @@ fn from_frame(d: (i32, i32), a: i32, c: i32) -> (i32, i32) {
 }
 
 fn boxed(center: Vec3, half: Vec3, albedo: f32) -> Solid {
-    Solid { wedge: false, round: false, center, rotation: Quat::IDENTITY, half, albedo }
+    Solid { detail: false, wedge: false, round: false, center, rotation: Quat::IDENTITY, half, albedo }
+}
+
+/// A fine piece: a step, parapet, moulding, an arch's strip, a column.
+fn fine(center: Vec3, half: Vec3, albedo: f32) -> Solid {
+    Solid { detail: true, ..boxed(center, half, albedo) }
 }
 
 /// The centre of a cell's floor at height `y` (grid metres).
@@ -387,7 +392,7 @@ impl Composer {
         let shade = self.tone + 0.03;
         self.extra.push(boxed(mid + Vec3::Y * (top - 0.6), half(length * 0.5, 0.6, bay_m() * 0.32), shade));
         for s in [-1.0, 1.0] {
-            self.extra.push(boxed(mid + side * (s * bay_m() * 0.3) + Vec3::Y * (top + 0.55), half(length * 0.5, 0.55, 0.15), shade));
+            self.extra.push(fine(mid + side * (s * bay_m() * 0.3) + Vec3::Y * (top + 0.55), half(length * 0.5, 0.55, 0.15), shade));
         }
         // The arch: strips from the deck down to a soffit falling to the
         // ends, which rest on the platforms.
@@ -399,7 +404,7 @@ impl Composer {
             let soffit = top - 1.2 - rise * (1.0 - u * u);
             let lo = soffit.min(top - 1.2);
             let c = pa + along * (length * t);
-            self.extra.push(boxed(c + Vec3::Y * ((lo + top - 1.2) * 0.5), half(length / strips as f32 * 0.5 + 0.02, (top - 1.2 - lo) * 0.5 + 0.01, bay_m() * 0.3), shade));
+            self.extra.push(fine(c + Vec3::Y * ((lo + top - 1.2) * 0.5), half(length / strips as f32 * 0.5 + 0.02, (top - 1.2 - lo) * 0.5 + 0.01, bay_m() * 0.3), shade));
         }
     }
 
@@ -473,7 +478,7 @@ impl Composer {
                         let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
                         let arc = roof - rad * 0.8 + 0.8 * (rad * rad - ui * ui).max(0.0).sqrt();
                         let half = if axis.0 != 0 { Vec3::new(bay_m() * 0.5, (roof - arc) * 0.5 + 0.01, (u1 - u0) * 0.5) } else { Vec3::new((u1 - u0) * 0.5, (roof - arc) * 0.5 + 0.01, bay_m() * 0.5) };
-                        out.push(boxed(c + side * ((u0 + u1) * 0.5) + Vec3::Y * ((arc + roof) * 0.5), half, tone));
+                        out.push(fine(c + side * ((u0 + u1) * 0.5) + Vec3::Y * ((arc + roof) * 0.5), half, tone));
                     }
                 }
                 Kind::Ground => {
@@ -516,7 +521,7 @@ impl Composer {
                         let h = level_m() * (k + 1) as f32 / flight_steps() as f32;
                         let c = cell_at(x, z, top + h * 0.5) + along * (-bay_m() * 0.5 + run * (k as f32 + 0.5));
                         let half = if dir.0 != 0 { Vec3::new(run * 0.5 + 0.01, h * 0.5, bay_m() * 0.42) } else { Vec3::new(bay_m() * 0.42, h * 0.5, run * 0.5 + 0.01) };
-                        out.push(boxed(c, half, tone + 0.04));
+                        out.push(fine(c, half, tone + 0.04));
                     }
                 }
                 Kind::Bridge | Kind::Void => {}
@@ -573,12 +578,15 @@ impl Composer {
                 let sized = |a: f32, h: f32, d: f32| if dx != 0 { Vec3::new(d, h, a) } else { Vec3::new(a, h, d) };
                 // A piece of the face: `u0..u1` along it, `y0..y1`, `d0..d1`
                 // in from the face (negative: proud of it).
-                let mut piece = |u0: f32, u1: f32, y0: f32, y1: f32, d0: f32, d1: f32, shade: f32| {
+                // Arch strips are `fine`: they drop out from afar, the
+                // piers and courses stay.
+                let mut piece = |u0: f32, u1: f32, y0: f32, y1: f32, d0: f32, d1: f32, shade: f32, strip: bool| {
                     if u1 - u0 < 0.01 || y1 - y0 < 0.01 {
                         return;
                     }
                     let c = face + along * ((u0 + u1) * 0.5) - n * ((d0 + d1) * 0.5) + Vec3::Y * ((y0 + y1) * 0.5);
-                    out.push(boxed(c, sized((u1 - u0) * 0.5, (y1 - y0) * 0.5, (d1 - d0) * 0.5), shade));
+                    let half = sized((u1 - u0) * 0.5, (y1 - y0) * 0.5, (d1 - d0) * 0.5);
+                    out.push(if strip { fine(c, half, shade) } else { boxed(c, half, shade) });
                 };
                 let h = bay_m() * 0.5;
                 match self.wall(cell.rect, (dx, dz)) {
@@ -588,8 +596,8 @@ impl Composer {
                         let pier = 0.8 * thick();
                         for k in 0..storeys {
                             let (y0, y1) = (below + k as f32 * level_m(), below + (k + 1) as f32 * level_m());
-                            piece(-h, -h + pier, y0, y1, 0.0, DEPTH, tone + 0.03);
-                            piece(h - pier, h, y0, y1, 0.0, DEPTH, tone + 0.03);
+                            piece(-h, -h + pier, y0, y1, 0.0, DEPTH, tone + 0.03, false);
+                            piece(h - pier, h, y0, y1, 0.0, DEPTH, tone + 0.03, false);
                             let rad = h - pier;
                             let spring = y1 - 0.6 - rad * 0.7;
                             for j in 0..10 {
@@ -597,10 +605,10 @@ impl Composer {
                                 let u1 = u0 + 2.0 * rad / 10.0;
                                 let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
                                 let arc = (spring + 0.7 * (rad * rad - ui * ui).max(0.0).sqrt()).min(y1);
-                                piece(u0 - 0.01, u1 + 0.01, arc, y1, 0.0, DEPTH, tone + 0.03);
+                                piece(u0 - 0.01, u1 + 0.01, arc, y1, 0.0, DEPTH, tone + 0.03, true);
                             }
                             if k > 0 {
-                                piece(-h, h, y0 - 0.25, y0, 0.0, DEPTH, tone + 0.01);
+                                piece(-h, h, y0 - 0.25, y0, 0.0, DEPTH, tone + 0.01, false);
                             }
                         }
                     }
@@ -608,13 +616,13 @@ impl Composer {
                         for k in 0..storeys {
                             let (y0, y1) = (below + k as f32 * level_m(), below + (k + 1) as f32 * level_m());
                             let (sill, head) = (y0 + 0.6, y1 - 0.9);
-                            piece(-h, h, y0, sill, 0.0, DEPTH, tone + 0.02);
-                            piece(-h, h, head, y1, 0.0, DEPTH, tone + 0.02);
+                            piece(-h, h, y0, sill, 0.0, DEPTH, tone + 0.02, false);
+                            piece(-h, h, head, y1, 0.0, DEPTH, tone + 0.02, false);
                             for (u0, u1) in [(-h, -1.9), (-0.6, 0.6), (1.9, h)] {
-                                piece(u0, u1, sill, head, 0.0, DEPTH, tone + 0.02);
+                                piece(u0, u1, sill, head, 0.0, DEPTH, tone + 0.02, false);
                             }
                             if k > 0 {
-                                piece(-h, h, y0 - 0.2, y0, 0.0, DEPTH, tone + 0.01);
+                                piece(-h, h, y0 - 0.2, y0, 0.0, DEPTH, tone + 0.01, false);
                             }
                         }
                     }
@@ -622,16 +630,16 @@ impl Composer {
                         for s in [-1.0, 1.0] {
                             let w = 0.45 * thick();
                             let u = s * (h - w);
-                            piece(u - w, u + w, below, top - 0.8, -0.6 * thick(), 0.0, tone + 0.05);
+                            piece(u - w, u + w, below, top - 0.8, -0.6 * thick(), 0.0, tone + 0.05, false);
                         }
-                        piece(-h, h, top - 0.8, top, -0.8, 0.0, tone + 0.06);
+                        piece(-h, h, top - 0.8, top, -0.8, 0.0, tone + 0.06, false);
                     }
                     Wall::Bays => {
                         for k in 0..storeys {
                             let (y0, y1) = (below + k as f32 * level_m(), below + (k + 1) as f32 * level_m());
                             let w = 0.7 * thick();
-                            piece(-h, -h + w, y0, y1, -0.25 * thick(), 0.0, tone + 0.04);
-                            piece(h - w, h, y0, y1, -0.25 * thick(), 0.0, tone + 0.04);
+                            piece(-h, -h + w, y0, y1, -0.25 * thick(), 0.0, tone + 0.04, false);
+                            piece(h - w, h, y0, y1, -0.25 * thick(), 0.0, tone + 0.04, false);
                             let rad = h - w;
                             let spring = y1 - 0.5 - rad;
                             for j in 0..8 {
@@ -639,13 +647,13 @@ impl Composer {
                                 let u1 = u0 + 2.0 * rad / 8.0;
                                 let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
                                 let arc = spring + (rad * rad - ui * ui).max(0.0).sqrt();
-                                piece(u0, u1, arc, y1, -0.2, 0.0, tone + 0.04);
+                                piece(u0, u1, arc, y1, -0.2, 0.0, tone + 0.04, true);
                             }
-                            piece(-h, h, y1 - 0.3, y1, -0.3, 0.0, tone + 0.06);
+                            piece(-h, h, y1 - 0.3, y1, -0.3, 0.0, tone + 0.06, false);
                         }
                     }
                     Wall::Blank => {
-                        piece(-h, h, top - 0.6, top, -0.5, 0.0, tone + 0.05);
+                        piece(-h, h, top - 0.6, top, -0.5, 0.0, tone + 0.05, false);
                     }
                 }
             }
@@ -684,7 +692,7 @@ impl Composer {
                     let arc = spring + (rad * rad - ui * ui).max(0.0).sqrt();
                     let c = edge + along * ((u0 + u1) * 0.5) + Vec3::Y * ((arc + deck) * 0.5);
                     let half = if dx != 0 { Vec3::new(0.35, (deck - arc) * 0.5 + 0.01, (u1 - u0) * 0.5 + 0.01) } else { Vec3::new((u1 - u0) * 0.5 + 0.01, (deck - arc) * 0.5 + 0.01, 0.35) };
-                    out.push(boxed(c, half, tone + 0.01));
+                    out.push(fine(c, half, tone + 0.01));
                 }
             }
         }
@@ -712,10 +720,10 @@ impl Composer {
                         if r.void == 1 {
                             for s in [-0.5f32, 0.0] {
                                 let c = edge - n * 0.7 + along * (s * bay_m()) + Vec3::Y * (top + level_m() * 0.5);
-                                out.push(boxed(c, Vec3::new(0.3 * thick(), level_m() * 0.5, 0.3 * thick()), tone + 0.06));
+                                out.push(fine(c, Vec3::new(0.3 * thick(), level_m() * 0.5, 0.3 * thick()), tone + 0.06));
                             }
                             let c = edge - n * 0.7 + Vec3::Y * (top + level_m() + 0.3);
-                            out.push(boxed(c, sized(bay_m() * 0.5 + 0.3, 0.3, 0.4), tone + 0.06));
+                            out.push(fine(c, sized(bay_m() * 0.5 + 0.3, 0.3, 0.4), tone + 0.06));
                             // The roof over the walk.
                             let c = edge - n * (bay_m() * 0.5 - 0.35) + Vec3::Y * (top + level_m() + 0.65);
                             out.push(boxed(c, sized(bay_m() * 0.5, 0.15, bay_m() * 0.5 - 0.3), tone + 0.04));
@@ -724,9 +732,9 @@ impl Composer {
                             while (k as f32) * level_m() < top - 0.1 {
                                 let y = k as f32 * level_m();
                                 let c = edge + n * 0.9 + Vec3::Y * (y - 0.25);
-                                out.push(boxed(c, sized(bay_m() * 0.5, 0.25, 0.9), tone + 0.05));
+                                out.push(fine(c, sized(bay_m() * 0.5, 0.25, 0.9), tone + 0.05));
                                 let c = edge + n * 1.7 + Vec3::Y * (y + 0.5);
-                                out.push(boxed(c, sized(bay_m() * 0.5, 0.5, 0.1), tone + 0.05));
+                                out.push(fine(c, sized(bay_m() * 0.5, 0.5, 0.1), tone + 0.05));
                                 k += 2;
                             }
                         }
@@ -763,11 +771,11 @@ impl Composer {
                     y = (y + rise).min(end);
                     let c = start + dir * (w * 0.5 + run * (k as f32 + 0.5)) + Vec3::Y * (y - 0.3);
                     let half = if dir.x != 0.0 { Vec3::new(run * 0.5 + 0.02, 0.3, w * 0.5) } else { Vec3::new(w * 0.5, 0.3, run * 0.5 + 0.02) };
-                    out.push(boxed(c, half, tone + 0.05));
+                    out.push(fine(c, half, tone + 0.05));
                 }
                 // A landing past the corner.
                 let corner = start + dir * len + dir * (w * 0.5) + Vec3::Y * (y - 0.3);
-                out.push(boxed(corner, Vec3::new(w * 0.5, 0.3, w * 0.5), tone + 0.05));
+                out.push(fine(corner, Vec3::new(w * 0.5, 0.3, w * 0.5), tone + 0.05));
                 f += 1;
             }
         }
@@ -807,26 +815,23 @@ impl Composer {
                     0.0,
                     if z == r.z0 { 0.8 } else if z == r.z1 + 1 { -0.8 } else { 0.0 },
                 );
-                out.push(boxed(p + inset + Vec3::Y * (base + h * 0.5), Vec3::new(0.35 * thick(), h * 0.5, 0.35 * thick()), tone + 0.06));
+                out.push(fine(p + inset + Vec3::Y * (base + h * 0.5), Vec3::new(0.35 * thick(), h * 0.5, 0.35 * thick()), tone + 0.06));
             }
             // The lintel round the top.
             let (x0, x1) = (r.x0 as f32 * bay_m() + 0.8, (r.x1 + 1) as f32 * bay_m() - 0.8);
             let (z0, z1) = (r.z0 as f32 * bay_m() + 0.8, (r.z1 + 1) as f32 * bay_m() - 0.8);
             let y = base + h + 0.3;
             for z in [z0, z1] {
-                out.push(boxed(Vec3::new((x0 + x1) * 0.5, y, z), Vec3::new((x1 - x0) * 0.5 + 0.4, 0.3, 0.45), tone + 0.06));
+                out.push(fine(Vec3::new((x0 + x1) * 0.5, y, z), Vec3::new((x1 - x0) * 0.5 + 0.4, 0.3, 0.45), tone + 0.06));
             }
             for x in [x0, x1] {
-                out.push(boxed(Vec3::new(x, y, (z0 + z1) * 0.5), Vec3::new(0.45, 0.3, (z1 - z0) * 0.5 + 0.4), tone + 0.06));
+                out.push(fine(Vec3::new(x, y, (z0 + z1) * 0.5), Vec3::new(0.45, 0.3, (z1 - z0) * 0.5 + 0.4), tone + 0.06));
             }
         }
         out
     }
 }
 
-/// Composes a complex `half` metres across (local x, z) from `origin`
-/// (world, its base at the ground) turned to `dir`, in about `steps`
-/// growth operations.
 /// A core composed on its own grid in the middle of a complex: its grid,
 /// the share of the complex's box it takes, and its growth operations.
 #[derive(Clone, Copy, Debug)]
@@ -836,7 +841,6 @@ pub struct Core {
     pub steps: u32,
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Grows a complex on the current grid in a box `half` metres across:
 /// from a root in the middle, or (with `roots`, local metres and a level)
 /// from those, keeping `blocked` and the `taken` boxes free.
@@ -1096,7 +1100,7 @@ fn grand_stair(core: &Composer, core_grid: (f32, f32), fabric: (f32, f32), d: (i
     let rail = |solids: &mut Vec<Solid>, p0: f32, p1: f32, y: f32| {
         let c = at(b1 - 0.2, (p0 + p1) * 0.5);
         let half = if d.0 != 0 { Vec3::new(0.2, 0.55, (p1 - p0).abs() * 0.5) } else { Vec3::new((p1 - p0).abs() * 0.5, 0.55, 0.2) };
-        solids.push(boxed(Vec3::new(c.x, y + 0.55, c.y), half, shade + 0.02));
+        solids.push(fine(Vec3::new(c.x, y + 0.55, c.y), half, shade + 0.02));
     };
     rail(&mut solids, land_lo, land_hi, top);
     // The fabric's root: a terrace at the foot, two bays across, three
@@ -1111,6 +1115,9 @@ fn grand_stair(core: &Composer, core_grid: (f32, f32), fabric: (f32, f32), d: (i
     Some(GrandStair { solids, root: (rl, rh, 1), taken: (tl, th), opening: ((cx, cz), d) })
 }
 
+/// Composes a complex `half` metres across (local x, z) from `origin`
+/// (world, its base at the ground) turned to `dir`, in about `steps`
+/// growth operations; with a `core`, a core on its own grid in the middle.
 #[allow(clippy::too_many_arguments)]
 pub fn compose(
     origin: Vec3,

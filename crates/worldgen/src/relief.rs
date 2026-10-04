@@ -54,6 +54,7 @@ pub fn build(poly: &[Vec2], floor: f32, height: f32, depth: f32, tone: f32, seed
             }
             let p = a + e * ((u0 + u1) * 0.5) + out_dir * (thick * 0.5);
             out.push(Solid {
+                detail: false,
                 wedge: false,
                 round: false,
                 center: Vec3::new(p.x, floor + (y0 + y1) * 0.5, p.y),

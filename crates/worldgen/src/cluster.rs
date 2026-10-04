@@ -15,6 +15,7 @@ fn tube(a: Vec3, b: Vec3, radius: f32, albedo: f32) -> Option<Solid> {
     let d = b - a;
     let dir = d.try_normalize()?;
     Some(Solid {
+        detail: false,
         wedge: false,
         round: true,
         center: (a + b) * 0.5,

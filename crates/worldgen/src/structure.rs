@@ -442,6 +442,9 @@ pub struct Placement {
 /// its x, `half.y` and `half.z` its radii).
 #[derive(Clone, Copy, Debug)]
 pub struct Solid {
+    /// A fine piece (a step, a moulding, an arch's strip): it may be left
+    /// out of the versions shown from afar, if it is small too.
+    pub detail: bool,
     pub wedge: bool,
     pub round: bool,
     pub center: Vec3,
@@ -653,6 +656,7 @@ impl Builder<'_> {
             let albedo = style.albedo + style.albedo_spread * (r(0) - 0.5) * 2.0;
             let Some((module, turn)) = choose(style, leaf, r(1), r(2)) else {
                 self.out.push(Solid {
+                    detail: false,
                     wedge: false,
                     round: false,
                     center: leaf.block.center,
@@ -679,7 +683,7 @@ impl Builder<'_> {
     }
 
     fn push(&mut self, b: Block, wedge: bool, albedo: f32) {
-        self.out.push(Solid { wedge, round: false, center: b.center, rotation: b.rotation, half: b.half, albedo });
+        self.out.push(Solid { detail: false, wedge, round: false, center: b.center, rotation: b.rotation, half: b.half, albedo });
     }
 
     /// A round tube from `a` to `b`.
@@ -687,6 +691,7 @@ impl Builder<'_> {
         let d = b - a;
         let Some(dir) = d.try_normalize() else { return };
         self.out.push(Solid {
+            detail: false,
             wedge: false,
             round: true,
             center: (a + b) * 0.5,
@@ -913,10 +918,87 @@ fn sub_block(cell: Block, min: Vec3, max: Vec3) -> Block {
 }
 
 /// Flat-shaded mesh of the solids: hard edges everywhere. Undersides and the
-/// lower parts of side faces are darker.
+/// lower parts of side faces are darker. Of boxes, only what no other box
+/// covers is drawn.
 pub fn mesh(solids: &[Solid]) -> ColumnMesh {
-    let mut mesh = ColumnMesh::default();
-    for s in solids {
+    mesh_tiles(solids, f32::INFINITY).pop().map(|(_, m)| m).unwrap_or_default()
+}
+
+/// The solids that still show from afar: all but the fine pieces whose
+/// second largest extent is under `min` metres (arch strips, steps,
+/// parapets, mouldings drop out; walls, decks, blocks and colossal piers
+/// stay).
+pub fn coarse(solids: &[Solid], min: f32) -> Vec<Solid> {
+    solids
+        .iter()
+        .filter(|s| {
+            if !s.detail {
+                return true;
+            }
+            let mut e = [s.half.x, s.half.y, s.half.z];
+            e.sort_by(f32::total_cmp);
+            2.0 * e[1] >= min
+        })
+        .copied()
+        .collect()
+}
+
+/// [`mesh`], in square tiles `tile` metres across by the solids' centres:
+/// each tile's (x, z) index and mesh. Faces hidden by boxes in other tiles
+/// are left out too.
+pub fn mesh_tiles(solids: &[Solid], tile: f32) -> Vec<((i32, i32), ColumnMesh)> {
+    let key = |s: &Solid| {
+        if tile.is_finite() { ((s.center.x / tile).floor() as i32, (s.center.z / tile).floor() as i32) } else { (0, 0) }
+    };
+    let mut tiles: std::collections::HashMap<(i32, i32), ColumnMesh> = std::collections::HashMap::new();
+    let boxes: Vec<_> = solids.iter().map(|s| (!s.wedge && !s.round).then_some((s.center, s.rotation, s.half))).collect();
+    let groups = crate::cull::groups(&boxes);
+    let mut culled = vec![false; solids.len()];
+    for group in &groups {
+        let extents: std::collections::HashMap<usize, (Vec3, Vec3)> = group.boxes.iter().map(|&(i, lo, hi)| (i, (lo, hi))).collect();
+        for &(i, _, _) in &group.boxes {
+            culled[i] = true;
+        }
+        for piece in crate::cull::visible(group) {
+            let s = &solids[piece.solid];
+            let mesh = tiles.entry(key(s)).or_default();
+            let (lo, hi) = extents[&piece.solid];
+            let (a, b) = crate::cull::others(piece.axis);
+            let plane = if piece.positive { hi[piece.axis] } else { lo[piece.axis] };
+            let r = piece.rect;
+            let mut corners: Vec<Vec3> = [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]
+                .iter()
+                .map(|&(u, v)| {
+                    let mut p = Vec3::ZERO;
+                    p[piece.axis] = plane;
+                    p[a] = u;
+                    p[b] = v;
+                    p
+                })
+                .collect();
+            // The corners' order gives +x, -y, +z; turned for the other side.
+            if piece.positive != (piece.axis != 1) {
+                corners.reverse();
+            }
+            let mut normal = Vec3::ZERO;
+            normal[piece.axis] = if piece.positive { 1.0 } else { -1.0 };
+            let normal = group.frame * normal;
+            let base = mesh.positions.len() as u32;
+            for c in &corners {
+                let p = group.frame * *c;
+                mesh.positions.push(p.to_array());
+                mesh.normals.push(normal.to_array());
+                mesh.albedo.push(s.albedo);
+                let height = ((p.y - s.center.y) / s.half.y.max(1e-6)).clamp(-1.0, 1.0);
+                let ao = if normal.y < -0.5 { 0.45 } else { 0.75 + 0.25 * (height * 0.5 + 0.5) };
+                mesh.ao.push(ao);
+            }
+            mesh.face_size(4, (hi[a] - lo[a]).min(hi[b] - lo[b]));
+            mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    for (s, _) in solids.iter().zip(&culled).filter(|(_, c)| !**c) {
+        let mesh = tiles.entry(key(s)).or_default();
         let world = |c: [f32; 3]| s.center + s.rotation * (Vec3::from(c) * s.half);
         let ao_at = |c: [f32; 3], down: bool| if down { 0.45 } else { 0.75 + 0.25 * (c[1] * 0.5 + 0.5) };
         let mut face = |corners: &[[f32; 3]]| {
@@ -935,7 +1017,7 @@ pub fn mesh(solids: &[Solid]) -> ColumnMesh {
             }
         };
         if s.round {
-            round(&mut mesh, s);
+            round(mesh, s);
         } else if s.wedge {
             // Bottom, back (+x), the slope, and the two triangular sides.
             face(&[[-1., -1., 1.], [-1., -1., -1.], [1., -1., -1.], [1., -1., 1.]]);
@@ -952,7 +1034,9 @@ pub fn mesh(solids: &[Solid]) -> ColumnMesh {
             face(&[[1., -1., -1.], [-1., -1., -1.], [-1., 1., -1.], [1., 1., -1.]]);
         }
     }
-    mesh
+    let mut tiles: Vec<_> = tiles.into_iter().collect();
+    tiles.sort_by_key(|(k, _)| *k);
+    tiles
 }
 
 /// Sides of a round solid.
@@ -1132,7 +1216,7 @@ mod tests {
     #[test]
     fn faces_point_outward() {
         for wedge in [false, true] {
-            let s = Solid { wedge, round: false, center: Vec3::new(3.0, 1.0, -2.0), rotation: Quat::from_rotation_y(0.7), half: Vec3::new(2.0, 1.0, 3.0), albedo: 0.1 };
+            let s = Solid { detail: false, wedge, round: false, center: Vec3::new(3.0, 1.0, -2.0), rotation: Quat::from_rotation_y(0.7), half: Vec3::new(2.0, 1.0, 3.0), albedo: 0.1 };
             let m = mesh(&[s]);
             for tri in m.indices.chunks(3) {
                 let p = |i: u32| Vec3::from(m.positions[i as usize]);

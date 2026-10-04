@@ -73,6 +73,7 @@ impl Tower {
         }
         let c = (lo + hi) * 0.5;
         self.out.push(Solid {
+            detail: false,
             wedge: false,
             round: false,
             center: self.origin + self.ex * c.x + self.ez * c.z + Vec3::Y * c.y,

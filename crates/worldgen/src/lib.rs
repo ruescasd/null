@@ -9,6 +9,7 @@ pub mod bastion;
 pub mod canal;
 pub mod cluster;
 pub mod compose;
+pub mod cull;
 pub mod curtain;
 pub mod district;
 pub mod dressing;
