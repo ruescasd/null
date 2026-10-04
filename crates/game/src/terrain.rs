@@ -228,7 +228,7 @@ fn setup_material(
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // Albedo comes from vertex colours; the material only sets the surface response.
-    let make = |detail: Vec4, etch: f32| ExtendedMaterial {
+    let make = |detail: Vec4, etch: f32, grain: f32, relief: f32| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
@@ -240,18 +240,25 @@ fn setup_material(
             grain: if args.opt("nograin") {
                 Vec4::new(0.0, world.size(), 0.0, etch)
             } else {
-                Vec4::new(args.num("grain", 0.2), world.size(), args.num("relief", 2.5), etch)
+                Vec4::new(grain, world.size(), relief, etch)
             },
             detail,
         },
     };
-    // Panelling: `--set detail=0` turns it off on structures, `ground_detail`
-    // on the ground; `glow` is the brightness of the light in recesses;
-    // `etch=1` puts the etched network on structures instead.
+    // Structures are plain by default, so their geometry can be judged:
+    // `--set detail=1` (or F2) adds the panelling, `etch=1` the etched
+    // network instead, `structure_grain` and `structure_relief` the grain
+    // the ground has. `ground_detail` puts panelling on the ground; `glow`
+    // is the brightness of the light in recesses.
     let panel = args.num("panel", 12.0);
     let seam = args.num("seam", 0.06);
-    let ground = make(Vec4::new(args.num("ground_detail", 0.0), 0.0, panel, seam), 0.0);
-    let structures = make(Vec4::new(args.num("detail", 1.0), args.num("glow", 3000.0), panel, seam), args.num("etch", 0.0));
+    let ground = make(Vec4::new(args.num("ground_detail", 0.0), 0.0, panel, seam), 0.0, args.num("grain", 0.2), args.num("relief", 2.5));
+    let structures = make(
+        Vec4::new(args.num("detail", 0.0), args.num("glow", 3000.0), panel, seam),
+        args.num("etch", 0.0),
+        args.num("structure_grain", 0.0),
+        args.num("structure_relief", 0.0),
+    );
     commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
     commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
 }

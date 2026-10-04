@@ -77,15 +77,15 @@ the suns), because layers fading with distance are what make the scale read. Bes
 visible disc) and the light bounced off the sunlit ground, there is a
 shadowless fill with no visible source: opposite the dominant sun by day,
 scaled with how much sun is up, and a faint glow from overhead at night.
-Surfaces get procedural grain in the terrain shader (albedo mottling and a
-faint micro-relief, fixed in the world, tiling with the wrap) so motion reads
-even with nothing else in view. Structures also get procedural panelling,
-all in the shading: every face layered in bands that run its whole width
-(plates, ribs, conduits, rows of openings, vents, light strips), divided
-into bays by regular frames, with weathering streaks below each band. Each
-detail fades out before it reaches the pixel size. `--set detail=0` turns
-it off (F2 in game), `glow` sets the lights' brightness, `panel` the
-largest band (metres).
+The ground gets procedural grain in the terrain shader (albedo mottling and
+a faint micro-relief, fixed in the world, tiling with the wrap) so motion
+reads even with nothing else in view. Structures are plain by default, so
+their geometry can be judged; the shader can add procedural panelling to
+them (`--set detail=1`, or F2 in game): every face layered in bands that
+run its whole width, divided into bays by regular frames, with weathering
+streaks below each band, each detail fading out before it reaches the
+pixel size; `--set etch=1` (F3) an etched network instead;
+`--set structure_grain=0.2 --set structure_relief=2.5` the ground's grain.
 
 ## The world
 
