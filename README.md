@@ -90,7 +90,7 @@ pixel size; `--set etch=1` (F3) an etched network instead;
 `--set structure_grain=0.2 --set structure_relief=2.5` the ground's grain.
 Ink lines are drawn after lighting where depth jumps (silhouettes) or the
 surface turns (creases), never where only the light changes, fading into
-the haze: `--set ink=0.85` sets their strength (0 off), `ink_width` their
+the haze, off by default: `--set ink=0.85` turns them on at that strength, `ink_width` their
 width in pixels, `ink_fade` the distance they fade over; F4 turns them off
 and on.
 

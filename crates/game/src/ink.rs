@@ -7,8 +7,9 @@
 //!
 //! Adapted from Bevy's `FullscreenMaterial`, which binds only the screen;
 //! this also binds the depth and normal prepass textures (the camera has
-//! them for SSAO). `--set ink=0` turns it off, `ink` sets its strength,
-//! `ink_width` its width in pixels; F4 turns it off and on.
+//! them for SSAO). Off by default (parked after a first review):
+//! `--set ink=0.85` turns it on at that strength, `ink_width` sets its
+//! width in pixels; F4 turns it off and on.
 
 use bevy::{
     core_pipeline::{
@@ -66,10 +67,8 @@ impl Plugin for InkPlugin {
 
 /// Gives the camera its ink once it exists.
 fn attach(mut commands: Commands, args: Res<Args>, cameras: Query<(Entity, &Projection), (With<Camera3d>, Without<Ink>)>) {
-    let strength = args.num("ink", 0.85);
-    if strength <= 0.0 {
-        return;
-    }
+    // Attached even when off, so F4 can turn it on.
+    let strength = args.num("ink", 0.0);
     for (entity, projection) in &cameras {
         let near = match projection {
             Projection::Perspective(p) => p.near,
