@@ -1,6 +1,6 @@
 //! Composed complexes: architecture from a kit of walkable units repeated
 //! at the same scale, not from fractals. The ground is a grid of bays
-//! (`BAY` metres) and levels (`LEVEL` metres, ten walkable steps). From a
+//! (`bay_m()` metres) and levels (`level_m()` metres, ten walkable steps). From a
 //! root platform the complex grows by operations off its edges:
 //!
 //! - a terrace: a platform a level up or down, with a stair at the
@@ -24,11 +24,32 @@ use glam::{Quat, Vec2, Vec3};
 use crate::noise::hash01;
 use crate::structure::Solid;
 
+thread_local! {
+    /// The grid of the complex being composed on this thread: a bay and a
+    /// level (metres). Set by `compose`; the units scale with it, the
+    /// stairs and parapets do not (they stay at human size).
+    static GRID: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((6.0, 4.5)) };
+}
+
 /// A bay (metres).
-pub const BAY: f32 = 6.0;
-/// A level (metres): ten steps of 0.45.
-pub const LEVEL: f32 = 4.5;
-const STEPS: i32 = 10;
+fn bay_m() -> f32 {
+    GRID.with(|g| g.get().0)
+}
+
+/// A level (metres): walkable steps of about 0.45.
+fn level_m() -> f32 {
+    GRID.with(|g| g.get().1)
+}
+
+/// How much thicker the structure's members are than on the 6 m grid.
+fn thick() -> f32 {
+    bay_m() / 6.0
+}
+
+/// Steps in a level's flight.
+fn flight_steps() -> i32 {
+    (level_m() / 0.45).round().max(1.0) as i32
+}
 /// The highest level anything reaches.
 const MAX_LEVEL: i32 = 30;
 /// How far everything reaches into the ground.
@@ -138,7 +159,7 @@ fn boxed(center: Vec3, half: Vec3, albedo: f32) -> Solid {
 
 /// The centre of a cell's floor at height `y` (grid metres).
 fn cell_at(x: i32, z: i32, y: f32) -> Vec3 {
-    Vec3::new((x as f32 + 0.5) * BAY, y, (z as f32 + 0.5) * BAY)
+    Vec3::new((x as f32 + 0.5) * bay_m(), y, (z as f32 + 0.5) * bay_m())
 }
 
 impl Composer {
@@ -157,13 +178,13 @@ impl Composer {
     /// How many storeys a platform's face drops to what is beyond it.
     fn drop(&self, x: i32, z: i32, d: (i32, i32)) -> i32 {
         let Some(cell) = self.cells.get(&(x, z)) else { return 0 };
-        let top = cell.level as f32 * LEVEL;
+        let top = cell.level as f32 * level_m();
         let below = self.cells.get(&(x + d.0, z + d.1)).map_or(0.0, |n| match n.kind {
-            Kind::Stair { .. } => (n.level + 1) as f32 * LEVEL,
+            Kind::Stair { .. } => (n.level + 1) as f32 * level_m(),
             Kind::Bridge => top,
-            _ => n.level as f32 * LEVEL,
+            _ => n.level as f32 * level_m(),
         });
-        ((top - below) / LEVEL).round() as i32
+        ((top - below) / level_m()).round() as i32
     }
 
     fn free(&self, x: i32, z: i32) -> bool {
@@ -340,17 +361,17 @@ impl Composer {
     /// A bridge deck from cell `a` to cell `b` towards `d`, at `level`, with
     /// parapets and an arch beneath.
     fn bridge(&mut self, a: (i32, i32), b: (i32, i32), d: (i32, i32), level: i32) {
-        let top = level as f32 * LEVEL;
-        let (pa, pb) = (cell_at(a.0, a.1, 0.0) - Vec3::new(d.0 as f32, 0.0, d.1 as f32) * BAY * 0.5, cell_at(b.0, b.1, 0.0) + Vec3::new(d.0 as f32, 0.0, d.1 as f32) * BAY * 0.5);
+        let top = level as f32 * level_m();
+        let (pa, pb) = (cell_at(a.0, a.1, 0.0) - Vec3::new(d.0 as f32, 0.0, d.1 as f32) * bay_m() * 0.5, cell_at(b.0, b.1, 0.0) + Vec3::new(d.0 as f32, 0.0, d.1 as f32) * bay_m() * 0.5);
         let along = Vec3::new(d.0 as f32, 0.0, d.1 as f32);
         let side = Vec3::new(-d.1 as f32, 0.0, d.0 as f32);
         let length = (pb - pa).length();
         let half = |l: f32, h: f32, w: f32| if d.0 != 0 { Vec3::new(l, h, w) } else { Vec3::new(w, h, l) };
         let mid = (pa + pb) * 0.5;
         let shade = self.tone + 0.03;
-        self.extra.push(boxed(mid + Vec3::Y * (top - 0.6), half(length * 0.5, 0.6, BAY * 0.32), shade));
+        self.extra.push(boxed(mid + Vec3::Y * (top - 0.6), half(length * 0.5, 0.6, bay_m() * 0.32), shade));
         for s in [-1.0, 1.0] {
-            self.extra.push(boxed(mid + side * (s * BAY * 0.3) + Vec3::Y * (top + 0.55), half(length * 0.5, 0.55, 0.15), shade));
+            self.extra.push(boxed(mid + side * (s * bay_m() * 0.3) + Vec3::Y * (top + 0.55), half(length * 0.5, 0.55, 0.15), shade));
         }
         // The arch: strips from the deck down to a soffit falling to the
         // ends, which rest on the platforms.
@@ -362,7 +383,7 @@ impl Composer {
             let soffit = top - 1.2 - rise * (1.0 - u * u);
             let lo = soffit.min(top - 1.2);
             let c = pa + along * (length * t);
-            self.extra.push(boxed(c + Vec3::Y * ((lo + top - 1.2) * 0.5), half(length / strips as f32 * 0.5 + 0.02, (top - 1.2 - lo) * 0.5 + 0.01, BAY * 0.3), shade));
+            self.extra.push(boxed(c + Vec3::Y * ((lo + top - 1.2) * 0.5), half(length / strips as f32 * 0.5 + 0.02, (top - 1.2 - lo) * 0.5 + 0.01, bay_m() * 0.3), shade));
         }
     }
 
@@ -387,7 +408,7 @@ impl Composer {
                 (r.z0..=r.z1).map(|z| (x, z)).collect()
             };
             let (first, last) = (cells[0], *cells.last().unwrap());
-            let top = r.level as f32 * LEVEL;
+            let top = r.level as f32 * level_m();
             let ends = [self.drop(first.0, first.1, (-axis.0, -axis.1)), self.drop(last.0, last.1, axis)];
             if ends[0] < 2 || ends[0] != ends[1] {
                 continue;
@@ -395,7 +416,7 @@ impl Composer {
             if !cells.iter().all(|c| self.cells.get(c).is_some_and(|c| c.rect == i as i32)) {
                 continue;
             }
-            let floor = top - ends[0] as f32 * LEVEL;
+            let floor = top - ends[0] as f32 * level_m();
             for c in cells {
                 out.insert(c, (axis, floor));
             }
@@ -408,12 +429,12 @@ impl Composer {
         let passages = self.passages();
         let tone = self.tone;
         let top_of = |c: &Cell| match c.kind {
-            Kind::Stair { .. } => (c.level + 1) as f32 * LEVEL,
-            _ => c.level as f32 * LEVEL,
+            Kind::Stair { .. } => (c.level + 1) as f32 * level_m(),
+            _ => c.level as f32 * level_m(),
         };
         let mut pillars: HashSet<(i32, i32)> = HashSet::new();
         for (&(x, z), cell) in &self.cells {
-            let top = cell.level as f32 * LEVEL;
+            let top = cell.level as f32 * level_m();
             match cell.kind {
                 Kind::Ground if passages.contains_key(&(x, z)) => {
                     // Solid below the passage and above it; walls either
@@ -421,21 +442,21 @@ impl Composer {
                     let (axis, floor) = passages[&(x, z)];
                     let side = if axis.0 != 0 { Vec3::Z } else { Vec3::X };
                     let c = cell_at(x, z, 0.0);
-                    out.push(boxed(c + Vec3::Y * ((floor - FOUNDATION) * 0.5), Vec3::new(BAY * 0.5, (floor + FOUNDATION) * 0.5, BAY * 0.5), tone));
-                    let roof = floor + LEVEL;
-                    out.push(boxed(c + Vec3::Y * ((roof + top) * 0.5), Vec3::new(BAY * 0.5, (top - roof) * 0.5, BAY * 0.5), tone));
+                    out.push(boxed(c + Vec3::Y * ((floor - FOUNDATION) * 0.5), Vec3::new(bay_m() * 0.5, (floor + FOUNDATION) * 0.5, bay_m() * 0.5), tone));
+                    let roof = floor + level_m();
+                    out.push(boxed(c + Vec3::Y * ((roof + top) * 0.5), Vec3::new(bay_m() * 0.5, (top - roof) * 0.5, bay_m() * 0.5), tone));
                     let wall = 1.4;
                     for sgn in [-1.0, 1.0] {
-                        let half = if axis.0 != 0 { Vec3::new(BAY * 0.5, LEVEL * 0.5, wall * 0.5) } else { Vec3::new(wall * 0.5, LEVEL * 0.5, BAY * 0.5) };
-                        out.push(boxed(c + side * (sgn * (BAY * 0.5 - wall * 0.5)) + Vec3::Y * (floor + LEVEL * 0.5), half, tone));
+                        let half = if axis.0 != 0 { Vec3::new(bay_m() * 0.5, level_m() * 0.5, wall * 0.5) } else { Vec3::new(wall * 0.5, level_m() * 0.5, bay_m() * 0.5) };
+                        out.push(boxed(c + side * (sgn * (bay_m() * 0.5 - wall * 0.5)) + Vec3::Y * (floor + level_m() * 0.5), half, tone));
                     }
-                    let rad = BAY * 0.5 - wall;
+                    let rad = bay_m() * 0.5 - wall;
                     for j in 0..8 {
                         let u0 = -rad + 2.0 * rad * j as f32 / 8.0;
                         let u1 = u0 + 2.0 * rad / 8.0;
                         let ui = if u0.abs() < u1.abs() { u0 } else { u1 };
                         let arc = roof - rad * 0.8 + 0.8 * (rad * rad - ui * ui).max(0.0).sqrt();
-                        let half = if axis.0 != 0 { Vec3::new(BAY * 0.5, (roof - arc) * 0.5 + 0.01, (u1 - u0) * 0.5) } else { Vec3::new((u1 - u0) * 0.5, (roof - arc) * 0.5 + 0.01, BAY * 0.5) };
+                        let half = if axis.0 != 0 { Vec3::new(bay_m() * 0.5, (roof - arc) * 0.5 + 0.01, (u1 - u0) * 0.5) } else { Vec3::new((u1 - u0) * 0.5, (roof - arc) * 0.5 + 0.01, bay_m() * 0.5) };
                         out.push(boxed(c + side * ((u0 + u1) * 0.5) + Vec3::Y * ((arc + roof) * 0.5), half, tone));
                     }
                 }
@@ -444,7 +465,7 @@ impl Composer {
                     // open, so arcades and slots have real depth; the deck
                     // covers the gallery.
                     let mut lo = Vec2::splat(0.0);
-                    let mut hi = Vec2::splat(BAY);
+                    let mut hi = Vec2::splat(bay_m());
                     for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                         if self.drop(x, z, (dx, dz)) >= 1 && matches!(self.wall(cell.rect, (dx, dz)), Wall::Arcade | Wall::Slots) {
                             match (dx, dz) {
@@ -455,15 +476,15 @@ impl Composer {
                             }
                         }
                     }
-                    let (x0, z0) = (x as f32 * BAY, z as f32 * BAY);
+                    let (x0, z0) = (x as f32 * bay_m(), z as f32 * bay_m());
                     let c = Vec3::new(x0 + (lo.x + hi.x) * 0.5, (top - FOUNDATION) * 0.5, z0 + (lo.y + hi.y) * 0.5);
                     out.push(boxed(c, Vec3::new((hi.x - lo.x) * 0.5, (top + FOUNDATION) * 0.5, (hi.y - lo.y) * 0.5), tone));
-                    if lo != Vec2::ZERO || hi != Vec2::splat(BAY) {
-                        out.push(boxed(cell_at(x, z, top - 0.5), Vec3::new(BAY * 0.5, 0.5, BAY * 0.5), tone));
+                    if lo != Vec2::ZERO || hi != Vec2::splat(bay_m()) {
+                        out.push(boxed(cell_at(x, z, top - 0.5), Vec3::new(bay_m() * 0.5, 0.5, bay_m() * 0.5), tone));
                     }
                 }
                 Kind::Raised => {
-                    out.push(boxed(cell_at(x, z, top - 0.7), Vec3::new(BAY * 0.5, 0.7, BAY * 0.5), tone + 0.02));
+                    out.push(boxed(cell_at(x, z, top - 0.7), Vec3::new(bay_m() * 0.5, 0.7, bay_m() * 0.5), tone + 0.02));
                     for (cx, cz) in [(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)] {
                         pillars.insert((cx, cz));
                     }
@@ -471,14 +492,14 @@ impl Composer {
                 Kind::Stair { dir } => {
                     // Solid up to the flight's base, then the steps.
                     if top > -FOUNDATION + 0.1 {
-                        out.push(boxed(cell_at(x, z, (top - FOUNDATION) * 0.5), Vec3::new(BAY * 0.5, (top + FOUNDATION) * 0.5, BAY * 0.5), tone));
+                        out.push(boxed(cell_at(x, z, (top - FOUNDATION) * 0.5), Vec3::new(bay_m() * 0.5, (top + FOUNDATION) * 0.5, bay_m() * 0.5), tone));
                     }
                     let along = Vec3::new(dir.0 as f32, 0.0, dir.1 as f32);
-                    let run = BAY / STEPS as f32;
-                    for k in 0..STEPS {
-                        let h = LEVEL * (k + 1) as f32 / STEPS as f32;
-                        let c = cell_at(x, z, top + h * 0.5) + along * (-BAY * 0.5 + run * (k as f32 + 0.5));
-                        let half = if dir.0 != 0 { Vec3::new(run * 0.5 + 0.01, h * 0.5, BAY * 0.42) } else { Vec3::new(BAY * 0.42, h * 0.5, run * 0.5 + 0.01) };
+                    let run = bay_m() / flight_steps() as f32;
+                    for k in 0..flight_steps() {
+                        let h = level_m() * (k + 1) as f32 / flight_steps() as f32;
+                        let c = cell_at(x, z, top + h * 0.5) + along * (-bay_m() * 0.5 + run * (k as f32 + 0.5));
+                        let half = if dir.0 != 0 { Vec3::new(run * 0.5 + 0.01, h * 0.5, bay_m() * 0.42) } else { Vec3::new(bay_m() * 0.42, h * 0.5, run * 0.5 + 0.01) };
                         out.push(boxed(c, half, tone + 0.04));
                     }
                 }
@@ -501,8 +522,8 @@ impl Composer {
                     if open {
                         continue;
                     }
-                    let c = cell_at(x, z, top + 0.55) + Vec3::new(dx as f32, 0.0, dz as f32) * (BAY * 0.5 - 0.2);
-                    let half = if dx != 0 { Vec3::new(0.2, 0.55, BAY * 0.5) } else { Vec3::new(BAY * 0.5, 0.55, 0.2) };
+                    let c = cell_at(x, z, top + 0.55) + Vec3::new(dx as f32, 0.0, dz as f32) * (bay_m() * 0.5 - 0.2);
+                    let half = if dx != 0 { Vec3::new(0.2, 0.55, bay_m() * 0.5) } else { Vec3::new(bay_m() * 0.5, 0.55, 0.2) };
                     out.push(boxed(c, half, tone + 0.05));
                 }
             }
@@ -513,18 +534,18 @@ impl Composer {
             if cell.kind != Kind::Ground {
                 continue;
             }
-            let top = cell.level as f32 * LEVEL;
+            let top = cell.level as f32 * level_m();
             for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let mut storeys = self.drop(x, z, (dx, dz));
                 if storeys < 1 {
                     continue;
                 }
-                let mut below = top - storeys as f32 * LEVEL;
+                let mut below = top - storeys as f32 * level_m();
                 if let Some(&(axis, floor)) = passages.get(&(x, z))
                     && (axis == (dx, dz) || axis == (-dx, -dz))
                     && (below - floor).abs() < 0.1
                 {
-                    below += LEVEL;
+                    below += level_m();
                     storeys -= 1;
                     if storeys < 1 {
                         continue;
@@ -532,7 +553,7 @@ impl Composer {
                 }
                 let n = Vec3::new(dx as f32, 0.0, dz as f32);
                 let along = Vec3::new(-dz as f32, 0.0, dx as f32);
-                let face = cell_at(x, z, 0.0) + n * (BAY * 0.5);
+                let face = cell_at(x, z, 0.0) + n * (bay_m() * 0.5);
                 let sized = |a: f32, h: f32, d: f32| if dx != 0 { Vec3::new(d, h, a) } else { Vec3::new(a, h, d) };
                 // A piece of the face: `u0..u1` along it, `y0..y1`, `d0..d1`
                 // in from the face (negative: proud of it).
@@ -543,14 +564,14 @@ impl Composer {
                     let c = face + along * ((u0 + u1) * 0.5) - n * ((d0 + d1) * 0.5) + Vec3::Y * ((y0 + y1) * 0.5);
                     out.push(boxed(c, sized((u1 - u0) * 0.5, (y1 - y0) * 0.5, (d1 - d0) * 0.5), shade));
                 };
-                let h = BAY * 0.5;
+                let h = bay_m() * 0.5;
                 match self.wall(cell.rect, (dx, dz)) {
                     Wall::Arcade => {
                         // Piers at the bay's edges, an arched head per storey,
                         // a floor per storey in the gallery behind.
-                        let pier = 0.8;
+                        let pier = 0.8 * thick();
                         for k in 0..storeys {
-                            let (y0, y1) = (below + k as f32 * LEVEL, below + (k + 1) as f32 * LEVEL);
+                            let (y0, y1) = (below + k as f32 * level_m(), below + (k + 1) as f32 * level_m());
                             piece(-h, -h + pier, y0, y1, 0.0, DEPTH, tone + 0.03);
                             piece(h - pier, h, y0, y1, 0.0, DEPTH, tone + 0.03);
                             let rad = h - pier;
@@ -569,7 +590,7 @@ impl Composer {
                     }
                     Wall::Slots => {
                         for k in 0..storeys {
-                            let (y0, y1) = (below + k as f32 * LEVEL, below + (k + 1) as f32 * LEVEL);
+                            let (y0, y1) = (below + k as f32 * level_m(), below + (k + 1) as f32 * level_m());
                             let (sill, head) = (y0 + 0.6, y1 - 0.9);
                             piece(-h, h, y0, sill, 0.0, DEPTH, tone + 0.02);
                             piece(-h, h, head, y1, 0.0, DEPTH, tone + 0.02);
@@ -583,17 +604,19 @@ impl Composer {
                     }
                     Wall::Giant => {
                         for s in [-1.0, 1.0] {
-                            let u = s * (h - 0.45);
-                            piece(u - 0.45, u + 0.45, below, top - 0.8, -0.6, 0.0, tone + 0.05);
+                            let w = 0.45 * thick();
+                            let u = s * (h - w);
+                            piece(u - w, u + w, below, top - 0.8, -0.6 * thick(), 0.0, tone + 0.05);
                         }
                         piece(-h, h, top - 0.8, top, -0.8, 0.0, tone + 0.06);
                     }
                     Wall::Bays => {
                         for k in 0..storeys {
-                            let (y0, y1) = (below + k as f32 * LEVEL, below + (k + 1) as f32 * LEVEL);
-                            piece(-h, -h + 0.7, y0, y1, -0.25, 0.0, tone + 0.04);
-                            piece(h - 0.7, h, y0, y1, -0.25, 0.0, tone + 0.04);
-                            let rad = h - 0.7;
+                            let (y0, y1) = (below + k as f32 * level_m(), below + (k + 1) as f32 * level_m());
+                            let w = 0.7 * thick();
+                            piece(-h, -h + w, y0, y1, -0.25 * thick(), 0.0, tone + 0.04);
+                            piece(h - w, h, y0, y1, -0.25 * thick(), 0.0, tone + 0.04);
+                            let rad = h - w;
                             let spring = y1 - 0.5 - rad;
                             for j in 0..8 {
                                 let u0 = -rad + 2.0 * rad * j as f32 / 8.0;
@@ -620,23 +643,23 @@ impl Composer {
                 .filter_map(|k| self.cells.get(k).filter(|c| c.kind == Kind::Raised).map(|c| c.level))
                 .collect();
             let Some(&deck) = decks.iter().min() else { continue };
-            let top = deck as f32 * LEVEL - 1.4;
-            let p = Vec3::new(px as f32 * BAY, top * 0.5 - FOUNDATION * 0.5, pz as f32 * BAY);
-            out.push(boxed(p, Vec3::new(0.6, (top + FOUNDATION) * 0.5, 0.6), tone + 0.01));
+            let top = deck as f32 * level_m() - 1.4;
+            let p = Vec3::new(px as f32 * bay_m(), top * 0.5 - FOUNDATION * 0.5, pz as f32 * bay_m());
+            out.push(boxed(p, Vec3::new(0.6 * thick(), (top + FOUNDATION) * 0.5, 0.6 * thick()), tone + 0.01));
         }
         for (&(x, z), cell) in &self.cells {
             if cell.kind != Kind::Raised {
                 continue;
             }
-            let deck = cell.level as f32 * LEVEL - 1.4;
+            let deck = cell.level as f32 * level_m() - 1.4;
             for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                 if self.cells.get(&(x + dx, z + dz)).is_some_and(|n| n.kind == Kind::Raised) {
                     continue;
                 }
                 // An arch head under the deck along this edge.
-                let edge = cell_at(x, z, 0.0) + Vec3::new(dx as f32, 0.0, dz as f32) * BAY * 0.5;
+                let edge = cell_at(x, z, 0.0) + Vec3::new(dx as f32, 0.0, dz as f32) * bay_m() * 0.5;
                 let along = Vec3::new(-dz as f32, 0.0, dx as f32);
-                let rad = BAY * 0.5 - 0.6;
+                let rad = bay_m() * 0.5 - 0.6;
                 let spring = deck - rad - 0.5;
                 for k in 0..8 {
                     let u0 = -rad + 2.0 * rad * k as f32 / 8.0;
@@ -656,7 +679,7 @@ impl Composer {
             if r.void == 0 {
                 continue;
             }
-            let top = r.level as f32 * LEVEL;
+            let top = r.level as f32 * level_m();
             for x in r.x0..=r.x1 {
                 for z in r.z0..=r.z1 {
                     if !self.cells.get(&(x, z)).is_some_and(|c| c.rect == i as i32 && c.kind == Kind::Ground) {
@@ -668,26 +691,26 @@ impl Composer {
                         }
                         let n = Vec3::new(dx as f32, 0.0, dz as f32);
                         let along = Vec3::new(-dz as f32, 0.0, dx as f32);
-                        let edge = cell_at(x, z, 0.0) + n * (BAY * 0.5);
+                        let edge = cell_at(x, z, 0.0) + n * (bay_m() * 0.5);
                         let sized = |a: f32, h: f32, d: f32| if dx != 0 { Vec3::new(d, h, a) } else { Vec3::new(a, h, d) };
                         if r.void == 1 {
                             for s in [-0.5f32, 0.0] {
-                                let c = edge - n * 0.7 + along * (s * BAY) + Vec3::Y * (top + LEVEL * 0.5);
-                                out.push(boxed(c, Vec3::new(0.3, LEVEL * 0.5, 0.3), tone + 0.06));
+                                let c = edge - n * 0.7 + along * (s * bay_m()) + Vec3::Y * (top + level_m() * 0.5);
+                                out.push(boxed(c, Vec3::new(0.3 * thick(), level_m() * 0.5, 0.3 * thick()), tone + 0.06));
                             }
-                            let c = edge - n * 0.7 + Vec3::Y * (top + LEVEL + 0.3);
-                            out.push(boxed(c, sized(BAY * 0.5 + 0.3, 0.3, 0.4), tone + 0.06));
+                            let c = edge - n * 0.7 + Vec3::Y * (top + level_m() + 0.3);
+                            out.push(boxed(c, sized(bay_m() * 0.5 + 0.3, 0.3, 0.4), tone + 0.06));
                             // The roof over the walk.
-                            let c = edge - n * (BAY * 0.5 - 0.35) + Vec3::Y * (top + LEVEL + 0.65);
-                            out.push(boxed(c, sized(BAY * 0.5, 0.15, BAY * 0.5 - 0.3), tone + 0.04));
+                            let c = edge - n * (bay_m() * 0.5 - 0.35) + Vec3::Y * (top + level_m() + 0.65);
+                            out.push(boxed(c, sized(bay_m() * 0.5, 0.15, bay_m() * 0.5 - 0.3), tone + 0.04));
                         } else {
                             let mut k = 1;
-                            while (k as f32) * LEVEL < top - 0.1 {
-                                let y = k as f32 * LEVEL;
+                            while (k as f32) * level_m() < top - 0.1 {
+                                let y = k as f32 * level_m();
                                 let c = edge + n * 0.9 + Vec3::Y * (y - 0.25);
-                                out.push(boxed(c, sized(BAY * 0.5, 0.25, 0.9), tone + 0.05));
+                                out.push(boxed(c, sized(bay_m() * 0.5, 0.25, 0.9), tone + 0.05));
                                 let c = edge + n * 1.7 + Vec3::Y * (y + 0.5);
-                                out.push(boxed(c, sized(BAY * 0.5, 0.5, 0.1), tone + 0.05));
+                                out.push(boxed(c, sized(bay_m() * 0.5, 0.5, 0.1), tone + 0.05));
                                 k += 2;
                             }
                         }
@@ -701,8 +724,8 @@ impl Composer {
             if !r.tower || !(r.x0..=r.x1).all(|x| self.cells.get(&(x, r.z0)).is_some_and(|c| c.rect == i as i32)) {
                 continue;
             }
-            let (x0, x1) = (r.x0 as f32 * BAY, (r.x1 + 1) as f32 * BAY);
-            let (z0, z1) = (r.z0 as f32 * BAY, (r.z1 + 1) as f32 * BAY);
+            let (x0, x1) = (r.x0 as f32 * bay_m(), (r.x1 + 1) as f32 * bay_m());
+            let (z0, z1) = (r.z0 as f32 * bay_m(), (r.z1 + 1) as f32 * bay_m());
             let w = 1.8;
             // The faces in turn, as (start, direction, length, outward).
             let faces = [
@@ -711,7 +734,7 @@ impl Composer {
                 (Vec3::new(x1, 0.0, z1 + w * 0.5), -Vec3::X, x1 - x0, Vec3::Z),
                 (Vec3::new(x0 - w * 0.5, 0.0, z1), -Vec3::Z, z1 - z0, -Vec3::X),
             ];
-            let (mut y, end) = (r.base as f32 * LEVEL, r.level as f32 * LEVEL);
+            let (mut y, end) = (r.base as f32 * level_m(), r.level as f32 * level_m());
             let (rise, run) = (0.45, 0.5);
             let mut f = 0;
             while y < end - 0.01 && f < 64 {
@@ -748,9 +771,9 @@ impl Composer {
             if !whole {
                 continue;
             }
-            let base = r.level as f32 * LEVEL;
-            let h = LEVEL;
-            let corners = |x: i32, z: i32| Vec3::new(x as f32 * BAY, 0.0, z as f32 * BAY);
+            let base = r.level as f32 * level_m();
+            let h = level_m();
+            let corners = |x: i32, z: i32| Vec3::new(x as f32 * bay_m(), 0.0, z as f32 * bay_m());
             let mut ring = Vec::new();
             for x in r.x0..=r.x1 + 1 {
                 ring.push((x, r.z0));
@@ -768,11 +791,11 @@ impl Composer {
                     0.0,
                     if z == r.z0 { 0.8 } else if z == r.z1 + 1 { -0.8 } else { 0.0 },
                 );
-                out.push(boxed(p + inset + Vec3::Y * (base + h * 0.5), Vec3::new(0.35, h * 0.5, 0.35), tone + 0.06));
+                out.push(boxed(p + inset + Vec3::Y * (base + h * 0.5), Vec3::new(0.35 * thick(), h * 0.5, 0.35 * thick()), tone + 0.06));
             }
             // The lintel round the top.
-            let (x0, x1) = (r.x0 as f32 * BAY + 0.8, (r.x1 + 1) as f32 * BAY - 0.8);
-            let (z0, z1) = (r.z0 as f32 * BAY + 0.8, (r.z1 + 1) as f32 * BAY - 0.8);
+            let (x0, x1) = (r.x0 as f32 * bay_m() + 0.8, (r.x1 + 1) as f32 * bay_m() - 0.8);
+            let (z0, z1) = (r.z0 as f32 * bay_m() + 0.8, (r.z1 + 1) as f32 * bay_m() - 0.8);
             let y = base + h + 0.3;
             for z in [z0, z1] {
                 out.push(boxed(Vec3::new((x0 + x1) * 0.5, y, z), Vec3::new((x1 - x0) * 0.5 + 0.4, 0.3, 0.45), tone + 0.06));
@@ -788,13 +811,14 @@ impl Composer {
 /// Composes a complex `half` metres across (local x, z) from `origin`
 /// (world, its base at the ground) turned to `dir`, in about `steps`
 /// growth operations.
-pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, steps: u32, symmetric: bool, tone: f32, seed: u32) -> Vec<Solid> {
+pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, grid: (f32, f32), steps: u32, symmetric: bool, tone: f32, seed: u32) -> Vec<Solid> {
+    GRID.with(|g| g.set((grid.0.max(3.0), grid.1.max(2.5))));
     let r = |a: i32, b: i32| hash01(a, b, 0xc0b, seed);
     let mut c = Composer {
         cells: HashMap::new(),
         rects: Vec::new(),
-        nx: (half.x / BAY) as i32,
-        nz: (half.y / BAY) as i32,
+        nx: (half.x / bay_m()) as i32,
+        nz: (half.y / bay_m()) as i32,
         extra: Vec::new(),
         bridges: Vec::new(),
         tone,

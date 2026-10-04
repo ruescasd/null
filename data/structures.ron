@@ -750,6 +750,12 @@
         "complex_symmetric": Compose(steps: 18, symmetric: true),
         "complex_big": Compose(steps: 60),
         "complex_huge": Compose(steps: 160),
+        // Proportions: the same units on bigger grids; stairs and parapets
+        // stay at human size.
+        "complex_tall": Compose(steps: 60, grid: (6, 9)),
+        "complex_wide": Compose(steps: 60, grid: (12, 4.5)),
+        "complex_monumental": Compose(steps: 60, grid: (12, 9)),
+        "complex_colossal": Compose(steps: 60, grid: (20, 13.5)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
         // boxes, pyramids or tetrahedra; a stepped tower made of stepped
@@ -1010,6 +1016,14 @@
             note: "The same, mirrored"),
         (name: "complex_big", form: "complex_big", footprint: 200, variants: 1,
             note: "A bigger one"),
+        (name: "complex_tall", form: "complex_tall", footprint: 200, variants: 1,
+            note: "Levels twice as tall (9 m), bays as before"),
+        (name: "complex_wide", form: "complex_wide", footprint: 380, variants: 1,
+            note: "Bays twice as wide (12 m), levels as before"),
+        (name: "complex_monumental", form: "complex_monumental", footprint: 380, variants: 1,
+            note: "Both doubled: 12 m bays, 9 m levels"),
+        (name: "complex_colossal", form: "complex_colossal", footprint: 620, variants: 1,
+            note: "20 m bays, 13.5 m levels"),
         (name: "complex_huge", form: "complex_huge", footprint: 320, variants: 1,
             note: "Much bigger: does it keep reading as one place?"),
         (name: "complex_huge_symmetric", form: "complex_huge_symmetric", footprint: 320, variants: 1,

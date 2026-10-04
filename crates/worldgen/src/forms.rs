@@ -44,6 +44,10 @@ pub enum Form {
     /// in the biggest rectangle that fits, mirrored if `symmetric`.
     Compose {
         steps: u32,
+        /// The grid: a bay and a level (metres); stairs and parapets keep
+        /// their human size whatever it is.
+        #[serde(default = "compose_grid")]
+        grid: (f32, f32),
         #[serde(default)]
         symmetric: bool,
         #[serde(default)]
@@ -314,6 +318,10 @@ fn one_tower() -> u32 {
     1
 }
 
+fn compose_grid() -> (f32, f32) {
+    (6.0, 4.5)
+}
+
 fn relief_depth() -> f32 {
     2.0
 }
@@ -531,9 +539,9 @@ impl Grower<'_> {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
             }
-            Form::Compose { steps, symmetric, tone: t } => {
+            Form::Compose { steps, grid, symmetric, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
-                let solids = crate::compose::compose(Vec3::new(center.x, floor, center.y), dir, half, *steps, *symmetric, tone + t, seed);
+                let solids = crate::compose::compose(Vec3::new(center.x, floor, center.y), dir, half, *grid, *steps, *symmetric, tone + t, seed);
                 if solids.len() > self.budget {
                     return;
                 }
