@@ -522,46 +522,35 @@
     // ducts rising along faces (from the ground or partway up) with collars
     // and junction boxes, turning into walls or running along them; bundles
     // spanning gaps to the mass facing them; cables sagging between tops.
-    //   pipes: chance per face   bundle: ducts per bundle   width: metres
-    //   collars: spacing (0 none)   junctions, spans, cables: chances
+    //   pipes: chance per open face   bundle: pipes per bundle   width: metres
+    //   collars: flange spacing (0 none)   brackets: bracket/clamp spacing
+    //   members: chance a long thin piece carries pipes along it, clamped
+    //   junctions, spans, cables: chances
     dressings: {
-        "industrial": (pipes: 0.35, bundle: (2, 5), width: (0.3, 1.0), collars: 2.5, junctions: 0.3,
-            spans: 0.4, cables: 0.3),
-        "giger": (pipes: 0.6, bundle: (3, 7), width: (0.25, 0.7), collars: 0.9, junctions: 0.15,
-            spans: 0.6, cables: 0.5),
+        "industrial": (pipes: 0.35, bundle: (1, 3), width: (0.4, 1.2), collars: 6, brackets: 3.5,
+            junctions: 0.25, spans: 0.35, cables: 0.3, members: 0.35),
     },
 
     // The lab (`--opt lab`): candidate patterns in a row on flat ground,
     // judged on their own. `form` + `footprint` (metres to the corners), or
     // `style` + `size`; `dress` adds pipework; `variants` samples side by
     // side; `note` says what each tries.
-    // Batch 1 verdicts: organ kept; shaft_rings, cantilever_stack,
-    // earthworks, mountain, truss, ribbed promising (lacking detail);
-    // stem_cap dropped. Batch 2: the same, dressed, beside a bare sample.
+    // Batch 1: organ kept; shaft_rings, cantilever_stack, earthworks,
+    //   mountain, truss, ribbed promising (lacking detail); stem_cap dropped.
+    // Batch 2 (pipework): reads as structure on the truss (at a distance)
+    //   and could on the mountain; cosmetic on the ring shaft, cantilever
+    //   stack and spire; add-ons or errors on the ribbed vertebrae (giger).
+    // Batch 3: pipework with round pipes, brackets, flanges and plates,
+    //   along members, on the truss, mountain and organ only.
     lab: [
-        (name: "shaft_rings", form: "lab_ring", footprint: 30, variants: 1, note: "Bare, as in batch 1"),
-        (name: "shaft_rings_dressed", form: "lab_ring", footprint: 30, dress: "industrial",
-            note: "BLAME!: the ring shaft with its pipework"),
-        (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept in batch 1)"),
-        (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
-            note: "The organ with pipework"),
-        (name: "cantilever_stack", form: "lab_cant", footprint: 25, variants: 1, note: "Bare, as in batch 1"),
-        (name: "cantilever_stack_dressed", form: "lab_cant", footprint: 25, dress: "industrial",
-            note: "The cantilever stack with pipework"),
-        (name: "earthworks", form: "lab_heizer", footprint: 90, variants: 1, note: "Bare, as in batch 1"),
-        (name: "earthworks_dressed", form: "lab_heizer", footprint: 90, dress: "industrial",
-            note: "The earthworks with pipework"),
-        (name: "mountain", form: "colossus_mountain", footprint: 120, variants: 1, note: "Bare, as in batch 1"),
+        (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Bare"),
+        (name: "truss_dressed", style: "truss", size: (40, 160, 40), dress: "industrial",
+            note: "Pipes along its members, clamped; rising pipes with brackets; cables"),
+        (name: "mountain", form: "colossus_mountain", footprint: 120, variants: 1, note: "Bare"),
         (name: "mountain_dressed", form: "colossus_mountain", footprint: 120, dress: "industrial",
             note: "The sloped mountain with pipework"),
-        (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Bare, as in batch 1"),
-        (name: "truss_dressed", style: "truss", size: (40, 160, 40), dress: "industrial",
-            note: "The truss tower with pipework"),
-        (name: "ribbed", form: "lab_rib_seg", footprint: 14, variants: 1, note: "Bare, as in batch 1"),
-        (name: "ribbed_dressed", form: "lab_rib_seg", footprint: 14, dress: "giger",
-            note: "Giger: the vertebrae with dense ringed ducts"),
-        (name: "spire_reference", style: "spire", size: (60, 300, 60), variants: 1, note: "Reference, bare"),
-        (name: "spire_dressed", style: "spire", size: (60, 300, 60), variants: 1, dress: "industrial",
-            note: "Reference, with pipework"),
+        (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
+        (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
+            note: "The organ with pipework"),
     ],
 )

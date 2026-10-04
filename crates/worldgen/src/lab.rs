@@ -10,6 +10,7 @@
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 
+use crate::dressing::Tube;
 use crate::forms::{Growth, Grower, Prism};
 use crate::noise::hash01;
 use crate::structure::{self, Library, Placement, Solid};
@@ -108,16 +109,26 @@ pub fn footprint(radius: f32, seed: u32) -> Vec<Vec2> {
         .collect()
 }
 
+/// What a candidate is made of.
+pub struct Parts {
+    pub solids: Vec<Solid>,
+    pub prisms: Vec<Prism>,
+    /// Its pipes, if it is dressed.
+    pub tubes: Vec<Tube>,
+}
+
 /// Everything a candidate is made of, its base centre at the origin, dressed
 /// with its pipework if it has any.
-pub fn build(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>) {
+pub fn build(library: &Library, entry: &LabEntry, max_leaves: usize) -> Parts {
     let (mut solids, prisms) = build_bare(library, entry, max_leaves);
+    let mut tubes = Vec::new();
     if let Some(dressing) = entry.dress.as_ref().and_then(|d| library.dressings.get(d)) {
         let tone = 0.13;
-        let pipes = crate::dressing::dress(dressing, &solids, &prisms, tone, entry.seed() ^ 0xd1e5);
-        solids.extend(pipes);
+        let work = crate::dressing::dress(dressing, &solids, &prisms, tone, entry.seed() ^ 0xd1e5);
+        solids.extend(work.solids);
+        tubes = work.tubes;
     }
-    (solids, prisms)
+    Parts { solids, prisms, tubes }
 }
 
 fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>) {

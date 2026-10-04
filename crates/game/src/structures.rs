@@ -20,6 +20,7 @@ use bevy::{
 use worldgen::{
     ColumnMesh,
     plates::PlateWorld,
+    dressing::{self, Tube},
     forms::{self, Prism},
     lab,
     sites::{self, Layer},
@@ -220,8 +221,8 @@ fn watch(
             let library = library.clone();
             let name = entry.label();
             let task = pool.spawn(async move {
-                let (solids, prisms) = lab::build(&library, &entry, MAX_LEAVES);
-                finish(solids, prisms)
+                let parts = lab::build(&library, &entry, MAX_LEAVES);
+                finish(parts.solids, parts.prisms, parts.tubes)
             });
             commands.spawn((
                 Structure,
@@ -240,7 +241,7 @@ fn watch(
         let (x, z) = placement.at;
         let origin = Vec3::new(x, world.ground_height(x, z), z);
         let library = library.clone();
-        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new()) });
+        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new(), Vec::new()) });
         commands.spawn((Structure, Building(task), Landmark { origin }, Transform::from_translation(origin)));
     }
     // Sites stream back in on their own.
@@ -256,8 +257,9 @@ fn watch(
 
 /// Meshes (box solids; plate pieces fine to coarse) and a collider: a box,
 /// wedge or hull per piece, robust for the player.
-fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
-    let fixed = structure::mesh(&solids);
+fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
+    let mut fixed = structure::mesh(&solids);
+    dressing::mesh_tubes(&mut fixed, &tubes);
     let mut levels = vec![ColumnMesh::default()];
     forms::mesh_into(&mut levels[0], &prisms);
     for min_width in LEVEL_MIN_WIDTH {
@@ -274,7 +276,9 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
     let height = fixed.positions.iter().chain(&levels[0].positions).map(|p| p[1]).fold(0.0, f32::max);
     let hulls = prisms
         .iter()
-        .filter_map(|p| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(p.hull_points())?)));
+        .map(|p| p.hull_points())
+        .chain(tubes.iter().map(|t| t.hull_points()))
+        .filter_map(|points| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(points)?)));
     let shapes: Vec<(Position, Rotation, Collider)> = solids
         .iter()
         .filter_map(|s| {
@@ -420,7 +424,7 @@ fn stream_sites(
             let lift = built.base - ground;
             let solids = built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
             let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
-            finish(solids, prisms)
+            finish(solids, prisms, Vec::new())
         });
         let origin = Vec3::new(x, ground, z);
         commands.spawn((

@@ -95,12 +95,14 @@ struct Tour {
 }
 
 /// The views: name, compass angle (degrees), distance in radii and in
-/// heights (the larger wins), eye height in heights (plus metres), and the
-/// height looked at, in heights.
-const VIEWS: [(&str, f32, f32, f32, f32, f32, f32); 3] = [
-    ("ground", 30.0, 2.2, 0.6, 0.0, 2.0, 0.45),
-    ("three_quarter", 150.0, 3.0, 1.1, 0.45, 10.0, 0.4),
-    ("wide", 260.0, 4.5, 1.8, 0.6, 20.0, 0.35),
+/// heights (the larger wins) plus metres, eye height in heights (plus
+/// metres), and the height looked at, in heights. The close view stands a
+/// short way off the candidate's edge, to judge detail.
+const VIEWS: [(&str, f32, f32, f32, f32, f32, f32, f32); 4] = [
+    ("ground", 30.0, 2.2, 0.6, 0.0, 0.0, 2.0, 0.45),
+    ("three_quarter", 150.0, 3.0, 1.1, 0.0, 0.45, 10.0, 0.4),
+    ("wide", 260.0, 4.5, 1.8, 0.0, 0.6, 20.0, 0.35),
+    ("close", 150.0, 1.0, 0.0, 18.0, 0.15, 6.0, 0.2),
 ];
 /// Frames to let the view settle (temporal effects, streaming) per shot.
 const TOUR_SETTLE: u32 = 150;
@@ -170,8 +172,8 @@ fn lab_tour(
 /// The camera the tour uses for one view of a candidate: position, yaw and
 /// pitch.
 fn view_of(origin: Vec3, radius: f32, height: f32, view: usize) -> (Vec3, f32, f32) {
-    let (_, angle, by_radius, by_height, eye, eye_metres, look) = VIEWS[view];
-    let distance = (radius * by_radius).max(height * by_height);
+    let (_, angle, by_radius, by_height, metres, eye, eye_metres, look) = VIEWS[view];
+    let distance = (radius * by_radius).max(height * by_height) + metres;
     let a = angle.to_radians();
     let at = origin + Vec3::new(a.cos(), 0.0, a.sin()) * distance + Vec3::Y * (height * eye + eye_metres);
     let to = origin + Vec3::Y * height * look - at;
