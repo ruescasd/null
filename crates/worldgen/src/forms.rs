@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use glam::{Vec2, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use serde::Deserialize;
 
 use crate::mesh::ColumnMesh;
@@ -37,6 +37,19 @@ pub enum Form {
         tone: f32,
         #[serde(default)]
         then: Option<String>,
+    },
+    /// A shape made of copies of itself, in the biggest rectangle that fits,
+    /// `height` tall: each copy placed (`at`, the parent's -1..1 frame,
+    /// y up), scaled and turned within its parent, recursing `depth` times
+    /// unless it `stops`; at the last level (or where a copy stops) each
+    /// piece is drawn as `leaf` (a copy may override it).
+    Fractal {
+        height: (f32, f32),
+        depth: u32,
+        leaf: FractalLeaf,
+        copies: Vec<FractalCopy>,
+        #[serde(default)]
+        tone: f32,
     },
     /// A Sierpinski pyramid in the biggest square that fits, `height` tall:
     /// a pyramid made of five half-size pyramids (four on the base, one on
@@ -255,6 +268,33 @@ pub enum Form {
     },
 }
 
+/// What a piece of a `Fractal` is drawn as.
+#[derive(Clone, Debug, Deserialize)]
+pub enum FractalLeaf {
+    Box,
+    /// Rising towards the piece's +x.
+    Wedge,
+    Pyramid,
+    Tetrahedron,
+    /// A structure of this box style filling the piece.
+    Style(String),
+}
+
+/// One copy of a `Fractal` within its parent.
+#[derive(Clone, Debug, Deserialize)]
+pub struct FractalCopy {
+    pub at: (f32, f32, f32),
+    pub scale: (f32, f32, f32),
+    /// Degrees about the vertical.
+    #[serde(default)]
+    pub turn: f32,
+    /// Drawn as a leaf here instead of recursing.
+    #[serde(default)]
+    pub stop: bool,
+    #[serde(default)]
+    pub leaf: Option<FractalLeaf>,
+}
+
 fn sierpinski_depth() -> u32 {
     5
 }
@@ -322,7 +362,8 @@ pub fn references(form: &Form) -> Vec<&str> {
         | Form::Curtains { .. }
         | Form::Bastions { .. }
         | Form::Tower { .. }
-        | Form::Sierpinski { .. } => vec![],
+        | Form::Sierpinski { .. }
+        | Form::Fractal { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -476,6 +517,76 @@ impl Grower<'_> {
                 self.out.solids.extend(solids);
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
+                }
+            }
+            Form::Fractal { height, depth: levels, leaf, copies, tone: t } => {
+                let Some((center, dir, half)) = inscribed_box(poly) else { return };
+                let h = pick(*height, 1);
+                let tone = tone + t;
+                // (centre, half size, yaw, depth, leaf) of each piece.
+                let root_yaw = (-dir.y).atan2(dir.x);
+                let mut stack = vec![(Vec3::new(center.x, floor + h * 0.5, center.y), Vec3::new(half.x, h * 0.5, half.y), root_yaw, 0u32, leaf.clone())];
+                let mut pieces = Vec::new();
+                while let Some((c, hs, yaw, d, piece_leaf)) = stack.pop() {
+                    if pieces.len() + stack.len() > 200_000 {
+                        break;
+                    }
+                    if d >= *levels {
+                        pieces.push((c, hs, yaw, piece_leaf));
+                        continue;
+                    }
+                    let rot = Quat::from_rotation_y(yaw);
+                    for copy in copies {
+                        let cc = c + rot * (Vec3::from(copy.at) * hs);
+                        let ch = hs * Vec3::from(copy.scale);
+                        let cy = yaw + copy.turn.to_radians();
+                        let cl = copy.leaf.clone().unwrap_or_else(|| piece_leaf.clone());
+                        if copy.stop {
+                            pieces.push((cc, ch, cy, cl));
+                        } else {
+                            stack.push((cc, ch, cy, d + 1, cl));
+                        }
+                    }
+                }
+                if pieces.len() > self.budget {
+                    return;
+                }
+                self.budget -= pieces.len();
+                for (k, (c, hs, yaw, piece_leaf)) in pieces.into_iter().enumerate() {
+                    let shade = (tone + (hash01(k as i32, 5, 0xf2a, seed) - 0.5) * 0.03).clamp(0.03, 0.4);
+                    let rot = Quat::from_rotation_y(yaw);
+                    let at = |u: f32, v: f32| {
+                        let p = c + rot * Vec3::new(u * hs.x, 0.0, v * hs.z);
+                        Vec2::new(p.x, p.z)
+                    };
+                    let (y0, y1) = (c.y - hs.y, c.y + hs.y);
+                    let pointed = |points: Vec<Vec2>| Prism { points, y0, y1, top_scale: 0.0, lean: Vec2::ZERO, albedo: shade };
+                    match piece_leaf {
+                        FractalLeaf::Box | FractalLeaf::Wedge => self.out.solids.push(Solid {
+                            wedge: matches!(piece_leaf, FractalLeaf::Wedge),
+                            round: false,
+                            center: c,
+                            rotation: rot,
+                            half: hs,
+                            albedo: shade,
+                        }),
+                        FractalLeaf::Pyramid => self.out.prisms.push(pointed(vec![at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)])),
+                        FractalLeaf::Tetrahedron => self.out.prisms.push(pointed(vec![at(-1.0, -1.0), at(1.0, -1.0), at(0.0, 1.0)])),
+                        FractalLeaf::Style(style) => {
+                            let placement = Placement {
+                                style,
+                                at: (0.0, 0.0),
+                                size: (hs.x * 2.0, hs.y * 2.0, hs.z * 2.0),
+                                yaw: yaw.to_degrees(),
+                                seed: seed ^ (k as u32).wrapping_mul(0x9e37_79b9),
+                                sink: 0.0,
+                            };
+                            let solids = structure::build(self.library, &placement, self.leaves.min(20_000));
+                            self.leaves = self.leaves.saturating_sub(solids.len());
+                            let offset = Vec3::new(c.x, y0, c.z);
+                            self.out.solids.extend(solids.into_iter().map(|s| Solid { center: s.center + offset, ..s }));
+                        }
+                    }
                 }
             }
             Form::Sierpinski { height, depth: levels, tetrahedron, ragged, tone: t } => {
