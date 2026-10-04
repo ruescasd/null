@@ -143,6 +143,7 @@ pub fn mesh_tubes(mesh: &mut ColumnMesh, tubes: &[Tube]) {
                 mesh.albedo.push(tube.albedo);
                 mesh.ao.push(ao);
             }
+            mesh.face_size(points.len(), crate::mesh::polygon_width(points));
             for k in 1..points.len() as u32 - 1 {
                 // Wind each triangle to face `normal`.
                 let (p0, p1, p2) = (points[0], points[k as usize], points[k as usize + 1]);

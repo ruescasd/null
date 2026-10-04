@@ -246,7 +246,7 @@ fn setup_material(
         },
     };
     // Panelling: `--set detail=0` turns it off on structures, `ground_detail`
-    // on the ground; `glow` is the inlays' brightness.
+    // on the ground; `glow` is the brightness of the light in recesses.
     let panel = args.num("panel", 12.0);
     let seam = args.num("seam", 0.06);
     let ground = make(Vec4::new(args.num("ground_detail", 0.0), 0.0, panel, seam));
@@ -494,10 +494,17 @@ pub fn column_collider(column: &ColumnMesh) -> Option<Collider> {
         .ok()
 }
 
-pub fn to_bevy_mesh(column: ColumnMesh) -> Mesh {
-    // Albedo in rgb, sky visibility in alpha (read by terrain.wgsl).
-    let colors: Vec<[f32; 4]> =
-        column.albedo.iter().zip(&column.ao).map(|(&a, &v)| [a, a, a, v]).collect();
+pub fn to_bevy_mesh(mut column: ColumnMesh) -> Mesh {
+    // Albedo in red, the face's size in green, sky visibility in alpha (read
+    // by terrain.wgsl).
+    column.face.resize(column.positions.len(), worldgen::mesh::OPEN_GROUND);
+    let colors: Vec<[f32; 4]> = column
+        .albedo
+        .iter()
+        .zip(&column.ao)
+        .zip(&column.face)
+        .map(|((&a, &v), &f)| [a, f, a, v])
+        .collect();
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, column.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, column.normals)

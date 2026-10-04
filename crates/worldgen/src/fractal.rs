@@ -197,6 +197,7 @@ pub fn build(shape: &dyn Shape, voxel: f32) -> ColumnMesh {
         normals,
         albedo,
         ao,
+        face: Vec::new(),
         indices,
     }
 }

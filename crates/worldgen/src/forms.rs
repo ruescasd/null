@@ -232,6 +232,7 @@ pub fn mesh_into(mesh: &mut ColumnMesh, prisms: &[Prism]) {
                 mesh.albedo.push(prism.albedo);
                 mesh.ao.push(a);
             }
+            mesh.face_size(points.len(), crate::mesh::polygon_width(points));
             for k in 1..points.len() as u32 - 1 {
                 if flip {
                     mesh.indices.extend_from_slice(&[base, base + k + 1, base + k]);

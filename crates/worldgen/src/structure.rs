@@ -705,6 +705,7 @@ pub fn mesh(solids: &[Solid]) -> ColumnMesh {
                 mesh.albedo.push(s.albedo);
                 mesh.ao.push(ao_at(*c, normal.y < -0.5));
             }
+            mesh.face_size(corners.len(), crate::mesh::polygon_width(&p));
             for k in 1..corners.len() as u32 - 1 {
                 mesh.indices.extend_from_slice(&[base, base + k, base + k + 1]);
             }
