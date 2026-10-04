@@ -23,6 +23,8 @@ Click to capture the mouse, Esc to release. F1 toggles the help overlay.
 | Up / Down | time speed |
 | P | soft / hard shadows |
 | F2 | structures' surface panelling off / on |
+| F3 | panelling / etched network |
+| F4 | ink lines off / on |
 | F12 | screenshot to `screenshots/` |
 
 Command-line options, mostly for tuning and capturing reference frames:
@@ -86,6 +88,11 @@ run its whole width, divided into bays by regular frames, with weathering
 streaks below each band, each detail fading out before it reaches the
 pixel size; `--set etch=1` (F3) an etched network instead;
 `--set structure_grain=0.2 --set structure_relief=2.5` the ground's grain.
+Ink lines are drawn after lighting where depth jumps (silhouettes) or the
+surface turns (creases), never where only the light changes, fading into
+the haze: `--set ink=0.85` sets their strength (0 off), `ink_width` their
+width in pixels, `ink_fade` the distance they fade over; F4 turns them off
+and on.
 
 ## The world
 

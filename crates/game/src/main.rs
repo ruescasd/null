@@ -3,6 +3,7 @@
 mod camera;
 mod capture;
 mod figure;
+mod ink;
 mod landmarks;
 mod look;
 mod player;
@@ -104,6 +105,7 @@ fn main() {
             landmarks::LandmarksPlugin,
             player::PlayerPlugin,
             structures::StructuresPlugin,
+            ink::InkPlugin,
         ))
         .run();
 }
