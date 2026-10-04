@@ -610,20 +610,29 @@ impl SiteTable {
     /// How ordered the plates are at `p`: the most any ordered site there
     /// makes them (see `SiteGround::orderliness`).
     pub fn order_at(&self, p: DVec2) -> f64 {
+        self.order_ground(p).map_or(0.0, |(_, order)| order)
+    }
+
+    /// The ordered site whose field reaches `p` most strongly, and how
+    /// strongly.
+    pub fn order_ground(&self, p: DVec2) -> Option<(&SiteGround, f64)> {
         if !self.ordered {
-            return 0.0;
+            return None;
         }
         let (cx, cz) = ((p.x / self.cell).floor() as i32, (p.y / self.cell).floor() as i32);
         let wrap = |d: f64| d - (d / self.size).round() * self.size;
-        let mut order: f64 = 0.0;
+        let mut best: Option<(&SiteGround, f64)> = None;
         for dz in -1..=1 {
             for dx in -1..=1 {
                 let (gx, gz) = ((cx + dx).rem_euclid(self.n), (cz + dz).rem_euclid(self.n));
                 let Some(ground) = &self.grounds[(gz * self.n + gx) as usize] else { continue };
-                order = order.max(ground.orderliness(DVec2::new(wrap(p.x - ground.center.x), wrap(p.y - ground.center.y))));
+                let order = ground.orderliness(DVec2::new(wrap(p.x - ground.center.x), wrap(p.y - ground.center.y)));
+                if order > 0.0 && best.is_none_or(|(_, o)| order > o) {
+                    best = Some((ground, order));
+                }
             }
         }
-        order
+        best
     }
 
     /// The site whose ground (grown by `margin`) contains `p`, at any

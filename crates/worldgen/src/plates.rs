@@ -380,6 +380,18 @@ impl PlateWorld {
                 height = h;
                 pillar = 0.0;
             }
+        } else if let Some((ground, order)) = self.sites.order_ground(p) {
+            // In an ordered site's field the land settles onto the site's
+            // levels: near the site its heights follow the land's broad
+            // shape in the site's steps (contour terraces), further out they
+            // blend back into the plates' own heights; pillars give way.
+            let s = ground.step.max(0.5);
+            let terraced = ground.top + ((self.broad(p) - ground.top) / s).round() * s;
+            let blended = height + (terraced - height) * order;
+            height = if order > 0.3 { (blended / s).round() * s } else { blended };
+            if order > 0.5 {
+                pillar = 0.0;
+            }
         }
         let marking = self.rand(level, sites[level], 7);
         if marking < rules.marking_chance * 0.66 {
