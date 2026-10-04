@@ -38,6 +38,19 @@ pub enum Form {
         #[serde(default)]
         then: Option<String>,
     },
+    /// A Sierpinski pyramid in the biggest square that fits, `height` tall:
+    /// a pyramid made of five half-size pyramids (four on the base, one on
+    /// top), each made the same way, `depth` times; with `tetrahedron`, a
+    /// tetrahedron made of four. No boxes, no right angles in its outline.
+    Sierpinski {
+        height: (f32, f32),
+        #[serde(default = "sierpinski_depth")]
+        depth: u32,
+        #[serde(default)]
+        tetrahedron: bool,
+        #[serde(default)]
+        tone: f32,
+    },
     /// An ordered tower (see `tower.rs`), transcribed from Manifold Garden:
     /// symmetric, proportioned, with designed-in stairs and fretwork, in
     /// the biggest square that fits, about `height` tall. With `spacing`,
@@ -239,6 +252,10 @@ pub enum Form {
     },
 }
 
+fn sierpinski_depth() -> u32 {
+    5
+}
+
 fn one_tower() -> u32 {
     1
 }
@@ -297,7 +314,12 @@ pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
         Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Roots { .. } | Form::Cluster { .. } | Form::Curtains { .. } | Form::Bastions { .. } | Form::Tower { .. } => vec![],
+        Form::Roots { .. }
+        | Form::Cluster { .. }
+        | Form::Curtains { .. }
+        | Form::Bastions { .. }
+        | Form::Tower { .. }
+        | Form::Sierpinski { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -451,6 +473,64 @@ impl Grower<'_> {
                 self.out.solids.extend(solids);
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
+                }
+            }
+            Form::Sierpinski { height, depth: levels, tetrahedron, tone: t } => {
+                let Some((center, dir, half)) = inscribed_box(poly) else { return };
+                let side = Vec2::new(-dir.y, dir.x);
+                let s = half.min_element();
+                let h = pick(*height, 1);
+                let tone = tone + t;
+                // (base outline, base height, height) of each piece, split
+                // `levels` times.
+                let mut pieces: Vec<(Vec<Vec2>, f32, f32)> = vec![if *tetrahedron {
+                    (
+                        (0..3)
+                            .map(|k| {
+                                let a = std::f32::consts::TAU * k as f32 / 3.0 + std::f32::consts::FRAC_PI_2;
+                                center + (dir * a.cos() + side * a.sin()) * s
+                            })
+                            .collect(),
+                        floor,
+                        h,
+                    )
+                } else {
+                    (
+                        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                            .iter()
+                            .map(|&(u, v)| center + (dir * u + side * v) * s)
+                            .collect(),
+                        floor,
+                        h,
+                    )
+                }];
+                for _ in 0..(*levels).min(8) {
+                    let mut next = Vec::with_capacity(pieces.len() * 5);
+                    for (base, y, h) in pieces {
+                        let c = centroid(&base);
+                        // Half-size copies at each corner of the base...
+                        for &corner in &base {
+                            next.push((base.iter().map(|&p| (p + corner) * 0.5).collect(), y, h * 0.5));
+                        }
+                        // ...and one on top, over the middle.
+                        next.push((base.iter().map(|&p| (p + c) * 0.5).collect(), y + h * 0.5, h * 0.5));
+                    }
+                    pieces = next;
+                }
+                if pieces.len() > self.budget {
+                    return;
+                }
+                self.budget -= pieces.len();
+                for (k, (points, y0, h)) in pieces.into_iter().enumerate() {
+                    let shade = tone + (hash01(k as i32, 3, 0x51e, seed) - 0.5) * 0.03;
+                    self.out.prisms.push(Prism {
+                        points,
+                        y0,
+                        y1: y0 + h,
+                        top_scale: 0.0,
+                        lean: Vec2::ZERO,
+                        albedo: shade.clamp(0.03, 0.4),
+                    });
                 }
             }
             Form::Tower { height, width, spacing, tone: t } => {

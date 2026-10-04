@@ -122,6 +122,9 @@
 //                      a prism whose faces are carved into themselves: a
 //                      skin `depth` thick cut into recesses within recesses
 //                      (sunk relief); `then` grows on top
+//   Sierpinski(height: (90, 90), depth: 5, tetrahedron: false, tone: 0)
+//                      a Sierpinski pyramid (five half-size pyramids, each
+//                      made the same way) or tetrahedron (four)
 //   Tower(height: (150, 200), width: 0, spacing: 0, tone: 0)
 //                      an ordered tower transcribed from Manifold Garden in
 //                      the biggest square that fits; with spacing, towers
@@ -700,6 +703,10 @@
         // things: deep arches, a door, a spiral stair, bridges.
         // Ordered towers (lab), transcribed from Manifold Garden: one, and
         // a lattice of them.
+        // Sierpinski (lab): no boxes at all.
+        "sierpinski": Sierpinski(height: (90, 90), depth: 5),
+        "sierpinski_deep": Sierpinski(height: (90, 90), depth: 6),
+        "sierpinski_tetra": Sierpinski(height: (100, 100), depth: 6, tetrahedron: true),
         "mg_tower": Tower(height: (170, 170)),
         "mg_lattice": Tower(height: (170, 170), width: 56, spacing: 78),
         "bastion": Bastions(height: (260, 380)),
@@ -821,6 +828,12 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
+        (name: "sierpinski", form: "sierpinski", footprint: 70, variants: 1,
+            note: "A Sierpinski pyramid, five levels"),
+        (name: "sierpinski_deep", form: "sierpinski_deep", footprint: 70, variants: 1,
+            note: "Six levels"),
+        (name: "sierpinski_tetra", form: "sierpinski_tetra", footprint: 70, variants: 1,
+            note: "A Sierpinski tetrahedron, six levels"),
         (name: "spire", style: "spire", size: (30, 120, 30), variants: 1, note: "Reference: the spire that works"),
         (name: "spire_carved", style: "spire_carved", size: (40, 140, 40), variants: 3,
             note: "The spire's recipe in a carved envelope: two random cuts"),
