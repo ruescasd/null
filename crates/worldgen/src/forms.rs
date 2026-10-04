@@ -48,6 +48,10 @@ pub enum Form {
         /// their human size whatever it is.
         #[serde(default = "compose_grid")]
         grid: (f32, f32),
+        /// A core on its own grid in the middle: (bay, level), the share of
+        /// the box it takes, its growth operations.
+        #[serde(default)]
+        core: Option<((f32, f32), f32, u32)>,
         #[serde(default)]
         symmetric: bool,
         #[serde(default)]
@@ -539,9 +543,10 @@ impl Grower<'_> {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
             }
-            Form::Compose { steps, grid, symmetric, tone: t } => {
+            Form::Compose { steps, grid, core, symmetric, tone: t } => {
+                let core = core.map(|(grid, share, steps)| crate::compose::Core { grid, share, steps });
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
-                let solids = crate::compose::compose(Vec3::new(center.x, floor, center.y), dir, half, *grid, *steps, *symmetric, tone + t, seed);
+                let solids = crate::compose::compose(Vec3::new(center.x, floor, center.y), dir, half, *grid, *steps, *symmetric, core, tone + t, seed);
                 if solids.len() > self.budget {
                     return;
                 }

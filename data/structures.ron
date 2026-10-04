@@ -122,7 +122,7 @@
 //                      a prism whose faces are carved into themselves: a
 //                      skin `depth` thick cut into recesses within recesses
 //                      (sunk relief); `then` grows on top
-//   Compose(steps: 24, symmetric: false, tone: 0)
+//   Compose(steps: 24, symmetric: false, grid: (6, 4.5), core: ((20, 13.5), 0.45, 40), tone: 0)
 //                      a complex of walkable units at the same scale (6 m
 //                      bays, 4.5 m levels): terraces, raised decks on arches,
 //                      bridges, stairs joining them, parapets, porticos,
@@ -756,6 +756,9 @@
         "complex_wide": Compose(steps: 60, grid: (12, 4.5)),
         "complex_monumental": Compose(steps: 60, grid: (12, 9)),
         "complex_colossal": Compose(steps: 60, grid: (20, 13.5)),
+        // Mixed grids: a colossal core, a human-scale complex round it.
+        "complex_mixed": Compose(steps: 220, core: ((20, 13.5), 0.45, 40)),
+        "complex_mixed_symmetric": Compose(steps: 160, symmetric: true, core: ((20, 13.5), 0.45, 30)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
         // boxes, pyramids or tetrahedra; a stepped tower made of stepped
@@ -1022,6 +1025,10 @@
             note: "Bays twice as wide (12 m), levels as before"),
         (name: "complex_monumental", form: "complex_monumental", footprint: 380, variants: 1,
             note: "Both doubled: 12 m bays, 9 m levels"),
+        (name: "complex_mixed", form: "complex_mixed", footprint: 520,
+            note: "A colossal core (20 x 13.5 m), a 6 x 4.5 m complex round it"),
+        (name: "complex_mixed_symmetric", form: "complex_mixed_symmetric", footprint: 520, variants: 1,
+            note: "The same, mirrored"),
         (name: "complex_colossal", form: "complex_colossal", footprint: 620, variants: 1,
             note: "20 m bays, 13.5 m levels"),
         (name: "complex_huge", form: "complex_huge", footprint: 320, variants: 1,

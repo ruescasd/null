@@ -142,6 +142,9 @@ struct Composer {
     /// How central the rect being grown from is (1 at the centre, 0 at
     /// the edge).
     focus: f32,
+    /// A box (local metres, centred: half sizes) kept free: another
+    /// complex, on another grid, stands there.
+    blocked: Option<Vec2>,
 }
 
 /// The frame of a direction: along it, and across it.
@@ -188,7 +191,12 @@ impl Composer {
     }
 
     fn free(&self, x: i32, z: i32) -> bool {
-        x.abs() < self.nx && z.abs() < self.nz && !self.cells.contains_key(&(x, z))
+        let clear = self.blocked.is_none_or(|b| {
+            let (x0, x1) = (x as f32 * bay_m(), (x + 1) as f32 * bay_m());
+            let (z0, z1) = (z as f32 * bay_m(), (z + 1) as f32 * bay_m());
+            x1 <= -b.x || x0 >= b.x || z1 <= -b.y || z0 >= b.y
+        });
+        clear && x.abs() < self.nx && z.abs() < self.nz && !self.cells.contains_key(&(x, z))
     }
 
     fn place(&mut self, r: Rect) -> bool {
@@ -811,7 +819,36 @@ impl Composer {
 /// Composes a complex `half` metres across (local x, z) from `origin`
 /// (world, its base at the ground) turned to `dir`, in about `steps`
 /// growth operations.
-pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, grid: (f32, f32), steps: u32, symmetric: bool, tone: f32, seed: u32) -> Vec<Solid> {
+/// A core composed on its own grid in the middle of a complex: its grid,
+/// the share of the complex's box it takes, and its growth operations.
+#[derive(Clone, Copy, Debug)]
+pub struct Core {
+    pub grid: (f32, f32),
+    pub share: f32,
+    pub steps: u32,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compose(
+    origin: Vec3,
+    dir: Vec2,
+    half: Vec2,
+    grid: (f32, f32),
+    steps: u32,
+    symmetric: bool,
+    core: Option<Core>,
+    tone: f32,
+    seed: u32,
+) -> Vec<Solid> {
+    // With a core: the core first, on its grid; then this complex round it,
+    // rooted against its sides.
+    let mut core_solids = Vec::new();
+    let mut blocked = None;
+    if let Some(core) = core {
+        let inner = half * core.share.clamp(0.1, 0.9);
+        core_solids = compose(origin, dir, inner, core.grid, core.steps, symmetric, None, tone, seed ^ 0xc04e);
+        blocked = Some(inner);
+    }
     GRID.with(|g| g.set((grid.0.max(3.0), grid.1.max(2.5))));
     let r = |a: i32, b: i32| hash01(a, b, 0xc0b, seed);
     let mut c = Composer {
@@ -824,15 +861,41 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, grid: (f32, f32), steps: u32
         tone,
         seed,
         focus: 1.0,
+        blocked,
     };
     if c.nx < 3 || c.nz < 3 {
-        return Vec::new();
+        return core_solids;
     }
-    // The root: a platform in the middle, a few levels up.
-    let (w, d) = (2 + (r(0, 0) * 3.0) as i32, 2 + (r(0, 1) * 3.0) as i32);
-    let level = 3 + (r(0, 2) * 3.0) as i32;
-    let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level, void: 0 };
-    c.place(root);
+    match blocked {
+        None => {
+            // The root: a platform in the middle, a few levels up.
+            let (w, d) = (2 + (r(0, 0) * 3.0) as i32, 2 + (r(0, 1) * 3.0) as i32);
+            let level = 3 + (r(0, 2) * 3.0) as i32;
+            let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level, void: 0 };
+            c.place(root);
+        }
+        Some(b) => {
+            // Roots against the core's four sides, a level or a few up.
+            let (bx, bz) = ((b.x / bay_m()).ceil() as i32, (b.y / bay_m()).ceil() as i32);
+            for (k, d) in [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().enumerate() {
+                let k = k as i32;
+                let w = 2 + (r(k, 3) * 3.0) as i32;
+                let level = 1 + (r(k, 4) * 3.0) as i32;
+                let out = if d.0 != 0 { bx } else { bz };
+                let (a0, a1) = if d.0 + d.1 > 0 { (out, out + 1) } else { (-out - 2, -out - 1) };
+                let (c0, c1) = (-w, w - 1);
+                let rect = if d.0 != 0 {
+                    Rect { x0: a0, x1: a1, z0: c0, z1: c1, level, raised: false, tower: false, base: level, void: 0 }
+                } else {
+                    Rect { x0: c0, x1: c1, z0: a0, z1: a1, level, raised: false, tower: false, base: level, void: 0 }
+                };
+                c.place(rect);
+            }
+            if c.rects.is_empty() {
+                return core_solids;
+            }
+        }
+    }
     let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     // Weighted towards climbing: the complex grows up as well as out.
     let mut k = 0;
@@ -935,8 +998,6 @@ pub fn compose(origin: Vec3, dir: Vec2, half: Vec2, grid: (f32, f32), steps: u32
     let porticos: HashSet<usize> = (0..c.rects.len()).filter(|&i| r(i as i32 % (c.rects.len() / if symmetric { 2 } else { 1 }).max(1) as i32, 99) < 0.3).collect();
     let solids = c.draw(&porticos);
     let rot = Quat::from_rotation_y((-dir.y).atan2(dir.x));
-    solids
-        .into_iter()
-        .map(|s| Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s })
-        .collect()
+    core_solids.extend(solids.into_iter().map(|s| Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }));
+    core_solids
 }
