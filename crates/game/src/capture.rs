@@ -126,15 +126,20 @@ fn lab_tour(
         if !streamer.settled || !building.is_empty() || items.is_empty() {
             return;
         }
-        // With --focus, only the candidates whose names start with it.
+        // With --focus, only the candidates whose names contain it.
         let focus = args.focus.as_deref().unwrap_or("");
         let mut stops: Vec<_> = items
             .iter()
-            .filter(|(item, _, _)| item.0.starts_with(focus))
+            .filter(|(item, _, _)| item.0.contains(focus))
             .map(|(item, t, d)| (item.0.clone(), t.translation, d.radius, d.height.max(1.0)))
             .collect();
         stops.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
         info!("lab tour: {} candidates", stops.len());
+        if stops.is_empty() {
+            warn!("lab tour: no candidate matches --focus {focus}");
+            exit.write(AppExit::Success);
+            return;
+        }
         tour.stops = stops;
     }
     if let Some(at) = tour.done_at {

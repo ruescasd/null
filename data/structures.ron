@@ -51,6 +51,8 @@
 //   stop_chance: chance a block stops splitting early (plain masses)
 //   lift:   random vertical shift of children, fraction of a cell
 //   min_size: blocks smaller than this (metres) are not split
+//   stairs: at most this many flights of stairs along the cliffs between
+//           levels
 //   albedo, albedo_spread: tone
 //   leaves: [ (on: Where, module: "name", weight: 1, turn: None), ... ]
 //     on:   Any | Top | Summit | Bottom | Corner | Edge | Interior | Outside | Early
@@ -114,6 +116,10 @@
 //                      a prism whose faces are carved into themselves: a
 //                      skin `depth` thick cut into recesses within recesses
 //                      (sunk relief); `then` grows on top
+//   Bastions(height: (90, 130), count: 1, tone: 0)
+//                      round towers of bare wall with rows of deep arches,
+//                      a door, a stair spiralling up the outside to each
+//                      arcade, ledges; arched bridges between neighbours
 //   Curtains(height: (90, 130), tone: 0)
 //                      walls round an open shaft, sheaves of long cables
 //                      crossing the void and hanging down the walls
@@ -353,6 +359,21 @@
         // Lab: made of conduits. The spire's recipe with looms of tubes
         // among its cells; a wall of looms and blocks; the massif with
         // looms. The tubes are part of the mass, not laid on it.
+        // Lab: the massif and the ziggurat with stairs climbing between
+        // their levels.
+        "massif_stairs": (
+            divisions: (4, 3, 4), keep: Massif(0.85), depth: 3, gap: 0.96,
+            stop_chance: 0.03, min_size: 3, albedo: 0.12, albedo_spread: 0.04, stairs: 60,
+            leaves: [
+                (on: Early, module: "box", weight: 3),
+                (on: Any, module: "box", weight: 3),
+            ],
+        ),
+        "ziggurat_stairs": (
+            divisions: (4, 4, 4), keep: Skyline, depth: 2, gap: 1.0,
+            stop_chance: 0.2, albedo: 0.14, stairs: 40,
+            leaves: [(on: Any, module: "box", weight: 1)],
+        ),
         "loom_spire": (
             divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 10,
             stop_chance: 0.2, albedo: 0.1,
@@ -574,6 +595,10 @@
         // Curtains (lab): wiring in its own right, sheaves of long cables
         // across an open shaft (after the Citadel in Half-Life 2).
         "citadel": Curtains(height: (90, 130)),
+        // Bastions (lab): bare round walls given scale by human-sized
+        // things: deep arches, a door, a spiral stair, bridges.
+        "bastion": Bastions(height: (260, 380)),
+        "bastions": Bastions(height: (220, 400), count: 3),
         "drums": Cluster(height: (55, 80)),
         "drums_tall": Cluster(height: (100, 140)),
         "rack_wall": Rack(height: (28, 36), depth: (2.5, 4), core: true, strange: true),
@@ -697,12 +722,20 @@
             note: "A long wall in sunk relief"),
         (name: "sunk_block", form: "sunk_block", footprint: 30,
             note: "The wall network sunk into the walls: pipes lying in grooves cut for them"),
+        (name: "bastion", form: "bastion", footprint: 60,
+            note: "One round tower: bare wall, deep arches, a door, a spiral stair"),
+        (name: "bastions", form: "bastions", footprint: 160,
+            note: "Three towers joined by arched bridges"),
         (name: "citadel", form: "citadel", footprint: 35,
             note: "Sheaves of long cables across an open shaft, after the Citadel"),
         (name: "square_block", form: "square_block", footprint: 30,
             note: "The wall network with square conduits"),
         (name: "square_sunk", form: "square_sunk", footprint: 30,
             note: "Square conduits sunk into the wall, flush ridges"),
+        (name: "massif_stairs", style: "massif_stairs", size: (150, 120, 150),
+            note: "The massif with stairs between its levels"),
+        (name: "ziggurat_stairs", style: "ziggurat_stairs", size: (90, 50, 90),
+            note: "A stepped skyline with stairs between its levels"),
         (name: "massif", style: "massif", size: (150, 120, 150), variants: 1,
             note: "Reference: the massif"),
         (name: "truss", style: "truss", size: (40, 160, 40), variants: 1, note: "Reference: the truss"),

@@ -38,6 +38,17 @@ pub enum Form {
         #[serde(default)]
         then: Option<String>,
     },
+    /// Round towers of bare wall given scale by a few human-sized things
+    /// (see `bastion.rs`): rows of deep arches, a door, a stair spiralling
+    /// up the outside, ledges, arched bridges between neighbours. Up to
+    /// `count` towers about `height` tall.
+    Bastions {
+        height: (f32, f32),
+        #[serde(default = "one_tower")]
+        count: u32,
+        #[serde(default)]
+        tone: f32,
+    },
     /// Wiring in its own right (see `curtain.rs`): a broken ring of walls
     /// round an open shaft, sheaves of long cables crossing the void and
     /// hanging down the walls, the walls carrying the pipe network sunk
@@ -215,6 +226,10 @@ pub enum Form {
     },
 }
 
+fn one_tower() -> u32 {
+    1
+}
+
 fn relief_depth() -> f32 {
     2.0
 }
@@ -269,7 +284,7 @@ pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
         Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Roots { .. } | Form::Cluster { .. } | Form::Curtains { .. } => vec![],
+        Form::Roots { .. } | Form::Cluster { .. } | Form::Curtains { .. } | Form::Bastions { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -424,6 +439,15 @@ impl Grower<'_> {
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
+            }
+            Form::Bastions { height, count, tone: t } => {
+                let (walls, solids) = crate::bastion::build(poly, floor, pick(*height, 1), *count, tone + t, child(7));
+                if walls.len() + solids.len() > self.budget {
+                    return;
+                }
+                self.budget -= walls.len() + solids.len();
+                self.out.prisms.extend(walls);
+                self.out.solids.extend(solids);
             }
             Form::Curtains { height, tone: t } => {
                 let (walls, cables, pipes) = crate::curtain::build(poly, floor, pick(*height, 1), tone + t, child(6));

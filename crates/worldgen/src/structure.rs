@@ -253,6 +253,10 @@ pub struct Style {
     /// Degrees each child is turned relative to its parent.
     #[serde(default)]
     pub twist: f32,
+    /// At most this many flights of stairs laid along the cliffs between
+    /// levels (see `stairs.rs`).
+    #[serde(default)]
+    pub stairs: u32,
     #[serde(default)]
     pub stop_chance: f32,
     #[serde(default)]
@@ -419,6 +423,10 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
                 s.half.y += FOUNDATION * 0.5;
             }
         }
+    }
+    if let Some(style) = library.styles.get(&placement.style).filter(|s| s.stairs > 0) {
+        let flights = crate::stairs::flights(&solids, style.stairs, seed);
+        solids.extend(flights);
     }
     solids
 }
