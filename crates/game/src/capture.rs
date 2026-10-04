@@ -16,7 +16,7 @@ impl Plugin for CapturePlugin {
         app.init_resource::<AutoShot>()
             .init_resource::<Bench>()
             .init_resource::<Tour>()
-            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour));
+            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus));
     }
 }
 
@@ -140,16 +140,12 @@ fn lab_tour(
     }
     let (stop, view) = (tour.step / VIEWS.len(), tour.step % VIEWS.len());
     let (name, origin, radius, height) = tour.stops[stop].clone();
-    let (label, angle, by_radius, by_height, eye, eye_metres, look) = VIEWS[view];
+    let label = VIEWS[view].0;
     let (mut transform, mut fly) = camera.into_inner();
     if tour.frames == 0 {
-        let distance = (radius * by_radius).max(height * by_height);
-        let a = angle.to_radians();
-        let at = origin + Vec3::new(a.cos(), 0.0, a.sin()) * distance + Vec3::Y * (height * eye + eye_metres);
-        let target = origin + Vec3::Y * height * look;
-        let to = target - at;
-        fly.yaw = (-to.x).atan2(-to.z);
-        fly.pitch = to.y.atan2(Vec2::new(to.x, to.z).length());
+        let (at, yaw, pitch) = view_of(origin, radius, height, view);
+        fly.yaw = yaw;
+        fly.pitch = pitch;
         transform.translation = at;
         transform.rotation = fly.rotation();
     }
@@ -169,6 +165,40 @@ fn lab_tour(
     if tour.step >= tour.stops.len() * VIEWS.len() {
         tour.done_at = Some(0);
     }
+}
+
+/// The camera the tour uses for one view of a candidate: position, yaw and
+/// pitch.
+fn view_of(origin: Vec3, radius: f32, height: f32, view: usize) -> (Vec3, f32, f32) {
+    let (_, angle, by_radius, by_height, eye, eye_metres, look) = VIEWS[view];
+    let distance = (radius * by_radius).max(height * by_height);
+    let a = angle.to_radians();
+    let at = origin + Vec3::new(a.cos(), 0.0, a.sin()) * distance + Vec3::Y * (height * eye + eye_metres);
+    let to = origin + Vec3::Y * height * look - at;
+    (at, (-to.x).atan2(-to.z), to.y.atan2(Vec2::new(to.x, to.z).length()))
+}
+
+/// `--focus name` in the lab: once that candidate is built, the camera
+/// moves to the tour's three-quarter view of it (once).
+fn lab_focus(
+    args: Res<Args>,
+    mut done: Local<bool>,
+    items: Query<(&crate::structures::LabItem, &Transform, &crate::structures::Detail)>,
+    camera: Single<(&mut Transform, &mut crate::camera::FlyCam), Without<crate::structures::LabItem>>,
+) {
+    let Some(focus) = &args.focus else { return };
+    if *done {
+        return;
+    }
+    let Some((_, t, d)) = items.iter().find(|(item, _, _)| &item.0 == focus) else { return };
+    let (at, yaw, pitch) = view_of(t.translation, d.radius, d.height.max(1.0), 1);
+    let (mut transform, mut fly) = camera.into_inner();
+    fly.yaw = yaw;
+    fly.pitch = pitch;
+    transform.translation = at;
+    transform.rotation = fly.rotation();
+    *done = true;
+    info!("lab: looking at {focus}");
 }
 
 fn manual_shot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {

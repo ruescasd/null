@@ -16,6 +16,7 @@ use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, window::PresentMo
 /// `--time t` simulation time in seconds, which sets where the suns are
 /// `--shot path.png` render one frame once terrain has loaded, save it and exit
 /// `--seed n`
+/// `--focus name` in the lab, start looking at that candidate
 /// `--opt name` (repeatable) switch a rendering experiment on or off
 /// `--set name=value` (repeatable) override a tuning number
 #[derive(Resource, Clone, Debug)]
@@ -26,6 +27,7 @@ pub struct Args {
     pub time: Option<f32>,
     pub shot: Option<String>,
     pub seed: u32,
+    pub focus: Option<String>,
 }
 
 impl Args {
@@ -39,7 +41,8 @@ impl Args {
     }
 
     fn parse() -> Self {
-        let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 1 };
+        let mut args =
+            Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None };
         let mut it = std::env::args().skip(1);
         let floats = |s: Option<String>| -> Vec<f32> {
             s.unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect()
@@ -49,6 +52,7 @@ impl Args {
                 "--cam" => args.cam = floats(it.next()).try_into().ok(),
                 "--time" => args.time = it.next().and_then(|s| s.parse().ok()),
                 "--shot" => args.shot = it.next(),
+                "--focus" => args.focus = it.next(),
                 "--opt" => args.opts.extend(it.next()),
                 "--set" => {
                     if let Some((k, v)) = it.next().as_deref().and_then(|s| s.split_once('='))

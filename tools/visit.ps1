@@ -1,11 +1,13 @@
 # Opens the game at one of the places shown on the review pages, with the
 # same camera as the capture, flying (V to land and walk).
 #
-#   .\tools\visit.ps1 <place>      (no place: lists them)
+#   .\tools\visit.ps1 <place>        (no place: lists them)
+#   .\tools\visit.ps1 lab <name>     straight to a lab candidate, e.g. organ_dressed
+#                                    (names: cargo run -p worldgen --release --example lab)
 #
 # In the game: Shift flies fast, Left/Right scrub the time of day, T pauses
 # the suns, F12 saves a screenshot to screenshots/.
-param([string]$Place)
+param([string]$Place, [string]$Name)
 
 # name = x, height above the ground, z, yaw, pitch (degrees)
 $places = [ordered]@{
@@ -30,4 +32,5 @@ if (-not $Place -or -not $places.Contains($Place)) {
 }
 Set-Location (Join-Path $PSScriptRoot "..")
 $extra = if ($Place -eq "lab") { @("--opt", "lab") } else { @() }
+if ($Place -eq "lab" -and $Name) { $extra += @("--focus", $Name) }
 cargo run -p game --release -- --opt noclip --time 40 --cam $places[$Place] @extra
