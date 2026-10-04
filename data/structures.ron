@@ -101,8 +101,9 @@
 //                      packed with pipes, tanks, hoses or machinery (or left
 //                      empty); `core` fills the inside with a dark mass;
 //                      `then` grows on the whole polygon at its top;
-//                      `strange`: frames within frames, branching and
-//                      twisted pipes, vertebrae, nothing at human scale
+//                      `strange`: no frame, but a network of pipes on the
+//                      core's faces (use with `core`), climbing, switching
+//                      lanes, splitting, with bare wall between its knots
 //
 // SITES: structures that grow out of the world by themselves.
 //   site_grid: (spacing: 768, chance: 0.5)
@@ -489,9 +490,9 @@
         "rack_block": Rack(height: (40, 55), core: true, then: "rack_setback"),
         "rack_setback": Inset(by: (5, 9), then: "rack_upper"),
         "rack_upper": Rack(height: (20, 35), core: true, depth: (2, 3)),
-        // Strange racks: frames within frames, branching and twisted pipes,
-        // vertebrae; nothing at human scale.
-        "rack_shaft_strange": Rack(height: (70, 90), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), strange: true),
+        // Strange racks: no frame, a network of pipes on the core's faces,
+        // climbing, switching lanes, splitting, with bare wall between.
+        "rack_wall": Rack(height: (28, 36), depth: (2.5, 4), core: true, strange: true),
         "rack_block_strange": Rack(height: (40, 55), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), core: true,
             strange: true, then: "rack_setback_strange"),
         "rack_setback_strange": Inset(by: (5, 9), then: "rack_upper_strange"),
@@ -603,10 +604,10 @@
             note: "A mountain of mountains: the same falling envelope at every scale"),
         (name: "rack_shaft", form: "rack_shaft", footprint: 34,
             note: "A hollow shaft lined with racks: pipes, tanks, hoses, machinery in the bays"),
-        (name: "rack_shaft_strange", form: "rack_shaft_strange", footprint: 34,
-            note: "The shaft made strange: frames within frames, branching and twisted pipes, vertebrae"),
+        (name: "rack_wall", form: "rack_wall", footprint: 22, stretch: 4,
+            note: "A long wall with a pipe network on it: what a trench wall would carry"),
         (name: "rack_block_strange", form: "rack_block_strange", footprint: 50,
-            note: "Strange racks around a dark core, set back above"),
+            note: "The network around a core, set back above"),
         (name: "organ", form: "lab_organ", footprint: 35, variants: 1, note: "Bare (kept)"),
         (name: "organ_dressed", form: "lab_organ", footprint: 35, dress: "industrial",
             note: "The organ with pipework"),

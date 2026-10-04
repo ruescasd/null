@@ -18,6 +18,10 @@ use crate::structure::{self, Library, Placement, Solid};
 fn default_size() -> (f32, f32, f32) {
     (80.0, 120.0, 80.0)
 }
+fn one() -> f32 {
+    1.0
+}
+
 fn default_footprint() -> f32 {
     60.0
 }
@@ -43,6 +47,10 @@ pub struct LabEntry {
     pub form: Option<String>,
     #[serde(default = "default_footprint")]
     pub footprint: f32,
+    /// The footprint drawn out this many times along z (across the row of
+    /// candidates): long walls.
+    #[serde(default = "one")]
+    pub stretch: f32,
     /// How many samples (different seeds) stand side by side: a pattern is
     /// judged on more than one roll of its dice.
     #[serde(default = "default_variants")]
@@ -138,7 +146,8 @@ fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<So
     }
     let Some(form) = &entry.form else { return (Vec::new(), Vec::new(), Vec::new()) };
     let mut grower = Grower { library, budget: 60_000, leaves: max_leaves, out: Growth::default() };
-    grower.grow(form, &footprint(entry.footprint, seed), 0.0, 0.13, seed, 0);
+    let shape: Vec<Vec2> = footprint(entry.footprint, seed).into_iter().map(|p| Vec2::new(p.x, p.y * entry.stretch)).collect();
+    grower.grow(form, &shape, 0.0, 0.13, seed, 0);
     let Growth { solids, mut prisms, tubes } = grower.out;
     // Into the ground, as on a site.
     for prism in &mut prisms {

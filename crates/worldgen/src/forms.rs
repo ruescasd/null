@@ -42,8 +42,8 @@ pub enum Form {
         frame: f32,
         #[serde(default)]
         core: bool,
-        /// Frames within frames, branching and twisted pipes, vertebrae:
-        /// nothing at human scale.
+        /// No frame: a network of pipes on the core's faces, climbing,
+        /// switching lanes, splitting, with bare wall between its knots.
         #[serde(default)]
         strange: bool,
         #[serde(default)]
@@ -353,7 +353,6 @@ impl Grower<'_> {
                     depth: pick(*d, 4),
                     frame: *frame,
                     strange: *strange,
-                    level: 0,
                 };
                 let rack = crate::rack::build(poly, floor, layout, tone, child(2));
                 let pieces = rack.solids.len() + rack.tubes.len();
