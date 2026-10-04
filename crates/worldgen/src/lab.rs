@@ -120,34 +120,33 @@ pub struct Parts {
 /// Everything a candidate is made of, its base centre at the origin, dressed
 /// with its pipework if it has any.
 pub fn build(library: &Library, entry: &LabEntry, max_leaves: usize) -> Parts {
-    let (mut solids, prisms) = build_bare(library, entry, max_leaves);
-    let mut tubes = Vec::new();
+    let (mut solids, prisms, mut tubes) = build_bare(library, entry, max_leaves);
     if let Some(dressing) = entry.dress.as_ref().and_then(|d| library.dressings.get(d)) {
         let tone = 0.13;
         let work = crate::dressing::dress(dressing, &solids, &prisms, tone, entry.seed() ^ 0xd1e5);
         solids.extend(work.solids);
-        tubes = work.tubes;
+        tubes.extend(work.tubes);
     }
     Parts { solids, prisms, tubes }
 }
 
-fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>) {
+fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>, Vec<Tube>) {
     let seed = entry.seed();
     if let Some(style) = &entry.style {
         let placement = Placement { style: style.clone(), at: (0.0, 0.0), size: entry.size, yaw: 0.0, seed, sink: 0.0 };
-        return (structure::build(library, &placement, max_leaves), Vec::new());
+        return (structure::build(library, &placement, max_leaves), Vec::new(), Vec::new());
     }
-    let Some(form) = &entry.form else { return (Vec::new(), Vec::new()) };
+    let Some(form) = &entry.form else { return (Vec::new(), Vec::new(), Vec::new()) };
     let mut grower = Grower { library, budget: 60_000, leaves: max_leaves, out: Growth::default() };
     grower.grow(form, &footprint(entry.footprint, seed), 0.0, 0.13, seed, 0);
-    let Growth { solids, mut prisms } = grower.out;
+    let Growth { solids, mut prisms, tubes } = grower.out;
     // Into the ground, as on a site.
     for prism in &mut prisms {
         if prism.y0.abs() < 1e-3 {
             prism.y0 -= 4.0;
         }
     }
-    (solids, prisms)
+    (solids, prisms, tubes)
 }
 
 /// The height a candidate reaches.

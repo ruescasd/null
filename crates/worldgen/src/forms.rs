@@ -26,6 +26,27 @@ use crate::structure::{self, Library, Placement, Solid};
 pub enum Form {
     /// Nothing (also available as "nothing").
     Nothing,
+    /// An open frame lining the polygon's edges, one bay `depth` deep, its
+    /// bays packed with pipes, tanks, hoses and machinery (see `rack.rs`).
+    /// With `core`, a dark mass fills the polygon inside the rack. `then`
+    /// grows on top, on the whole polygon.
+    Rack {
+        height: (f32, f32),
+        #[serde(default = "rack_storey")]
+        storey: (f32, f32),
+        #[serde(default = "rack_bay")]
+        bay: (f32, f32),
+        #[serde(default = "rack_depth")]
+        depth: (f32, f32),
+        #[serde(default = "rack_frame")]
+        frame: f32,
+        #[serde(default)]
+        core: bool,
+        #[serde(default)]
+        tone: f32,
+        #[serde(default)]
+        then: Option<String>,
+    },
     /// A prism of the polygon. `taper` is how much it narrows towards the
     /// top (0 straight, 1 to a point), `lean` how far its top may shift
     /// sideways; `then` grows on its top.
@@ -140,6 +161,22 @@ pub enum Form {
     },
 }
 
+fn rack_storey() -> (f32, f32) {
+    (3.5, 5.0)
+}
+
+fn rack_bay() -> (f32, f32) {
+    (3.0, 5.0)
+}
+
+fn rack_depth() -> (f32, f32) {
+    (2.2, 3.5)
+}
+
+fn rack_frame() -> f32 {
+    0.45
+}
+
 fn two() -> u32 {
     2
 }
@@ -169,6 +206,7 @@ fn default_fill() -> f32 {
 pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
+        Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
         }
@@ -267,11 +305,13 @@ pub fn mesh_into(mesh: &mut ColumnMesh, prisms: &[Prism]) {
     }
 }
 
-/// What grows from a polygon: prisms, and solids from box styles.
+/// What grows from a polygon: prisms, solids (from box styles and racks)
+/// and tubes (racks).
 #[derive(Default)]
 pub struct Growth {
     pub prisms: Vec<Prism>,
     pub solids: Vec<Solid>,
+    pub tubes: Vec<crate::dressing::Tube>,
 }
 
 /// Recursion deeper than this stops, whatever the forms say.
@@ -300,6 +340,41 @@ impl Grower<'_> {
         let child = |i: u32| seed.wrapping_mul(0x9e37_79b9).wrapping_add(i.wrapping_mul(0x85eb_ca6b)) ^ depth;
         match form {
             Form::Nothing => {}
+            Form::Rack { height, storey, bay, depth: d, frame, core, tone: t, then } => {
+                let tone = tone + t;
+                let layout = crate::rack::Layout {
+                    height: pick(*height, 1),
+                    storey: pick(*storey, 2),
+                    bay: pick(*bay, 3),
+                    depth: pick(*d, 4),
+                    frame: *frame,
+                };
+                let rack = crate::rack::build(poly, floor, layout, tone, child(2));
+                let pieces = rack.solids.len() + rack.tubes.len();
+                if pieces > self.budget {
+                    return;
+                }
+                self.budget -= pieces;
+                self.out.solids.extend(rack.solids);
+                self.out.tubes.extend(rack.tubes);
+                if *core && self.budget > 0 {
+                    let inner = inset(poly, layout.depth);
+                    if inner.len() >= 3 {
+                        self.budget -= 1;
+                        self.out.prisms.push(Prism {
+                            points: inner,
+                            y0: floor,
+                            y1: floor + layout.height,
+                            top_scale: 1.0,
+                            lean: Vec2::ZERO,
+                            albedo: (tone - 0.04).clamp(0.03, 0.4),
+                        });
+                    }
+                }
+                if let Some(then) = then {
+                    self.grow(then, poly, floor + layout.height, tone, child(1), depth + 1);
+                }
+            }
             Form::Extrude { height, taper, lean, tone: t, then } => {
                 let tone = tone + t;
                 let a = r(4) * std::f32::consts::TAU;
