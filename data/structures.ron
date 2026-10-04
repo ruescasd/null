@@ -513,6 +513,24 @@
                 (on: Early, module: "box", weight: 3),
             ],
         ),
+        // Crisp fills (lab): the family's envelopes filled so their outline
+        // stays sharp: plain boxes, tight grooves, no early stops.
+        "crisp_gate": (
+            divisions: (5, 4, 3), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, envelope: [Box(min: (-0.45, -1.1, -1.1), max: (0.45, 0.35, 1.1))],
+            leaves: [(on: Any, module: "box", weight: 1)],
+        ),
+        "crisp_ring": (
+            divisions: (5, 3, 5), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, envelope: [Box(min: (-0.62, -0.7, -0.62), max: (0.62, 1.1, 0.62))],
+            leaves: [(on: Any, module: "box", weight: 1)],
+        ),
+        "crisp_cluster": (
+            divisions: (4, 6, 4), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, envelope: [Box(min: (-0.3, -0.75, -1.1), max: (0.3, 1.1, 1.1)), Box(min: (-1.1, -0.75, -0.3), max: (1.1, 1.1, 0.3)), Box(min: (-1.1, 0.2, -1.1), max: (-0.55, 1.1, -0.55)), Box(min: (0.55, 0.6, 0.55), max: (1.1, 1.1, 1.1))],
+            leaves: [(on: Any, module: "box", weight: 1)],
+        ),
+        "crisp_carved": (
+            divisions: (3, 6, 3), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, cuts: 3,
+            leaves: [(on: Any, module: "box", weight: 1)],
+        ),
         // A loose stack of tables and cages.
         "tables": (
             divisions: (3, 3, 3), keep: Random(0.55), depth: 3, gap: 0.92, twist: -4,
@@ -707,6 +725,7 @@
         "sierpinski": Sierpinski(height: (90, 90), depth: 5),
         "sierpinski_deep": Sierpinski(height: (90, 90), depth: 6),
         "sierpinski_tetra": Sierpinski(height: (100, 100), depth: 6, tetrahedron: true),
+        "sierpinski_ragged": Sierpinski(height: (90, 90), depth: 6, ragged: 0.8),
         "mg_tower": Tower(height: (170, 170)),
         "mg_lattice": Tower(height: (170, 170), width: 56, spacing: 78),
         "bastion": Bastions(height: (260, 380)),
@@ -828,6 +847,12 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
+        (name: "sierpinski_ragged", form: "sierpinski_ragged", footprint: 70, variants: 1,
+            note: "The pyramid made ragged: pieces missing, heights jittered"),
+        (name: "crisp_gate", style: "crisp_gate", size: (110, 90, 40), variants: 1, note: "The gate's envelope, crisp fill"),
+        (name: "crisp_ring", style: "crisp_ring", size: (120, 50, 120), variants: 1, note: "The ring's envelope, crisp fill"),
+        (name: "crisp_cluster", style: "crisp_cluster", size: (90, 160, 90), variants: 1, note: "The cluster's envelope, crisp fill"),
+        (name: "crisp_carved", style: "crisp_carved", size: (60, 140, 60), note: "Three random cuts, crisp fill"),
         (name: "sierpinski", form: "sierpinski", footprint: 70, variants: 1,
             note: "A Sierpinski pyramid, five levels"),
         (name: "sierpinski_deep", form: "sierpinski_deep", footprint: 70, variants: 1,

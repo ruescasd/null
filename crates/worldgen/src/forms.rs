@@ -48,6 +48,9 @@ pub enum Form {
         depth: u32,
         #[serde(default)]
         tetrahedron: bool,
+        /// How ragged it is (0 crisp): pieces missing and heights jittered.
+        #[serde(default)]
+        ragged: f32,
         #[serde(default)]
         tone: f32,
     },
@@ -475,7 +478,7 @@ impl Grower<'_> {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
             }
-            Form::Sierpinski { height, depth: levels, tetrahedron, tone: t } => {
+            Form::Sierpinski { height, depth: levels, tetrahedron, ragged, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
                 let side = Vec2::new(-dir.y, dir.x);
                 let s = half.min_element();
@@ -504,16 +507,27 @@ impl Grower<'_> {
                         h,
                     )
                 }];
-                for _ in 0..(*levels).min(8) {
+                let mut n = 0i32;
+                for level in 0..(*levels).min(8) {
                     let mut next = Vec::with_capacity(pieces.len() * 5);
                     for (base, y, h) in pieces {
                         let c = centroid(&base);
-                        // Half-size copies at each corner of the base...
-                        for &corner in &base {
-                            next.push((base.iter().map(|&p| (p + corner) * 0.5).collect(), y, h * 0.5));
+                        let mut children: Vec<(Vec<Vec2>, f32, f32)> = base
+                            .iter()
+                            .map(|&corner| (base.iter().map(|&p| (p + corner) * 0.5).collect(), y, h * 0.5))
+                            .collect();
+                        children.push((base.iter().map(|&p| (p + c) * 0.5).collect(), y + h * 0.5, h * 0.5));
+                        for (points, y, h) in children {
+                            n += 1;
+                            let r = |k: i32| hash01(n, k, level as i32, seed ^ 0x7a9);
+                            // Ragged: now and then a piece missing, heights
+                            // jittered.
+                            if *ragged > 0.0 && level > 0 && r(0) < *ragged * 0.25 {
+                                continue;
+                            }
+                            let h = h * (1.0 + (r(1) - 0.5) * *ragged);
+                            next.push((points, y, h));
                         }
-                        // ...and one on top, over the middle.
-                        next.push((base.iter().map(|&p| (p + c) * 0.5).collect(), y + h * 0.5, h * 0.5));
                     }
                     pieces = next;
                 }
