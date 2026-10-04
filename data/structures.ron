@@ -122,6 +122,11 @@
 //                      a prism whose faces are carved into themselves: a
 //                      skin `depth` thick cut into recesses within recesses
 //                      (sunk relief); `then` grows on top
+//   Compose(steps: 24, symmetric: false, tone: 0)
+//                      a complex of walkable units at the same scale (6 m
+//                      bays, 4.5 m levels): terraces, raised decks on arches,
+//                      bridges, stairs joining them, parapets, porticos,
+//                      grown in runs and mutated
 //   Fractal(height: (90, 90), depth: 3, leaf: Box, copies: [(at: (x, y, z), scale: (x, y, z), turn: 0, stop: false, leaf: Box), ...])
 //                      a shape made of copies of itself: each copy placed
 //                      (the parent's -1..1 frame), scaled and turned, recursing
@@ -739,6 +744,11 @@
         // Ordered towers (lab), transcribed from Manifold Garden: one, and
         // a lattice of them.
         // Sierpinski (lab): no boxes at all.
+        // Composed complexes (lab): walkable units repeated at the same
+        // scale, grown, repeated in runs, mutated.
+        "complex": Compose(steps: 24),
+        "complex_symmetric": Compose(steps: 18, symmetric: true),
+        "complex_big": Compose(steps: 60),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
         // boxes, pyramids or tetrahedra; a stepped tower made of stepped
         // towers; a cluster of clusters of towers, bridged.
@@ -992,15 +1002,13 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
+        (name: "complex", form: "complex", footprint: 110, variants: 3,
+            note: "A complex grown from terraces, stairs, raised decks, bridges"),
+        (name: "complex_symmetric", form: "complex_symmetric", footprint: 110, variants: 3,
+            note: "The same, mirrored"),
+        (name: "complex_big", form: "complex_big", footprint: 200, variants: 1,
+            note: "A bigger one"),
         (name: "spire", style: "spire", size: (30, 120, 30), variants: 1, note: "Reference: the spire"),
-        (name: "sierpinski_deep", form: "sierpinski_deep", footprint: 70, variants: 1, note: "Reference: the pyramid"),
-        (name: "gate_boxes", form: "gate_boxes", footprint: 60, stretch: 0.5, variants: 1, note: "A gate of gates, boxes"),
-        (name: "gate_pyramids", form: "gate_pyramids", footprint: 60, stretch: 0.5, variants: 1, note: "A gate of gates, pyramids"),
-        (name: "gate_tetra", form: "gate_tetra", footprint: 60, stretch: 0.5, variants: 1, note: "A gate of gates, tetrahedra"),
-        (name: "stepped_boxes", form: "stepped_boxes", footprint: 50, variants: 1, note: "A stepped tower of stepped towers, boxes"),
-        (name: "stepped_pyramids", form: "stepped_pyramids", footprint: 50, variants: 1, note: "The same, pyramids"),
-        (name: "cluster_spires", form: "cluster_spires", footprint: 130, variants: 1, note: "A cluster of clusters of spires, bridged"),
-        (name: "cluster_boxes", form: "cluster_boxes", footprint: 130, variants: 1, note: "The same composition, plain boxes"),
-
+        (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1, note: "Reference: the Manifold Garden tower"),
     ],
 )

@@ -38,6 +38,17 @@ pub enum Form {
         #[serde(default)]
         then: Option<String>,
     },
+    /// A complex composed from walkable units repeated at the same scale
+    /// (see `compose.rs`): terraces, raised decks on arches, bridges, stairs
+    /// joining them, parapets, porticos; grown in about `steps` operations
+    /// in the biggest rectangle that fits, mirrored if `symmetric`.
+    Compose {
+        steps: u32,
+        #[serde(default)]
+        symmetric: bool,
+        #[serde(default)]
+        tone: f32,
+    },
     /// A shape made of copies of itself, in the biggest rectangle that fits,
     /// `height` tall: each copy placed (`at`, the parent's -1..1 frame,
     /// y up), scaled and turned within its parent, recursing `depth` times
@@ -363,7 +374,8 @@ pub fn references(form: &Form) -> Vec<&str> {
         | Form::Bastions { .. }
         | Form::Tower { .. }
         | Form::Sierpinski { .. }
-        | Form::Fractal { .. } => vec![],
+        | Form::Fractal { .. }
+        | Form::Compose { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -518,6 +530,15 @@ impl Grower<'_> {
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
+            }
+            Form::Compose { steps, symmetric, tone: t } => {
+                let Some((center, dir, half)) = inscribed_box(poly) else { return };
+                let solids = crate::compose::compose(Vec3::new(center.x, floor, center.y), dir, half, *steps, *symmetric, tone + t, seed);
+                if solids.len() > self.budget {
+                    return;
+                }
+                self.budget -= solids.len();
+                self.out.solids.extend(solids);
             }
             Form::Fractal { height, depth: levels, leaf, copies, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
