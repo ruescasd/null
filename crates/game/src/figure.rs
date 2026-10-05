@@ -305,6 +305,9 @@ struct Element {
     velocity: Vec3,
     /// A per-fragment phase for the shiver.
     phase: f32,
+    /// Hard parts and eyes don't shiver: they move as one with their bone,
+    /// so the eyes stay on the face instead of dipping in and out of it.
+    rigid: bool,
 }
 
 fn spawn(
@@ -514,16 +517,16 @@ fn spawn(
             };
             let eyes: Vec<(Vec3, Vec3, Quat, usize)> = match head {
                 1 => [-1.0f32, 1.0]
-                    .map(|sx| (Vec3::new(sx * 0.04, l * 0.62, 0.099), eye_half, Quat::from_rotation_y(-sx * 0.43) * Quat::from_rotation_z(sx * slant), eye_shape))
+                    .map(|sx| (Vec3::new(sx * 0.04, l * 0.62, 0.105), eye_half, Quat::from_rotation_y(-sx * 0.43) * Quat::from_rotation_z(sx * slant), eye_shape))
                     .to_vec(),
-                5 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.042, l * 0.62, 0.112), eye_half, Quat::from_rotation_z(sx * slant), eye_shape)).to_vec(),
+                5 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.042, l * 0.62, 0.116), eye_half, Quat::from_rotation_z(sx * slant), eye_shape)).to_vec(),
                 2 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.064, l * 0.55, 0.22), Vec3::new(0.004, 0.008, 0.03), Quat::IDENTITY, 0)).to_vec(),
                 _ => Vec::new(),
             };
             for (n, (offset, half, rotation, shape)) in pieces.into_iter().enumerate() {
                 let offset = Vec3::new(offset.x, offset.y / l.max(0.01), offset.z);
                 let phase = hash01(index as i32, n as i32, 9, 0xf18) * 100.0;
-                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, head_dark.clone(), half);
+                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase, rigid: true }, shape, head_dark.clone(), half);
                 count += 1;
             }
             for (n, (offset, half, rotation, shape)) in eyes.into_iter().enumerate() {
@@ -531,7 +534,7 @@ fn spawn(
                 let phase = hash01(index as i32, n as i32 + 50, 9, 0xf18) * 100.0;
                 // No outline round the eyes: just the light.
                 commands.spawn((
-                    Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase },
+                    Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase, rigid: true },
                     Mesh3d(shapes[shape].clone()),
                     MeshMaterial3d(eye_light.clone()),
                     Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
@@ -602,7 +605,7 @@ fn spawn(
             for (n, ((offset, half, rotation), shape)) in shaped.enumerate() {
                 let offset = Vec3::new(offset.x, offset.y / part.length.max(0.01), offset.z);
                 let phase = hash01(index as i32, n as i32, 9, 0xf17) * 100.0;
-                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, hard.clone(), half);
+                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase, rigid: true }, shape, hard.clone(), half);
                 count += 1;
             }
             continue;
@@ -691,7 +694,7 @@ fn spawn(
                 };
                 put(
                     &mut commands,
-                    Element { bone: index, offset, rotation: b.rotation * tilt, velocity: Vec3::ZERO, phase: r(9) * 100.0 },
+                    Element { bone: index, offset, rotation: b.rotation * tilt, velocity: Vec3::ZERO, phase: r(9) * 100.0, rigid: false },
                     shape,
                     material,
                     half,
@@ -907,7 +910,11 @@ fn follow(
             continue;
         }
         let local = Vec3::new(e.offset.x, e.offset.y * pose.length, e.offset.z);
-        let shiver = Vec3::new((t * 7.0 + e.phase).sin(), (t * 5.3 + e.phase * 1.7).sin(), (t * 6.1 + e.phase * 0.6).sin()) * 0.004;
+        let shiver = if e.rigid {
+            Vec3::ZERO
+        } else {
+            Vec3::new((t * 7.0 + e.phase).sin(), (t * 5.3 + e.phase * 1.7).sin(), (t * 6.1 + e.phase * 0.6).sin()) * 0.004
+        };
         let target = pose.start + pose.rotation * local + shiver;
         let to = target - transform.translation;
         // Far away (first frame, or teleported): snap.
