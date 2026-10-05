@@ -37,9 +37,9 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt peace                               no swarm
-    --opt fight|holdfire|huntfire|god|tough|watch   for captures: keep the swarm in a capture and fire by itself /
-                                              don't fire / fire only at a hunter / never die / hunters ten times
-                                              tougher / face the nearest hunter
+    --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
+                                              itself / don't fire / fire only at a hunter / never die / hunters ten
+                                              times tougher / hunters keep their distance / face the nearest hunter
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
@@ -221,8 +221,10 @@ black ichor (`combat/ichor.rs`): each hit throws glossy droplets, streaked
 along their flight, mostly out of the far side along the shot; where one
 lands it leaves a splat (an irregular pool with satellite drops, its shape
 one of a few generated at startup), and on a wall the splat runs down for a
-while. The last 600 splats stay. Under a dark drone, the swarm buzzes and
-grates from where it is.
+while. The last 600 splats stay. Black would not show against a dark body,
+so the moment of impact is a white burst with a crown of liquid blades flung
+out along the shot in silhouette against it. Under a dark drone (a
+two-minute seamless loop), the swarm buzzes and grates from where it is.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so

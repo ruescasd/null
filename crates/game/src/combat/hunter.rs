@@ -214,6 +214,7 @@ pub(super) fn gather(
 pub(super) fn hunt(
     mut commands: Commands,
     time: Res<Time>,
+    args: Res<Args>,
     world: Res<WorldGen>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
@@ -279,8 +280,12 @@ pub(super) fn hunt(
             _ if stunned => {}
             Stance::Stalk => {
                 h.heading += turn.clamp(-2.5 * dt, 2.5 * dt);
-                step = Vec3::new(h.heading.sin(), 0.0, h.heading.cos()) * HUNTER_SPEED * dt;
-                if distance < LUNGE_RANGE && h.timer <= 0.0 {
+                // (`--opt tame`, for captures: it keeps its distance.)
+                let tame = args.opt("tame");
+                if !tame || distance > 14.0 {
+                    step = Vec3::new(h.heading.sin(), 0.0, h.heading.cos()) * HUNTER_SPEED * dt;
+                }
+                if distance < LUNGE_RANGE && h.timer <= 0.0 && !tame {
                     h.stance = Stance::Windup;
                     h.timer = WINDUP;
                 }

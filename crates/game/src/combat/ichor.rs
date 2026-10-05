@@ -4,6 +4,10 @@
 //! splash back. Where a droplet lands it leaves a splat, an irregular pool
 //! with satellite drops; on a wall the splat slowly runs down. The last few
 //! hundred splats stay, so a fight leaves its marks.
+//!
+//! Black on a dark body would not show, so the moment of impact is a white
+//! burst with the ichor thrown against it in silhouette: a crown of liquid
+//! blades flung out along the shot, which breaks into the droplets.
 
 use std::collections::VecDeque;
 
@@ -26,6 +30,20 @@ pub(super) struct Ichor {
     wet: Handle<StandardMaterial>,
     quad: Handle<Mesh>,
     splats: Vec<Handle<StandardMaterial>>,
+    /// The impact: a white star, and a crown of liquid blades along +Y.
+    star: Handle<Mesh>,
+    white: Handle<StandardMaterial>,
+    crowns: Vec<Handle<Mesh>>,
+}
+
+/// A burst at the moment of impact, growing fast then shrinking away.
+#[derive(Component)]
+pub(super) struct Burst {
+    age: f32,
+    life: f32,
+    /// Seconds to reach full size.
+    grow: f32,
+    size: Vec3,
 }
 
 #[derive(Resource, Default)]
@@ -68,11 +86,36 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
             })
         })
         .collect();
+    // A star of short rays, the same from every side.
+    let star: Vec<(Vec3, f32, f32)> = (0..10)
+        .map(|k| {
+            let d = Vec3::new(hash01(k, 0, 2, 0x1c6) - 0.5, hash01(k, 1, 2, 0x1c6) - 0.5, hash01(k, 2, 2, 0x1c6) - 0.5);
+            (d.normalize_or(Vec3::Y), 0.5 + 0.5 * hash01(k, 3, 2, 0x1c6), 0.08)
+        })
+        .collect();
+    // Crowns: blades of liquid fanning out in a cone round +Y, ragged.
+    let crowns = (0..4)
+        .map(|c| {
+            let blades: Vec<(Vec3, f32, f32)> = (0..9)
+                .map(|k| {
+                    let r = |j: i32| hash01(c, k, j, 0x1c7);
+                    let a = (k as f32 + r(0) * 0.6) / 9.0 * std::f32::consts::TAU;
+                    let open = 0.35 + 0.5 * r(1);
+                    (Vec3::new(a.cos() * open, 1.0, a.sin() * open), 0.5 + 0.6 * r(2), 0.035 + 0.03 * r(3))
+                })
+                .collect();
+            meshes.add(shard_mesh(&blades))
+        })
+        .collect();
+    let white = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(120.0, 120.0, 120.0), ..default() });
     commands.insert_resource(Ichor {
         drop: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         wet,
         quad: meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(0.5)).mesh()),
         splats,
+        star: meshes.add(shard_mesh(&star)),
+        white,
+        crowns,
     });
     commands.init_resource::<Splats>();
 }
@@ -125,6 +168,24 @@ fn splat_image(seed: u32) -> Image {
 /// Ichor bursting from a hit at `at` by a shot flying along `dir`;
 /// `strength` 1 for one shard, more for a death.
 pub(super) fn spray(commands: &mut Commands, ichor: &Ichor, at: Vec3, dir: Vec3, strength: f32, seed: u32) {
+    // The impact: a white star, and the crown thrown out against it.
+    let r = |j: i32| hash01(seed as i32, j, 9, 0x1c8);
+    let size = 0.35 * strength.sqrt();
+    commands.spawn((
+        Burst { age: 0.0, life: 0.09, grow: 0.015, size: Vec3::splat(size * 1.2) },
+        Mesh3d(ichor.star.clone()),
+        MeshMaterial3d(ichor.white.clone()),
+        Transform::from_translation(at + dir * 0.3).with_scale(Vec3::ZERO),
+        bevy::light::NotShadowCaster,
+    ));
+    let twist = Quat::from_rotation_y(r(0) * std::f32::consts::TAU);
+    commands.spawn((
+        Burst { age: 0.0, life: 0.22, grow: 0.06, size: Vec3::new(size * 1.6, size * 2.2, size * 1.6) },
+        Mesh3d(ichor.crowns[(r(1) * ichor.crowns.len() as f32) as usize % ichor.crowns.len()].clone()),
+        MeshMaterial3d(ichor.wet.clone()),
+        Transform::from_translation(at).with_rotation(Quat::from_rotation_arc(Vec3::Y, dir) * twist).with_scale(Vec3::ZERO),
+        bevy::light::NotShadowCaster,
+    ));
     let count = (4.0 * strength).round() as i32;
     for k in 0..count {
         let r = |j: i32| hash01(seed as i32, k, j, 0x1c4) - 0.5;
@@ -143,6 +204,25 @@ pub(super) fn spray(commands: &mut Commands, ichor: &Ichor, at: Vec3, dir: Vec3,
             Transform::from_translation(at).with_scale(Vec3::splat(size)),
             bevy::light::NotShadowCaster,
         ));
+    }
+}
+
+/// Bursts grow fast to full size, then shrink away.
+pub(super) fn burst(mut commands: Commands, time: Res<Time>, mut bursts: Query<(Entity, &mut Burst, &mut Transform)>) {
+    let dt = time.delta_secs();
+    for (entity, mut b, mut transform) in &mut bursts {
+        b.age += dt;
+        if b.age >= b.life {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let k = if b.age < b.grow {
+            let t = b.age / b.grow;
+            1.0 - (1.0 - t) * (1.0 - t)
+        } else {
+            1.0 - ((b.age - b.grow) / (b.life - b.grow)).powi(2)
+        };
+        transform.scale = b.size * k;
     }
 }
 
