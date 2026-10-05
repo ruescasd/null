@@ -39,7 +39,9 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt peace                               no swarm
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
-                                              times tougher / hunters keep their distance / face the nearest hunter
+                                              times tougher / hunters circle at a distance (--set tame_at=14) /
+                                              face the nearest hunter
+    --opt biped|beast                         what the swarm assembles into (otherwise either)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
@@ -76,7 +78,8 @@ crashed the GPU driver.
   tuning constants at the top; `player/tether.rs` is the grappling tether's
   state and look; `player/bot.rs` is the scripted test pilot),
   mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`),
-  the weapon, the swarm and its hunters (`combat.rs`, `combat/hunter.rs`;
+  the weapon, the swarm and its hunters (`combat.rs`, `combat/hunter.rs`,
+  `combat/ichor.rs`; creatures move on the procedural rig in `rig.rs`;
   their sounds are synthesised WAVs in `crates/game/src/sounds/`).
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 
@@ -210,8 +213,17 @@ player but darting in to bite; three shards break one. More keep coming,
 faster the longer you last, so standing still is death; the time you last
 and what you destroyed show at the top. Left alone, seven or more close
 together assemble (you hear them grinding, and have a few seconds to break
-them) into a hunter about 3 m tall, each member a piece of its body, which
-stalks you and lunges after a crouch you can see. It takes hits as a whole
+them) into a creature: a tall biped with long arms, or a beast the size of
+a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its
+body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
+coordinating the legs (a trot for the beast), feet that plant and swing on
+an arc to where the body will be, two-bone IK legs, a body that bobs with
+the steps and leans into turns, a chest that leads a turn with the hips
+following, a head that tracks you and now and then glances away, a trailing
+tail, breathing when still, and poses for a crouch and a leap. Its body is
+dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
+and settles, with glowing cores and two eyes. It stalks, crouches where you
+can see it, then the biped dashes and the beast pounces. It takes hits as a whole
 (about four good shots): each shard jolts the piece it strikes and staggers
 the body back, and when it breaks the whole body bursts at once. Every hit
 shows: splinters burst back, a flash lights the body, the struck piece

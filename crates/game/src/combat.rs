@@ -47,7 +47,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, ichor::setup)
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, hunter::gather, hunter::hunt, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, hunter::gather, hunter::hunt, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -141,13 +141,11 @@ struct Streak {
     impact: bool,
 }
 
-/// What a swarmer is doing: hunting on its own, flying to an assembly, or
-/// holding a slot in a hunter's body.
+/// What a swarmer is doing: hunting on its own, or flying to an assembly.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Free,
     Gather(Entity),
-    Bound { hunter: Entity, slot: usize },
 }
 
 #[derive(Component)]
@@ -161,8 +159,6 @@ struct Swarmer {
     /// Seconds until it may bite again.
     bite_in: f32,
     phase: f32,
-    /// A jolt from a hit, metres, decaying (a hunter's members).
-    jolt: Vec3,
 }
 
 /// A piece flying off something broken, or a spark.
@@ -351,7 +347,7 @@ fn fire(
     mut feedback: ResMut<Feedback>,
     camera: Single<(&Transform, &FlyCam), With<Player>>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
-    mut hunters: Query<&mut hunter::Hunter>,
+    mut hunters: Query<(Entity, &mut hunter::Hunter)>,
     ichor: Res<ichor::Ichor>,
     mut light: Single<&mut PointLight, With<MuzzleLight>>,
 ) {
@@ -397,31 +393,41 @@ fn fire(
                 best = Some((along, entity));
             }
         }
-        let end = best.map_or(wall, |(d, _)| d);
-        if let Some((along, entity)) = best
+        // Or a hunter's body, nearer still: it takes the hit as a whole.
+        let mut body: Option<(f32, Entity, usize)> = None;
+        for (entity, h) in &hunters {
+            let limit = best.map_or(wall, |(d, _)| d);
+            if let Some((d, bone)) = h.ray(eye, dir, limit)
+                && body.is_none_or(|(b, ..)| d < b)
+            {
+                body = Some((d, entity, bone));
+            }
+        }
+        let mut end = best.map_or(wall, |(d, _)| d);
+        let mut struck = None;
+        if let Some((d, entity, bone)) = body
+            && let Ok((_, mut h)) = hunters.get_mut(entity)
+        {
+            h.hurt(bone, dir);
+            end = d;
+            struck = Some(eye + dir * d);
+        } else if let Some((along, entity)) = best
             && let Ok((_, mut t, mut s)) = swarm.get_mut(entity)
         {
-            let point = eye + dir * along;
-            if let Mode::Bound { hunter, .. } = s.mode {
-                // A hunter takes the hit as a whole: the piece struck is
-                // jolted, the body staggers.
-                if let Ok(mut h) = hunters.get_mut(hunter) {
-                    h.hurt(dir);
-                }
-                s.jolt += dir * 0.35;
-            } else {
-                s.health -= 1.0;
-                s.velocity += dir * 4.0;
-            }
-            // The piece struck pops.
+            s.health -= 1.0;
+            s.velocity += dir * 4.0;
+            // It pops.
             t.scale *= 1.18;
+            struck = Some(eye + dir * along);
+        }
+        if let Some(point) = struck {
             feedback.hits += 1;
             feedback.at += point;
             sparks(&mut commands, &assets, point, -dir, gun.shots * 31 + k as u32);
             ichor::spray(&mut commands, &ichor, point, dir, 1.0, gun.shots * 37 + k as u32);
         }
         commands.spawn((
-            Streak { from: muzzle, to: eye + dir * end, travelled: 0.0, impact: best.is_none() && end < RANGE },
+            Streak { from: muzzle, to: eye + dir * end, travelled: 0.0, impact: struck.is_none() && end < RANGE },
             Mesh3d(assets.shard.clone()),
             MeshMaterial3d(assets.bright.clone()),
             // Stretched: seen nearly end-on, a short shard would be a dot.
@@ -503,7 +509,7 @@ fn swarm(
             let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
             commands
                 .spawn((
-                    Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0, jolt: Vec3::ZERO },
+                    Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0 },
                     Mesh3d(assets.swarmer.clone()),
                     MeshMaterial3d(assets.dark.clone()),
                     Transform::from_translation(p),
@@ -596,7 +602,7 @@ fn die(
     ichor: Res<ichor::Ichor>,
     mut player: Single<&mut Player>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
-    bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>)>>,
+    bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>, With<hunter::Part>, With<hunter::Eye>)>>,
 ) {
     for (entity, transform, s) in &swarm {
         if s.health > 0.0 {

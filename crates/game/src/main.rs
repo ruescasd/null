@@ -7,6 +7,7 @@ mod figure;
 mod landmarks;
 mod look;
 mod player;
+mod rig;
 mod structures;
 mod terrain;
 
