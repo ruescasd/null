@@ -64,6 +64,9 @@ pub struct Settings {
     /// the cells round it.
     pub reactor: bool,
     pub cables: u32,
+    /// Round: the rings filled in this many arcs with gaps between (0:
+    /// all the way round).
+    pub arcs: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,6 +105,8 @@ struct Lattice {
     thin: f32,
     /// The void in the middle, in slots across (none: 0).
     void: f32,
+    /// Round: filled arcs round the rings (0: all the way).
+    arcs: u32,
 }
 
 impl Lattice {
@@ -120,7 +125,17 @@ impl Lattice {
     }
 
     fn inside(&self, (x, y, z): Key) -> bool {
-        x.abs() <= self.nx && z.abs() <= self.nz && (0..self.ny).contains(&y) && (x as f32).hypot(z as f32) >= self.void
+        x.abs() <= self.nx && z.abs() <= self.nz && (0..self.ny).contains(&y) && (x as f32).hypot(z as f32) >= self.void && self.in_arc(z)
+    }
+
+    /// Whether a row round the rings is in one of the filled arcs (three
+    /// fifths of each arc's share of the circle; the rest a gap).
+    fn in_arc(&self, z: i32) -> bool {
+        if self.arcs == 0 {
+            return true;
+        }
+        let t = (z + self.nz) as f32 / (2 * self.nz + 1) as f32;
+        (t * self.arcs as f32).fract() < 0.6
     }
 
     fn empty(&self, k: Key) -> bool {
@@ -245,6 +260,7 @@ fn grow(half: Vec2, s: Settings, seed: u32) -> Lattice {
         cores: Vec::new(),
         thin: s.thin,
         void: if s.radial.is_some() { 0.0 } else { s.void / w * 0.5 },
+        arcs: if s.radial.is_some() { s.arcs } else { 0 },
     };
     let r = |a: i32, b: i32, c: i32| hash01(a * 7919 + c, b, 0x1a7, seed);
     // How central a column is: round, the inner rings (by the reactor);
@@ -825,7 +841,8 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
             Some((inner, _)) => inner,
             None => s.void * 0.5,
         };
-        let radius = void * 0.55;
+        // Slender, and well clear of the city.
+        let radius = (void * 0.25).clamp(60.0, 180.0);
         let height = l.ny as f32 * h * 1.25;
         out.extend(crate::reactor::reactor(Vec3::ZERO, radius, height, tone));
         // The cells nearest the void, and where each faces it.
@@ -888,6 +905,7 @@ mod tests {
             radial: None,
             reactor: false,
             cables: 0,
+            arcs: 0,
         }
     }
 

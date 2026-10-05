@@ -109,6 +109,9 @@ pub enum Form {
         reactor: bool,
         #[serde(default)]
         cables: u32,
+        /// Round: filled arcs with gaps between (0: all the way round).
+        #[serde(default)]
+        arcs: u32,
         #[serde(default)]
         tone: f32,
     },
@@ -699,7 +702,7 @@ impl Grower<'_> {
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
             }
-            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, ramps, ramp_grain, void, radial, reactor, cables, tone: t } => {
+            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, ramps, ramp_grain, void, radial, reactor, cables, arcs, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
                 let settings = crate::lattice::Settings {
                     cell: *cell,
@@ -718,6 +721,7 @@ impl Grower<'_> {
                     radial: *radial,
                     reactor: *reactor,
                     cables: *cables,
+                    arcs: *arcs,
                 };
                 let solids = crate::lattice::lattice(Vec3::new(center.x, floor, center.y), dir, half, settings, tone + t, seed);
                 if solids.len() > self.budget {

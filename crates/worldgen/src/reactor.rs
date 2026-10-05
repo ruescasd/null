@@ -25,57 +25,55 @@ fn ring(out: &mut Vec<Solid>, center: Vec3, radius: f32, deep: f32, (y0, y1): (f
     }
 }
 
-/// The reactor at `center` (its base on the ground), `radius` across the
-/// drum and `height` to the top of the crown: a stepped plinth with giant
-/// buttresses round it, a lower drum ribbed and banded, a narrower upper
-/// drum with deep vertical channels, setbacks and a lantern.
+/// The reactor's radius at height `t` (0 at the base, 1 at the top), as a
+/// share of its full radius: wide at the base, a long thin waist, wide
+/// again at the top (like a tokamak's central column), eased between.
+fn profile(t: f32) -> f32 {
+    let ease = |a: f32, b: f32, x: f32| {
+        let u = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        u * u * (3.0 - 2.0 * u)
+    };
+    let waist = 0.42;
+    1.0 - (1.0 - waist) * ease(0.12, 0.3, t) + (1.0 - waist) * ease(0.7, 0.86, t)
+}
+
+/// The reactor at `center` (its base on the ground), `radius` at its
+/// widest and `height` to the top of the crown: a stepped plinth, then a
+/// spool (wide, a long thin waist, wide) in many thin bands, grooved by
+/// fine vertical etchings that run its whole height, joints every so
+/// often, a crown and a lantern.
 pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> {
     let mut out = Vec::new();
-    let n = ((TAU * radius / 14.0) as usize).clamp(32, 96);
     // A stepped plinth.
-    ring(&mut out, center, radius * 1.02, radius * 0.25, (-8.0, 14.0), n, tone + 0.02);
-    ring(&mut out, center, radius * 1.02, radius * 0.12, (14.0, 30.0), n, tone + 0.03);
-    // Giant buttresses: wedges leaning on the lower drum, all round.
-    let fins = 12;
-    let lower = height * 0.5;
-    for i in 0..fins {
-        let a = TAU * (i as f32 + 0.5) / fins as f32;
-        let run = radius * 0.6;
-        let rise = lower * 0.55;
-        // Tall side (+x) against the drum: +x points inwards.
-        let turn = Quat::from_rotation_y(-(a + std::f32::consts::PI));
-        let mid = center + Vec3::new(a.cos(), 0.0, a.sin()) * (radius + run * 0.5) + Vec3::Y * ((rise - 8.0) * 0.5);
-        out.push(Solid { wedge: true, ..boxed(mid, Vec3::new(run * 0.5, (rise + 8.0) * 0.5, 6.0), turn, tone + 0.01) });
-    }
-    // The lower drum: ribs and bands.
-    ring(&mut out, center, radius - 8.0, 8.0, (0.0, lower), n, tone - 0.02);
-    for i in (0..n).step_by(4) {
-        let a = TAU * i as f32 / n as f32;
-        let p = center + Vec3::new(a.cos(), 0.0, a.sin()) * (radius + 3.0) + Vec3::Y * (lower * 0.5);
-        out.push(boxed(p, Vec3::new(3.0, lower * 0.5, 4.0), Quat::from_rotation_y(-a), tone + 0.03));
-    }
-    let mut y = 60.0;
-    while y < lower - 20.0 {
-        ring(&mut out, center, radius, 6.0, (y, y + 6.0), n, tone + 0.05);
-        y += 70.0;
-    }
-    // A shoulder, then the upper drum: narrower, cut by deep channels.
-    ring(&mut out, center, radius * 0.72, radius * 0.3, (lower, lower + 14.0), n, tone + 0.04);
-    let upper = height * 0.88;
-    let ur = radius * 0.72;
-    let m = (n * 3 / 4).max(24);
-    for i in 0..m {
-        // Every third segment left out deep: a channel.
-        let deep = if i % 3 == 0 { 3.0 } else { 10.0 };
-        let a = TAU * i as f32 / m as f32;
-        let width = TAU * ur / m as f32 * 0.5 + 0.05;
-        let p = center + Vec3::new(a.cos(), 0.0, a.sin()) * (ur - 10.0 + deep * 0.5) + Vec3::Y * ((lower + upper) * 0.5);
-        out.push(boxed(p, Vec3::new(deep * 0.5, (upper - lower) * 0.5, width), Quat::from_rotation_y(-a), if i % 3 == 0 { tone - 0.06 } else { tone - 0.01 }));
+    let n = 120;
+    ring(&mut out, center, radius * 1.05, radius * 0.3, (-8.0, 16.0), n / 2, tone + 0.02);
+    ring(&mut out, center, radius * 1.05, radius * 0.14, (16.0, 34.0), n / 2, tone + 0.03);
+    // The spool, band by band; the same segments in every band, so their
+    // grooves line up into etchings running the whole height.
+    let top = height * 0.94;
+    let bands = 90;
+    let deep = 7.0;
+    for b in 0..bands {
+        let (t0, t1) = (b as f32 / bands as f32, (b + 1) as f32 / bands as f32);
+        let r = radius * profile((t0 + t1) * 0.5);
+        let (y0, y1) = (top * t0, top * t1 + 0.05);
+        let joint = b % 9 == 8;
+        for i in 0..n {
+            let a = TAU * i as f32 / n as f32;
+            // Every fourth segment a groove, set back; joints a little proud.
+            let groove = i % 4 == 0 && !joint;
+            let set = if groove { 2.5 } else if joint { -1.2 } else { 0.0 };
+            let width = TAU * r / n as f32 * 0.5 + 0.05;
+            let p = center + Vec3::new(a.cos(), 0.0, a.sin()) * (r - deep * 0.5 - set) + Vec3::Y * ((y0 + y1) * 0.5);
+            let shade = if groove { tone - 0.07 } else if joint { tone + 0.04 } else { tone - 0.01 };
+            out.push(boxed(p, Vec3::new(deep * 0.5, (y1 - y0) * 0.5, width), Quat::from_rotation_y(-a), shade));
+        }
     }
     // The crown: setbacks and a lantern.
-    ring(&mut out, center, ur * 0.86, ur * 0.18, (upper, upper + height * 0.03), m, tone + 0.02);
-    ring(&mut out, center, ur * 0.6, ur * 0.16, (upper + height * 0.03, upper + height * 0.06), m, tone + 0.03);
-    ring(&mut out, center, ur * 0.25, ur * 0.06, (upper + height * 0.06, height), (m / 2).max(16), tone + 0.05);
+    let r = radius * profile(1.0);
+    ring(&mut out, center, r * 0.8, r * 0.2, (top, top + height * 0.02), n / 2, tone + 0.02);
+    ring(&mut out, center, r * 0.55, r * 0.2, (top + height * 0.02, top + height * 0.035), n / 2, tone + 0.03);
+    ring(&mut out, center, r * 0.18, r * 0.06, (top + height * 0.035, height), 24, tone + 0.05);
     out
 }
 
