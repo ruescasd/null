@@ -193,9 +193,11 @@ slimmer and finer-grained with glowing fragments threaded through every part
 (strange only in its substance). `--opt hunched`
 gives the earlier menacing humanoid (head forward and low, shoulders raised),
 `--opt creature` a feral creature with digitigrade legs. The human's hands and
-feet are hard, solid pieces; `--opt longhands` gives it long three-digit hands
-instead, and `--opt outline` draws it as line art (pale fragments, each
-ringed in black), the rest of the world unchanged. One stands about 20 m ahead of
+feet are hard, solid pieces. `--set hand=N` chooses its hands (0 hard human,
+1 long three-digit, 2 a single blade, 3 two razor prongs) and `--set head=N`
+its head (0 fragments, 1 hard human, 2 a long forward wedge, 3 a tall crest,
+4 a wide disc); `--opt outline` draws it as line art (each piece ringed in
+black), the rest of the world unchanged. One stands about 20 m ahead of
 the spawn point and walks towards you; `--opt statue` keeps it still,
 `--opt nofigures` removes it.
 

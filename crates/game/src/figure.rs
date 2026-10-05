@@ -360,7 +360,7 @@ fn spawn(
     // pale ground and the black sky (all-dark fragments vanish against it).
     // With line art the fragments are pale and matte, so the black lines
     // read as ink on paper.
-    let tones = if args.opt("outline") { [(0.55, 0.8, 0.3), (0.42, 0.85, 0.3), (0.3, 0.8, 0.3)] } else { [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)] };
+    let tones = if args.opt("outline") { [(0.3, 0.75, 0.35), (0.23, 0.8, 0.35), (0.16, 0.75, 0.35)] } else { [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)] };
     let finishes = tones.map(|(tone, rough, refl)| {
         materials.add(StandardMaterial {
             base_color: Color::srgb(tone, tone, tone),
@@ -439,11 +439,70 @@ fn spawn(
         // The human's hands and feet are hard, solid pieces rather than
         // fragments: a palm, jointed fingers and a thumb; a foot, a heel and
         // a toe cap. Offsets in metres along the bone, converted below.
+        // `--set head=N`: 0 fragments; 1 a hard human head; 2 a long narrow
+        // wedge of a head reaching forward; 3 a tall thin crest; 4 a wide
+        // flat disc. `--set hand=N`: 0 hard human hands; 1 long three-digit
+        // hands; 2 a single blade; 3 two razor prongs.
+        let head = args.num("head", 0.0) as i32;
+        let hand = if args.opt("longhands") { 1 } else { args.num("hand", 0.0) as i32 };
+        if solid && matches!(bone, Bone::Skull) && head > 0 {
+            // The skull's frame: x across, y up, z forward.
+            let l = part.length;
+            let mut pieces: Vec<(Vec3, Vec3, Quat, usize)> = Vec::new();
+            match head {
+                1 => {
+                    pieces.push((Vec3::new(0.0, l * 0.55, -0.01), Vec3::new(0.095, l * 0.42, 0.12), Quat::IDENTITY, 0));
+                    pieces.push((Vec3::new(0.0, l * 0.14, 0.03), Vec3::new(0.072, l * 0.13, 0.09), Quat::IDENTITY, 0));
+                }
+                2 => {
+                    // Long and narrow, reaching forward to a point, a fin behind.
+                    pieces.push((Vec3::new(0.0, l * 0.5, 0.05), Vec3::new(0.06, l * 0.32, 0.2), Quat::IDENTITY, 0));
+                    pieces.push((Vec3::new(0.0, l * 0.45, 0.32), Vec3::new(0.08, 0.05, 0.12), Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), 1));
+                    pieces.push((Vec3::new(0.0, l * 0.75, -0.2), Vec3::new(0.012, l * 0.35, 0.09), Quat::IDENTITY, 0));
+                }
+                3 => {
+                    // A tall thin blade of a head.
+                    pieces.push((Vec3::new(0.0, l * 0.95, 0.0), Vec3::new(0.035, l * 0.95, 0.15), Quat::IDENTITY, 0));
+                    pieces.push((Vec3::new(0.0, l * 0.2, 0.02), Vec3::new(0.06, l * 0.2, 0.09), Quat::IDENTITY, 0));
+                }
+                _ => {
+                    // A wide flat disc on a short stalk.
+                    pieces.push((Vec3::new(0.0, l * 0.25, 0.0), Vec3::new(0.055, l * 0.25, 0.055), Quat::IDENTITY, 0));
+                    pieces.push((Vec3::new(0.0, l * 0.62, 0.02), Vec3::new(0.27, 0.045, 0.23), Quat::IDENTITY, 0));
+                    pieces.push((Vec3::new(0.0, l * 0.62 + 0.06, 0.0), Vec3::new(0.12, 0.03, 0.1), Quat::IDENTITY, 0));
+                }
+            }
+            for (n, (offset, half, rotation, shape)) in pieces.into_iter().enumerate() {
+                let offset = Vec3::new(offset.x, offset.y / l.max(0.01), offset.z);
+                let phase = hash01(index as i32, n as i32, 9, 0xf18) * 100.0;
+                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, hard.clone(), half);
+                count += 1;
+            }
+            continue;
+        }
         if solid && matches!(bone, Bone::Claw(_) | Bone::Metatarsal(_) | Bone::Toe(_)) {
             let k = part.start.0 / if matches!(bone, Bone::Claw(_)) { 0.12 } else { 0.12 };
             let mut pieces: Vec<(Vec3, Vec3, Quat)> = Vec::new();
+            // Blades: the wedge shape's long straight edge on one side, a
+            // point at the far end, broad across (x) and thin front to back,
+            // so they show their shape from the front; `outer` turns the
+            // straight edge to the other side.
+            let mut blades: Vec<(Vec3, Vec3, Quat)> = Vec::new();
+            let flat = |outer: bool| if outer { Quat::IDENTITY } else { Quat::from_rotation_y(std::f32::consts::PI) };
             match bone {
-                Bone::Claw(_) if args.opt("longhands") => {
+                Bone::Claw(_) if hand == 2 => {
+                    // A single blade, no hand at all.
+                    blades.push((Vec3::new(0.0, 0.03 + 0.28, 0.0), Vec3::new(0.065, 0.28, 0.012), flat(true)));
+                }
+                Bone::Claw(_) if hand == 3 => {
+                    // Two razor prongs, a little apart, edges outward.
+                    for (x, fan, outer) in [(-0.035f32, 0.12f32, true), (0.035, -0.12, false)] {
+                        // Fanned apart across (about z), straight edges out.
+                        let dir = Vec3::new(-fan.sin(), fan.cos(), 0.0);
+                        blades.push((Vec3::new(x, 0.02, 0.0) + dir * 0.26, Vec3::new(0.035, 0.25, 0.01), Quat::from_rotation_z(fan) * flat(outer)));
+                    }
+                }
+                Bone::Claw(_) if hand == 1 => {
                     // Not a human hand: a narrow palm and three very long,
                     // slender digits of three joints each, fanned a little.
                     pieces.push((Vec3::new(0.0, 0.04, 0.0), Vec3::new(0.02 * k, 0.04, 0.04 * k), Quat::IDENTITY));
@@ -479,10 +538,11 @@ fn spawn(
                     pieces.push((Vec3::new(0.0, part.length * 0.5, 0.01), Vec3::new(0.056 * k, part.length * 0.5, 0.026), Quat::IDENTITY));
                 }
             }
-            for (n, (offset, half, rotation)) in pieces.into_iter().enumerate() {
+            let shaped = pieces.into_iter().map(|p| (p, 0)).chain(blades.into_iter().map(|p| (p, 1)));
+            for (n, ((offset, half, rotation), shape)) in shaped.enumerate() {
                 let offset = Vec3::new(offset.x, offset.y / part.length.max(0.01), offset.z);
                 let phase = hash01(index as i32, n as i32, 9, 0xf17) * 100.0;
-                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, 0, hard.clone(), half);
+                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, hard.clone(), half);
                 count += 1;
             }
             continue;
@@ -559,7 +619,7 @@ fn spawn(
                 // doesn't gather to one side).
                 let glows = if solid {
                     let (cx, cy, cz) = (b.center.x / (wide * 0.5), b.center.y, b.center.z / (deep * 0.5));
-                    let core = (cx / 0.6).powi(2) + ((cy - 0.55) / 0.3).powi(2) + (cz / 0.7).powi(2) < 1.0;
+                    let core = (cx / 0.6).powi(2) + ((cy - 0.36) / 0.28).powi(2) + (cz / 0.7).powi(2) < 1.0;
                     layer == 0 && matches!(bone, Bone::Chest) && core && r(11) < 0.75
                 } else {
                     layer == 0 && deep_inside && r(11) < chance
@@ -778,7 +838,9 @@ fn follow(
     let t = time.elapsed_secs();
     // The lamp sits in the middle of the chest.
     let chest = figure.poses[2];
-    light.translation = chest.start + chest.rotation * Vec3::Y * chest.length * 0.55;
+    // The lamp sits in the chest's glowing core (lower for the human).
+    let at = if figure.anatomy == Anatomy::Human { 0.38 } else { 0.55 };
+    light.translation = chest.start + chest.rotation * Vec3::Y * chest.length * at;
     for (mut e, mut transform) in &mut elements {
         let pose = figure.poses[e.bone];
         if pose.length <= 0.0 {
