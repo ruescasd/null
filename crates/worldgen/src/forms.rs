@@ -94,6 +94,31 @@ pub enum Form {
         #[serde(default)]
         tone: f32,
     },
+    /// A scene: `fore` (a form) grown in a square `fore_half` metres either
+    /// side of the middle, and a mega backdrop behind it (towards +z):
+    /// `count` colossal elements of `kind` (stairs, wedges, slabs, pylons,
+    /// mixed), turned every which way if `varied`, else all one way.
+    Backdrop {
+        #[serde(default)]
+        fore: Option<String>,
+        #[serde(default = "fore_half")]
+        fore_half: f32,
+        kind: String,
+        #[serde(default = "four")]
+        count: u32,
+        #[serde(default)]
+        varied: bool,
+        #[serde(default)]
+        tone: f32,
+    },
+    /// A field of city cells on the ground, `2n + 1` across each way, 96 m
+    /// apart with streets between their decks: a human-scale foreground.
+    Field {
+        #[serde(default = "two")]
+        n: u32,
+        #[serde(default)]
+        tone: f32,
+    },
     /// One city cell on the ground, for the unit lab: a deck the size of a
     /// lattice cell `len` slots long (96 m slots) with what stands on it
     /// (`kind`: plaza, court, terraces, gallery, tower), up to `storeys`
@@ -374,6 +399,14 @@ fn one_tower() -> u32 {
     1
 }
 
+fn fore_half() -> f32 {
+    440.0
+}
+
+fn four() -> u32 {
+    4
+}
+
 fn one() -> u32 {
     1
 }
@@ -477,7 +510,9 @@ pub fn references(form: &Form) -> Vec<&str> {
         | Form::Fractal { .. }
         | Form::Compose { .. }
         | Form::Lattice { .. }
-        | Form::Cell { .. } => vec![],
+        | Form::Cell { .. }
+        | Form::Field { .. } => vec![],
+        Form::Backdrop { fore, .. } => fore.iter().map(|s| s.as_str()).collect(),
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -663,6 +698,43 @@ impl Grower<'_> {
                 }
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
+            }
+            Form::Backdrop { fore, fore_half, kind, count, varied, tone: t } => {
+                let Some((center, _, _)) = inscribed_box(poly) else { return };
+                if let Some(fore) = fore {
+                    let h = *fore_half;
+                    let square = [Vec2::new(-h, -h), Vec2::new(h, -h), Vec2::new(h, h), Vec2::new(-h, h)].map(|p| p + center);
+                    // The same foreground in every scene, to compare backdrops.
+                    self.grow(fore, &square, floor, tone, 0xf0e, depth + 1);
+                }
+                let kind = crate::mega::Kind::from_name(kind);
+                self.out.solids.extend(crate::mega::backdrop(Vec3::new(center.x, floor, center.y), kind, *count, *varied, tone + t, seed));
+            }
+            Form::Field { n, tone: t } => {
+                let Some((center, _, _)) = inscribed_box(poly) else { return };
+                let tone = tone + t;
+                let n = *n as i32;
+                let half = (42.24, 42.24);
+                let deck = 1.5;
+                for i in -n..=n {
+                    for j in -n..=n {
+                        let cell_seed = seed ^ ((i + 50) as u32 * 7919 + (j + 50) as u32 * 104_729);
+                        let kind = crate::cellunit::pick(1, crate::noise::hash01(i, j, 0xf1e, seed));
+                        let at = Vec3::new(center.x + i as f32 * 96.0, floor, center.y + j as f32 * 96.0);
+                        self.out.solids.push(crate::structure::Solid {
+                            detail: false,
+                            wedge: false,
+                            round: false,
+                            center: at + Vec3::new(0.0, deck - 3.0, 0.0),
+                            rotation: glam::Quat::IDENTITY,
+                            half: Vec3::new(half.0, 3.0, half.1),
+                            albedo: tone,
+                        });
+                        let turn = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 * (crate::noise::hash01(i, j, 0xf1f, seed) * 4.0).floor());
+                        let unit = crate::cellunit::unit(kind, half, 5 + (crate::noise::hash01(i, j, 0xf20, seed) * 3.0) as i32, tone, cell_seed);
+                        self.out.solids.extend(unit.into_iter().map(|s| crate::structure::Solid { center: at + Vec3::Y * deck + turn * s.center, rotation: turn * s.rotation, ..s }));
+                    }
+                }
             }
             Form::Cell { kind, len, storeys, old, tone: t } => {
                 let Some((center, dir, _)) = inscribed_box(poly) else { return };

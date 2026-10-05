@@ -252,10 +252,19 @@ fn hall(k: &mut Kit, r: Rect, storeys: i32) {
     let ground = if storeys >= 3 { 2.0 * STOREY } else { STOREY };
     let deep = 3.0;
     let bay = k.pick(&[5.0, 6.0, 7.5]);
-    // The arcade's gallery: a core set back behind the arches.
-    let core = Rect::new(r.lo.x + deep, r.lo.y + deep, r.hi.x - deep, r.hi.y - deep);
-    if core.size().min_element() > 1.0 {
-        k.span(Vec3::new(core.lo.x, 0.0, core.lo.y), Vec3::new(core.hi.x, ground, core.hi.y), 0.0);
+    // Behind the arcade, an open hall of piers carrying the floors above:
+    // the arches lead into space, not onto a wall.
+    let inner = Rect::new(r.lo.x + deep, r.lo.y + deep, r.hi.x - deep, r.hi.y - deep);
+    if inner.size().min_element() > 1.0 {
+        let size = inner.size();
+        let (nx, nz) = (((size.x / bay).round() as i32).max(1), ((size.y / bay).round() as i32).max(1));
+        let pier = 0.6;
+        for i in 0..=nx {
+            for j in 0..=nz {
+                let p = Vec3::new(inner.lo.x + size.x * i as f32 / nx as f32, 0.0, inner.lo.y + size.y * j as f32 / nz as f32);
+                k.span(p + Vec3::new(-pier, 0.0, -pier), p + Vec3::new(pier, ground, pier), 0.01);
+            }
+        }
     }
     for (a, b, out) in r.sides(0.0) {
         let n = arches_for((b - a).length(), bay);

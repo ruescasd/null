@@ -19,6 +19,7 @@ pub mod fractal;
 pub mod ifs;
 pub mod lab;
 pub mod lattice;
+pub mod mega;
 pub mod plates;
 pub mod rack;
 pub mod stairs;
