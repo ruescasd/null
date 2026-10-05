@@ -186,9 +186,11 @@ far, then stepping on an arc; two-bone IK legs); each bone's volume is filled
 by a fractal fill of fragments (cubes, wedges, shards) held to the bone by
 springs, a dense core with a frayed edge, so the body is held together
 rather than solid. A core of glowing shards and a lamp inside the chest
-light it from within, through its own gaps. The default is a menacing
-humanoid (hunched, head forward and low, shoulders raised); `--opt creature`
-gives a feral creature with digitigrade legs. One stands about 20 m ahead of
+light it from within, through its own gaps. The default is a human of exact
+proportions, about 2.4 m tall, upright and calm, with glowing fragments
+threaded through every part: strange only in its substance. `--opt hunched`
+gives the earlier menacing humanoid (head forward and low, shoulders raised),
+`--opt creature` a feral creature with digitigrade legs. One stands about 20 m ahead of
 the spawn point and walks towards you; `--opt statue` keeps it still,
 `--opt nofigures` removes it.
 
