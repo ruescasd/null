@@ -53,7 +53,7 @@ pub fn build(poly: &[Vec2], floor: f32, height: f32, depth: f32, tone: f32, seed
                 return;
             }
             let p = a + e * ((u0 + u1) * 0.5) + out_dir * (thick * 0.5);
-            out.push(Solid {
+            out.push(Solid { glow: 0.0,
                 detail: false,
                 wedge: false,
                 round: false,

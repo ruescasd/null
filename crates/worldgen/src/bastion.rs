@@ -48,7 +48,7 @@ struct Tower {
 }
 
 fn solid(center: Vec3, yaw: f32, half: Vec3, albedo: f32) -> Solid {
-    Solid { detail: false, wedge: false, round: false, center, rotation: Quat::from_rotation_y(yaw), half, albedo }
+    Solid { glow: 0.0, detail: false, wedge: false, round: false, center, rotation: Quat::from_rotation_y(yaw), half, albedo }
 }
 
 /// The yaw that turns a box's x along the tangent at angle `a` (its z then

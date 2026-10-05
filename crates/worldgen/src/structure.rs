@@ -445,6 +445,9 @@ pub struct Solid {
     /// A fine piece (a step, a moulding, an arch's strip): it may be left
     /// out of the versions shown from afar, if it is small too.
     pub detail: bool,
+    /// How brightly it glows (0: not at all; about 1: as bright as the
+    /// light filaments).
+    pub glow: f32,
     pub wedge: bool,
     pub round: bool,
     pub center: Vec3,
@@ -655,7 +658,7 @@ impl Builder<'_> {
             let r = |k: i32| hash01(n as i32, k, leaf.block.level as i32, seed);
             let albedo = style.albedo + style.albedo_spread * (r(0) - 0.5) * 2.0;
             let Some((module, turn)) = choose(style, leaf, r(1), r(2)) else {
-                self.out.push(Solid {
+                self.out.push(Solid { glow: 0.0,
                     detail: false,
                     wedge: false,
                     round: false,
@@ -683,14 +686,14 @@ impl Builder<'_> {
     }
 
     fn push(&mut self, b: Block, wedge: bool, albedo: f32) {
-        self.out.push(Solid { detail: false, wedge, round: false, center: b.center, rotation: b.rotation, half: b.half, albedo });
+        self.out.push(Solid { glow: 0.0, detail: false, wedge, round: false, center: b.center, rotation: b.rotation, half: b.half, albedo });
     }
 
     /// A round tube from `a` to `b`.
     fn tube(&mut self, a: Vec3, b: Vec3, radius: f32, albedo: f32) {
         let d = b - a;
         let Some(dir) = d.try_normalize() else { return };
-        self.out.push(Solid {
+        self.out.push(Solid { glow: 0.0,
             detail: false,
             wedge: false,
             round: true,
@@ -994,6 +997,9 @@ pub fn mesh_tiles(solids: &[Solid], tile: f32) -> Vec<((i32, i32), ColumnMesh)> 
                 mesh.ao.push(ao);
             }
             mesh.face_size(4, (hi[a] - lo[a]).min(hi[b] - lo[b]));
+            if s.glow > 0.0 {
+                mesh.glow_of(4, s.glow);
+            }
             mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
     }
@@ -1012,6 +1018,9 @@ pub fn mesh_tiles(solids: &[Solid], tile: f32) -> Vec<((i32, i32), ColumnMesh)> 
                 mesh.ao.push(ao_at(*c, normal.y < -0.5));
             }
             mesh.face_size(corners.len(), crate::mesh::polygon_width(&p));
+            if s.glow > 0.0 {
+                mesh.glow_of(corners.len(), s.glow);
+            }
             for k in 1..corners.len() as u32 - 1 {
                 mesh.indices.extend_from_slice(&[base, base + k, base + k + 1]);
             }
@@ -1065,6 +1074,9 @@ fn round(mesh: &mut ColumnMesh, s: &Solid) {
         mesh.ao.push(0.75 + 0.25 * n.y.max(0.0));
     }
     mesh.face_size(2 * ROUND_SIDES, width);
+    if s.glow > 0.0 {
+        mesh.glow_of(2 * ROUND_SIDES, s.glow);
+    }
     let n = ROUND_SIDES as u32;
     for k in 0..n {
         let j = (k + 1) % n;
@@ -1216,7 +1228,7 @@ mod tests {
     #[test]
     fn faces_point_outward() {
         for wedge in [false, true] {
-            let s = Solid { detail: false, wedge, round: false, center: Vec3::new(3.0, 1.0, -2.0), rotation: Quat::from_rotation_y(0.7), half: Vec3::new(2.0, 1.0, 3.0), albedo: 0.1 };
+            let s = Solid { glow: 0.0, detail: false, wedge, round: false, center: Vec3::new(3.0, 1.0, -2.0), rotation: Quat::from_rotation_y(0.7), half: Vec3::new(2.0, 1.0, 3.0), albedo: 0.1 };
             let m = mesh(&[s]);
             for tri in m.indices.chunks(3) {
                 let p = |i: u32| Vec3::from(m.positions[i as usize]);

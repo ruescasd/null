@@ -73,7 +73,7 @@ impl Kit {
         if half.min_element() < 0.005 {
             return;
         }
-        self.out.push(Solid { detail, wedge: false, round, center, rotation, half, albedo: self.tone + shade });
+        self.out.push(Solid { glow: 0.0, detail, wedge: false, round, center, rotation, half, albedo: self.tone + shade });
     }
 
     /// A box from `lo` to `hi`.

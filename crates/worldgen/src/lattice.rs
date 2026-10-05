@@ -441,7 +441,7 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
     let load_of = |k: Key| load.get(&k).copied().unwrap_or(0.0).max(1.0);
 
     let mut out = Vec::new();
-    let boxed = |center: Vec3, half: Vec3, albedo: f32| Solid {
+    let boxed = |center: Vec3, half: Vec3, albedo: f32| Solid { glow: 0.0,
         detail: false,
         wedge: false,
         round: false,
@@ -516,9 +516,12 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
         let variant = (r(i as i32, 5, 61) * 3.0) as u32;
         let place = Vec3::new((lo.x + hi.x) * 0.5, y1, (lo.z + hi.z) * 0.5);
         // Round, a deck is as wide across as its row is at its radius.
-        let (on_ring, angle, radius) = polar(place);
+        let (on_ring, angle, _) = polar(place);
         let across = match rings {
-            Some((_, step)) => radius * step * 0.5 - margin,
+            Some((_, step)) => {
+                let (_, _, inner) = polar(Vec3::new(lo.x, 0.0, place.z));
+                inner * step * 0.5 - margin
+            }
             None => w * 0.5 - margin,
         };
         let half = (len as f32 * w * 0.5 - margin, across);
@@ -822,7 +825,25 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
     // Round: bend the lattice into its rings, each piece placed and turned
     // at its own radius and stretched across to its row's width there.
     if let Some((_, step)) = rings {
-        out = out
+        // Long pieces running outward (decks, rails, walkways, balconies)
+        // are cut into short lengths first, so each length is as wide as
+        // the deck it lies on, there.
+        let piece = w * 0.2;
+        let cut: Vec<Solid> = out
+            .into_iter()
+            .flat_map(|q| {
+                let pieces = if q.rotation == Quat::IDENTITY && !q.round && !q.wedge { ((q.half.x * 2.0 / piece).ceil() as i32).max(1) } else { 1 };
+                (0..pieces).map(move |i| {
+                    if pieces == 1 {
+                        return q;
+                    }
+                    let len = q.half.x * 2.0 / pieces as f32;
+                    let x = q.center.x - q.half.x + len * (i as f32 + 0.5);
+                    Solid { center: Vec3::new(x, q.center.y, q.center.z), half: Vec3::new(len * 0.5 + 0.01, q.half.y, q.half.z), ..q }
+                })
+            })
+            .collect();
+        out = cut
             .into_iter()
             .map(|q| {
                 let (center, angle, radius) = polar(q.center);
@@ -852,13 +873,13 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
                 let c = at(k.0, k.2);
                 let (point, facing) = match rings {
                     Some(_) if k.0 == -l.nx => {
-                        let (p, _, _) = polar(c - Vec3::X * (w * 0.5 - margin) + Vec3::Y * (bottom(k) - 1.0));
+                        let (p, _, _) = polar(c - Vec3::X * (w * 0.5 - margin) + Vec3::Y * surface(k));
                         (p, -p.with_y(0.0).normalize_or_zero())
                     }
                     None if (k.0 as f32).hypot(k.2 as f32) < l.void + 1.6 => {
                         let to = (-c).with_y(0.0).normalize_or_zero();
                         let side = if to.x.abs() > to.z.abs() { Vec3::new(to.x.signum(), 0.0, 0.0) } else { Vec3::new(0.0, 0.0, to.z.signum()) };
-                        (c + side * (w * 0.5 - margin) + Vec3::Y * (bottom(k) - 1.0), side)
+                        (c + side * (w * 0.5 - margin) + Vec3::Y * surface(k), side)
                     }
                     _ => continue,
                 };
@@ -873,10 +894,16 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
             // From the drum, a little above, round towards the cell.
             let toward = (point.with_y(0.0)).normalize_or_zero();
             let toward = if toward == Vec3::ZERO { -facing } else { toward };
-            let from = toward * radius + Vec3::Y * (point.y + 30.0 + r(e as i32, 18, 401) * 120.0).min(height * 0.8);
-            let span = (point - from).length();
+            let y = (point.y + 30.0 + r(e as i32, 18, 401) * 120.0).min(height * 0.8);
+            // Start on the reactor's surface, sunk into it a little.
+            let from = toward * (crate::reactor::surface(radius, height, y) - 3.0) + Vec3::Y * y;
             let thick = 2.5 + r(e as i32, 19, 402) * 3.5;
-            out.extend(crate::reactor::cable(from, point, span * (0.06 + 0.06 * r(e as i32, 20, 403)), thick, tone - 0.03));
+            // End in an anchor on the deck: the cable meets it at its middle.
+            let size = (thick * 3.0).max(8.0);
+            let end = point + Vec3::Y * (size * 0.5) - facing * 0.5;
+            let span = (end - from).length();
+            out.extend(crate::reactor::anchor(point, facing, size, tone));
+            out.extend(crate::reactor::cable(from, end, span * (0.06 + 0.06 * r(e as i32, 20, 403)), thick, tone - 0.03));
         }
     }
     let rot = Quat::from_rotation_y((-dir.y).atan2(dir.x));

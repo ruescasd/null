@@ -375,7 +375,7 @@ impl Out<'_> {
             return;
         }
         let albedo = self.albedo(shade);
-        self.work.solids.push(Solid { detail: false, wedge: false, round: false, center, rotation, half, albedo });
+        self.work.solids.push(Solid { glow: 0.0, detail: false, wedge: false, round: false, center, rotation, half, albedo });
     }
 
     fn tube(&mut self, from: Vec3, to: Vec3, radius: f32, shade: f32) {

@@ -72,7 +72,7 @@ impl Tower {
             return;
         }
         let c = (lo + hi) * 0.5;
-        self.out.push(Solid {
+        self.out.push(Solid { glow: 0.0,
             detail: false,
             wedge: false,
             round: false,

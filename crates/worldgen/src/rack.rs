@@ -107,7 +107,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
             let p = start + e * along + inn * across;
             Vec3::new(p.x, y, p.y)
         };
-        let solid = |center: Vec3, half: Vec3, albedo: f32| Solid { detail: false, wedge: false, round: false, center, rotation: yaw, half, albedo };
+        let solid = |center: Vec3, half: Vec3, albedo: f32| Solid { glow: 0.0, detail: false, wedge: false, round: false, center, rotation: yaw, half, albedo };
         let r = |k: i32, j: i32| hash01(i as i32 * 131 + k, j, 0x7ac, seed);
 
         // The frame: columns, beams along both lines and across.
@@ -310,7 +310,7 @@ pub fn build(poly: &[Vec2], floor: f32, layout: Layout, tone: f32, seed: u32) ->
                         let both = r(k as i32 * 64 + j as i32, 70) < 0.6;
                         for sign in if both { &[1.0, -1.0][..] } else { &[1.0][..] } {
                             let rotation = yaw * Quat::from_rotation_z(tilt * sign);
-                            rack.solids.push(Solid {
+                            rack.solids.push(Solid { glow: 0.0,
                                 detail: false,
                                 wedge: false,
                                 round: false,
@@ -522,7 +522,7 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
                 let side = surface.off.cross(dir).normalize_or_zero();
                 let up = dir.cross(side);
                 let rotation = Quat::from_mat3(&Mat3::from_cols(dir, side, up));
-                rack.solids.push(Solid {
+                rack.solids.push(Solid { glow: 0.0,
                     detail: false,
                     wedge: false,
                     round: false,
@@ -569,7 +569,7 @@ pub fn network(rack: &mut Rack, surface: &Surface, depth: f32, tone: f32, seed: 
         // A heavy bracket holding the bundle (on the ground, a support).
         let brackets = if surface.ground { 0.3 } else { 0.1 };
         if !sunk && r(2) < brackets {
-            rack.solids.push(Solid {
+            rack.solids.push(Solid { glow: 0.0,
                 detail: false,
                 wedge: false,
                 round: false,
@@ -700,7 +700,7 @@ pub fn conduits(poly: &[Vec2], floor: f32, reach: f32, tone: f32, seed: u32) -> 
         // A crown showing 0.35 of the radius above the ground.
         let sink = |radius: f32| -radius * 0.65;
         let hatch = |rack: &mut Rack, u: f32, y: f32, size: f32| {
-            rack.solids.push(Solid {
+            rack.solids.push(Solid { glow: 0.0,
                 detail: false,
                 wedge: false,
                 round: false,

@@ -84,7 +84,7 @@ impl Drawer {
         if (hi - lo).min_element() < 0.01 {
             return;
         }
-        self.out.push(Solid {
+        self.out.push(Solid { glow: 0.0,
             detail: false,
             wedge: false,
             round: false,

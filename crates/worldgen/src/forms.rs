@@ -753,7 +753,7 @@ impl Grower<'_> {
                         let cell_seed = seed ^ ((i + 50) as u32 * 7919 + (j + 50) as u32 * 104_729);
                         let kind = crate::cellunit::pick(1, crate::noise::hash01(i, j, 0xf1e, seed));
                         let at = Vec3::new(center.x + i as f32 * 96.0, floor, center.y + j as f32 * 96.0);
-                        self.out.solids.push(crate::structure::Solid {
+                        self.out.solids.push(crate::structure::Solid { glow: 0.0,
                             detail: false,
                             wedge: false,
                             round: false,
@@ -773,7 +773,7 @@ impl Grower<'_> {
                 let tone = tone + t;
                 let half = (*len as f32 * 48.0 - 5.76, 42.24);
                 let deck = 1.5;
-                let mut solids = vec![crate::structure::Solid {
+                let mut solids = vec![crate::structure::Solid { glow: 0.0,
                     detail: false,
                     wedge: false,
                     round: false,
@@ -843,7 +843,7 @@ impl Grower<'_> {
                     let (y0, y1) = (c.y - hs.y, c.y + hs.y);
                     let pointed = |points: Vec<Vec2>| Prism { points, y0, y1, top_scale: 0.0, lean: Vec2::ZERO, albedo: shade };
                     match piece_leaf {
-                        FractalLeaf::Box | FractalLeaf::Wedge => self.out.solids.push(Solid {
+                        FractalLeaf::Box | FractalLeaf::Wedge => self.out.solids.push(Solid { glow: 0.0,
                             detail: false,
                             wedge: matches!(piece_leaf, FractalLeaf::Wedge),
                             round: false,

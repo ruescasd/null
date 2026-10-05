@@ -14,7 +14,7 @@ use crate::structure::Solid;
 fn tube(a: Vec3, b: Vec3, radius: f32, albedo: f32) -> Option<Solid> {
     let d = b - a;
     let dir = d.try_normalize()?;
-    Some(Solid {
+    Some(Solid { glow: 0.0,
         detail: false,
         wedge: false,
         round: true,

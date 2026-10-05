@@ -70,7 +70,7 @@ impl Kind {
 }
 
 fn boxed(center: Vec3, half: Vec3, rotation: Quat, albedo: f32) -> Solid {
-    Solid { detail: false, wedge: false, round: false, center, rotation, half, albedo }
+    Solid { glow: 0.0, detail: false, wedge: false, round: false, center, rotation, half, albedo }
 }
 
 /// A colossal flight in its own frame (rising along +x from x = 0), `steps`

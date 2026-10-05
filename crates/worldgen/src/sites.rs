@@ -729,7 +729,7 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
             let mut solids = structure::build(library, placement, max_leaves);
             // Its foundation, hidden in the core.
             let (sx, _, sz) = placement.size;
-            solids.push(Solid {
+            solids.push(Solid { glow: 0.0,
                 detail: false,
                 wedge: false,
                 round: false,

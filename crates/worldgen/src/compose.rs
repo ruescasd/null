@@ -168,7 +168,7 @@ fn from_frame(d: (i32, i32), a: i32, c: i32) -> (i32, i32) {
 }
 
 fn boxed(center: Vec3, half: Vec3, albedo: f32) -> Solid {
-    Solid { detail: false, wedge: false, round: false, center, rotation: Quat::IDENTITY, half, albedo }
+    Solid { glow: 0.0, detail: false, wedge: false, round: false, center, rotation: Quat::IDENTITY, half, albedo }
 }
 
 /// A fine piece: a step, parapet, moulding, an arch's strip, a column.
