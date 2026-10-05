@@ -57,6 +57,36 @@ pub enum Form {
         #[serde(default)]
         tone: f32,
     },
+    /// A sparse lattice of big cells in the biggest rectangle that fits (see
+    /// `lattice.rs`): most slots empty, every cell carried by a column,
+    /// corbel, beam, rods or the cell below, connectors sized by load.
+    Lattice {
+        /// A cell's width and height (metres).
+        #[serde(default = "lattice_cell")]
+        cell: (f32, f32),
+        #[serde(default = "lattice_levels")]
+        levels: u32,
+        /// Share of the slots within reach of the cores filled.
+        #[serde(default = "lattice_fill")]
+        fill: f32,
+        /// 0: scattered cells, 1: cells gather by their neighbours.
+        #[serde(default = "half")]
+        cluster: f32,
+        /// How fast the ceiling falls away from each core's top.
+        #[serde(default = "lattice_thin")]
+        thin: f32,
+        /// 0: cells stand (columns), 1: cells hang (rods from beams).
+        #[serde(default = "lattice_hang")]
+        hang: f32,
+        /// How much cells' sizes vary within their slots.
+        #[serde(default = "lattice_vary")]
+        vary: f32,
+        /// Share of the cores' sub-grid points that are cores.
+        #[serde(default = "half")]
+        cores: f32,
+        #[serde(default)]
+        tone: f32,
+    },
     /// A shape made of copies of itself, in the biggest rectangle that fits,
     /// `height` tall: each copy placed (`at`, the parent's -1..1 frame,
     /// y up), scaled and turned within its parent, recursing `depth` times
@@ -322,6 +352,34 @@ fn one_tower() -> u32 {
     1
 }
 
+fn lattice_cell() -> (f32, f32) {
+    (24.0, 18.0)
+}
+
+fn lattice_levels() -> u32 {
+    8
+}
+
+fn lattice_fill() -> f32 {
+    0.4
+}
+
+fn lattice_thin() -> f32 {
+    0.3
+}
+
+fn half() -> f32 {
+    0.5
+}
+
+fn lattice_hang() -> f32 {
+    0.4
+}
+
+fn lattice_vary() -> f32 {
+    0.2
+}
+
 fn compose_grid() -> (f32, f32) {
     (6.0, 4.5)
 }
@@ -387,7 +445,8 @@ pub fn references(form: &Form) -> Vec<&str> {
         | Form::Tower { .. }
         | Form::Sierpinski { .. }
         | Form::Fractal { .. }
-        | Form::Compose { .. } => vec![],
+        | Form::Compose { .. }
+        | Form::Lattice { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -547,6 +606,25 @@ impl Grower<'_> {
                 let core = core.map(|(grid, share, steps)| crate::compose::Core { grid, share, steps });
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
                 let solids = crate::compose::compose(Vec3::new(center.x, floor, center.y), dir, half, *grid, *steps, *symmetric, core, tone + t, seed);
+                if solids.len() > self.budget {
+                    return;
+                }
+                self.budget -= solids.len();
+                self.out.solids.extend(solids);
+            }
+            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, tone: t } => {
+                let Some((center, dir, half)) = inscribed_box(poly) else { return };
+                let settings = crate::lattice::Settings {
+                    cell: *cell,
+                    levels: *levels,
+                    fill: *fill,
+                    cluster: *cluster,
+                    thin: *thin,
+                    hang: *hang,
+                    vary: *vary,
+                    cores: *cores,
+                };
+                let solids = crate::lattice::lattice(Vec3::new(center.x, floor, center.y), dir, half, settings, tone + t, seed);
                 if solids.len() > self.budget {
                     return;
                 }
