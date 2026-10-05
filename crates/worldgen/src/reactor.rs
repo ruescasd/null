@@ -46,8 +46,8 @@ pub fn surface(radius: f32, height: f32, y: f32) -> f32 {
 /// The reactor at `center` (its base on the ground), `radius` at its
 /// widest and `height` to the top: a smooth spool (wide, a long thin
 /// waist, wide) in many thin bands, cut by fine etchings running its whole
-/// height that glow faintly, a few of them brightly; fins radiating from
-/// it, sinking into the ground in triangles; thin rings hovering
+/// height that glow faintly, a few of them brightly; thin fins like a
+/// heatsink's all the way up; thin rings hovering
 /// round the waist with nothing holding them, their inner edges lit; a
 /// smooth base and a lit crown. No hoops, no rivets: not a boiler.
 pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> {
@@ -62,58 +62,58 @@ pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> 
     let deep = 7.0;
     for b in 0..bands {
         let (t0, t1) = (b as f32 / bands as f32, (b + 1) as f32 / bands as f32);
-        let r = radius * profile((t0 + t1) * 0.5);
-        let (y0, y1) = (top * t0, top * t1 + 0.05);
+        let (r0, r1) = (radius * profile(t0), radius * profile(t1));
+        let r = (r0 + r1) * 0.5;
+        let (y0, y1) = (top * t0, top * t1);
+        // Each band tilted to the spool's slope, so the flares are smooth.
+        let (dr, dy) = (r1 - r0, y1 - y0);
+        let len = (dr * dr + dy * dy).sqrt();
         for i in 0..n {
             let a = TAU * i as f32 / n as f32;
             let etched = i % 4 == 0;
             let seam = i % 30 == 0;
             let set = if etched { 1.6 } else { 0.0 };
             let width = TAU * r / n as f32 * 0.5 + 0.05;
-            let p = center + Vec3::new(a.cos(), 0.0, a.sin()) * (r - deep * 0.5 - set) + Vec3::Y * ((y0 + y1) * 0.5);
-            let mut piece = boxed(p, Vec3::new(deep * 0.5, (y1 - y0) * 0.5, width), Quat::from_rotation_y(-a), if etched { tone - 0.08 } else { tone + 0.02 });
+            let tilt = Quat::from_rotation_y(-a) * Quat::from_rotation_z(-dr.atan2(dy));
+            let mid = center + Vec3::new(a.cos(), 0.0, a.sin()) * r + Vec3::Y * ((y0 + y1) * 0.5);
+            let p = mid - tilt * Vec3::X * (deep * 0.5 + set);
+            let mut piece = boxed(p, Vec3::new(deep * 0.5, len * 0.5 + 0.05, width), tilt, if etched { tone - 0.08 } else { tone + 0.02 });
             if etched {
                 piece.glow = if seam { 0.9 } else { 0.18 };
             }
             out.push(piece);
         }
     }
-    // Fins radiating from it: thin blades whose outer edges run straight
-    // from the top flare down and out past the base, sinking into the
-    // ground, so each foot is a triangle digging in; jagged against the
-    // spool's roundness. Every other one has a lit edge.
-    let fins = 8;
-    let (foot, crest) = (radius * 1.95, top * 0.86);
-    let (r_crest, sink) = (radius * profile(0.86), -40.0);
-    let edge_at = |y: f32| foot + (r_crest - foot) * ((y - sink) / (crest - sink));
-    let step = 4.0;
+    // Fins like a heatsink's: many thin blades of one depth all the way
+    // up, following the spool's curve; every eighth with a lit edge.
+    let fins = 48;
+    let fin_deep = (radius * 0.07).clamp(6.0, 14.0);
+    let fin_bands = 180;
     for f in 0..fins {
         let a = TAU * (f as f32 + 0.5) / fins as f32;
         let turn = Quat::from_rotation_y(-a);
         let out_dir = Vec3::new(a.cos(), 0.0, a.sin());
-        let mut y = sink;
-        while y < crest {
-            let y1 = (y + step).min(crest);
-            let ym = (y + y1) * 0.5;
-            let inner = radius * profile((ym / top).clamp(0.0, 1.0)) - 4.0;
-            let outer = edge_at(ym);
-            if outer > inner + 1.0 {
-                let p = center + out_dir * ((inner + outer) * 0.5) + Vec3::Y * ym;
-                out.push(boxed(p, Vec3::new((outer - inner) * 0.5, (y1 - y) * 0.5 + 0.02, 2.5), turn, tone + 0.05));
+        let lit = f % 8 == 0;
+        for b in 0..fin_bands {
+            let (t0, t1) = (b as f32 / fin_bands as f32, (b + 1) as f32 / fin_bands as f32);
+            let (r0, r1) = (radius * profile(t0), radius * profile(t1));
+            let (y0, y1) = (top * t0, top * t1);
+            // Tilted to follow the spool's slope here, so the edges run on
+            // smoothly from band to band.
+            let (dr, dy) = (r1 - r0, y1 - y0);
+            let len = (dr * dr + dy * dy).sqrt();
+            let tilt = turn * Quat::from_rotation_z(-dr.atan2(dy));
+            let across = tilt * Vec3::X;
+            let mid = center + out_dir * ((r0 + r1) * 0.5) + Vec3::Y * ((y0 + y1) * 0.5);
+            out.push(boxed(mid + across * (fin_deep * 0.5 - 1.0), Vec3::new(fin_deep * 0.5 + 1.0, len * 0.5 + 0.05, 0.6), tilt, tone + 0.04));
+            if lit {
+                let mut edge = boxed(mid + across * fin_deep, Vec3::new(0.35, len * 0.5 + 0.05, 0.35), tilt, tone + 0.12);
+                edge.glow = 0.8;
+                out.push(edge);
             }
-            y = y1;
-        }
-        if f % 2 == 0 {
-            // The lit edge: a thin strip along the sloping outer edge.
-            let (p0, p1) = (out_dir * foot + Vec3::Y * sink, out_dir * r_crest + Vec3::Y * crest);
-            let d = p1 - p0;
-            let len = d.length();
-            let pitch = Quat::from_rotation_arc(Vec3::X, d / len);
-            let mut strip = boxed(center + (p0 + p1) * 0.5 + out_dir * 0.4, Vec3::new(len * 0.5, 0.5, 0.8), pitch, tone + 0.12);
-            strip.glow = 0.8;
-            out.push(strip);
         }
     }
+    let edge_at = |y: f32| radius * profile((y / top).clamp(0.0, 1.0)) + fin_deep;
     // Rings hovering round the waist: thin, flat, held by nothing, each a
     // little further out, their inner edges lit.
     let waist = radius * profile(0.5);
