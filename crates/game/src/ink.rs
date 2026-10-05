@@ -63,7 +63,10 @@ impl Plugin for InkPlugin {
                 Render,
                 (prepare_pipelines.in_set(RenderSystems::Prepare), prepare_bind_groups.in_set(RenderSystems::PrepareBindGroups)),
             )
-            .add_systems(Core3d, ink_pass.in_set(Core3dSystems::PostProcess).before(tonemapping));
+            // After bloom: both swap the view's two textures, and left
+            // unordered one of them sometimes lost the other's work (bloom
+            // came and went from frame to frame).
+            .add_systems(Core3d, ink_pass.in_set(Core3dSystems::PostProcess).after(bevy::post_process::bloom::bloom).before(tonemapping));
     }
 }
 
@@ -191,11 +194,15 @@ fn prepare_bind_groups(
 }
 
 fn ink_pass(
-    view: ViewQuery<(&ViewTarget, &DynamicUniformIndex<Ink>, &InkBindGroups, &InkPipelineId)>,
+    view: ViewQuery<(&ViewTarget, &Ink, &DynamicUniformIndex<Ink>, &InkBindGroups, &InkPipelineId)>,
     pipeline_cache: Res<PipelineCache>,
     mut ctx: RenderContext,
 ) {
-    let (target, index, groups, pipeline_id) = view.into_inner();
+    let (target, ink, index, groups, pipeline_id) = view.into_inner();
+    // Off: no pass at all.
+    if ink.a.x <= 0.0 {
+        return;
+    }
     let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline_id.0) else { return };
     let post = target.post_process_write();
     let group = if post.source.id() == groups.a_view { &groups.a } else { &groups.b };

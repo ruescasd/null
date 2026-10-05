@@ -36,6 +36,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bot                                 scripted movement test: logs speed/height and exits
     --opt stairbot                            walks up a flight of stairs near spawn, logs every frame
     --opt shotpair                            with --shot: a second capture 5 frames later (<path>_b.png), to compare for flicker
+    --set burst=N                             with --shot: N captures 3 frames apart (<path>_1.png, _2...)
     --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
     --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
     --opt voxel                               the earlier organic voxel terrain

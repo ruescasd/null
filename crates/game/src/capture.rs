@@ -25,11 +25,11 @@ struct AutoShot {
     settled_frames: u32,
     requested: bool,
     saved: bool,
-    /// With `--opt shotpair`: frames since the first shot, and whether the
-    /// second (a few frames later, `<path>_b.png`) is saved, to see what
-    /// flickers between frames.
+    /// With `--opt shotpair` or `--set burst=N`: frames since the first
+    /// shot, and how many of the later ones are saved, to see what flickers
+    /// between frames.
     after: u32,
-    second: bool,
+    more_saved: u32,
 }
 
 #[derive(Resource, Default)]
@@ -241,14 +241,20 @@ fn auto_shot(
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
 ) {
     let Some(path) = &args.shot else { return };
-    if state.saved && args.opt("shotpair") && !state.second {
+    // Later shots: a pair 5 frames apart (`<path>_b.png`), or a burst of
+    // one every 3 frames (`<path>_1.png`, `_2`...).
+    let pair = args.opt("shotpair");
+    let (more, gap) = if pair { (1, 5) } else { ((args.num("burst", 1.0) as u32).saturating_sub(1), 3) };
+    if state.saved && state.more_saved < more {
         state.after += 1;
-        if state.after == 5 {
-            let second = path.strip_suffix(".png").map_or(format!("{path}_b"), |p| format!("{p}_b.png"));
+        if state.after % gap == 0 && state.after / gap <= more {
+            let k = state.after / gap;
+            let stem = path.strip_suffix(".png").unwrap_or(path);
+            let name = if pair { format!("{stem}_b.png") } else { format!("{stem}_{k}.png") };
             commands
                 .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(second))
-                .observe(|_: On<ScreenshotCaptured>, mut state: ResMut<AutoShot>| state.second = true);
+                .observe(save_to_disk(name))
+                .observe(|_: On<ScreenshotCaptured>, mut state: ResMut<AutoShot>| state.more_saved += 1);
         }
         return;
     }
