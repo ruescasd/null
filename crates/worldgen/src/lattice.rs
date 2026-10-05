@@ -47,8 +47,8 @@ pub struct Settings {
     /// The chance a cell joins its neighbours in a longer one (up to three
     /// slots in a line).
     pub bars: f32,
-    /// A city: each cell is a deck with a complex composed on it, in about
-    /// this many growth operations per slot of its length (0: plain cells).
+    /// A city: each cell is a deck with buildings on it (see
+    /// `cellunit.rs`), joined by walkways and stairs (0: plain cells).
     pub content: u32,
 }
 
@@ -442,7 +442,8 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
     }
     // The cells: a box each in the lattice; a deck in a city, with a
     // complex composed on most (a few variants per length, reused).
-    let mut composed: HashMap<(usize, u32, i32), Vec<Solid>> = HashMap::new();
+    let mut composed: HashMap<(crate::cellunit::Kind, usize, i32, u32), Vec<Solid>> = HashMap::new();
+    let deck_half = |len: usize| (len as f32 * w * 0.5 - margin, w * 0.5 - margin);
     for (i, (run, along_x)) in groups.iter().enumerate() {
         let (first, last) = (run[0], run[run.len() - 1]);
         let (ex, ez) = extent(first);
@@ -451,23 +452,166 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
         let y0 = bottom(first);
         let y1 = if city { y0 + deck } else { ceiling(first) };
         out.push(span(Vec3::new(lo.x, y0, lo.z), Vec3::new(hi.x, y1, hi.z), tone));
-        if !city || r(i as i32, 3, 60) < 0.2 {
+        if !city {
             continue;
         }
-        // Porticos and parapets rise about a level over the top terrace.
-        let levels = ((ceiling(first) - y1 - 6.0) / 4.5).floor() as i32;
-        let variant = (r(i as i32, 5, 61) * 3.0) as u32;
+        // What stands on it, composed with the cell as its frame: a few
+        // variants per kind, length and height, reused.
         let len = run.len();
-        let content = composed.entry((len, variant, levels)).or_insert_with(|| {
-            let inset = 3.0;
-            let half = Vec2::new(len as f32 * w * 0.5 - margin - inset, w * 0.5 - margin - inset);
-            crate::compose::on_deck(half, s.content * len as u32, levels, tone, seed ^ (len as u32 * 7919 + variant * 104_729 + levels as u32))
+        let kind = crate::cellunit::pick(len, r(i as i32, 9, 63));
+        let storeys = ((ceiling(first) - y1 - 1.5) / 4.5).floor() as i32;
+        let variant = (r(i as i32, 5, 61) * 3.0) as u32;
+        let content = composed.entry((kind, len, storeys, variant)).or_insert_with(|| {
+            crate::cellunit::unit(kind, deck_half(len), storeys, tone, seed ^ (len as u32 * 7919 + variant * 104_729 + storeys as u32 * 31))
         });
         // Along the run, turned end for end at random.
         let flip = if r(i as i32, 7, 62) < 0.5 { std::f32::consts::PI } else { 0.0 };
         let turn = Quat::from_rotation_y(if *along_x { 0.0 } else { -std::f32::consts::FRAC_PI_2 } + flip);
         let place = Vec3::new((lo.x + hi.x) * 0.5, y1, (lo.z + hi.z) * 0.5);
         out.extend(content.iter().map(|s| Solid { center: place + turn * s.center, rotation: turn * s.rotation, ..*s }));
+    }
+    if city {
+        let ex = w * 0.5 - margin;
+        let fine = |lo: Vec3, hi: Vec3, albedo: f32| Solid { detail: true, ..span(lo, hi, albedo) };
+        // Walkways across one or two empty slots to a deck at the same
+        // height, and long stairs across one to a deck a level up: from
+        // each slot's open sides, once per pair.
+        let mut openings: std::collections::HashSet<(Key, (i32, i32))> = std::collections::HashSet::new();
+        let mut cells: Vec<Key> = groups.iter().flat_map(|g| g.0.iter().copied()).collect();
+        cells.sort();
+        for &k in &cells {
+            for d in SIDES {
+                let step = |n: i32, dy: i32| (k.0 + d.0 * n, k.1 + dy, k.2 + d.1 * n);
+                if group_of.get(&step(1, 0)) == group_of.get(&k) || !l.empty(step(1, 0)) {
+                    continue;
+                }
+                let n_hat = Vec3::new(d.0 as f32, 0.0, d.1 as f32);
+                let from = at(k.0, k.2) + n_hat * ex + Vec3::Y * surface(k);
+                // A walkway.
+                let mut linked = false;
+                for gap in 1..=2 {
+                    let t = step(gap + 1, 0);
+                    if gap == 2 && !l.empty(step(2, 0)) {
+                        break;
+                    }
+                    if group_of.contains_key(&t) && t > k && (surface(t) - surface(k)).abs() < 0.1 && r(k.0 * 3 + d.0, k.2 * 3 + d.1, 70 + k.1) < 0.75 {
+                        let to = at(t.0, t.2) - n_hat * ex + Vec3::Y * surface(t);
+                        let across = Vec3::new(-n_hat.z, 0.0, n_hat.x);
+                        let (a, b) = (from - across * 3.0, to + across * 3.0);
+                        let (lo, hi) = (a.min(b), a.max(b));
+                        out.push(span(Vec3::new(lo.x, from.y - 1.0, lo.z), Vec3::new(hi.x, from.y, hi.z), tone + 0.04));
+                        // A girder under it, deeper for a longer span.
+                        let depth = ((to - from).length() / 22.0).max(1.5);
+                        let (a, b) = (from - across * 1.0, to + across * 1.0);
+                        out.push(span(Vec3::new(a.min(b).x, from.y - 1.0 - depth, a.min(b).z), Vec3::new(a.max(b).x, from.y - 1.0, a.max(b).z), structure));
+                        for sgn in [-1.0, 1.0] {
+                            let (a, b) = (from + across * (sgn * 2.9), to + across * (sgn * 2.9));
+                            let pad = across.abs() * 0.075;
+                            out.push(fine(a.min(b) - pad, a.max(b) + pad + Vec3::Y * 1.05, tone + 0.07));
+                        }
+                        openings.insert((k, d));
+                        openings.insert((t, (-d.0, -d.1)));
+                        linked = true;
+                        break;
+                    }
+                    if !l.empty(t) {
+                        break;
+                    }
+                }
+                // A long stair to a deck a level up, across one slot.
+                let t = step(2, 1);
+                if !linked
+                    && group_of.contains_key(&t)
+                    && l.empty(step(1, 1))
+                    && (surface(t) - surface(k) - h).abs() < 0.1
+                    && r(k.0 * 5 + d.0, k.2 * 5 + d.1, 80 + k.1) < 0.6
+                {
+                    let to = at(t.0, t.2) - n_hat * ex + Vec3::Y * surface(t);
+                    let (run, rise) = ((to - from).with_y(0.0).length(), to.y - from.y);
+                    let steps = (rise / 0.45).ceil() as i32;
+                    let (tread, riser) = (run / steps as f32, rise / steps as f32);
+                    let across = Vec3::new(-n_hat.z, 0.0, n_hat.x);
+                    for i in 0..steps {
+                        let a = from + n_hat * (tread * i as f32) - across * 2.5;
+                        let b = from + n_hat * (tread * (i + 1) as f32 + 0.02) + across * 2.5;
+                        let y = from.y + riser * (i + 1) as f32;
+                        out.push(fine(Vec3::new(a.min(b).x, y - 1.2, a.min(b).z), Vec3::new(a.max(b).x, y, a.max(b).z), tone + 0.05));
+                    }
+                    // A stringer under it, and railings, along the slope.
+                    let length = (run * run + rise * rise).sqrt();
+                    let pitch = rise.atan2(run);
+                    let yaw = (-n_hat.z).atan2(n_hat.x);
+                    let turn = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch);
+                    let mid = (from + to) * 0.5;
+                    let down = turn * Vec3::NEG_Y;
+                    out.push(Solid { rotation: turn, ..span(Vec3::ZERO, Vec3::ZERO, structure) });
+                    let last = out.len() - 1;
+                    out[last].center = mid + down * 2.6;
+                    out[last].half = Vec3::new(length * 0.5, 1.2, 1.2);
+                    for sgn in [-1.0, 1.0] {
+                        out.push(Solid {
+                            detail: true,
+                            rotation: turn,
+                            center: mid + across * (sgn * 2.45) + Vec3::Y * 0.55,
+                            half: Vec3::new(length * 0.5, 0.5, 0.075),
+                            ..span(Vec3::ZERO, Vec3::ONE, tone + 0.07)
+                        });
+                    }
+                    openings.insert((k, d));
+                    openings.insert((t, (-d.0, -d.1)));
+                }
+            }
+        }
+        // Rims: a railing along every open deck edge, open where a walkway
+        // or stair lands; here and there a balcony out over the void.
+        for &k in &cells {
+            for d in SIDES {
+                if group_of.get(&(k.0 + d.0, k.1, k.2 + d.1)) == group_of.get(&k) {
+                    continue;
+                }
+                let n_hat = Vec3::new(d.0 as f32, 0.0, d.1 as f32);
+                let along = Vec3::new(-n_hat.z, 0.0, n_hat.x);
+                // The edge's ends: to the slot's end where the deck carries
+                // on into the next slot of the cell, else to the deck's.
+                let reach = |sgn: i32| {
+                    let next = (k.0 + (along.x as i32) * sgn, k.1, k.2 + (along.z as i32) * sgn);
+                    if group_of.get(&next) == group_of.get(&k) { w * 0.5 } else { ex }
+                };
+                let (u0, u1) = (-reach(-1), reach(1));
+                let y = surface(k);
+                let edge = at(k.0, k.2) + n_hat * (ex - 0.075) + Vec3::Y * y;
+                let mut gaps: Vec<(f32, f32)> = Vec::new();
+                if openings.contains(&(k, d)) {
+                    gaps.push((-3.2, 3.2));
+                } else if r(k.0 * 7 + d.0, k.2 * 7 + d.1, 90 + k.1) < 0.3 {
+                    // A balcony: a slab out past the edge, railed round.
+                    let half = 6.0 + r(k.0, k.2, 91 + k.1) * 8.0;
+                    let off = (r(k.0, k.2, 92 + k.1) - 0.5) * (u1 - u0 - 2.0 * half - 4.0).max(0.0);
+                    let deep = 5.0;
+                    let (a, b) = (edge + along * (off - half), edge + along * (off + half) + n_hat * deep);
+                    out.push(span(Vec3::new(a.min(b).x, y - 1.2, a.min(b).z), Vec3::new(a.max(b).x, y, a.max(b).z), tone + 0.04));
+                    let rail = |p: Vec3, q: Vec3| {
+                        let pad = if (q - p).x.abs() > (q - p).z.abs() { Vec3::new(0.0, 0.0, 0.075) } else { Vec3::new(0.075, 0.0, 0.0) };
+                        fine(p.min(q) - pad, p.max(q) + pad + Vec3::Y * 1.05, tone + 0.07)
+                    };
+                    let (c0, c1) = (edge + along * (off - half), edge + along * (off + half));
+                    out.push(rail(c0 + n_hat * deep, c1 + n_hat * deep));
+                    out.push(rail(c0, c0 + n_hat * deep));
+                    out.push(rail(c1, c1 + n_hat * deep));
+                    gaps.push((off - half, off + half));
+                }
+                let mut u = u0;
+                gaps.push((u1, u1));
+                for (g0, g1) in gaps {
+                    if g0 > u + 0.1 {
+                        let (p, q) = (edge + along * u, edge + along * g0);
+                        let pad = if along.x.abs() > 0.5 { Vec3::new(0.0, 0.0, 0.075) } else { Vec3::new(0.075, 0.0, 0.0) };
+                        out.push(fine(p.min(q) - pad, p.max(q) + pad + Vec3::Y * 1.05, tone + 0.07));
+                    }
+                    u = u.max(g1);
+                }
+            }
+        }
     }
     // What carries each slot of each cell, and the beams.
     for (&k, slot) in &l.slots {

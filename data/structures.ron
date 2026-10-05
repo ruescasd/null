@@ -770,11 +770,13 @@
         "lattice_varied": Lattice(vary: 0.7),
         "lattice_colossal": Lattice(cell: (40, 30), levels: 7),
         // The lattice at the scale of a city: 96 x 45 m slots (16 bays,
-        // 10 levels of the composer's grid), each cell a deck with a
-        // complex composed on it; cells join into bars up to 3 slots long.
+        // 10 levels of the composer's grid), each cell a deck with open
+        // buildings on it (cellunit.rs), joined by walkways and stairs;
+        // cells join into bars up to 3 slots long.
         "city": Lattice(cell: (96, 45), levels: 10, bars: 0.5, content: 8, cluster: 0.7),
         "city_hanging": Lattice(cell: (96, 45), levels: 10, bars: 0.5, content: 8, cluster: 0.7, hang: 0.85, cores: 0.7),
         "city_tall": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35),
+        "city_soaring": Lattice(cell: (96, 45), levels: 20, bars: 0.5, content: 8, cluster: 0.7, thin: 0.08, cores: 0.3),
         "complex_mixed_symmetric": Compose(steps: 200, symmetric: true, core: ((40, 27), 0.5, 18)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
@@ -1033,9 +1035,9 @@
         // Earlier candidates (complexes, spire, Manifold Garden tower, the
         // building-scale lattices) are still defined above; add a line here
         // to bring one back.
-        (name: "city", form: "city", footprint: 880, variants: 1,
-            note: "A hanging city: 96 x 45 m slots, 10 levels, decks with composed complexes"),
+        (name: "city_tall", form: "city_tall", footprint: 880, variants: 1,
+            note: "Hanging city: 96 x 45 m slots, 14 levels, decks with open buildings, walkways"),
+        (name: "city_soaring", form: "city_soaring", footprint: 880, variants: 1, note: "20 levels, fewer cores"),
         (name: "city_hanging", form: "city_hanging", footprint: 880, variants: 1, note: "Mostly hung, more cores"),
-        (name: "city_tall", form: "city_tall", footprint: 880, variants: 1, note: "14 levels, fewer cores, a gentler fall"),
     ],
 )

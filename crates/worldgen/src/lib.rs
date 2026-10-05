@@ -7,6 +7,7 @@ pub mod mesh;
 pub mod noise;
 pub mod bastion;
 pub mod canal;
+pub mod cellunit;
 pub mod cluster;
 pub mod compose;
 pub mod cull;

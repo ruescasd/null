@@ -235,6 +235,7 @@ fn auto_shot(
     mut commands: Commands,
     args: Res<Args>,
     streamer: Res<Streamer>,
+    building: Query<(), With<crate::structures::Building>>,
     mut state: ResMut<AutoShot>,
     mut exit: MessageWriter<AppExit>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
@@ -258,7 +259,8 @@ fn auto_shot(
     if state.requested {
         return;
     }
-    if streamer.settled {
+    // Once the terrain has settled and every structure has been built.
+    if streamer.settled && building.is_empty() {
         state.settled_frames += 1;
     }
     // Give temporal effects (TAA, soft shadows, auto exposure) time to converge.

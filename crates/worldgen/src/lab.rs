@@ -145,7 +145,7 @@ fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<So
         return (structure::build(library, &placement, max_leaves), Vec::new(), Vec::new());
     }
     let Some(form) = &entry.form else { return (Vec::new(), Vec::new(), Vec::new()) };
-    let mut grower = Grower { library, budget: 250_000, leaves: max_leaves, out: Growth::default() };
+    let mut grower = Grower { library, budget: 500_000, leaves: max_leaves, out: Growth::default() };
     let shape: Vec<Vec2> = footprint(entry.footprint, seed).into_iter().map(|p| Vec2::new(p.x, p.y * entry.stretch)).collect();
     grower.grow(form, &shape, 0.0, 0.13, seed, 0);
     let Growth { solids, mut prisms, tubes } = grower.out;
