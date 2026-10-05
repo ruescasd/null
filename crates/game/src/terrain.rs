@@ -25,9 +25,8 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
 use worldgen::{
-    ColumnMesh, LOD_FACTOR, LOD_LEVELS, World, WorldConfig, column_size, mesh_column,
+    ColumnMesh, LOD_FACTOR, LOD_LEVELS, WORLD_SIZE, column_size,
     plates::{CanalFlow, PlateWorld},
-    voxel_size,
 };
 
 use bevy::camera::{primitives::Aabb, visibility::NoAutoAabb};
@@ -45,18 +44,15 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         let args = app.world().resource::<Args>();
-        let config = WorldConfig { seed: args.seed, ..default() };
         let world = if args.opt("lab") {
             // The lab: flat plates, nothing else (see `structures.rs`).
-            WorldGen::Plates(Arc::new(PlateWorld::lab(config.size, config.seed)))
-        } else if args.opt("voxel") {
-            WorldGen::Voxel(Arc::new(World::new(config)))
+            WorldGen(Arc::new(PlateWorld::lab(WORLD_SIZE, args.seed)))
         } else {
             // The sites in the structure library reshape the ground.
-            let world = PlateWorld::new(config.size, config.seed);
+            let world = PlateWorld::new(WORLD_SIZE, args.seed);
             match crate::structures::load_library() {
-                Ok(library) if !args.opt("nosites") => WorldGen::Plates(Arc::new(world.with_sites(&library))),
-                _ => WorldGen::Plates(Arc::new(world)),
+                Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
+                _ => WorldGen(Arc::new(world)),
             }
         };
         embedded_asset!(app, "terrain.wgsl");
@@ -77,60 +73,37 @@ impl Plugin for TerrainPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StreamSet;
 
-/// The world being shown: the polygonal plate world, or the earlier voxel
-/// world (`--opt voxel`) kept for comparison.
+/// The world being shown: the plate world.
 #[derive(Resource, Clone)]
-pub enum WorldGen {
-    Plates(Arc<PlateWorld>),
-    Voxel(Arc<World>),
-}
+pub struct WorldGen(pub Arc<PlateWorld>);
 
 impl WorldGen {
     pub fn size(&self) -> f32 {
-        match self {
-            WorldGen::Plates(w) => w.size(),
-            WorldGen::Voxel(w) => w.size(),
-        }
+        self.0.size()
     }
 
     pub fn ground_height(&self, x: f32, z: f32) -> f32 {
-        match self {
-            WorldGen::Plates(w) => w.height_at(x, z),
-            WorldGen::Voxel(w) => w.column(x, z).height,
-        }
+        self.0.height_at(x, z)
     }
 
     /// The canal flow at a point, if it is inside a canal's pipe.
     pub fn canal_at(&self, x: f32, z: f32) -> Option<CanalFlow> {
-        match self {
-            WorldGen::Plates(w) => w.canal_at(x, z),
-            WorldGen::Voxel(_) => None,
-        }
+        self.0.canal_at(x, z)
     }
 
     /// The nearest canal centreline point, its flow direction and floor.
     pub fn nearest_canal(&self, x: f32, z: f32) -> Option<(Vec2, Vec2, f32)> {
-        match self {
-            WorldGen::Plates(w) => w.nearest_canal(x, z),
-            WorldGen::Voxel(_) => None,
-        }
+        self.0.nearest_canal(x, z)
     }
 
     fn mesh(&self, lod: u32, cx: i32, cz: i32) -> ColumnMesh {
-        match self {
-            WorldGen::Plates(w) => w.mesh_column(lod, cx, cz),
-            WorldGen::Voxel(w) => mesh_column(w, lod, cx, cz),
-        }
+        self.0.mesh_column(lod, cx, cz)
     }
 
-    /// How far a coarse column is lowered so finer overlapping terrain wins.
+    /// How far a coarse column is lowered so finer overlapping terrain wins:
+    /// finer plates step at most a few metres from their parent.
     fn sink(&self, lod: u32) -> f32 {
-        match (self, lod) {
-            (_, 0) => 0.0,
-            // Finer plates step at most a few metres from their parent.
-            (WorldGen::Plates(_), _) => 3.0 * lod as f32,
-            (WorldGen::Voxel(_), _) => voxel_size(lod) * 0.6,
-        }
+        3.0 * lod as f32
     }
 
     pub fn columns_per_side(&self, lod: u32) -> i32 {
@@ -150,10 +123,9 @@ pub struct TerrainExtension {
     /// x: albedo grain strength, y: world wrap period (m), z: relief strength.
     #[uniform(101)]
     pub grain: Vec4,
-    /// Panelling (see terrain.wgsl). x: strength (0 off), y: inlay glow,
-    /// z: largest panel (m), w: seam width (m).
+    /// x: brightness of lit geometry (glowing etchings and seams).
     #[uniform(102)]
-    pub detail: Vec4,
+    pub glow: Vec4,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -228,7 +200,7 @@ fn setup_material(
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // Albedo comes from vertex colours; the material only sets the surface response.
-    let make = |detail: Vec4, etch: f32, grain: f32, relief: f32| ExtendedMaterial {
+    let make = |glow: f32, grain: f32, relief: f32| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
@@ -238,56 +210,28 @@ fn setup_material(
         extension: TerrainExtension {
             params: Vec4::new(if args.opt("noao") { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0),
             grain: if args.opt("nograin") {
-                Vec4::new(0.0, world.size(), 0.0, etch)
+                Vec4::new(0.0, world.size(), 0.0, 0.0)
             } else {
-                Vec4::new(grain, world.size(), relief, etch)
+                Vec4::new(grain, world.size(), relief, 0.0)
             },
-            detail,
+            glow: Vec4::new(glow, 0.0, 0.0, 0.0),
         },
     };
-    // Structures are plain by default, so their geometry can be judged:
-    // `--set detail=1` (or F2) adds the panelling, `etch=1` the etched
-    // network instead, `structure_grain` and `structure_relief` the grain
-    // the ground has. `ground_detail` puts panelling on the ground; `glow`
-    // is the brightness of the light in recesses.
-    let panel = args.num("panel", 12.0);
-    let seam = args.num("seam", 0.06);
-    let ground = make(Vec4::new(args.num("ground_detail", 0.0), 0.0, panel, seam), 0.0, args.num("grain", 0.2), args.num("relief", 2.5));
-    let structures = make(
-        Vec4::new(args.num("detail", 0.0), args.num("glow", 3000.0), panel, seam),
-        args.num("etch", 0.0),
-        args.num("structure_grain", 0.0),
-        args.num("structure_relief", 0.0),
-    );
+    // The ground has grain; structures are plain, so their geometry reads.
+    // `glow` is the brightness of lit geometry.
+    let ground = make(0.0, args.num("grain", 0.2), args.num("relief", 2.5));
+    let structures = make(args.num("glow", 3000.0), 0.0, 0.0);
     commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
     commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
 }
 
 fn update_material(
     args: Res<Args>,
-    keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<TerrainMaterialHandle>,
     structures: Res<StructureMaterialHandle>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     anchor: Single<&Transform, With<StreamAnchor>>,
 ) {
-    // F2 turns the structures' panelling off and on, to compare.
-    if keys.just_pressed(KeyCode::F2)
-        && let Some(mut material) = materials.get_mut(&structures.0)
-    {
-        let on = material.extension.detail.x > 0.0;
-        material.extension.detail.x = if on { 0.0 } else { args.num("detail", 1.0).max(1.0) };
-        info!("panelling {}", if on { "off" } else { "on" });
-    }
-    // F3 switches the structures between the panelling and the etched
-    // network.
-    if keys.just_pressed(KeyCode::F3)
-        && let Some(mut material) = materials.get_mut(&structures.0)
-    {
-        let etch = material.extension.grain.w < 0.5;
-        material.extension.grain.w = if etch { 1.0 } else { 0.0 };
-        info!("{}", if etch { "etched network" } else { "panelling" });
-    }
     let curvature = if args.opt("flat") { 0.0 } else { 0.5 / PLANET_RADIUS };
     let p = anchor.translation;
     for handle in [&terrain.0, &structures.0] {

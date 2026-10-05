@@ -17,11 +17,10 @@ use std::collections::BTreeMap;
 use glam::{Quat, Vec2, Vec3};
 use serde::Deserialize;
 
-use crate::ifs::{self, Block, Context, Cut, Keep, Leaf, Rule};
+use crate::ifs::{self, Block, Context, Keep, Leaf, Rule};
 use crate::mesh::ColumnMesh;
 use crate::noise::hash01;
 use crate::forms::{self, Form};
-use crate::dressing::Dressing;
 use crate::lab::LabEntry;
 use crate::sites::{SiteGrid, SiteRule};
 
@@ -49,9 +48,6 @@ pub struct Library {
     /// Candidate patterns for the lab (see `lab.rs`).
     #[serde(default)]
     pub lab: Vec<LabEntry>,
-    /// Pipework that belongs to structures (see `dressing.rs`).
-    #[serde(default)]
-    pub dressings: BTreeMap<String, Dressing>,
 }
 
 impl Library {
@@ -74,9 +70,6 @@ impl Library {
                             return Err(format!("module '{name}': unknown module '{}'", part.module));
                         }
                     }
-                }
-                Module::Structure { style, .. } if !self.styles.contains_key(style) => {
-                    return Err(format!("module '{name}': unknown style '{style}'"));
                 }
                 _ => {}
             }
@@ -104,11 +97,6 @@ impl Library {
                 && !self.forms.contains_key(form)
             {
                 return Err(format!("lab '{}': unknown form '{form}'", entry.name));
-            }
-            if let Some(dress) = &entry.dress
-                && !self.dressings.contains_key(dress)
-            {
-                return Err(format!("lab '{}': unknown dressing '{dress}'", entry.name));
             }
         }
         for site in self.sites.iter().chain(&self.colossi) {
@@ -166,16 +154,6 @@ pub enum Module {
     },
     /// The cell's twelve edges as bars `bar` (fraction) thick: a hollow frame.
     Frame { bar: f32 },
-    /// The cell made of conduits: a core (`core`, fraction of the cell's
-    /// cross-section; 0 for none) wrapped in a loom of tubes packed side by
-    /// side along the cell's longest side, of mixed thickness, no fittings;
-    /// with chance `bow`, a tube bows out a little, hanging loose.
-    Conduits {
-        #[serde(default = "default_core")]
-        core: f32,
-        #[serde(default = "default_bow")]
-        bow: f32,
-    },
     /// A wedge filling the cell, rising towards +x. Only where it is walkable
     /// (no steeper than 45 degrees); in a steeper cell it becomes stairs.
     Ramp,
@@ -187,34 +165,15 @@ pub enum Module {
     },
     /// Parts placed inside the cell, each filled by another module.
     Group(Vec<Part>),
-    /// A whole structure of the given style built inside the cell, standing
-    /// on its floor, with a random fraction `height` (min, max) of the cell's
-    /// height. Nests up to three deep.
-    Structure {
-        style: String,
-        #[serde(default = "full_height")]
-        height: (f32, f32),
-    },
 }
 
-fn default_core() -> f32 {
-    0.45
-}
 
-/// Cells narrower than this (metres) are too thin for conduits.
-const LOOM_MIN: f32 = 1.2;
 
-fn default_bow() -> f32 {
-    0.25
-}
 
 fn default_rise() -> f32 {
     0.45
 }
 
-fn full_height() -> (f32, f32) {
-    (1.0, 1.0)
-}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 pub enum Height {
@@ -253,10 +212,6 @@ pub struct Style {
     /// Degrees each child is turned relative to its parent.
     #[serde(default)]
     pub twist: f32,
-    /// At most this many flights of stairs laid along the cliffs between
-    /// levels (see `stairs.rs`).
-    #[serde(default)]
-    pub stairs: u32,
     #[serde(default)]
     pub stop_chance: f32,
     #[serde(default)]
@@ -271,77 +226,6 @@ pub struct Style {
     /// How leaves are filled; with none, or none matching, a leaf is a box.
     #[serde(default)]
     pub leaves: Vec<LeafRule>,
-    /// Cuts taken out of the box before it is filled (see `ifs::Cut`)...
-    #[serde(default)]
-    pub envelope: Vec<Cut>,
-    /// ...and this many more, picked at random from corners, notches,
-    /// strips, undercuts and slopes...
-    #[serde(default)]
-    pub cuts: u32,
-    /// ...mirrored across x and z, so the envelope stays symmetric.
-    #[serde(default)]
-    pub symmetric: bool,
-}
-
-impl Style {
-    /// The cuts for one structure: the style's own and its random ones.
-    pub fn cuts(&self, seed: u32) -> Vec<Cut> {
-        let mut out = self.envelope.clone();
-        let r = |k: u32, j: i32| hash01(k as i32, j, 0xc07, seed);
-        for k in 0..self.cuts {
-            let kind = (r(k, 0) * 5.0) as u32;
-            let (sx, sz) = (if r(k, 1) < 0.5 { -1.0 } else { 1.0 }, if r(k, 2) < 0.5 { -1.0 } else { 1.0 });
-            let depth = 0.3 + 0.5 * r(k, 3);
-            let low = -1.0 + 2.0 * (0.2 + 0.6 * r(k, 4));
-            let mut cut = match kind {
-                // A corner, the full height or above some level.
-                0 => {
-                    let y0 = if r(k, 5) < 0.5 { -1.1 } else { low };
-                    let (ax, az) = (sx * (1.0 - depth), sz * (1.0 - depth * (0.6 + 0.8 * r(k, 6))));
-                    Cut::Box { min: (ax.min(sx * 1.1), y0, az.min(sz * 1.1)), max: (ax.max(sx * 1.1), 1.1, az.max(sz * 1.1)) }
-                }
-                // A notch into the middle of a face.
-                1 => {
-                    let w = 0.2 + 0.3 * r(k, 6);
-                    let y0 = if r(k, 5) < 0.6 { -1.1 } else { low };
-                    let a = sx * (1.0 - depth * 0.7);
-                    Cut::Box { min: (a.min(sx * 1.1), y0, -w), max: (a.max(sx * 1.1), 1.1, w) }
-                }
-                // A strip off one side above some level (a setback).
-                2 => {
-                    let a = sz * (1.0 - depth * 0.6);
-                    Cut::Box { min: (-1.1, low, a.min(sz * 1.1)), max: (1.1, 1.1, a.max(sz * 1.1)) }
-                }
-                // An undercut: a side taken out below some level, leaving
-                // an overhang.
-                3 => {
-                    let a = sx * (1.0 - depth * 0.6);
-                    let top = -1.0 + 2.0 * (0.15 + 0.35 * r(k, 6));
-                    Cut::Box { min: (a.min(sx * 1.1), -1.1, -1.1), max: (a.max(sx * 1.1), top, 1.1) }
-                }
-                // A slope across the top, towards one side.
-                _ => {
-                    let n = Vec3::new(sx * (0.5 + r(k, 6)), 1.0, 0.0).normalize();
-                    Cut::Plane { normal: (n.x, n.y, n.z), offset: 0.3 + 0.5 * r(k, 7) }
-                }
-            };
-            if self.symmetric {
-                let mirror = |c: &Cut, mx: f32, mz: f32| match *c {
-                    Cut::Box { min, max } => Cut::Box {
-                        min: (min.0 * mx, min.1, min.2 * mz),
-                        max: (max.0 * mx, max.1, max.2 * mz),
-                    },
-                    Cut::Plane { normal, offset } => Cut::Plane { normal: (normal.0 * mx, normal.1, normal.2 * mz), offset },
-                };
-                for (mx, mz) in [(-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
-                    out.push(mirror(&cut, mx, mz));
-                }
-                cut = mirror(&cut, 1.0, 1.0);
-            }
-            out.push(cut);
-        }
-        out
-    }
 }
 
 fn one() -> f32 {
@@ -483,12 +367,9 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
     };
     let seed = placement.seed.wrapping_mul(0x9e37_79b9) ^ 0x5eed;
     let mut builder = Builder { library, budget: max_leaves, out: Vec::new() };
-    builder.style(&placement.style, root, seed, 0);
+    builder.style(&placement.style, root, seed);
     let mut solids = builder.out;
-    // A carved envelope leaves lintels and overhangs held up only by their
-    // neighbours across the grooves.
-    let carved = library.styles.get(&placement.style).is_some_and(|s| !s.envelope.is_empty() || s.cuts > 0);
-    settle(&mut solids, carved);
+    settle(&mut solids);
     // Seated on the ground: the lowest piece's bottom at the base (less the
     // sink), whatever the rules left out at the bottom.
     let lowest = solids.iter().map(Solid::bottom).fold(f32::MAX, f32::min);
@@ -504,16 +385,8 @@ pub fn build(library: &Library, placement: &Placement, max_leaves: usize) -> Vec
             }
         }
     }
-    if let Some(style) = library.styles.get(&placement.style).filter(|s| s.stairs > 0) {
-        let flights = crate::stairs::flights(&solids, style.stairs, seed);
-        solids.extend(flights);
-    }
     solids
 }
-
-/// Pieces that would fall further than this to the ground under a carved
-/// envelope's overhang are removed (see `settle`), metres.
-const OVERHANG: f32 = 12.0;
 
 /// How far pieces on the ground reach into it, metres.
 const FOUNDATION: f32 = 8.0;
@@ -522,12 +395,8 @@ const FOUNDATION: f32 = 8.0;
 /// (touching, sideways included: roofs, bridges) stay as they are; a piece
 /// cut off from it reaches down to the highest thing below it, or to the
 /// base. The rules cannot see what grew in the cell below, so this is
-/// settled afterwards. With `across_grooves` (carved envelopes), neighbours
-/// separated by no more than a groove also hold each other up, and a piece
-/// still cut off may be removed rather than reaching down (a stray needle under
-/// a lintel goes, rather than becoming a pole), when it would fall more
-/// than `OVERHANG` to the ground.
-fn settle(solids: &mut Vec<Solid>, across_grooves: bool) {
+/// settled afterwards.
+fn settle(solids: &mut [Solid]) {
     const CELL: f32 = 8.0;
     const TOUCH: f32 = 0.1;
     let base = solids.iter().map(Solid::bottom).fold(f32::MAX, f32::min);
@@ -553,16 +422,7 @@ fn settle(solids: &mut Vec<Solid>, across_grooves: bool) {
         (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| (x, z)))
     };
     let touching = |a: &(Vec3, Vec3), b: &(Vec3, Vec3)| {
-        let groove = if across_grooves {
-            let size = |b: &(Vec3, Vec3)| (b.1.x - b.0.x).min(b.1.z - b.0.z);
-            (size(a).max(size(b)) * 0.45).max(TOUCH)
-        } else {
-            TOUCH
-        };
-        (0..3).all(|k| {
-            let t = if k == 1 { TOUCH } else { groove };
-            a.0[k] <= b.1[k] + t && b.0[k] <= a.1[k] + t
-        })
+        (0..3).all(|k| a.0[k] <= b.1[k] + TOUCH && b.0[k] <= a.1[k] + TOUCH)
     };
     let covers = |s: &Solid, p: Vec2| {
         let local = s.rotation.inverse() * (Vec3::new(p.x, s.center.y, p.y) - s.center);
@@ -613,11 +473,6 @@ fn settle(solids: &mut Vec<Solid>, across_grooves: bool) {
             }
         }
         let drop = bottom - highest;
-        // Under a lintel or an overhang: rather than a pole all the way to
-        // the ground, nothing.
-        if across_grooves && highest <= base + TOUCH && drop > OVERHANG {
-            continue;
-        }
         let s = &mut solids[i];
         s.center.y -= drop * 0.5;
         s.half.y += drop * 0.5;
@@ -628,17 +483,8 @@ fn settle(solids: &mut Vec<Solid>, across_grooves: bool) {
         supported[i] = true;
         stack.push(i);
     }
-    if across_grooves {
-        let mut k = 0;
-        solids.retain(|_| {
-            k += 1;
-            supported[k - 1]
-        });
-    }
 }
 
-/// How deep structures may nest inside structures.
-const MAX_NESTING: u32 = 3;
 
 struct Builder<'a> {
     library: &'a Library,
@@ -649,10 +495,9 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     /// Runs a style's rule inside `root` and fills its leaves.
-    fn style(&mut self, name: &str, root: Block, seed: u32, nesting: u32) {
+    fn style(&mut self, name: &str, root: Block, seed: u32) {
         let Some(style) = self.library.styles.get(name) else { return };
-        let cuts = style.cuts(seed);
-        let leaves = ifs::generate(&style.rule(), Block { level: 0, ..root }, seed, self.budget, &cuts);
+        let leaves = ifs::generate(&style.rule(), Block { level: 0, ..root }, seed, self.budget);
         self.budget = self.budget.saturating_sub(leaves.len());
         for (n, leaf) in leaves.iter().enumerate() {
             let r = |k: i32| hash01(n as i32, k, leaf.block.level as i32, seed);
@@ -681,7 +526,7 @@ impl Builder<'_> {
             let cell = turned(leaf.block, turns);
             let child_seed = seed.wrapping_mul(0x85eb_ca6b) ^ (n as u32).wrapping_mul(0xc2b2_ae35);
             let module = self.library.module(&module);
-            self.expand(&module, cell, albedo, 0, nesting, child_seed);
+            self.expand(&module, cell, albedo, 0, child_seed);
         }
     }
 
@@ -689,22 +534,8 @@ impl Builder<'_> {
         self.out.push(Solid { glow: 0.0, detail: false, wedge, round: false, center: b.center, rotation: b.rotation, half: b.half, albedo });
     }
 
-    /// A round tube from `a` to `b`.
-    fn tube(&mut self, a: Vec3, b: Vec3, radius: f32, albedo: f32) {
-        let d = b - a;
-        let Some(dir) = d.try_normalize() else { return };
-        self.out.push(Solid { glow: 0.0,
-            detail: false,
-            wedge: false,
-            round: true,
-            center: (a + b) * 0.5,
-            rotation: Quat::from_rotation_arc(Vec3::X, dir),
-            half: Vec3::new(d.length() * 0.5, radius, radius),
-            albedo,
-        });
-    }
 
-    fn expand(&mut self, module: &Module, cell: Block, albedo: f32, depth: u32, nesting: u32, seed: u32) {
+    fn expand(&mut self, module: &Module, cell: Block, albedo: f32, depth: u32, seed: u32) {
         let sub = |min: [f32; 3], max: [f32; 3]| sub_block(cell, Vec3::from(min), Vec3::from(max));
         match module {
             Module::Void => {}
@@ -712,7 +543,7 @@ impl Builder<'_> {
             Module::Ramp => {
                 // Steeper than 45 degrees cannot be walked: use stairs instead.
                 if cell.half.y > cell.half.x {
-                    self.expand(&Module::Stairs { rise: default_rise() }, cell, albedo, depth, nesting, seed);
+                    self.expand(&Module::Stairs { rise: default_rise() }, cell, albedo, depth, seed);
                 } else {
                     self.push(cell, true, albedo);
                 }
@@ -737,76 +568,6 @@ impl Builder<'_> {
                     Axis::Z => ([-1.0, -1.0, -t], [1.0, 1.0, t]),
                 };
                 self.push(sub(min, max), false, albedo);
-            }
-            Module::Conduits { core, bow } => {
-                // Along the cell's longest side; u and v across it.
-                let h = cell.half;
-                let axis = if h.y >= h.x && h.y >= h.z { 1 } else if h.x >= h.z { 0 } else { 2 };
-                let (a1, a2) = match axis {
-                    0 => (1, 2),
-                    1 => (0, 2),
-                    _ => (0, 1),
-                };
-                let unit = |i: usize| match i {
-                    0 => Vec3::X,
-                    1 => Vec3::Y,
-                    _ => Vec3::Z,
-                };
-                let (along, u, v) = (unit(axis), unit(a1), unit(a2));
-                let (ha, hu, hv) = (h[axis], h[a1], h[a2]);
-                // Too thin to hold a loom: solid.
-                if hu.min(hv) < LOOM_MIN * 0.5 {
-                    self.push(cell, false, albedo);
-                    return;
-                }
-                let world = |p: Vec3| cell.center + cell.rotation * p;
-                let r = |k: i32| hash01(seed as i32, k, depth as i32, 0xc0d);
-                // The core, a mass the loom wraps.
-                let core = core.clamp(0.0, 0.95);
-                let (cu, cv) = (hu * core, hv * core);
-                if core > 0.0 {
-                    let half = along * ha + u * cu + v * cv;
-                    self.push(Block { half, ..cell }, false, (albedo - 0.02).max(0.03));
-                }
-                // The loom: tubes side by side round the core (or filling the
-                // cell), as thick as the space allows, of mixed thickness.
-                let max_r = if core > 0.0 { ((hu - cu).min(hv - cv) * 0.5).max(0.02) } else { hu.min(hv) * 0.3 };
-                let (ru, rv) = (cu + max_r, cv + max_r);
-                let perimeter = 4.0 * (ru + rv);
-                let mut s = r(0) * max_r;
-                let mut k = 0;
-                while s < perimeter && k < 14 {
-                    let radius = max_r * (0.55 + 0.45 * r(k + 1));
-                    // A point on the rectangle's outline at distance s.
-                    let t = s % perimeter;
-                    let (pu, pv) = if t < 2.0 * ru {
-                        (-ru + t, -rv)
-                    } else if t < 2.0 * ru + 2.0 * rv {
-                        (ru, -rv + (t - 2.0 * ru))
-                    } else if t < 4.0 * ru + 2.0 * rv {
-                        (ru - (t - 2.0 * ru - 2.0 * rv), rv)
-                    } else {
-                        (-ru, rv - (t - 4.0 * ru - 2.0 * rv))
-                    };
-                    // Sunk a little into the core.
-                    let inward = (max_r - radius) + max_r * 0.15;
-                    let out = (u * pu + v * pv).normalize_or_zero();
-                    let at = u * pu + v * pv - out * inward;
-                    let shade = (albedo * (0.75 + 0.6 * r(k + 100))).clamp(0.03, 0.4);
-                    let (a, b) = (at - along * ha, at + along * ha);
-                    if r(k + 200) < *bow && ha > radius * 4.0 {
-                        // Bowing out a little between its ends, hanging loose.
-                        let sag = out * radius * (0.8 + 1.2 * r(k + 300));
-                        let (m1, m2) = (at - along * ha * 0.35 + sag, at + along * ha * 0.35 + sag);
-                        self.tube(world(a), world(m1), radius, shade);
-                        self.tube(world(m1), world(m2), radius, shade);
-                        self.tube(world(m2), world(b), radius, shade);
-                    } else {
-                        self.tube(world(a), world(b), radius, shade);
-                    }
-                    s += radius * 2.05;
-                    k += 1;
-                }
             }
             Module::Frame { bar } => {
                 let b = bar.clamp(0.01, 0.5) * 2.0;
@@ -844,18 +605,8 @@ impl Builder<'_> {
                     let b = sub_block(cell, Vec3::from(part.min), Vec3::from(part.max));
                     let b = turned(b, part.turn);
                     let module = self.library.module(&part.module);
-                    self.expand(&module, b, albedo, depth + 1, nesting, seed.wrapping_add(depth + 1));
+                    self.expand(&module, b, albedo, depth + 1, seed.wrapping_add(depth + 1));
                 }
-            }
-            Module::Structure { style, height } => {
-                if nesting >= MAX_NESTING || self.budget == 0 {
-                    return;
-                }
-                // Stand on the cell's floor, a random fraction of its height.
-                let (lo, hi) = (height.0.min(height.1), height.0.max(height.1));
-                let fraction = (lo + (hi - lo) * hash01(seed as i32, 11, 0, 0x57c7)).clamp(0.05, 1.0);
-                let root = sub([-1.0, -1.0, -1.0], [1.0, -1.0 + 2.0 * fraction, 1.0]);
-                self.style(style, root, seed, nesting + 1);
             }
         }
     }
@@ -1201,23 +952,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn structures_nest_inside_cells() {
-        let lib = Library::parse(r#"(
-            modules: { "tower": Structure(style: "inner", height: (0.5, 0.5)) },
-            styles: {
-                "inner": (divisions: (2, 2, 2), keep: All, depth: 1),
-                "region": (divisions: (3, 1, 3), keep: All, depth: 1, gap: 0.8, leaves: [(on: Any, module: "tower")]),
-            },
-            structures: [ (style: "region", at: (0, 0), size: (90, 40, 90)) ],
-        )"#)
-        .unwrap();
-        let solids = build(&lib, &lib.structures[0], 10_000);
-        // Nine plots, each a 2x2x2 structure half the plot's height.
-        assert_eq!(solids.len(), 9 * 8);
-        let top = solids.iter().map(|s| s.center.y + s.half.y).fold(f32::MIN, f32::max);
-        assert!((top - 20.0).abs() < 1e-3, "top {top}");
-    }
 
     #[test]
     fn unknown_names_are_reported() {

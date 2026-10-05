@@ -22,9 +22,6 @@ Click to capture the mouse, Esc to release. F1 toggles the help overlay.
 | Left / Right | scrub time |
 | Up / Down | time speed |
 | P | soft / hard shadows |
-| F2 | structures' surface panelling off / on |
-| F3 | panelling / etched network |
-| F4 | ink lines off / on |
 | F12 | screenshot to `screenshots/` |
 
 Command-line options, mostly for tuning and capturing reference frames:
@@ -39,9 +36,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --set burst=N                             with --shot: N captures 3 frames apart (<path>_1.png, _2...)
     --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
     --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
-    --opt voxel                               the earlier organic voxel terrain
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
-    --opt ssao                                screen-space AO (off by default: its noise shimmers on detailed facades)
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
@@ -59,15 +54,16 @@ crashed the GPU driver.
 - `crates/worldgen` — engine-agnostic generation. `plates.rs`: the plate
   world (hierarchical Voronoi, prisms meshed exactly, stylised AO).
   `district.rs`: districts and their generator rules. `canal.rs`: the canals.
-  `ifs.rs` + `structure.rs`: structures from fractal rules and modules;
-  `forms.rs`: buildings grown from plates; `sites.rs`: where they grow in
-  the world. `world.rs` + `mesh.rs`: the earlier voxel
-  density field and surface-nets mesher. `cargo test -p worldgen`;
-  benchmarks in `examples/`; `cargo run -p worldgen --release --example map --
-  map.png 8` draws a top-down map of the whole world (districts, canals,
-  site footprints) at 8 m per pixel and lists the sites nearest the spawn
-  point; `--example floating` reports pieces of structures with nothing
-  under them.
+  `ifs.rs` + `structure.rs`: box-style structures from fractal rules and
+  modules; `forms.rs`: buildings grown from plates; `compose.rs`: complexes
+  of walkable units; `lattice.rs` (with `cellunit.rs`, `reactor.rs`): the
+  hanging city; `mega.rs`: colossal wedges; `sites.rs`: where things grow in
+  the world; `mesh.rs`: the terrain's columns. `cargo test -p worldgen`;
+  `cargo run -p worldgen --release --example map -- map.png 8` draws a
+  top-down map of the whole world (districts, canals, site footprints) at 8 m
+  per pixel and lists the sites and colossi nearest the spawn point;
+  `--example lab` lists the lab's catalogue with its sizes; `--example
+  floating` reports pieces of structures with nothing under them.
 - `crates/game` — Bevy app: column streaming with LOD (`terrain.rs`), curved
   horizon and AO shaders (`*.wgsl`), suns / stars / bounce and fill light and
   grading (`look.rs`), structures and streamed sites (`structures.rs`), kept
@@ -85,31 +81,32 @@ shadowless fill with no visible source: opposite the dominant sun by day,
 scaled with how much sun is up, and a faint glow from overhead at night.
 The ground gets procedural grain in the terrain shader (albedo mottling and
 a faint micro-relief, fixed in the world, tiling with the wrap) so motion
-reads even with nothing else in view. Structures are plain by default, so
-their geometry can be judged; the shader can add procedural panelling to
-them (`--set detail=1`, or F2 in game): every face layered in bands that
-run its whole width, divided into bays by regular frames, with weathering
-streaks below each band, each detail fading out before it reaches the
-pixel size; `--set etch=1` (F3) an etched network instead;
-`--set structure_grain=0.2 --set structure_relief=2.5` the ground's grain.
-Ink lines are drawn after lighting where depth jumps (silhouettes) or the
-surface turns (creases), never where only the light changes, fading into
-the haze, off by default: `--set ink=0.85` turns them on at that strength, `ink_width` their
-width in pixels, `ink_fade` the distance they fade over; F4 turns them off
-and on.
+reads even with nothing else in view. Structures are plain, so their
+geometry reads; only pieces marked as lit glow (the reactor's etchings,
+`--set glow=3000`). Bloom flickers in short irregular bursts, so bright
+things (the creature's chest and eyes) stutter like a failing light.
+
+What was tried and removed, but might be worth another look, is listed in
+`docs/removed.md`.
 
 ## The world
 
 The planet was once a single built surface; what is left are its plates,
 grouped into districts whose purpose is lost, each with its own rules and
-its own structures:
+its own ground:
 
-| District | Ground | Sites (for now) |
-|---|---|---|
-| floor | vast pale flat plates, steps of a few cm | halls, screens of fins, whole quarters |
-| tiers | terraces of 2 m (mantle-height) ledges | ziggurats, lattices |
-| stacks | dark small plates, many tall pillars | spires, tables |
-| broken | the original mixed terrain | lattices, halls, ziggurats |
+| District | Ground |
+|---|---|
+| floor | vast pale flat plates, steps of a few cm |
+| tiers | terraces of 2 m (mantle-height) ledges |
+| stacks | dark small plates, many tall pillars |
+| broken | the original mixed terrain |
+
+For now, pending the game's direction, the world holds only what passed
+review: a few hanging cities on the floor, one placed example each of the
+other kinds (the spire by the spawn point, a spire site and a towers site in
+the stacks, a needles colossus and a shattered-shafts colossus), and the
+stacks' pillars.
 
 Structures come from fractal *rules* (`ifs.rs`) filled with
 hand-designed modules (`structure.rs`). A style splits a block into a grid,
@@ -118,20 +115,20 @@ slab, column, fin, frame, ramp, stairs, or a group of parts), chosen by where
 it sat in its parent. Everything is boxes and wedges: hard edges, box and
 wedge colliders.
 
-**`data/structures.ron`** holds the modules, styles, test placements and
-site rules, and documents its own format. The game watches it: save and the structures are
-rebuilt within a second; mistakes show at the top right while the last good
-version stays up. Six test structures stand in an arc about 450 m ahead of the
-default spawn point (`--opt nofractals` leaves them out). The earlier
-distance-field fractals (`fractal.rs`: soft edges, millions of triangles,
-fidgety collision) remain behind `--opt sdf_fractals`.
+**`data/structures.ron`** holds the modules, styles, forms, placements,
+site rules and the lab's catalogue, and documents its own format. The game
+watches it: save and the structures are rebuilt within a second; mistakes
+show at the top right while the last good version stays up. The spire, the
+box style that always worked, stands about 450 m ahead of the default spawn
+point (`--opt nofractals` leaves it out).
 
 Sites are structures that grow out of the world by the data file's rules
 (`sites.rs`): the planet is cut into cells of about 770 m, each holding a
 site with some chance; the district there picks a style by weight and a
 size within a range, and everything is decided by hashing the cell, so the
-world is the same every time. Sites keep clear of each other, the canals
-and the test structures. A site reshapes the plates around it rather than
+world is the same every time; a rule with `at` places its one site exactly
+there instead. Sites keep clear of each other, the canals and the placed
+structures. A site reshapes the plates around it rather than
 standing on a slab: the 32 m plates under and around the structure become
 a flat core, raised above the surrounding ground (an acropolis), level with
 it (a plaza) or sunk into it (a court), and rings of terraces step from the
@@ -156,28 +153,28 @@ round or square, with ramps along their axes; the structures rise out of
 the ground rather than standing on it.
 
 **The pattern lab** (`--opt lab`, or `tools\visit.ps1 lab`): the data file's
-`lab` candidates stand in a row on flat, empty ground, two samples (seeds)
-of each, so a pattern is judged on its own rather than for whether it
-rescues a place. `--opt lab --opt labshots` photographs every candidate
-from the same four angles (the last one close up) into `screenshots/lab/` and exits; with `--focus name` only the candidates whose names contain it. Patterns that
-pass join the catalogue the world draws on. The forms grammar has `Shift`
-(cantilevers) and negative tapers (forms widening upwards) for them. Box styles can keep a `Massif` (columns falling from the centre at every
-level: a mountain of mountains), and the `Rack` form lines a polygon with
-open frames whose bays hold pipes, tanks, hoses and machinery.
+`lab` candidates stand in a row on flat, empty ground, one or more samples
+(seeds) of each, so a pattern is judged on its own rather than for whether
+it rescues a place. For now the lab holds the catalogue: the patterns that
+passed review (the hanging city and the reactor cities, a composed complex,
+the Manifold Garden tower, the deck units, colossal wedges behind a
+human-scale field). `--opt lab --opt labshots` photographs every candidate
+from the same four angles (the last one close up) into `screenshots/lab/`
+and exits; with `--focus name` only the candidates whose names contain it.
 
 Colossi are megastructures on the same rules over a much coarser grid,
-about one per district and a few hundred metres tall, seen from 4.5 km:
-a form grown on a whole footprint (the big plate there, scaled up),
-with grooved bands, setbacks, slots and crowns so their size reads. For
-now: needle clusters in the stacks, stepped mountains in the tiers, walled
-enclosures on the floor and shattered fields of bent shafts in broken
-districts. Ordinary sites keep clear of them.
+hundreds of metres tall and seen from 4.5 km: a form grown on a whole
+footprint (the big plate there, scaled up, or a square). The hanging city
+is one: a sparse lattice of decks (most cells empty) carrying composed
+units, on a low square platform, in some of the floor districts' slots
+(`tools\visit.ps1 city`, or `city_air`). The needles colossus and the
+shattered shafts are placed once each. Ordinary sites keep clear of them.
 
 Site ground keeps its full detail at every distance, and everything built
 reaches a few metres into its plate, so nothing floats when seen from afar.
 Box-style structures are settled too: blocks stack flush (grooves only
 run sideways), cells spanning a gap reach their neighbours, and anything
-still cut off from the ground reaches down to what is below it. The test
+still cut off from the ground reaches down to what is below it. Placed
 structures stand on a flat core with terraces, like sites. Structures are built in the background within 2.5 km of the
 camera and dropped beyond 2.9 km; changing the site rules regenerates the
 terrain.
@@ -191,20 +188,13 @@ rather than solid. A core of glowing shards and a lamp inside the chest
 light it from within, through its own gaps. The default is a human of exact
 proportions, about 2.4 m tall, upright and calm, heavy-limbed and fairly
 solid, glowing only in its chest, drawn as line art (each piece ringed in
-black, the rest of the world unchanged; `--opt nooutline` turns it off), with
-a matte near-black faceted skull with two steady lit eyes, hard feet and two
-razor prongs for hands. `--set hand=N` chooses its hands (0 hard human, 1
-long three-digit, 2 a single blade, 3 two razor prongs), `--set head=N` its
-head (0 fragments, 1 the faceted skull, 2 a long forward wedge, 3 a tall
-crest, 4 a wide disc, 5 the first box head) and `--set eyes=N` its eyes (0
-slits, 1 flat slanted rhombuses, 2 upright rhombuses); `--opt eyepulse` has
-the eyes pulse with the chest. `--opt luminous` gives the same shape slimmer and finer-grained
-with glowing fragments threaded through every part (strange only in its
-substance). `--opt hunched` gives the earlier menacing humanoid (head forward
-and low, shoulders raised), `--opt creature` a feral creature with
-digitigrade legs. One stands about 20 m ahead of
-the spawn point and walks towards you; `--opt statue` keeps it still,
-`--opt nofigures` removes it.
+black, the rest of the world unchanged), with a matte near-black faceted
+skull with two steady lit eyes (flat slanted rhombuses), hard feet and two
+razor prongs for hands. `--opt luminous` gives the same shape slimmer and
+finer-grained with glowing fragments threaded through every part (strange
+only in its substance). One stands about 20 m ahead of the spawn point and
+walks towards you; `--opt statue` keeps it still, `--opt nofigures` removes
+it.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so

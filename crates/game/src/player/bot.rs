@@ -242,7 +242,7 @@ fn stairs(
     }
     let now = time.elapsed_secs();
     if state.stair.is_none() {
-        let WorldGen::Plates(plates) = world else { return };
+        let plates = &world.0;
         let Ok(library) = crate::structures::load_library() else { return };
         let found = worldgen::sites::near(&library, plates, 1200.0, 900.0, 3000.0).into_iter().find_map(|site| {
             let built = worldgen::sites::build(&library, plates, &site, 1000);

@@ -13,7 +13,7 @@ use bevy::{
         CascadeShadowConfigBuilder, DirectionalLightShadowMap, NotShadowCaster, NotShadowReceiver,
         ShadowFilteringMethod, Skybox,
     },
-    pbr::{ContactShadows, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion},
+    pbr::{ContactShadows, DistanceFog, FogFalloff},
     post_process::bloom::Bloom,
     prelude::*,
     render::{
@@ -240,11 +240,6 @@ fn setup(
     }
     if !args.opt("notaa") {
         cam.insert((TemporalAntiAliasing::default(), ShadowFilteringMethod::Temporal));
-    }
-    // Off by default: its per-frame noise shimmers on finely broken
-    // facades (TAA cannot settle it), and the meshes carry their own AO.
-    if args.opt("ssao") {
-        cam.insert(ScreenSpaceAmbientOcclusion::default());
     }
     if !args.opt("nocontact") {
         cam.insert(ContactShadows::default());

@@ -12,9 +12,10 @@ use glam::DVec2;
 
 use crate::noise::hash01;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Deserialize)]
 pub enum District {
     /// Vast pale flat plates, like plazas: steps of a few centimetres.
+    #[default]
     Floor,
     /// Terraced slopes of 2 m ledges: everything is a mantle away.
     Tiers,

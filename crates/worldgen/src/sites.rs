@@ -141,7 +141,12 @@ pub enum EarthworkShape {
 /// on this kind of ground."
 #[derive(Clone, Debug, Deserialize)]
 pub struct SiteRule {
+    /// Where it applies; ignored by a placed rule (`at`).
+    #[serde(default)]
     pub district: District,
+    /// A placed rule: one site exactly here (x, z), and nowhere else.
+    #[serde(default)]
+    pub at: Option<(f32, f32)>,
     #[serde(default = "one")]
     pub weight: f32,
     /// A centrepiece of a box style...
@@ -363,26 +368,39 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
     let cell = (cell.0.rem_euclid(n), cell.1.rem_euclid(n));
     let seed = world.seed() ^ layer.seed();
     let r = |k: i32| hash01(cell.0, k, cell.1, seed);
-    if r(0) >= grid.chance {
-        return None;
-    }
-    let x = (cell.0 as f32 + 0.5 + (r(1) * 2.0 - 1.0) * JITTER) * size;
-    let z = (cell.1 as f32 + 0.5 + (r(2) * 2.0 - 1.0) * JITTER) * size;
-    let district = world.district(x as f64, z as f64);
-    let rules: Vec<&SiteRule> = layer.rules(library).iter().filter(|s| s.district == district).collect();
-    let total: f32 = rules.iter().map(|s| s.weight.max(0.0)).sum();
-    if total <= 0.0 {
-        return None;
-    }
-    let mut pick = r(3) * total;
-    let rule = rules
-        .iter()
-        .copied()
-        .find(|s| {
-            pick -= s.weight.max(0.0);
-            pick <= 0.0
-        })
-        .unwrap_or(rules[rules.len() - 1]);
+    // A placed rule whose spot lies in this cell wins it.
+    let cell_of = |v: f32| ((v / size).floor() as i32).rem_euclid(n);
+    let placed = layer.rules(library).iter().find(|s| s.at.is_some_and(|(x, z)| (cell_of(x), cell_of(z)) == cell));
+    let (x, z, rule) = match placed {
+        Some(rule) => {
+            let (x, z) = rule.at.unwrap_or_default();
+            (x, z, rule)
+        }
+        None => {
+            if r(0) >= grid.chance {
+                return None;
+            }
+            let x = (cell.0 as f32 + 0.5 + (r(1) * 2.0 - 1.0) * JITTER) * size;
+            let z = (cell.1 as f32 + 0.5 + (r(2) * 2.0 - 1.0) * JITTER) * size;
+            let district = world.district(x as f64, z as f64);
+            let rules: Vec<&SiteRule> =
+                layer.rules(library).iter().filter(|s| s.at.is_none() && s.district == district).collect();
+            let total: f32 = rules.iter().map(|s| s.weight.max(0.0)).sum();
+            if total <= 0.0 {
+                return None;
+            }
+            let mut pick = r(3) * total;
+            let rule = rules
+                .iter()
+                .copied()
+                .find(|s| {
+                    pick -= s.weight.max(0.0);
+                    pick <= 0.0
+                })
+                .unwrap_or(rules[rules.len() - 1]);
+            (x, z, rule)
+        }
+    };
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
 
     // The site's outer radius stays inside the cell, off the canals and off
@@ -442,7 +460,9 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
         None if rule.form.is_some() && rule.plinth => {
             // A form on the whole footprint, which shrinks to fit.
             let footprint = lerp(rule.footprint.0, rule.footprint.1, r(4)).min(reach - terraces - CORE_MARGIN);
-            if footprint < MIN_FOOTPRINT {
+            // Squeezed to under half its smallest size (by a canal, say):
+            // none rather than a stunted one.
+            if footprint < MIN_FOOTPRINT.max(rule.footprint.0 * 0.5) {
                 return None;
             }
             form = rule.form.clone().map(|f| (f, footprint));

@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use glam::{Quat, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 use serde::Deserialize;
 
 use crate::mesh::ColumnMesh;
@@ -26,18 +26,6 @@ use crate::structure::{self, Library, Placement, Solid};
 pub enum Form {
     /// Nothing (also available as "nothing").
     Nothing,
-    /// A prism whose faces are carved into themselves (see `relief.rs`): a
-    /// core, and a skin `depth` thick cut into recesses within recesses.
-    /// `then` grows on top, on the whole polygon.
-    Relief {
-        height: (f32, f32),
-        #[serde(default = "relief_depth")]
-        depth: f32,
-        #[serde(default)]
-        tone: f32,
-        #[serde(default)]
-        then: Option<String>,
-    },
     /// A complex composed from walkable units repeated at the same scale
     /// (see `compose.rs`): terraces, raised decks on arches, bridges, stairs
     /// joining them, parapets, porticos; grown in about `steps` operations
@@ -145,45 +133,14 @@ pub enum Form {
     },
     /// One city cell on the ground, for the unit lab: a deck the size of a
     /// lattice cell `len` slots long (96 m slots) with what stands on it
-    /// (`kind`: plaza, court, terraces, gallery, tower), up to `storeys`
-    /// high; `old` draws the first version of the units, for comparison.
+    /// (`kind`: plaza, court, terraces, gallery, tower, cascade, garden), up
+    /// to `storeys` high.
     Cell {
         kind: String,
         #[serde(default = "one")]
         len: u32,
         #[serde(default = "five")]
         storeys: i32,
-        #[serde(default)]
-        old: bool,
-        #[serde(default)]
-        tone: f32,
-    },
-    /// A shape made of copies of itself, in the biggest rectangle that fits,
-    /// `height` tall: each copy placed (`at`, the parent's -1..1 frame,
-    /// y up), scaled and turned within its parent, recursing `depth` times
-    /// unless it `stops`; at the last level (or where a copy stops) each
-    /// piece is drawn as `leaf` (a copy may override it).
-    Fractal {
-        height: (f32, f32),
-        depth: u32,
-        leaf: FractalLeaf,
-        copies: Vec<FractalCopy>,
-        #[serde(default)]
-        tone: f32,
-    },
-    /// A Sierpinski pyramid in the biggest square that fits, `height` tall:
-    /// a pyramid made of five half-size pyramids (four on the base, one on
-    /// top), each made the same way, `depth` times; with `tetrahedron`, a
-    /// tetrahedron made of four. No boxes, no right angles in its outline.
-    Sierpinski {
-        height: (f32, f32),
-        #[serde(default = "sierpinski_depth")]
-        depth: u32,
-        #[serde(default)]
-        tetrahedron: bool,
-        /// How ragged it is (0 crisp): pieces missing and heights jittered.
-        #[serde(default)]
-        ragged: f32,
         #[serde(default)]
         tone: f32,
     },
@@ -199,80 +156,6 @@ pub enum Form {
         spacing: f32,
         #[serde(default)]
         tone: f32,
-    },
-    /// Round towers of bare wall given scale by a few human-sized things
-    /// (see `bastion.rs`): rows of deep arches, a door, a stair spiralling
-    /// up the outside, ledges, arched bridges between neighbours. Up to
-    /// `count` towers about `height` tall.
-    Bastions {
-        height: (f32, f32),
-        #[serde(default = "one_tower")]
-        count: u32,
-        #[serde(default)]
-        tone: f32,
-    },
-    /// Wiring in its own right (see `curtain.rs`): a broken ring of walls
-    /// round an open shaft, sheaves of long cables crossing the void and
-    /// hanging down the walls, the walls carrying the pipe network sunk
-    /// into their faces.
-    Curtains {
-        height: (f32, f32),
-        #[serde(default)]
-        tone: f32,
-    },
-    /// A mass made of cylinders (see `cluster.rs`): drums packed and fused
-    /// on the polygon, about `height` tall at its middle, a few lying across,
-    /// and a tangle of small tubes sagging between them and winding down
-    /// their sides.
-    Cluster {
-        height: (f32, f32),
-        #[serde(default)]
-        tone: f32,
-    },
-    /// A network of pipes spreading out across the ground from the polygon's
-    /// edges for `reach` metres, no higher than `depth` (see `rack.rs`):
-    /// the city's pipes running out into the land.
-    Roots {
-        reach: (f32, f32),
-        #[serde(default = "roots_depth")]
-        depth: f32,
-        /// Buried conduits instead: few, straight, only their crowns showing.
-        #[serde(default)]
-        buried: bool,
-        #[serde(default)]
-        tone: f32,
-    },
-    /// An open frame lining the polygon's edges, one bay `depth` deep, its
-    /// bays packed with pipes, tanks, hoses and machinery (see `rack.rs`).
-    /// With `core`, a dark mass fills the polygon inside the rack. `then`
-    /// grows on top, on the whole polygon.
-    Rack {
-        height: (f32, f32),
-        #[serde(default = "rack_storey")]
-        storey: (f32, f32),
-        #[serde(default = "rack_bay")]
-        bay: (f32, f32),
-        #[serde(default = "rack_depth")]
-        depth: (f32, f32),
-        #[serde(default = "rack_frame")]
-        frame: f32,
-        #[serde(default)]
-        core: bool,
-        /// No frame: a network of pipes on the core's faces, climbing,
-        /// switching lanes, splitting, with bare wall between its knots.
-        #[serde(default)]
-        strange: bool,
-        /// With `strange` and `core`: the pipes sunk into the core's faces,
-        /// only their crowns showing.
-        #[serde(default)]
-        sunk: bool,
-        /// With `strange`: conduits square in section rather than round.
-        #[serde(default)]
-        square: bool,
-        #[serde(default)]
-        tone: f32,
-        #[serde(default)]
-        then: Option<String>,
     },
     /// A prism of the polygon. `taper` is how much it narrows towards the
     /// top (0 straight, 1 to a point), `lean` how far its top may shift
@@ -311,15 +194,6 @@ pub enum Form {
     },
     /// The polygon shrunk by `by` on every side.
     Inset { by: (f32, f32), then: String },
-    /// The polygon moved `by` metres sideways, in a random direction (or
-    /// along the polygon's longest edge with `along`): stacked, this makes
-    /// cantilevers and overhangs.
-    Shift {
-        by: (f32, f32),
-        #[serde(default)]
-        along: bool,
-        then: String,
-    },
     /// A recessed band: a prism of the polygon shrunk by `by`, `height`
     /// high; `then` grows on top of it on the whole polygon again. Stacked
     /// between bands it makes the grooves that give tall things a scale.
@@ -388,40 +262,9 @@ pub enum Form {
     },
 }
 
-/// What a piece of a `Fractal` is drawn as.
-#[derive(Clone, Debug, Deserialize)]
-pub enum FractalLeaf {
-    Box,
-    /// Rising towards the piece's +x.
-    Wedge,
-    Pyramid,
-    Tetrahedron,
-    /// A structure of this box style filling the piece.
-    Style(String),
-}
 
-/// One copy of a `Fractal` within its parent.
-#[derive(Clone, Debug, Deserialize)]
-pub struct FractalCopy {
-    pub at: (f32, f32, f32),
-    pub scale: (f32, f32, f32),
-    /// Degrees about the vertical.
-    #[serde(default)]
-    pub turn: f32,
-    /// Drawn as a leaf here instead of recursing.
-    #[serde(default)]
-    pub stop: bool,
-    #[serde(default)]
-    pub leaf: Option<FractalLeaf>,
-}
 
-fn sierpinski_depth() -> u32 {
-    5
-}
 
-fn one_tower() -> u32 {
-    1
-}
 
 fn fore_half() -> f32 {
     440.0
@@ -471,29 +314,11 @@ fn compose_grid() -> (f32, f32) {
     (6.0, 4.5)
 }
 
-fn relief_depth() -> f32 {
-    2.0
-}
 
-fn roots_depth() -> f32 {
-    2.5
-}
 
-fn rack_storey() -> (f32, f32) {
-    (3.5, 5.0)
-}
 
-fn rack_bay() -> (f32, f32) {
-    (3.0, 5.0)
-}
 
-fn rack_depth() -> (f32, f32) {
-    (2.2, 3.5)
-}
 
-fn rack_frame() -> f32 {
-    0.45
-}
 
 fn two() -> u32 {
     2
@@ -524,25 +349,17 @@ fn default_fill() -> f32 {
 pub fn references(form: &Form) -> Vec<&str> {
     match form {
         Form::Nothing | Form::Structure { .. } => vec![],
-        Form::Rack { then, .. } => then.iter().map(|s| s.as_str()).collect(),
-        Form::Roots { .. }
-        | Form::Cluster { .. }
-        | Form::Curtains { .. }
-        | Form::Bastions { .. }
-        | Form::Tower { .. }
-        | Form::Sierpinski { .. }
-        | Form::Fractal { .. }
+        Form::Tower { .. }
         | Form::Compose { .. }
         | Form::Lattice { .. }
         | Form::Cell { .. }
         | Form::Field { .. } => vec![],
         Form::Backdrop { fore, .. } => fore.iter().map(|s| s.as_str()).collect(),
-        Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
         }
         Form::Rim { inner, wall, .. } => inner.iter().chain(wall).map(|s| s.as_str()).collect(),
-        Form::Inset { then, .. } | Form::Split { then, .. } | Form::Cells { then, .. } | Form::Shift { then, .. } => {
+        Form::Inset { then, .. } | Form::Split { then, .. } | Form::Cells { then, .. } => {
             vec![then]
         }
         Form::Choose(options) => options.iter().map(|(_, s)| s.as_str()).collect(),
@@ -636,13 +453,12 @@ pub fn mesh_into(mesh: &mut ColumnMesh, prisms: &[Prism]) {
     }
 }
 
-/// What grows from a polygon: prisms, solids (from box styles and racks)
-/// and tubes (racks).
+/// What grows from a polygon: prisms, and solids (from box styles and the
+/// composed forms).
 #[derive(Default)]
 pub struct Growth {
     pub prisms: Vec<Prism>,
     pub solids: Vec<Solid>,
-    pub tubes: Vec<crate::dressing::Tube>,
 }
 
 /// Recursion deeper than this stops, whatever the forms say.
@@ -671,27 +487,6 @@ impl Grower<'_> {
         let child = |i: u32| seed.wrapping_mul(0x9e37_79b9).wrapping_add(i.wrapping_mul(0x85eb_ca6b)) ^ depth;
         match form {
             Form::Nothing => {}
-            Form::Relief { height, depth: d, tone: t, then } => {
-                let tone = tone + t;
-                let h = pick(*height, 1);
-                let (core, solids) = crate::relief::build(poly, floor, h, *d, tone, child(5));
-                if solids.len() + 1 > self.budget {
-                    return;
-                }
-                self.budget -= solids.len() + 1;
-                self.out.prisms.push(Prism {
-                    points: core,
-                    y0: floor,
-                    y1: floor + h,
-                    top_scale: 1.0,
-                    lean: Vec2::ZERO,
-                    albedo: (tone - 0.02).clamp(0.03, 0.4),
-                });
-                self.out.solids.extend(solids);
-                if let Some(then) = then {
-                    self.grow(then, poly, floor + h, tone, child(1), depth + 1);
-                }
-            }
             Form::Compose { steps, grid, core, symmetric, tone: t } => {
                 let core = core.map(|(grid, share, steps)| crate::compose::Core { grid, share, steps });
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
@@ -768,7 +563,7 @@ impl Grower<'_> {
                     }
                 }
             }
-            Form::Cell { kind, len, storeys, old, tone: t } => {
+            Form::Cell { kind, len, storeys, tone: t } => {
                 let Some((center, dir, _)) = inscribed_box(poly) else { return };
                 let tone = tone + t;
                 let half = (*len as f32 * 48.0 - 5.76, 42.24);
@@ -782,163 +577,12 @@ impl Grower<'_> {
                     half: Vec3::new(half.0, 3.0, half.1),
                     albedo: tone,
                 }];
-                let unit = if *old {
-                    let kind = match kind.as_str() {
-                        "plaza" => crate::slabunit::Kind::Plaza,
-                        "court" => crate::slabunit::Kind::Court,
-                        "terraces" => crate::slabunit::Kind::Terraces,
-                        "gallery" => crate::slabunit::Kind::Gallery,
-                        _ => crate::slabunit::Kind::Tower,
-                    };
-                    crate::slabunit::unit(kind, half, *storeys, tone, seed)
-                } else {
-                    let kind = crate::cellunit::Kind::from_name(kind).unwrap_or(crate::cellunit::Kind::Court);
-                    crate::cellunit::unit(kind, half, *storeys, tone, seed)
-                };
+                let kind = crate::cellunit::Kind::from_name(kind).unwrap_or(crate::cellunit::Kind::Court);
+                let unit = crate::cellunit::unit(kind, half, *storeys, tone, seed);
                 solids.extend(unit.into_iter().map(|s| crate::structure::Solid { center: s.center + Vec3::Y * deck, ..s }));
                 let rot = glam::Quat::from_rotation_y((-dir.y).atan2(dir.x));
                 let origin = Vec3::new(center.x, floor, center.y);
                 self.out.solids.extend(solids.into_iter().map(|s| crate::structure::Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }));
-            }
-            Form::Fractal { height, depth: levels, leaf, copies, tone: t } => {
-                let Some((center, dir, half)) = inscribed_box(poly) else { return };
-                let h = pick(*height, 1);
-                let tone = tone + t;
-                // (centre, half size, yaw, depth, leaf) of each piece.
-                let root_yaw = (-dir.y).atan2(dir.x);
-                let mut stack = vec![(Vec3::new(center.x, floor + h * 0.5, center.y), Vec3::new(half.x, h * 0.5, half.y), root_yaw, 0u32, leaf.clone())];
-                let mut pieces = Vec::new();
-                while let Some((c, hs, yaw, d, piece_leaf)) = stack.pop() {
-                    if pieces.len() + stack.len() > 200_000 {
-                        break;
-                    }
-                    if d >= *levels {
-                        pieces.push((c, hs, yaw, piece_leaf));
-                        continue;
-                    }
-                    let rot = Quat::from_rotation_y(yaw);
-                    for copy in copies {
-                        let cc = c + rot * (Vec3::from(copy.at) * hs);
-                        let ch = hs * Vec3::from(copy.scale);
-                        let cy = yaw + copy.turn.to_radians();
-                        let cl = copy.leaf.clone().unwrap_or_else(|| piece_leaf.clone());
-                        if copy.stop {
-                            pieces.push((cc, ch, cy, cl));
-                        } else {
-                            stack.push((cc, ch, cy, d + 1, cl));
-                        }
-                    }
-                }
-                if pieces.len() > self.budget {
-                    return;
-                }
-                self.budget -= pieces.len();
-                for (k, (c, hs, yaw, piece_leaf)) in pieces.into_iter().enumerate() {
-                    let shade = (tone + (hash01(k as i32, 5, 0xf2a, seed) - 0.5) * 0.03).clamp(0.03, 0.4);
-                    let rot = Quat::from_rotation_y(yaw);
-                    let at = |u: f32, v: f32| {
-                        let p = c + rot * Vec3::new(u * hs.x, 0.0, v * hs.z);
-                        Vec2::new(p.x, p.z)
-                    };
-                    let (y0, y1) = (c.y - hs.y, c.y + hs.y);
-                    let pointed = |points: Vec<Vec2>| Prism { points, y0, y1, top_scale: 0.0, lean: Vec2::ZERO, albedo: shade };
-                    match piece_leaf {
-                        FractalLeaf::Box | FractalLeaf::Wedge => self.out.solids.push(Solid { glow: 0.0,
-                            detail: false,
-                            wedge: matches!(piece_leaf, FractalLeaf::Wedge),
-                            round: false,
-                            center: c,
-                            rotation: rot,
-                            half: hs,
-                            albedo: shade,
-                        }),
-                        FractalLeaf::Pyramid => self.out.prisms.push(pointed(vec![at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)])),
-                        FractalLeaf::Tetrahedron => self.out.prisms.push(pointed(vec![at(-1.0, -1.0), at(1.0, -1.0), at(0.0, 1.0)])),
-                        FractalLeaf::Style(style) => {
-                            let placement = Placement {
-                                style,
-                                at: (0.0, 0.0),
-                                size: (hs.x * 2.0, hs.y * 2.0, hs.z * 2.0),
-                                yaw: yaw.to_degrees(),
-                                seed: seed ^ (k as u32).wrapping_mul(0x9e37_79b9),
-                                sink: 0.0,
-                            };
-                            let solids = structure::build(self.library, &placement, self.leaves.min(20_000));
-                            self.leaves = self.leaves.saturating_sub(solids.len());
-                            let offset = Vec3::new(c.x, y0, c.z);
-                            self.out.solids.extend(solids.into_iter().map(|s| Solid { center: s.center + offset, ..s }));
-                        }
-                    }
-                }
-            }
-            Form::Sierpinski { height, depth: levels, tetrahedron, ragged, tone: t } => {
-                let Some((center, dir, half)) = inscribed_box(poly) else { return };
-                let side = Vec2::new(-dir.y, dir.x);
-                let s = half.min_element();
-                let h = pick(*height, 1);
-                let tone = tone + t;
-                // (base outline, base height, height) of each piece, split
-                // `levels` times.
-                let mut pieces: Vec<(Vec<Vec2>, f32, f32)> = vec![if *tetrahedron {
-                    (
-                        (0..3)
-                            .map(|k| {
-                                let a = std::f32::consts::TAU * k as f32 / 3.0 + std::f32::consts::FRAC_PI_2;
-                                center + (dir * a.cos() + side * a.sin()) * s
-                            })
-                            .collect(),
-                        floor,
-                        h,
-                    )
-                } else {
-                    (
-                        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-                            .iter()
-                            .map(|&(u, v)| center + (dir * u + side * v) * s)
-                            .collect(),
-                        floor,
-                        h,
-                    )
-                }];
-                let mut n = 0i32;
-                for level in 0..(*levels).min(8) {
-                    let mut next = Vec::with_capacity(pieces.len() * 5);
-                    for (base, y, h) in pieces {
-                        let c = centroid(&base);
-                        let mut children: Vec<(Vec<Vec2>, f32, f32)> = base
-                            .iter()
-                            .map(|&corner| (base.iter().map(|&p| (p + corner) * 0.5).collect(), y, h * 0.5))
-                            .collect();
-                        children.push((base.iter().map(|&p| (p + c) * 0.5).collect(), y + h * 0.5, h * 0.5));
-                        for (points, y, h) in children {
-                            n += 1;
-                            let r = |k: i32| hash01(n, k, level as i32, seed ^ 0x7a9);
-                            // Ragged: now and then a piece missing, heights
-                            // jittered.
-                            if *ragged > 0.0 && level > 0 && r(0) < *ragged * 0.25 {
-                                continue;
-                            }
-                            let h = h * (1.0 + (r(1) - 0.5) * *ragged);
-                            next.push((points, y, h));
-                        }
-                    }
-                    pieces = next;
-                }
-                if pieces.len() > self.budget {
-                    return;
-                }
-                self.budget -= pieces.len();
-                for (k, (points, y0, h)) in pieces.into_iter().enumerate() {
-                    let shade = tone + (hash01(k as i32, 3, 0x51e, seed) - 0.5) * 0.03;
-                    self.out.prisms.push(Prism {
-                        points,
-                        y0,
-                        y1: y0 + h,
-                        top_scale: 0.0,
-                        lean: Vec2::ZERO,
-                        albedo: shade.clamp(0.03, 0.4),
-                    });
-                }
             }
             Form::Tower { height, width, spacing, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
@@ -954,86 +598,6 @@ impl Grower<'_> {
                 }
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
-            }
-            Form::Bastions { height, count, tone: t } => {
-                let (walls, solids) = crate::bastion::build(poly, floor, pick(*height, 1), *count, tone + t, child(7));
-                if walls.len() + solids.len() > self.budget {
-                    return;
-                }
-                self.budget -= walls.len() + solids.len();
-                self.out.prisms.extend(walls);
-                self.out.solids.extend(solids);
-            }
-            Form::Curtains { height, tone: t } => {
-                let (walls, cables, pipes) = crate::curtain::build(poly, floor, pick(*height, 1), tone + t, child(6));
-                let pieces = walls.len() + cables.len() + pipes.len();
-                if pieces > self.budget {
-                    return;
-                }
-                self.budget -= pieces;
-                self.out.prisms.extend(walls);
-                self.out.solids.extend(cables);
-                self.out.tubes.extend(pipes);
-            }
-            Form::Cluster { height, tone: t } => {
-                let solids = crate::cluster::build(poly, floor, pick(*height, 1), tone + t, child(4));
-                if solids.len() > self.budget {
-                    return;
-                }
-                self.budget -= solids.len();
-                self.out.solids.extend(solids);
-            }
-            Form::Roots { reach, depth: d, buried, tone: t } => {
-                let roots = if *buried {
-                    crate::rack::conduits(poly, floor, pick(*reach, 1), tone + t, child(3))
-                } else {
-                    crate::rack::roots(poly, floor, pick(*reach, 1), *d, tone + t, child(3))
-                };
-                let pieces = roots.solids.len() + roots.tubes.len();
-                if pieces > self.budget {
-                    return;
-                }
-                self.budget -= pieces;
-                self.out.solids.extend(roots.solids);
-                self.out.tubes.extend(roots.tubes);
-            }
-            Form::Rack { height, storey, bay, depth: d, frame, core, strange, sunk, square, tone: t, then } => {
-                let tone = tone + t;
-                let layout = crate::rack::Layout {
-                    height: pick(*height, 1),
-                    storey: pick(*storey, 2),
-                    bay: pick(*bay, 3),
-                    depth: pick(*d, 4),
-                    frame: *frame,
-                    strange: *strange,
-                    sunk: *sunk,
-                    square: *square,
-                };
-                let rack = crate::rack::build(poly, floor, layout, tone, child(2));
-                let pieces = rack.solids.len() + rack.tubes.len();
-                if pieces > self.budget {
-                    return;
-                }
-                self.budget -= pieces;
-                self.out.solids.extend(rack.solids);
-                self.out.tubes.extend(rack.tubes);
-                if *core && self.budget > 0 {
-                    let inner = inset(poly, layout.depth);
-                    if inner.len() >= 3 {
-                        self.budget -= 1;
-                        self.out.prisms.push(Prism {
-                            points: inner,
-                            y0: floor,
-                            y1: floor + layout.height,
-                            top_scale: 1.0,
-                            lean: Vec2::ZERO,
-                            albedo: (tone - 0.04).clamp(0.03, 0.4),
-                        });
-                    }
-                }
-                if let Some(then) = then {
-                    self.grow(then, poly, floor + layout.height, tone, child(1), depth + 1);
-                }
             }
             Form::Extrude { height, taper, lean, tone: t, then } => {
                 let tone = tone + t;
@@ -1117,25 +681,6 @@ impl Grower<'_> {
                 if let Some(then) = then {
                     self.grow(then, poly, floor + h, tone, child(1), depth + 1);
                 }
-            }
-            Form::Shift { by, along, then } => {
-                let dir = if *along {
-                    let n = poly.len();
-                    let i = (0..n)
-                        .max_by(|&a, &b| {
-                            let len = |i: usize| (poly[(i + 1) % n] - poly[i]).length_squared();
-                            len(a).total_cmp(&len(b))
-                        })
-                        .unwrap_or(0);
-                    let e = (poly[(i + 1) % n] - poly[i]).normalize_or_zero();
-                    if r(2) < 0.5 { e } else { -e }
-                } else {
-                    let a = r(2) * std::f32::consts::TAU;
-                    Vec2::new(a.cos(), a.sin())
-                };
-                let offset = dir * pick(*by, 1);
-                let moved: Vec<Vec2> = poly.iter().map(|&p| p + offset).collect();
-                self.grow(then, &moved, floor, tone, child(1), depth + 1);
             }
             Form::Inset { by, then } => {
                 let inner = inset(poly, pick(*by, 1));

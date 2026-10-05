@@ -1,4 +1,5 @@
-// Structures: modules, styles, and where to build test structures.
+// Structures: box styles and their modules, forms, the sites and colossi the
+// world grows, and the lab's catalogue.
 //
 // The game watches this file: save it and every structure is rebuilt within
 // a second. If something is wrong the error shows at the top right and the
@@ -18,12 +19,6 @@
 //   Column(width: 0.3)           a full-height square column
 //   Fin(thickness: 0.1)          a full-height plate; add axis: Z to turn it
 //   Frame(bar: 0.1)              the cell's twelve edges as bars
-//   Conduits(core: 0.45, bow: 0.25)
-//                                the cell made of conduits: a core (fraction
-//                                of its cross-section, 0 for none) wrapped in
-//                                tubes packed along its longest side, some
-//                                bowing out loose (chance `bow`); cells under
-//                                1.2 m across stay solid
 //   Ramp                         a wedge rising towards +x; only where it is
 //                                walkable (45 degrees or less), otherwise it
 //                                becomes stairs
@@ -34,31 +29,16 @@
 //   Group([ (min: (x, y, z), max: (x, y, z), module: "name", turn: 1), ... ])
 //                                parts inside the cell, each a sub-box filled
 //                                by another module; turn = quarter turns
-//   Structure(style: "name", height: (0.5, 1.0))
-//                                a whole structure of that style built in the
-//                                cell, standing on its floor, a random
-//                                fraction of the cell's height; for regions
-//                                of plots (nests up to three deep)
 //
 // STYLES
 //   divisions: (x, y, z)   cells per axis at each split
 //   keep:   All | Lattice | ColumnsAndRoof | Skyline | Random(0.6)
-//           | Massif(0.8)  (columns falling from the centre by that much,
-//             at every level: a mountain of mountains)
 //   depth:  how many times to split
 //   gap:    fraction of its cell each child fills (below 1 leaves grooves)
 //   twist:  degrees each level turns relative to its parent
 //   stop_chance: chance a block stops splitting early (plain masses)
 //   lift:   random vertical shift of children, fraction of a cell
 //   min_size: blocks smaller than this (metres) are not split
-//   stairs: at most this many flights of stairs along the cliffs between
-//           levels
-//   envelope: [Box(min: (x, y, z), max: (x, y, z)), Plane(normal: (x, y, z), offset: 0.5)]
-//           cuts taken out of the box before it is filled, in its own -1..1
-//           coordinates: what a box contains, what lies beyond a plane
-//   cuts:   this many more cuts picked at random: corners (L shapes),
-//           notches, strips (setbacks), undercuts (overhangs), slopes
-//   symmetric: true mirrors the random cuts across x and z
 //   albedo, albedo_spread: tone
 //   leaves: [ (on: Where, module: "name", weight: 1, turn: None), ... ]
 //     on:   Any | Top | Summit | Bottom | Corner | Edge | Interior | Outside | Early
@@ -69,7 +49,7 @@
 //           the parent's centre: ramps and stairs rising outwards)
 //     Every matching rule is a candidate, picked by weight; with none, a box.
 //
-// STRUCTURES (test placements)
+// STRUCTURES (placed box-style structures)
 //   (style: "name", at: (x, z), size: (x, y, z), yaw: 0, seed: 0, sink: 0)
 //   The default spawn point is at (1200, 900), looking towards +x / -z.
 //
@@ -109,66 +89,44 @@
 //   Structure(style: "name", height: (20, 40))   or   proportion: (1.5, 3)
 //                      a structure of a box style in the biggest box that
 //                      fits, so high, or that many times its narrower side
-//   Rack(height: (40, 60), storey: (3.5, 5), bay: (3, 5), depth: (2.2, 3.5),
-//        frame: 0.45, core: false, strange: false, tone: 0, then: "name")
-//                      an open frame along each edge, one bay deep, its bays
-//                      packed with pipes, tanks, hoses or machinery (or left
-//                      empty); `core` fills the inside with a dark mass;
-//                      `then` grows on the whole polygon at its top;
-//                      `strange`: no frame, but a network of pipes on the
-//                      core's faces (use with `core`), climbing, switching
-//                      lanes, splitting, with bare wall between its knots
-//   Relief(height: (45, 65), depth: 2, tone: 0, then: "name")
-//                      a prism whose faces are carved into themselves: a
-//                      skin `depth` thick cut into recesses within recesses
-//                      (sunk relief); `then` grows on top
 //   Compose(steps: 24, symmetric: false, grid: (6, 4.5), core: ((20, 13.5), 0.45, 40), tone: 0)
 //                      a complex of walkable units at the same scale (6 m
 //                      bays, 4.5 m levels): terraces, raised decks on arches,
 //                      bridges, stairs joining them, parapets, porticos,
 //                      grown in runs and mutated
-//   Fractal(height: (90, 90), depth: 3, leaf: Box, copies: [(at: (x, y, z), scale: (x, y, z), turn: 0, stop: false, leaf: Box), ...])
-//                      a shape made of copies of itself: each copy placed
-//                      (the parent's -1..1 frame), scaled and turned, recursing
-//                      `depth` times unless it stops; pieces drawn as Box,
-//                      Wedge, Pyramid, Tetrahedron or Style("name")
-//   Sierpinski(height: (90, 90), depth: 5, tetrahedron: false, tone: 0)
-//                      a Sierpinski pyramid (five half-size pyramids, each
-//                      made the same way) or tetrahedron (four)
 //   Tower(height: (150, 200), width: 0, spacing: 0, tone: 0)
 //                      an ordered tower transcribed from Manifold Garden in
 //                      the biggest square that fits; with spacing, towers
 //                      `width` across on a lattice that far apart
-//   Bastions(height: (90, 130), count: 1, tone: 0)
-//                      round towers of bare wall with rows of deep arches,
-//                      a door, a stair spiralling up the outside to each
-//                      arcade, ledges; arched bridges between neighbours
-//   Curtains(height: (90, 130), tone: 0)
-//                      walls round an open shaft, sheaves of long cables
-//                      crossing the void and hanging down the walls
-//   Cluster(height: (55, 80), tone: 0)
-//                      a mass made of cylinders: drums of very different
-//                      sizes packed and fused, taller in the middle, a few
-//                      lying across, small tubes sagging and winding over them
-//   Roots(reach: (45, 70), depth: 2.5, buried: false, tone: 0)
-//                      the same network spreading out across the ground
-//                      from each edge, `reach` metres, half sunk or on
-//                      supports, thinning and diving in as it goes; with
-//                      `buried`, conduits instead: few, straight, sunk to
-//                      their crowns, flush hatches where they turn or end
+//   Lattice(cell: (96, 45), levels: 14, ...)
+//                      the hanging city: a sparse lattice of cells (slots
+//                      `cell` wide and high), most of them empty, the rest
+//                      decks carrying composed units, held up by cores,
+//                      beams, piers and rods (see lattice.rs for the knobs;
+//                      `reactor: true` with `void` or `radial` builds the
+//                      reactor city)
+//   Cell(kind: "court", len: 1)
+//                      one city cell on the ground, for the lab: a deck with
+//                      a unit of that kind (plaza, court, terraces, gallery,
+//                      tower, cascade, garden)
+//   Field(n: 2), Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "flight")
+//                      a human-scale field of cells, and colossal wedges
+//                      standing behind one (see mega.rs)
 //
 // SITES: structures that grow out of the world by themselves.
 //   site_grid: (spacing: 768, chance: 0.5)
 //     The world is cut into cells about `spacing` metres wide; each holds a
 //     site with probability `chance`, near its centre.
-//   sites: [ (district: Floor, weight: 1,
+//   sites: [ (district: Floor, weight: 1, at: (x, z),
 //             plates: "form", terraces: "form", terrace_chance: 0.35,
 //             core: (40, 90), stairs: 0.5,
 //             style: "name", size: ((min x, y, z), (max x, y, z)),
 //             lift: (3, 9), rings: 3, ring_width: 22, step: 0.5), ... ]
 //     district: Floor | Tiers | Stacks | Broken
 //     A site picks among its district's rules by weight. Sites shrink to
-//     keep clear of neighbours, canals and the test structures.
+//     keep clear of neighbours, canals and the placed structures.
+//     at: (x, z) places a rule's one site exactly there (its district is
+//     then ignored), and nowhere else.
 //     The site reshapes the plates around it: a flat core `core` metres in
 //     radius, `lift` metres (a random amount in the range) above the
 //     surrounding ground, or below it if negative (a sunken court); `rings`
@@ -195,7 +153,9 @@
 //     form: "name", footprint: (60, 120)
 //       grows a form on the whole footprint instead: the big plate at the
 //       centre, scaled to that many metres from its centre to its furthest
-//       corner (the core then fits around it).
+//       corner (the core then fits around it); squeezed below half its
+//       smallest size, there is none. square: true uses a square (turned
+//       with the earthwork) instead of the plate: a city needs the width.
 //   Sites stream in within 2.5 km of you; `--opt nosites` leaves them out.
 //
 // COLOSSI: the same rules on a much coarser grid, for megastructures.
@@ -205,68 +165,22 @@
 //   Changing the sites regenerates the terrain, which takes a few seconds.
 (
     modules: {
-        "floor": Slab(thickness: 0.2),
-        "roof": Slab(thickness: 0.15, at: Top),
-        "pier": Column(width: 0.35),
         "needle": Column(width: 0.12),
-        // Cells made of conduits: a core wrapped in a loom of tubes, or a
-        // loose bundle of tubes with no core.
-        "loom": Conduits(core: 0.45, bow: 0.2),
-        "cables": Conduits(core: 0, bow: 0.45),
         "blade": Fin(thickness: 0.08),
-        "blade_z": Fin(thickness: 0.08, axis: Z),
         "cage": Frame(bar: 0.08),
-        "steps": Stairs(rise: 0.45),
-
-        // A low block with a ramp running up from its top.
         "terrace": Group([
             (min: (-1, -1, -1), max: (1, -0.4, 1), module: "box"),
             (min: (-1, -0.4, -1), max: (1, 0.3, 1), module: "ramp"),
         ]),
-        // Two piers carrying a lintel.
-        "gate": Group([
-            (min: (-1, -1, -1), max: (-0.55, 1, 1), module: "box"),
-            (min: (0.55, -1, -1), max: (1, 1, 1), module: "box"),
-            (min: (-0.55, 0.5, -1), max: (0.55, 1, 1), module: "box"),
-        ]),
-        // A stack of thin slabs.
         "louvres": Group([
             (min: (-1, -1, -1), max: (1, -0.85, 1), module: "box"),
             (min: (-1, -0.45, -1), max: (1, -0.3, 1), module: "box"),
             (min: (-1, 0.1, -1), max: (1, 0.25, 1), module: "box"),
             (min: (-1, 0.65, -1), max: (1, 0.8, 1), module: "box"),
         ]),
-        // A slab on four needles, like a table.
-        "table": Group([
-            (min: (-1, 0.6, -1), max: (1, 1, 1), module: "box"),
-            (min: (-1, -1, -1), max: (-0.7, 0.6, -0.7), module: "box"),
-            (min: (0.7, -1, -1), max: (1, 0.6, -0.7), module: "box"),
-            (min: (-1, -1, 0.7), max: (-0.7, 0.6, 1), module: "box"),
-            (min: (0.7, -1, 0.7), max: (1, 0.6, 1), module: "box"),
-        ]),
-
-        // Whole structures, for filling the plots of a region.
-        "plot_ziggurat": Structure(style: "ziggurat", height: (0.25, 0.45)),
-        "plot_spire": Structure(style: "spire", height: (0.7, 1.0)),
-        "plot_hall": Structure(style: "hall", height: (0.12, 0.2)),
-        "plot_tables": Structure(style: "tables", height: (0.2, 0.35)),
-        "plot_fins": Structure(style: "fins", height: (0.15, 0.3)),
-        "plot_lattice": Structure(style: "lattice", height: (0.2, 0.4)),
-        // A thin paved plate covering the plot (2 m in a 200 m high region).
-        "plaza": Slab(thickness: 0.01),
     },
 
     styles: {
-        // Lab: an open lattice tower of frames (BLAME!'s trusses).
-        "truss": (
-            divisions: (2, 6, 2), keep: All, depth: 2, gap: 0.96, albedo: 0.1,
-            leaves: [
-                (on: Any, module: "cage", weight: 6),
-                (on: Bottom, module: "box", weight: 1),
-                (on: Early, module: "box", weight: 2),
-            ],
-        ),
-        // The spire's recipe, a little lighter, for colossal needles.
         "needle": (
             divisions: (3, 5, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 6,
             stop_chance: 0.3, albedo: 0.1,
@@ -326,319 +240,19 @@
                 (on: Early, module: "box", weight: 3),
             ],
         ),
-        // Piers carrying roofs, arcades within arcades, with gates.
-        "hall": (
-            divisions: (5, 2, 3), keep: ColumnsAndRoof, depth: 3, gap: 0.95,
-            stop_chance: 0.1, albedo: 0.16,
-            leaves: [
-                (on: Top, module: "roof", weight: 2),
-                (on: Top, module: "box", weight: 1),
-                (on: Corner, module: "pier", weight: 2),
-                (on: Edge, module: "gate", weight: 2, turn: Outward),
-                (on: Any, module: "box", weight: 1),
-            ],
-        ),
-        // Stepped massing climbed by ramps and stairs that face outwards.
-        "ziggurat": (
-            divisions: (4, 4, 4), keep: Skyline, depth: 2, gap: 0.92,
-            stop_chance: 0.2, albedo: 0.14,
-            leaves: [
-                (on: Top, module: "terrace", weight: 2, turn: Outward),
-                (on: Top, module: "steps", weight: 1, turn: Outward),
-                (on: Any, module: "box", weight: 2),
-            ],
-        ),
-        // A block whose faces are rows of blades: a brise-soleil facade.
-        "fins": (
-            divisions: (6, 4, 2), keep: All, depth: 2, gap: 0.97, albedo: 0.18,
-            leaves: [
-                (on: Outside, module: "blade", weight: 2),
-                (on: Outside, module: "blade_z", weight: 1),
-                (on: Interior, module: "void"),
-                (on: Bottom, module: "box", weight: 1),
-            ],
-        ),
-        // Lab: a mountain of mountains. Every split keeps columns falling
-        // from the centre to broken edges, so the massif is made of smaller
-        // massifs down to a few metres; ramps rising inwards on the summits.
-        "massif": (
-            divisions: (4, 3, 4), keep: Massif(0.85), depth: 3, gap: 0.96,
-            stop_chance: 0.03, min_size: 3, albedo: 0.12, albedo_spread: 0.04,
-            leaves: [
-                (on: Summit, module: "ramp", weight: 2, turn: Inward),
-                (on: Summit, module: "box", weight: 2),
-                (on: Outside, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-                (on: Any, module: "box", weight: 3),
-            ],
-        ),
-        // Rougher: thirds, steeper falls, children lifted and turned a little.
-        "massif_rough": (
-            divisions: (3, 3, 3), keep: Massif(1.0), depth: 4, gap: 0.9, twist: 3,
-            stop_chance: 0.1, lift: 0.12, min_size: 1.5, albedo: 0.11, albedo_spread: 0.05,
-            leaves: [
-                (on: Summit, module: "ramp", weight: 1, turn: Inward),
-                (on: Corner, module: "needle", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Early, module: "box", weight: 3),
-                (on: Any, module: "box", weight: 3),
-            ],
-        ),
-        // Lab: made of conduits. The spire's recipe with looms of tubes
-        // among its cells; a wall of looms and blocks; the massif with
-        // looms. The tubes are part of the mass, not laid on it.
-        // Lab: the massif and the ziggurat with stairs climbing between
-        // their levels.
-        "massif_stairs": (
-            divisions: (4, 3, 4), keep: Massif(0.85), depth: 3, gap: 0.96,
-            stop_chance: 0.03, min_size: 3, albedo: 0.12, albedo_spread: 0.04, stairs: 60,
-            leaves: [
-                (on: Early, module: "box", weight: 3),
-                (on: Any, module: "box", weight: 3),
-            ],
-        ),
-        "ziggurat_stairs": (
-            divisions: (4, 4, 4), keep: Skyline, depth: 2, gap: 1.0,
-            stop_chance: 0.2, albedo: 0.14, stairs: 40,
-            leaves: [(on: Any, module: "box", weight: 1)],
-        ),
-        "loom_spire": (
-            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 10,
-            stop_chance: 0.2, albedo: 0.1,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "loom", weight: 1),
-                (on: Edge, module: "loom", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 2),
-                (on: Early, module: "loom", weight: 1),
-                (on: Interior, module: "cables", weight: 1),
-            ],
-        ),
-        "loom_wall": (
-            divisions: (5, 4, 2), keep: Lattice, depth: 3, gap: 0.94,
-            stop_chance: 0.15, albedo: 0.11,
-            leaves: [
-                (on: Any, module: "loom", weight: 3),
-                (on: Any, module: "box", weight: 2),
-                (on: Edge, module: "cables", weight: 1),
-                (on: Early, module: "box", weight: 2),
-            ],
-        ),
-        "loom_massif": (
-            divisions: (4, 3, 4), keep: Massif(0.85), depth: 3, gap: 0.96,
-            stop_chance: 0.03, min_size: 3, albedo: 0.12, albedo_spread: 0.04,
-            leaves: [
-                (on: Summit, module: "ramp", weight: 2, turn: Inward),
-                (on: Any, module: "loom", weight: 2),
-                (on: Outside, module: "cables", weight: 1),
-                (on: Early, module: "box", weight: 3),
-                (on: Any, module: "box", weight: 3),
-            ],
-        ),
-        // The family (lab): the spire's recipe filling carved envelopes
-        // instead of the same box every time.
-        // Two random cuts: corners, notches, setbacks, overhangs, slopes.
-        "spire_carved": (
-            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, cuts: 2,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // One random cut, mirrored four ways.
-        "spire_symmetric": (
-            divisions: (3, 6, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, cuts: 1, symmetric: true,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // An ordered massif: a broad block, symmetric cuts.
-        "fam_massif": (
-            divisions: (4, 3, 4), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, cuts: 2, symmetric: true,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // A gate: two piers bridged at the top.
-        "fam_gate": (
-            divisions: (5, 4, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, envelope: [Box(min: (-0.45, -1.1, -1.1), max: (0.45, 0.35, 1.1))], cuts: 1, symmetric: true,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // A ring: walls round an empty court.
-        "fam_ring": (
-            divisions: (5, 3, 5), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, envelope: [Box(min: (-0.62, -0.7, -0.62), max: (0.62, 1.1, 0.62))], cuts: 1, symmetric: true,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // A cluster: four towers on one plinth.
-        "fam_cluster": (
-            divisions: (4, 6, 4), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, envelope: [Box(min: (-0.3, -0.75, -1.1), max: (0.3, 1.1, 1.1)), Box(min: (-1.1, -0.75, -0.3), max: (1.1, 1.1, 0.3)), Box(min: (-1.1, 0.2, -1.1), max: (-0.55, 1.1, -0.55)), Box(min: (0.55, 0.6, 0.55), max: (1.1, 1.1, 1.1))],
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // A hall: long and low, with setbacks.
-        "fam_hall": (
-            divisions: (6, 3, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 0,
-            stop_chance: 0.2, albedo: 0.1, cuts: 2, symmetric: true,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // Crisp fills (lab): the family's envelopes filled so their outline
-        // stays sharp: plain boxes, tight grooves, no early stops.
-        "crisp_gate": (
-            divisions: (5, 4, 3), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, envelope: [Box(min: (-0.45, -1.1, -1.1), max: (0.45, 0.35, 1.1))],
-            leaves: [(on: Any, module: "box", weight: 1)],
-        ),
-        "crisp_ring": (
-            divisions: (5, 3, 5), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, envelope: [Box(min: (-0.62, -0.7, -0.62), max: (0.62, 1.1, 0.62))],
-            leaves: [(on: Any, module: "box", weight: 1)],
-        ),
-        "crisp_cluster": (
-            divisions: (4, 6, 4), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, envelope: [Box(min: (-0.3, -0.75, -1.1), max: (0.3, 1.1, 1.1)), Box(min: (-1.1, -0.75, -0.3), max: (1.1, 1.1, 0.3)), Box(min: (-1.1, 0.2, -1.1), max: (-0.55, 1.1, -0.55)), Box(min: (0.55, 0.6, 0.55), max: (1.1, 1.1, 1.1))],
-            leaves: [(on: Any, module: "box", weight: 1)],
-        ),
-        "crisp_carved": (
-            divisions: (3, 6, 3), keep: All, depth: 2, gap: 0.97, albedo: 0.11, albedo_spread: 0.03, cuts: 3,
-            leaves: [(on: Any, module: "box", weight: 1)],
-        ),
-        // A lighter spire, for pieces of bigger compositions.
-        "spire_light": (
-            divisions: (3, 6, 3), keep: Lattice, depth: 2, gap: 0.9, twist: 10,
-            stop_chance: 0.2, albedo: 0.1,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
-        // A loose stack of tables and cages.
-        "tables": (
-            divisions: (3, 3, 3), keep: Random(0.55), depth: 3, gap: 0.92, twist: -4,
-            stop_chance: 0.25, lift: 0.15, albedo: 0.11,
-            leaves: [
-                (on: Any, module: "table", weight: 2),
-                (on: Any, module: "cage", weight: 1),
-                (on: Early, module: "box", weight: 2),
-            ],
-        ),
-
-        // A region: a 5 x 5 grid of plots separated by streets (the gap),
-        // each plot a structure, a plaza, or left empty. Spires gather in the
-        // middle; facades of fins line the edges.
-        "quarter": (
-            divisions: (5, 1, 5), keep: All, depth: 1, gap: 0.82, albedo: 0.15,
-            leaves: [
-                (on: Interior, module: "plot_spire", weight: 1),
-                (on: Interior, module: "plaza", weight: 1),
-                (on: Edge, module: "plot_fins", weight: 1),
-                (on: Any, module: "plot_ziggurat", weight: 2),
-                (on: Any, module: "plot_hall", weight: 2),
-                (on: Any, module: "plot_tables", weight: 1),
-                (on: Any, module: "plot_lattice", weight: 1),
-                (on: Any, module: "void", weight: 1),
-            ],
-        ),
     },
 
     structures: [
-        (style: "lattice",  at: (1643, 978), size: (150, 90, 120), seed: 1),
+        // The spire: the box style that always worked.
         (style: "spire",    at: (1637, 791), size: (60, 340, 60),  seed: 2, yaw: 20),
-        (style: "hall",     at: (1555, 623), size: (160, 50, 100), seed: 3, yaw: 35),
-        (style: "ziggurat", at: (1411, 503), size: (60, 80, 140), seed: 4),
-        (style: "fins",     at: (1231, 451), size: (140, 70, 40),  seed: 5, yaw: -10),
-        (style: "tables",   at: (1046, 477), size: (120, 90, 120), seed: 6),
-        // A 600 m region behind the spawn point (turn around to see it).
-        (style: "quarter",  at: (900, 1450), size: (600, 200, 600), seed: 7),
     ],
 
     forms: {
-        // ---- Lab candidates (see `lab:` at the end) ----
-        // A blank shaft circled by projecting walkway rings.
-        "lab_ring": Extrude(height: (1.2, 2), tone: 0.03, then: "lab_shaft_body"),
-        "lab_shaft_body": Neck(by: (5, 7), height: (8, 22), then: "lab_shaft_next"),
-        "lab_shaft_next": Choose([(40, "lab_ring"), (1, "lab_shaft_top")]),
-        "lab_shaft_top": Inset(by: (5, 7), then: "c_crown_split"),
-        // A bundle of pipe-like prisms of different heights.
-        "lab_organ": Cells(size: 5, gap: 0.4, then: "lab_pipe"),
-        "lab_pipe": Extrude(height: (20, 140), then: "lab_pipe_cap"),
-        "lab_pipe_cap": Choose([(3, "nothing"), (1, "lab_pipe_crown")]),
-        "lab_pipe_crown": Inset(by: (0.4, 0.8), then: "lab_pipe_crown_block"),
-        "lab_pipe_crown_block": Extrude(height: (1, 4), tone: 0.03),
-        // Slabs stacked, each shifted along the long axis: cantilevers.
-        "lab_cant": Extrude(height: (5, 9), then: "lab_cant_next"),
-        "lab_cant_next": Choose([(8, "lab_cant_shift"), (1, "nothing")]),
-        "lab_cant_shift": Shift(by: (4, 10), along: true, then: "lab_cant"),
-        // A slender stem carrying a wide cap.
-        "lab_stem": Inset(by: (16, 19), then: "lab_stem_shaft"),
-        "lab_stem_shaft": Extrude(height: (60, 110), then: "lab_cap"),
-        "lab_cap": Extrude(height: (10, 16), taper: (-5, -4), then: "lab_cap_top"),
-        "lab_cap_top": Extrude(height: (2, 4), taper: (0.15, 0.3)),
-        // Earthworks and frames on a flat complex.
-        "lab_heizer": Split(depth: 2, gap: 10, min_width: 20, then: "lab_heizer_piece"),
-        "lab_heizer_piece": Choose([(3, "lab_berm"), (1, "lab_frame"), (1, "nothing")]),
-        "lab_berm": Extrude(height: (6, 16), taper: (0.4, 0.7), tone: 0.02),
-        "lab_frame": Rim(width: 2.5, height: (10, 18), gates: 1),
-        // Vertebrae: segments of dense ribs with necks between.
-        "lab_rib_seg": Facade(height: (6, 10), panel: 1.0, storey: 20, depth: (1, 2.5), fill: 0.9,
-            then: "lab_rib_neck"),
-        "lab_rib_neck": Neck(by: (2, 3.5), height: (1.5, 3), then: "lab_rib_next"),
-        "lab_rib_next": Choose([(10, "lab_rib_seg"), (1, "nothing")]),
-
-        // Blocks: a few storeys; the top may set back and rise again.
         "block": Facade(height: (5, 18), panel: 3, storey: 3.2, depth: (0.25, 1.1), fill: 0.6, then: "block_top"),
         "block_top": Choose([(4, "nothing"), (3, "setback"), (1, "parapet")]),
         "setback": Inset(by: (1.5, 5), then: "block"),
         "parapet": Rim(width: 0.5, height: (1.1, 1.1), gates: 0),
         "low_block": Inset(by: (3, 6), then: "block"),
-        // A tall tower, slightly battered.
-        "monolith": Facade(height: (12, 24), panel: 4, storey: 4, depth: (0.4, 1.6), fill: 0.55, tone: -0.03,
-            then: "monolith_next"),
-        "monolith_next": Choose([(4, "monolith_groove"), (1, "setback"), (1, "nothing")]),
-        "monolith_groove": Neck(by: (0.8, 1.6), height: (1.2, 2.4), then: "monolith"),
-
-        // Blocks cut along the plate's own lines, with streets between.
         "blocks": Split(depth: 2, gap: 2.5, min_width: 16, then: "block_or_gap"),
         "block_or_gap": Choose([(6, "town_tower"), (4, "town_slab"), (0.5, "nothing")]),
         // Buildings of the box styles in the pieces of a plate.
@@ -646,10 +260,6 @@
         "town_tower_box": Structure(style: "tower_block", proportion: (2, 4.5)),
         "town_slab": Inset(by: (0.5, 1.5), then: "town_slab_box"),
         "town_slab_box": Structure(style: "slab_block", proportion: (0.4, 0.9)),
-        // A screen of slender fins.
-        "screen": Split(depth: 4, gap: 1.4, min_width: 2.5, then: "fin"),
-        "fin": Extrude(height: (8, 22), tone: 0.02),
-        // A walled court with a gate, and something inside.
         "court": Rim(width: 1.6, height: (5, 11), gates: 0.5, inner: "court_inside"),
         "court_inside": Choose([(2, "nothing"), (1, "low_block"), (1, "dais")]),
         // A stepped dais: low terraces, each a mantle or less.
@@ -680,9 +290,6 @@
         "pillar_crown_block": Extrude(height: (0.5, 2.5), tone: 0.02),
 
         // What grows on a plate, by kind of site.
-        "plaza": Choose([(6, "nothing"), (1, "dais"), (1, "court"), (1, "paving")]),
-        "town": Inset(by: (0.5, 1.5), then: "town_plate"),
-        "town_plate": Choose([(7, "blocks"), (1, "court"), (1, "dais"), (1, "nothing")]),
         "towers": Inset(by: (1.5, 4), then: "towers_plate"),
         "towers_plate": Choose([(3, "towers_spire"), (3, "blocks"), (1, "lattice_block"), (1, "nothing")]),
         "towers_spire": Structure(style: "tower_block", proportion: (3, 6)),
@@ -710,284 +317,21 @@
         "needle_spire": Structure(style: "needle", proportion: (4, 7)),
         "needle_tall": Structure(style: "needle", proportion: (7, 10)),
 
-        // Tiers: a mountain of sloped tiers. Each tier battered back like a
-        // pyramid's face; each ledge carries platforms and blocks along its
-        // edge, broken by gaps; sometimes twin peaks; a crown or a tower on top.
-        // Racks (lab): open frames packed with pipes, tanks, hoses and
-        // machinery. A hollow shaft lined with them; a block of them around a
-        // dark core, set back above.
-        "rack_shaft": Rack(height: (70, 90), depth: (2.5, 3.5)),
-        "rack_block": Rack(height: (40, 55), core: true, then: "rack_setback"),
-        "rack_setback": Inset(by: (5, 9), then: "rack_upper"),
-        "rack_upper": Rack(height: (20, 35), core: true, depth: (2, 3)),
-        // Strange racks: no frame, a network of pipes on the core's faces,
-        // climbing, switching lanes, splitting, with bare wall between.
-        // Clusters (lab): masses made of cylinders, a tangle of tubes over
-        // them.
-        // Sunk relief (lab): faces carved into themselves, recesses within
-        // recesses.
-        "relief_block": Relief(height: (45, 65), depth: 2.5, then: "relief_setback"),
-        "relief_setback": Inset(by: (5, 9), then: "relief_upper"),
-        "relief_upper": Relief(height: (20, 35), depth: 2),
-        "relief_wall": Relief(height: (30, 40), depth: 2.5),
-        // Pipes in grooves (lab): the wall network sunk into a core, only
-        // the crowns showing.
-        "sunk_block": Rack(height: (40, 55), depth: (2.5, 3.5), core: true, strange: true, sunk: true),
-        // Square conduits (lab): standing off the wall, and sunk into it.
-        "square_block": Rack(height: (40, 55), depth: (2.5, 3.5), core: true, strange: true, square: true),
-        "square_sunk": Rack(height: (40, 55), depth: (2.5, 3.5), core: true, strange: true, square: true, sunk: true),
-        // Curtains (lab): wiring in its own right, sheaves of long cables
-        // across an open shaft (after the Citadel in Half-Life 2).
-        "citadel": Curtains(height: (90, 130)),
-        // Bastions (lab): bare round walls given scale by human-sized
-        // things: deep arches, a door, a spiral stair, bridges.
-        // Ordered towers (lab), transcribed from Manifold Garden: one, and
-        // a lattice of them.
-        // Sierpinski (lab): no boxes at all.
-        // Composed complexes (lab): walkable units repeated at the same
-        // scale, grown, repeated in runs, mutated.
-        "complex": Compose(steps: 24),
-        "complex_symmetric": Compose(steps: 18, symmetric: true),
-        "complex_big": Compose(steps: 60),
-        "complex_huge": Compose(steps: 160),
-        // Proportions: the same units on bigger grids; stairs and parapets
-        // stay at human size.
-        "complex_tall": Compose(steps: 60, grid: (6, 9)),
-        "complex_wide": Compose(steps: 60, grid: (12, 4.5)),
-        "complex_monumental": Compose(steps: 60, grid: (12, 9)),
-        "complex_colossal": Compose(steps: 60, grid: (20, 13.5)),
-        // Mixed grids: a colossal core, a human-scale complex round it.
         "complex_mixed": Compose(steps: 260, core: ((40, 27), 0.5, 24)),
-        // Sparse lattices: big cells, most slots empty, every cell carried
-        // (bearing, columns, corbels, rods from beams), connectors by load.
-        "lattice_base": Lattice(),
-        "lattice_sparse": Lattice(fill: 0.2),
-        "lattice_dense": Lattice(fill: 0.6),
-        "lattice_clustered": Lattice(cluster: 1.0),
-        "lattice_scattered": Lattice(cluster: 0.0),
-        "lattice_hanging": Lattice(hang: 0.9, cores: 0.7),
-        "lattice_standing": Lattice(hang: 0.0),
-        "lattice_varied": Lattice(vary: 0.7),
-        "lattice_colossal": Lattice(cell: (40, 30), levels: 7),
-        // The lattice at the scale of a city: 96 x 45 m slots (16 bays,
-        // 10 levels of the composer's grid), each cell a deck with open
-        // buildings on it (cellunit.rs), joined by walkways and stairs;
-        // cells join into bars up to 3 slots long.
-        "city": Lattice(cell: (96, 45), levels: 10, bars: 0.5, content: 8, cluster: 0.7),
-        "city_hanging": Lattice(cell: (96, 45), levels: 10, bars: 0.5, content: 8, cluster: 0.7, hang: 0.85, cores: 0.7),
         "city_tall": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35),
-        "city_soaring": Lattice(cell: (96, 45), levels: 20, bars: 0.5, content: 8, cluster: 0.7, thin: 0.08, cores: 0.3),
-        // The unit lab: one city cell on the ground per kind, the reworked
-        // units and the first version (old: true) side by side.
         "unit_court": Cell(kind: "court"),
-        "unit_court_old": Cell(kind: "court", old: true),
         "unit_terraces": Cell(kind: "terraces"),
-        "unit_terraces_old": Cell(kind: "terraces", old: true),
         "unit_gallery": Cell(kind: "gallery", len: 2),
-        "unit_gallery_old": Cell(kind: "gallery", len: 2, old: true),
         "unit_tower": Cell(kind: "tower"),
-        "unit_tower_old": Cell(kind: "tower", old: true),
         "unit_plaza": Cell(kind: "plaza"),
-        "unit_plaza_old": Cell(kind: "plaza", old: true),
         "unit_cascade": Cell(kind: "cascade"),
-        "unit_cascade_long": Cell(kind: "cascade", len: 2),
         "unit_garden": Cell(kind: "garden"),
-        "unit_garden_long": Cell(kind: "garden", len: 2),
-        // Mega backdrops behind a hanging city: what makes colossal
-        // elements behind a human-scale foreground compelling?
         "field": Field(n: 2),
-        "back_several": Backdrop(fore: Some("field"), kind: "stairs", count: 4, varied: true),
-        "back_one": Backdrop(fore: Some("field"), kind: "stairs", count: 1, varied: true),
-        "back_aligned": Backdrop(fore: Some("field"), kind: "stairs", count: 4, varied: false),
         "back_plain": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true),
-        "back_mixed": Backdrop(fore: Some("field"), kind: "mixed", count: 5, varied: true),
-        "back_ribs": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "ribs"),
-        "back_ridges": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "ridges"),
         "back_flight": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "flight"),
-        "back_crossing": Backdrop(fore: Some("field"), kind: "crossing", count: 4),
-        // Reactor city: a hanging city round a central void in which a
-        // colossal reactor rises, cables hung from it to the city.
         "reactor_square": Lattice(cell: (96, 45), levels: 24, bars: 0.5, content: 8, cluster: 0.7, thin: 0.06, cores: 0.45, void: 1000, reactor: true, cables: 30),
         "reactor_round": Lattice(cell: (96, 45), levels: 24, bars: 0.5, content: 8, cluster: 0.7, thin: 0.06, cores: 0.45, fill: 0.3, radial: Some((600, 3)), arcs: 4, reactor: true, cables: 30),
-        // The hanging city with colossal ramps rising into it.
-        "city_ramps": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35, ramps: 6),
-        "city_ramps_ridges": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35, ramps: 6, ramp_grain: "ridges"),
-        "complex_mixed_symmetric": Compose(steps: 200, symmetric: true, core: ((40, 27), 0.5, 18)),
-        "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
-        // Shapes made of themselves (lab). A gate made of gates, drawn with
-        // boxes, pyramids or tetrahedra; a stepped tower made of stepped
-        // towers; a cluster of clusters of towers, bridged.
-        "gate_boxes": Fractal(height: (90, 90), depth: 3, leaf: Box, copies: [
-            (at: (-0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-        ]),
-        "gate_pyramids": Fractal(height: (90, 90), depth: 3, leaf: Pyramid, copies: [
-            (at: (-0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-        ]),
-        "gate_tetra": Fractal(height: (90, 90), depth: 3, leaf: Tetrahedron, copies: [
-            (at: (-0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-        ]),
-        "stepped_boxes": Fractal(height: (140, 140), depth: 3, leaf: Box, copies: [
-            (at: (-0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-        ]),
-        "stepped_pyramids": Fractal(height: (140, 140), depth: 3, leaf: Pyramid, copies: [
-            (at: (-0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, -0.6667, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (-0.6667, 0.0000, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.0000, 0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.0000, -0.6667), scale: (0.3333, 0.3333, 0.3333)),
-            (at: (0.0000, 0.6667, 0.0000), scale: (0.3333, 0.3333, 0.3333)),
-        ]),
-        "cluster_spires": Fractal(height: (260, 260), depth: 2, leaf: Style("spire_light"), copies: [
-            (at: (0, 0, 0), scale: (0.36, 1, 0.36)),
-            (at: (0.64, -0.3, 0), scale: (0.3, 0.7, 0.3)),
-            (at: (-0.64, -0.3, 0), scale: (0.3, 0.7, 0.3)),
-            (at: (0, -0.3, 0.64), scale: (0.3, 0.7, 0.3)),
-            (at: (0, -0.3, -0.64), scale: (0.3, 0.7, 0.3)),
-            (at: (0.35, 0.15, 0), scale: (0.03, 0.025, 0.06), stop: true, leaf: Box),
-            (at: (-0.35, 0.15, 0), scale: (0.03, 0.025, 0.06), stop: true, leaf: Box),
-            (at: (0, 0.15, 0.35), scale: (0.06, 0.025, 0.03), stop: true, leaf: Box),
-            (at: (0, 0.15, -0.35), scale: (0.06, 0.025, 0.03), stop: true, leaf: Box),
-        ]),
-        "cluster_boxes": Fractal(height: (260, 260), depth: 3, leaf: Box, copies: [
-            (at: (0, 0, 0), scale: (0.36, 1, 0.36)),
-            (at: (0.64, -0.3, 0), scale: (0.3, 0.7, 0.3)),
-            (at: (-0.64, -0.3, 0), scale: (0.3, 0.7, 0.3)),
-            (at: (0, -0.3, 0.64), scale: (0.3, 0.7, 0.3)),
-            (at: (0, -0.3, -0.64), scale: (0.3, 0.7, 0.3)),
-            (at: (0.35, 0.15, 0), scale: (0.03, 0.025, 0.06), stop: true, leaf: Box),
-            (at: (-0.35, 0.15, 0), scale: (0.03, 0.025, 0.06), stop: true, leaf: Box),
-            (at: (0, 0.15, 0.35), scale: (0.06, 0.025, 0.03), stop: true, leaf: Box),
-            (at: (0, 0.15, -0.35), scale: (0.06, 0.025, 0.03), stop: true, leaf: Box),
-        ]),
-        "sierpinski": Sierpinski(height: (90, 90), depth: 5),
-        "sierpinski_deep": Sierpinski(height: (90, 90), depth: 6),
-        "sierpinski_tetra": Sierpinski(height: (100, 100), depth: 6, tetrahedron: true),
-        "sierpinski_ragged": Sierpinski(height: (90, 90), depth: 6, ragged: 0.8),
         "mg_tower": Tower(height: (170, 170)),
-        "mg_lattice": Tower(height: (170, 170), width: 56, spacing: 78),
-        "bastion": Bastions(height: (260, 380)),
-        "bastions": Bastions(height: (220, 400), count: 3),
-        "drums": Cluster(height: (55, 80)),
-        "drums_tall": Cluster(height: (100, 140)),
-        "rack_wall": Rack(height: (28, 36), depth: (2.5, 4), core: true, strange: true),
-        // Roots (lab): the network spreading out across the ground from a
-        // structure's footprint, thinning and diving in as it goes.
-        "roots": Roots(reach: (55, 85)),
-        "rooted_block": Stack(["rack_block_strange", "roots"]),
-        "rooted_spire": Stack(["rooted_spire_tower", "roots"]),
-        "rooted_spire_tower": Structure(style: "spire", height: (90, 120)),
-        // Buried: conduits under the ground, only their crowns showing.
-        "conduits": Roots(reach: (90, 130), buried: true),
-        "conduit_block": Stack(["rack_block_strange", "conduits"]),
-        "conduit_spire": Stack(["rooted_spire_tower", "conduits"]),
-        "rack_block_strange": Rack(height: (40, 55), storey: (5, 8), bay: (4, 7), depth: (3, 4.5), core: true,
-            strange: true, then: "rack_setback_strange"),
-        "rack_setback_strange": Inset(by: (5, 9), then: "rack_upper_strange"),
-        "rack_upper_strange": Rack(height: (20, 35), storey: (4, 7), depth: (2.5, 3.5), core: true, strange: true),
-        "colossus_mountain": Extrude(height: (25, 45), taper: (0.12, 0.25), tone: -0.02, then: "mountain_ledge"),
-        "mountain_ledge": Rim(width: 12, gates: 0.35, wall: "mountain_deco", inner: "mountain_up"),
-        "mountain_up": Choose([(6, "colossus_mountain"), (1, "mountain_split"), (1, "mountain_crown")]),
-        "mountain_split": Split(depth: 1, gap: 10, min_width: 40, then: "colossus_mountain"),
-        "mountain_crown": Choose([(1, "c_crown_split"), (1, "towers_spire")]),
-        "mountain_deco": Choose([(2, "nothing"), (3, "mountain_blocks"), (1, "mountain_platform")]),
-        "mountain_blocks": Split(depth: 2, gap: 2, min_width: 8, then: "mountain_block"),
-        "mountain_block": Choose([(3, "town_slab"), (1, "town_tower"), (1, "nothing")]),
-        "mountain_platform": Extrude(height: (1.5, 4)),
-
-        // Floor: a vast walled enclosure, banded walls broken by gates, and
-        // something inside.
-        "colossus_enclosure": Rim(width: 14, gates: 0.6, wall: "w_band", inner: "enclosure_inside"),
-        "w_band": Facade(height: (10, 22), panel: 5, storey: 4.5, depth: (0.5, 1.8), fill: 0.5, then: "w_next"),
-        "w_next": Choose([(5, "w_groove"), (1, "nothing")]),
-        "w_groove": Neck(by: (0.8, 1.5), height: (1.5, 3), then: "w_band"),
-        "enclosure_inside": Choose([(2, "lone_needle"), (1, "lone_mountain"), (1, "nothing")]),
-        "lone_needle": Inset(by: (50, 90), then: "c_band"),
-        "lone_mountain": Inset(by: (40, 70), then: "colossus_mountain"),
-
-        // Broken: a shattered field of shafts, some bent as they rise.
         "colossus_ruin": Cells(size: 45, gap: 6, then: "ruin_shaft"),
         "ruin_shaft": Choose([(2, "c_band"), (2, "r_band"), (2, "ruin_stub"), (2, "nothing")]),
         "r_band": Extrude(height: (14, 32), lean: 3, then: "r_next"),
@@ -997,84 +341,50 @@
     },
 
     site_grid: (spacing: 768, chance: 0.55),
+    // For now (pending the game's direction) only placed examples of the
+    // kinds that passed review; `at` puts a rule's one site exactly there.
     sites: [
-        // Floor: vast plazas and towns on low square platforms with ramps;
-        // the odd hall.
-        (district: Floor, weight: 3, plates: "plaza", terraces: "terrace", core: (70, 130),
-            lift: (1.5, 5), rings: 2, ring_width: 30, earthwork: (shape: Square, ramps: 1)),
-        (district: Floor, weight: 2, plates: "town", terraces: "terrace", core: (80, 140),
-            lift: (3, 8), rings: 2, ring_width: 30, earthwork: (shape: Square, ramps: 1)),
-        (district: Floor, weight: 1, style: "hall", size: ((120, 30, 80), (220, 60, 140)), plates: "plaza",
-            terraces: "terrace", lift: (1.5, 5), rings: 2, ring_width: 30, earthwork: (shape: Square, ramps: 0.6)),
-        // Tiers: high stepped mounds in mantle-height steps, crowned.
-        (district: Tiers, weight: 2, style: "ziggurat", size: ((60, 50, 80), (140, 110, 180)), plates: "ruin",
-            terraces: "terrace", terrace_chance: 0.5, lift: (8, 16), rings: 5, ring_width: 16, step: 2),
-        (district: Tiers, weight: 2, plates: "town", terraces: "terrace", terrace_chance: 0.5, core: (50, 90),
-            lift: (8, 16), rings: 5, ring_width: 16, step: 2),
-        // Stacks: towers on round mounds among the pillars.
-        (district: Stacks, weight: 3, plates: "towers", terraces: "ruin", core: (50, 100), lift: (4, 10),
-            earthwork: (shape: Round)),
         // An ordered site: square terraces climbed by stairs on the four
         // axes, the plates around it regular, the order fading outwards.
-        (district: Stacks, weight: 1, style: "spire", size: ((40, 200, 40), (80, 420, 80)), plates: "towers",
+        (at: (2633, 2004), style: "spire", size: ((40, 200, 40), (80, 420, 80)), plates: "towers",
             terraces: "ruin", terrace_chance: 0.2, lift: (10, 16), rings: 4, ring_width: 20, step: 3, order: 300),
-        // Broken: ruins on mounds or sunk into bowls.
-        (district: Broken, weight: 3, plates: "ruin", terraces: "ruin", core: (60, 110), lift: (-10, 8),
-            earthwork: (shape: Round)),
-        (district: Broken, weight: 1, plates: "town", terraces: "ruin", core: (60, 100), lift: (-8, 4),
-            earthwork: (shape: Square)),
-        (district: Broken, weight: 1, style: "lattice", size: ((100, 60, 100), (180, 120, 180)), plates: "ruin",
-            terraces: "ruin", lift: (-10, 8), earthwork: (shape: Round, ramps: 0.4)),
+        // Towers on a round mound among the stacks' pillars.
+        (at: (2698, 413), plates: "towers", terraces: "ruin", core: (50, 100), lift: (4, 10), earthwork: (shape: Round)),
     ],
 
     colossus_grid: (spacing: 2048, chance: 0.85),
     colossi: [
-        // Each colossus emerges from an earthwork: needles from square
-        // mounds with ramps, mountains from round ones, enclosures sunk in
-        // square bowls, shattered shafts from low mounds.
-        (district: Stacks, form: "colossus_needles", footprint: (90, 160), lift: (12, 25), rings: 3, ring_width: 30,
+        // Needles from a square mound with ramps, and shattered shafts from
+        // a low mound: one placed example of each.
+        (at: (2801, 834), form: "colossus_needles", footprint: (90, 160), lift: (12, 25), rings: 3, ring_width: 30,
             terraces: "ruin", earthwork: (shape: Square, ramps: 0.6)),
-        (district: Tiers, form: "colossus_mountain", footprint: (140, 220), lift: (10, 20), rings: 4, ring_width: 24,
-            step: 2, terraces: "terrace", terrace_chance: 0.5, earthwork: (shape: Round, ramps: 1)),
-        (district: Floor, form: "colossus_enclosure", footprint: (180, 260), lift: (-10, -4), rings: 2, ring_width: 40,
-            terraces: "terrace", earthwork: (shape: Square)),
-        // The hanging city (the lab's city_tall) in the open floor, on a
-        // low square platform with ramps.
-        (district: Floor, weight: 3, form: "city_tall", footprint: (560, 600), square: true, lift: (2, 5), rings: 2,
-            ring_width: 40, terraces: "terrace", earthwork: (shape: Square, ramps: 1)),
-        (district: Broken, form: "colossus_ruin", footprint: (140, 220), lift: (8, 18), rings: 3, ring_width: 30,
+        (at: (4872, 3097), form: "colossus_ruin", footprint: (140, 220), lift: (8, 18), rings: 3, ring_width: 30,
             terraces: "ruin", earthwork: (shape: Round, ramps: 0.3)),
+        // A few hanging cities (the lab's city_tall) in the open floor, on
+        // low square platforms with ramps.
+        (district: Floor, form: "city_tall", footprint: (560, 600), square: true, lift: (2, 5), rings: 2,
+            ring_width: 40, terraces: "terrace", earthwork: (shape: Square, ramps: 1)),
     ],
-
-    // Pipework that belongs to structures (see dressing.rs): bundles of
-    // ducts rising along faces (from the ground or partway up) with collars
-    // and junction boxes, turning into walls or running along them; bundles
-    // spanning gaps to the mass facing them; cables sagging between tops.
-    //   pipes: chance per open face   bundle: pipes per bundle   width: metres
-    //   collars: flange spacing (0 none)   brackets: bracket/clamp spacing
-    //   members: chance a long thin piece carries pipes along it, clamped
-    //   junctions, spans, cables: chances
-    dressings: {
-        "industrial": (pipes: 0.35, bundle: (1, 3), width: (0.4, 1.2), collars: 6, brackets: 3.5,
-            junctions: 0.25, spans: 0.35, cables: 0.3, members: 0.35),
-    },
 
     // The lab (`--opt lab`): candidate patterns in a row on flat ground,
     // judged on their own. `form` + `footprint` (metres to the corners), or
-    // `style` + `size`; `dress` adds pipework; `variants` samples side by
-    // side; `note` says what each tries.
-    // Batch 1: organ kept; shaft_rings, cantilever_stack, earthworks,
-    //   mountain, truss, ribbed promising (lacking detail); stem_cap dropped.
-    // Batch 2 (pipework): reads as structure on the truss (at a distance)
-    //   and could on the mountain; cosmetic on the ring shaft, cantilever
-    //   stack and spire; add-ons or errors on the ribbed vertebrae (giger).
-    // Batch 3: pipework with round pipes, brackets, flanges and plates,
-    //   along members, on the truss, mountain and organ only.
+    // `style` + `size`; `variants` samples side by side; `note` says what
+    // each is. For now the lab holds the catalogue: the patterns that passed
+    // review (`--focus name` shows one).
     lab: [
-        // Reactor city (the backdrop lab, the unit lab and earlier
-        // candidates are still defined above; add a line here to bring one
-        // back).
+        (name: "city_tall", form: "city_tall", footprint: 880, variants: 1, note: "The hanging city: a sparse lattice of decks, each a composed unit"),
         (name: "reactor_square", form: "reactor_square", footprint: 1150, variants: 1, note: "A square hanging city round a void, a reactor in it"),
         (name: "reactor_round", form: "reactor_round", footprint: 1150, variants: 1, note: "The city in rings round the reactor"),
+        (name: "complex_mixed", form: "complex_mixed", footprint: 760, variants: 1, note: "A composed complex: a colossal core in a human-scale fabric, grand stairs"),
+        (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1, note: "Yardstick: the Manifold Garden tower"),
+        (name: "unit_plaza", form: "unit_plaza", footprint: 110, variants: 2, note: "Stoas, a rotunda or tower, gateways"),
+        (name: "unit_court", form: "unit_court", footprint: 110, variants: 2, note: "Halls round a court; some with a giant loggia on top"),
+        (name: "unit_terraces", form: "unit_terraces", footprint: 110, variants: 1, note: "Terraces on the axis"),
+        (name: "unit_gallery", form: "unit_gallery", footprint: 200, variants: 2, note: "A hall, towers, a colonnade or vault"),
+        (name: "unit_tower", form: "unit_tower", footprint: 110, variants: 1, note: "Towers on a podium"),
+        (name: "unit_cascade", form: "unit_cascade", footprint: 110, variants: 3, note: "Trays cantilevered off a solid core (after Fallingwater)"),
+        (name: "unit_garden", form: "unit_garden", footprint: 110, variants: 2, note: "A pool on the axis, pergolas, pavilions, obelisks, a gateway"),
+        (name: "back_plain", form: "back_plain", footprint: 1300, variants: 1, note: "Colossal wedges behind a human-scale field"),
+        (name: "back_flight", form: "back_flight", footprint: 1300, variants: 1, note: "Wedges with a human-scale flight up the middle"),
     ],
 )

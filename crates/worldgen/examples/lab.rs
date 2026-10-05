@@ -15,16 +15,12 @@ fn main() {
         let triangles = worldgen::structure::mesh(&parts.solids).indices.len() / 3;
         let meshing = start.elapsed().as_millis();
         let far = worldgen::structure::mesh(&worldgen::structure::coarse(&parts.solids, 2.5)).indices.len() / 3;
-        let bare = lab::build(&library, &lab::LabEntry { dress: None, ..entry.clone() }, 250_000);
-        let pipes = parts.solids.len().saturating_sub(bare.solids.len()) + parts.tubes.len();
         println!(
-            "{:>28} at {:5.0},{:4.0}: {:6} pieces ({:5} pipework, {:5} tubes), {:4.0} m tall, {:8} triangles ({:8} far; box-only would be {:8}) meshed in {} ms",
+            "{:>28} at {:5.0},{:4.0}: {:6} pieces, {:4.0} m tall, {:8} triangles ({:8} far; box-only would be {:8}) meshed in {} ms",
             entry.label(),
             x,
             z,
-            parts.solids.len() + parts.prisms.len() + parts.tubes.len(),
-            pipes,
-            parts.tubes.len(),
+            parts.solids.len() + parts.prisms.len(),
             lab::height(&parts.solids, &parts.prisms),
             triangles,
             far,

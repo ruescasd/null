@@ -10,7 +10,6 @@
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 
-use crate::dressing::Tube;
 use crate::forms::{Growth, Grower, Prism};
 use crate::noise::hash01;
 use crate::structure::{self, Library, Placement, Solid};
@@ -55,9 +54,6 @@ pub struct LabEntry {
     /// judged on more than one roll of its dice.
     #[serde(default = "default_variants")]
     pub variants: u32,
-    /// Pipework to dress it with (a name from `dressings`).
-    #[serde(default)]
-    pub dress: Option<String>,
     /// Which sample this is (set by `layout`).
     #[serde(skip)]
     pub variant: u32,
@@ -121,41 +117,27 @@ pub fn footprint(radius: f32, seed: u32) -> Vec<Vec2> {
 pub struct Parts {
     pub solids: Vec<Solid>,
     pub prisms: Vec<Prism>,
-    /// Its pipes, if it is dressed.
-    pub tubes: Vec<Tube>,
 }
 
-/// Everything a candidate is made of, its base centre at the origin, dressed
-/// with its pipework if it has any.
+/// Everything a candidate is made of, its base centre at the origin.
 pub fn build(library: &Library, entry: &LabEntry, max_leaves: usize) -> Parts {
-    let (mut solids, prisms, mut tubes) = build_bare(library, entry, max_leaves);
-    if let Some(dressing) = entry.dress.as_ref().and_then(|d| library.dressings.get(d)) {
-        let tone = 0.13;
-        let work = crate::dressing::dress(dressing, &solids, &prisms, tone, entry.seed() ^ 0xd1e5);
-        solids.extend(work.solids);
-        tubes.extend(work.tubes);
-    }
-    Parts { solids, prisms, tubes }
-}
-
-fn build_bare(library: &Library, entry: &LabEntry, max_leaves: usize) -> (Vec<Solid>, Vec<Prism>, Vec<Tube>) {
     let seed = entry.seed();
     if let Some(style) = &entry.style {
         let placement = Placement { style: style.clone(), at: (0.0, 0.0), size: entry.size, yaw: 0.0, seed, sink: 0.0 };
-        return (structure::build(library, &placement, max_leaves), Vec::new(), Vec::new());
+        return Parts { solids: structure::build(library, &placement, max_leaves), prisms: Vec::new() };
     }
-    let Some(form) = &entry.form else { return (Vec::new(), Vec::new(), Vec::new()) };
+    let Some(form) = &entry.form else { return Parts { solids: Vec::new(), prisms: Vec::new() } };
     let mut grower = Grower { library, budget: 500_000, leaves: max_leaves, out: Growth::default() };
     let shape: Vec<Vec2> = footprint(entry.footprint, seed).into_iter().map(|p| Vec2::new(p.x, p.y * entry.stretch)).collect();
     grower.grow(form, &shape, 0.0, 0.13, seed, 0);
-    let Growth { solids, mut prisms, tubes } = grower.out;
+    let Growth { solids, mut prisms } = grower.out;
     // Into the ground, as on a site.
     for prism in &mut prisms {
         if prism.y0.abs() < 1e-3 {
             prism.y0 -= 4.0;
         }
     }
-    (solids, prisms, tubes)
+    Parts { solids, prisms }
 }
 
 /// The height a candidate reaches.

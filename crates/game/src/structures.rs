@@ -20,7 +20,6 @@ use bevy::{
 use worldgen::{
     ColumnMesh,
     plates::PlateWorld,
-    dressing::{self, Tube},
     forms::{self, Prism},
     lab,
     sites::{self, Layer},
@@ -224,14 +223,14 @@ fn watch(
     };
     // Sites shape the ground: if they changed, the terrain is regenerated
     // (what is shown stays up until its replacement is ready).
-    if let WorldGen::Plates(old) = &*world
-        && !args.opt("nosites")
+    let old = &world.0;
+    if !args.opt("nosites")
         && !args.opt("lab")
     {
         let new = PlateWorld::new(old.size(), args.seed).with_sites(&library);
         if !old.same_ground(&new) {
             info!("sites changed: regenerating the terrain");
-            commands.insert_resource(WorldGen::Plates(Arc::new(new)));
+            commands.insert_resource(WorldGen(Arc::new(new)));
             streamer.reset();
         }
     }
@@ -248,7 +247,7 @@ fn watch(
             let name = entry.label();
             let task = pool.spawn(async move {
                 let parts = lab::build(&library, &entry, MAX_LEAVES);
-                finish(parts.solids, parts.prisms, parts.tubes)
+                finish(parts.solids, parts.prisms)
             });
             commands.spawn((
                 Structure,
@@ -267,7 +266,7 @@ fn watch(
         let (x, z) = placement.at;
         let origin = Vec3::new(x, world.ground_height(x, z), z);
         let library = library.clone();
-        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new(), Vec::new()) });
+        let task = pool.spawn(async move { finish(structure::build(&library, &placement, MAX_LEAVES), Vec::new()) });
         commands.spawn((Structure, Building(task), Landmark { origin }, Transform::from_translation(origin)));
     }
     // Sites stream back in on their own.
@@ -283,19 +282,14 @@ fn watch(
 
 /// Meshes (box solids; plate pieces fine to coarse) and a collider: a box,
 /// wedge or hull per piece, robust for the player.
-fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
+fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
     let near = structure::mesh_tiles(&solids, TILE);
     let coarse = structure::coarse(&solids, TILE_COARSE);
     let mut far: std::collections::HashMap<(i32, i32), ColumnMesh> =
         if coarse.len() < solids.len() { structure::mesh_tiles(&coarse, TILE).into_iter().collect() } else { Default::default() };
     let detailed = coarse.len() < solids.len();
-    let mut tiles: Vec<TileMeshes> =
+    let tiles: Vec<TileMeshes> =
         near.into_iter().map(|(k, near)| TileMeshes { near, far: detailed.then(|| far.remove(&k).unwrap_or_default()) }).collect();
-    let mut fixed = ColumnMesh::default();
-    dressing::mesh_tubes(&mut fixed, &tubes);
-    if !fixed.is_empty() {
-        tiles.push(TileMeshes { near: fixed, far: None });
-    }
     let mut levels = vec![ColumnMesh::default()];
     forms::mesh_into(&mut levels[0], &prisms);
     for min_width in LEVEL_MIN_WIDTH {
@@ -309,7 +303,6 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>, tubes: Vec<Tube>) -> Levels {
     let hulls = prisms
         .iter()
         .map(|p| p.hull_points())
-        .chain(tubes.iter().map(|t| t.hull_points()))
         .filter_map(|points| Some((Position(Vec3::ZERO), Rotation::default(), Collider::convex_hull(points)?)));
     let shapes: Vec<(Position, Rotation, Collider)> = solids
         .iter()
@@ -441,7 +434,7 @@ fn stream_sites(
     camera: Single<&Transform, With<FlyCam>>,
     existing: Query<(Entity, &Site, &Landmark)>,
 ) {
-    let WorldGen::Plates(plates) = &*world else { return };
+    let plates = &world.0;
     let Some(library) = state.library.clone() else { return };
     if args.opt("nosites") || args.opt("lab") {
         return;
@@ -486,7 +479,7 @@ fn stream_sites(
             let lift = built.base - ground;
             let solids = built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
             let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();
-            finish(solids, prisms, Vec::new())
+            finish(solids, prisms)
         });
         let origin = Vec3::new(x, ground, z);
         commands.spawn((
