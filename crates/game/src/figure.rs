@@ -358,7 +358,10 @@ fn spawn(
     ];
     // Three finishes, from pale to dark, so the body reads against both the
     // pale ground and the black sky (all-dark fragments vanish against it).
-    let finishes = [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)].map(|(tone, rough, refl)| {
+    // With line art the fragments are pale and matte, so the black lines
+    // read as ink on paper.
+    let tones = if args.opt("outline") { [(0.55, 0.8, 0.3), (0.42, 0.85, 0.3), (0.3, 0.8, 0.3)] } else { [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)] };
+    let finishes = tones.map(|(tone, rough, refl)| {
         materials.add(StandardMaterial {
             base_color: Color::srgb(tone, tone, tone),
             perceptual_roughness: rough,
@@ -393,9 +396,97 @@ fn spawn(
         Visibility::default(),
     ));
 
+    // Hard parts (the human's hands and feet): dark and glossy, smoother
+    // than the fragments.
+    let hard_tone = if args.opt("outline") { 0.2 } else { 0.05 };
+    let hard = materials.add(StandardMaterial {
+        base_color: Color::srgb(hard_tone, hard_tone, hard_tone),
+        perceptual_roughness: 0.25,
+        reflectance: 0.8,
+        ..default()
+    });
+    // `--opt outline`: line art on the figure alone. Each piece gets a
+    // slightly larger black copy that shows only its back faces, so a line
+    // of constant width runs round every piece and nowhere else.
+    let outline = args.opt("outline").then(|| {
+        materials.add(StandardMaterial {
+            base_color: Color::BLACK,
+            unlit: true,
+            cull_mode: Some(bevy::render::render_resource::Face::Front),
+            ..default()
+        })
+    });
+    let put = |commands: &mut Commands, element: Element, shape: usize, material: Handle<StandardMaterial>, half: Vec3| {
+        let mut e = commands.spawn((
+            element,
+            Mesh3d(shapes[shape].clone()),
+            MeshMaterial3d(material),
+            Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
+        ));
+        if let Some(line) = &outline {
+            let width = 0.012;
+            e.with_child((
+                Mesh3d(shapes[shape].clone()),
+                MeshMaterial3d(line.clone()),
+                Transform::from_scale(Vec3::ONE + Vec3::splat(width) / half.max(Vec3::splat(0.005))),
+            ));
+        }
+    };
+
     let mut count = 0;
     for (index, bone) in BONES.iter().enumerate() {
         let part = bone.part(anatomy);
+        // The human's hands and feet are hard, solid pieces rather than
+        // fragments: a palm, jointed fingers and a thumb; a foot, a heel and
+        // a toe cap. Offsets in metres along the bone, converted below.
+        if solid && matches!(bone, Bone::Claw(_) | Bone::Metatarsal(_) | Bone::Toe(_)) {
+            let k = part.start.0 / if matches!(bone, Bone::Claw(_)) { 0.12 } else { 0.12 };
+            let mut pieces: Vec<(Vec3, Vec3, Quat)> = Vec::new();
+            match bone {
+                Bone::Claw(_) if args.opt("longhands") => {
+                    // Not a human hand: a narrow palm and three very long,
+                    // slender digits of three joints each, fanned a little.
+                    pieces.push((Vec3::new(0.0, 0.04, 0.0), Vec3::new(0.02 * k, 0.04, 0.04 * k), Quat::IDENTITY));
+                    for (z, fan) in [(-0.025, -0.14f32), (0.0, 0.0), (0.025, 0.14)] {
+                        let dir = Vec3::new(0.0, fan.cos(), fan.sin());
+                        let segment = 0.15;
+                        for j in 0..3 {
+                            let along = 0.08 + segment * (j as f32 + 0.5);
+                            let thin = 0.013 * (1.0 - 0.22 * j as f32) * k;
+                            pieces.push((Vec3::new(0.004 * j as f32, 0.0, z * k) + dir * along, Vec3::new(thin, segment * 0.48, thin), Quat::from_rotation_x(fan)));
+                        }
+                    }
+                }
+                Bone::Claw(_) => {
+                    // The palm lies in the plane of the arm's swing (palms to
+                    // the thighs): thin across (x), wide front to back (z).
+                    pieces.push((Vec3::new(0.0, 0.055, 0.0), Vec3::new(0.022 * k, 0.055, 0.068 * k), Quat::IDENTITY));
+                    for (z, l) in [(-0.051, 0.045), (-0.017, 0.053), (0.017, 0.05), (0.051, 0.04)] {
+                        let z = z * k;
+                        pieces.push((Vec3::new(0.0, 0.11 + l * 0.5, z), Vec3::new(0.016 * k, l * 0.5, 0.014 * k), Quat::IDENTITY));
+                        // The second joint, bent a little towards the palm.
+                        pieces.push((Vec3::new(0.006, 0.11 + l * 1.42, z), Vec3::new(0.014 * k, l * 0.42, 0.013 * k), Quat::from_rotation_z(0.18)));
+                    }
+                    // The thumb, at the front, angled out.
+                    pieces.push((Vec3::new(0.008, 0.055, -0.085 * k), Vec3::new(0.016 * k, 0.036, 0.015 * k), Quat::from_rotation_x(0.5)));
+                }
+                Bone::Metatarsal(_) => {
+                    // Along the foot (y) from the ankle; z points down.
+                    pieces.push((Vec3::new(0.0, part.length * 0.5, 0.0), Vec3::new(0.06 * k, part.length * 0.5, 0.042), Quat::IDENTITY));
+                    pieces.push((Vec3::new(0.0, -0.02, 0.035), Vec3::new(0.05 * k, 0.05, 0.04), Quat::IDENTITY));
+                }
+                _ => {
+                    pieces.push((Vec3::new(0.0, part.length * 0.5, 0.01), Vec3::new(0.056 * k, part.length * 0.5, 0.026), Quat::IDENTITY));
+                }
+            }
+            for (n, (offset, half, rotation)) in pieces.into_iter().enumerate() {
+                let offset = Vec3::new(offset.x, offset.y / part.length.max(0.01), offset.z);
+                let phase = hash01(index as i32, n as i32, 9, 0xf17) * 100.0;
+                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, 0, hard.clone(), half);
+                count += 1;
+            }
+            continue;
+        }
         let (wide, deep) = (part.start.0.max(part.end.0), part.start.1.max(part.end.1));
         // Generated one unit long at the part's widest, then tapered.
         let root = Block {
@@ -457,29 +548,34 @@ fn spawn(
                 let core_bone = matches!(bone, Bone::Chest | Bone::Waist | Bone::Neck | Bone::Skull);
                 // The human glows all through: threads of lit fragments in
                 // every part, more in the chest and skull.
-                let chance = if solid {
-                    // Only in the chest.
-                    if matches!(bone, Bone::Chest) { 0.3 } else { 0.0 }
-                } else {
-                    match (human, core_bone) {
-                        (true, true) => 0.32,
-                        (true, false) => 0.14,
-                        (false, true) => 0.3,
-                        (false, false) => 0.0,
-                    }
+                let chance = match (human, core_bone) {
+                    (true, true) => 0.32,
+                    (true, false) => 0.14,
+                    (false, true) => 0.3,
+                    (false, false) => 0.0,
                 };
-                let inside = layer == 0 && deep_inside;
-                let material = if inside && r(11) < chance {
+                // The solid human glows only in its chest: an even core in
+                // the middle of it (by place, not by chance alone, so it
+                // doesn't gather to one side).
+                let glows = if solid {
+                    let (cx, cy, cz) = (b.center.x / (wide * 0.5), b.center.y, b.center.z / (deep * 0.5));
+                    let core = (cx / 0.6).powi(2) + ((cy - 0.55) / 0.3).powi(2) + (cz / 0.7).powi(2) < 1.0;
+                    layer == 0 && matches!(bone, Bone::Chest) && core && r(11) < 0.75
+                } else {
+                    layer == 0 && deep_inside && r(11) < chance
+                };
+                let material = if glows {
                     glow.clone()
                 } else {
                     finishes[(r(10) * 3.0) as usize % 3].clone()
                 };
-                commands.spawn((
+                put(
+                    &mut commands,
                     Element { bone: index, offset, rotation: b.rotation * tilt, velocity: Vec3::ZERO, phase: r(9) * 100.0 },
-                    Mesh3d(shapes[shape].clone()),
-                    MeshMaterial3d(material),
-                    Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
-                ));
+                    shape,
+                    material,
+                    half,
+                );
                 count += 1;
             }
         }

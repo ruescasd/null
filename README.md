@@ -192,7 +192,10 @@ solid, glowing only in its chest. `--opt luminous` gives the same shape
 slimmer and finer-grained with glowing fragments threaded through every part
 (strange only in its substance). `--opt hunched`
 gives the earlier menacing humanoid (head forward and low, shoulders raised),
-`--opt creature` a feral creature with digitigrade legs. One stands about 20 m ahead of
+`--opt creature` a feral creature with digitigrade legs. The human's hands and
+feet are hard, solid pieces; `--opt longhands` gives it long three-digit hands
+instead, and `--opt outline` draws it as line art (pale fragments, each
+ringed in black), the rest of the world unchanged. One stands about 20 m ahead of
 the spawn point and walks towards you; `--opt statue` keeps it still,
 `--opt nofigures` removes it.
 
