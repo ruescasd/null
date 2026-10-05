@@ -2,6 +2,12 @@
 //! in `walk`); visually it is a bundle of dark twisting strands ending in a
 //! black crystalline burr: a single needle in flight that splays into a
 //! cluster of shards where it roots into a surface.
+//!
+//! The strands are real geometry (lit, glossy tubes that cast shadows), and
+//! they leave the hand already apart, from a small crown of shards (the
+//! emitter), converging only into the needle or burr. In flight the bundle
+//! sags under its weight; when it catches it snaps taut with a short twang,
+//! then stays straight and twists while pulling.
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -40,6 +46,17 @@ pub struct Needle;
 
 #[derive(Component)]
 pub struct Burr;
+
+/// The crown of shards at the hand the strands leave from.
+#[derive(Component)]
+pub struct Emitter;
+
+/// The strands' mesh, rebuilt every frame.
+#[derive(Component)]
+pub struct Strands;
+
+#[derive(Resource)]
+pub struct StrandsMesh(Handle<Mesh>);
 
 /// A small light carried by the spike, so it lightly picks out the surface
 /// around where it roots.
@@ -114,6 +131,45 @@ pub fn setup(
         Transform::default(),
         Visibility::Hidden,
     ));
+    // The emitter: six short shards in a crown round +Y (the line), leaning
+    // out, and a stub behind, so the strands have something to leave from.
+    let mut crown = vec![(Vec3::NEG_Y, 0.06, 0.03)];
+    for i in 0..6 {
+        let a = i as f32 / 6.0 * std::f32::consts::TAU;
+        crown.push((Vec3::new(a.cos() * 0.45, 1.0, a.sin() * 0.45), 0.08, 0.016));
+    }
+    commands.spawn((
+        Emitter,
+        Mesh3d(meshes.add(shard_mesh(&crown))),
+        MeshMaterial3d(material.clone()),
+        Transform::default(),
+        Visibility::Hidden,
+    ));
+    let strands = meshes.add(
+        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; 3])
+            .with_inserted_indices(Indices::U32(vec![0, 1, 2])),
+    );
+    commands.insert_resource(StrandsMesh(strands.clone()));
+    // The strands' tubes: the same finish, drawn from both sides (their
+    // winding is not worth fussing over at a centimetre across).
+    let strand_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.015, 0.015, 0.015),
+        perceptual_roughness: 0.2,
+        reflectance: 0.9,
+        cull_mode: None,
+        ..default()
+    });
+    commands.spawn((
+        Strands,
+        Mesh3d(strands),
+        MeshMaterial3d(strand_material),
+        Transform::default(),
+        Visibility::Hidden,
+        // Its bounds change every frame.
+        bevy::camera::visibility::NoFrustumCulling,
+    ));
     commands.spawn((
         Burr,
         Mesh3d(meshes.add(burr)),
@@ -136,18 +192,25 @@ pub fn setup(
 }
 
 /// Places the needle or burr and draws the strands from the left hand to it.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn draw(
     time: Res<Time>,
-    camera: Single<(&Transform, &FlyCam, &Player), (Without<Needle>, Without<Burr>, Without<SpikeLight>)>,
-    mut needle: Single<(&mut Transform, &mut Visibility), (With<Needle>, Without<Burr>, Without<SpikeLight>)>,
-    mut burr: Single<(&mut Transform, &mut Visibility), (With<Burr>, Without<Needle>, Without<SpikeLight>)>,
-    mut light: Single<(&mut Transform, &mut PointLight), (With<SpikeLight>, Without<Needle>, Without<Burr>)>,
-    mut gizmos: Gizmos,
+    camera: Single<(&Transform, &FlyCam, &Player), (Without<Needle>, Without<Burr>, Without<SpikeLight>, Without<Emitter>, Without<Strands>)>,
+    mut needle: Single<(&mut Transform, &mut Visibility), (With<Needle>, Without<Burr>, Without<SpikeLight>, Without<Emitter>, Without<Strands>)>,
+    mut burr: Single<(&mut Transform, &mut Visibility), (With<Burr>, Without<Needle>, Without<SpikeLight>, Without<Emitter>, Without<Strands>)>,
+    mut light: Single<(&mut Transform, &mut PointLight), (With<SpikeLight>, Without<Needle>, Without<Burr>, Without<Emitter>, Without<Strands>)>,
+    mut emitter: Single<(&mut Transform, &mut Visibility), (With<Emitter>, Without<Needle>, Without<Burr>, Without<SpikeLight>, Without<Strands>)>,
+    mut strands: Single<&mut Visibility, (With<Strands>, Without<Needle>, Without<Burr>, Without<SpikeLight>, Without<Emitter>)>,
+    handle: Res<StrandsMesh>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    // When it last caught (for the twang), and where.
+    mut caught: Local<(Option<Vec3>, f32)>,
 ) {
     let (transform, fly, player) = *camera;
     *needle.1 = Visibility::Hidden;
     *burr.1 = Visibility::Hidden;
+    *emitter.1 = Visibility::Hidden;
+    **strands = Visibility::Hidden;
     light.1.intensity = 0.0;
     // A slow, slight pulse so the light feels alive rather than a lamp.
     let pulse = 0.85 + 0.15 * (time.elapsed_secs() * 2.3).sin();
@@ -169,8 +232,17 @@ pub fn draw(
             light.1.intensity = LIGHT_ROOTED * pulse;
             (point, true)
         }
-        _ => return,
+        _ => {
+            caught.0 = None;
+            return;
+        }
     };
+    let t_now = time.elapsed_secs();
+    // The moment it catches: start the twang.
+    if taut && caught.0 != Some(end) {
+        *caught = (Some(end), t_now);
+    }
+    let since_caught = if taut { t_now - caught.1 } else { f32::INFINITY };
 
     let rotation = fly.rotation();
     let (aim, right, up) = (rotation * Vec3::NEG_Z, rotation * Vec3::X, rotation * Vec3::Y);
@@ -180,27 +252,79 @@ pub fn draw(
     if length < 0.1 {
         return;
     }
-    let (u, v) = (line / length).any_orthonormal_pair();
+    let dir = line / length;
+    let (u, v) = dir.any_orthonormal_pair();
 
-    // Six strands twisting around the line, near-black to mid grey; slack
-    // and slow in flight, drawn tight and spinning faster while pulling.
+    // The emitter at the hand, its crown along the line.
+    *emitter.0 = Transform::from_translation(start).with_rotation(Quat::from_rotation_arc(Vec3::Y, dir));
+    *emitter.1 = Visibility::Visible;
+
+    // Six strands twisting round the line. They leave the emitter's rim
+    // already apart and converge only into the needle or burr; slack and
+    // sagging in flight, tight and spinning faster while pulling.
     const STRANDS: usize = 6;
-    const SEGMENTS: usize = 32;
-    let t_now = time.elapsed_secs();
-    let (radius, spin) = if taut { (0.05, 6.0) } else { (0.11, 2.0) };
+    const SEGMENTS: usize = 48;
+    const SIDES: usize = 6;
+    let (spread, spin) = if taut { (0.06, 6.0) } else { (0.12, 2.0) };
+    let smooth = |a: f32, b: f32, x: f32| {
+        let k = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        k * k * (3.0 - 2.0 * k)
+    };
+    // Sag under its weight in flight; a twang when it catches.
+    let sag = if taut { 0.0 } else { (length * 0.035).min(2.5) };
+    let twang = if since_caught.is_finite() { 0.35 * (-7.0 * since_caught).exp() * (38.0 * since_caught).sin() } else { 0.0 };
+    let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::<u32>::new());
     for s in 0..STRANDS {
-        let grey = [0.004, 0.02, 0.05, 0.09, 0.14, 0.22][s];
-        let mut prev = start;
-        for i in 1..=SEGMENTS {
-            let t = i as f32 / SEGMENTS as f32;
-            let phase = s as f32 / STRANDS as f32 * std::f32::consts::TAU + t * length * 0.5
-                - t_now * spin;
-            let swell = (std::f32::consts::PI * t).sin().powf(0.6)
-                * (1.0 + 0.3 * (t * 17.0 + s as f32 * 1.7 + t_now * 3.0).sin());
-            let offset = (u * phase.cos() + v * phase.sin()) * radius * swell;
-            let point = start + line * t + offset;
-            gizmos.line(prev, point, LinearRgba::rgb(grey, grey, grey));
-            prev = point;
+        let thick = 0.011 + 0.004 * ((s * 5 % 6) as f32 / 5.0);
+        let points: Vec<Vec3> = (0..=SEGMENTS)
+            .map(|i| {
+                let t = i as f32 / SEGMENTS as f32;
+                let phase = s as f32 / STRANDS as f32 * std::f32::consts::TAU + t * length * 0.5 - t_now * spin;
+                // The bundle's radius: the emitter's rim at the hand, its
+                // spread along the way, a point at the far end.
+                let along = 0.04 + (spread - 0.04) * smooth(0.0, 0.15, t);
+                let radius = along * (1.0 - smooth(0.85, 1.0, t)) + 0.012 * smooth(0.85, 1.0, t);
+                let wobble = 1.0 + 0.25 * (t * 17.0 + s as f32 * 1.7 + t_now * 3.0).sin() * (std::f32::consts::PI * t).sin();
+                let offset = (u * phase.cos() + v * phase.sin()) * radius * wobble;
+                let hang = Vec3::NEG_Y * sag * (std::f32::consts::PI * t).sin();
+                let shake = u * twang * (std::f32::consts::PI * t).sin();
+                start + line * t + offset + hang + shake
+            })
+            .collect();
+        // A tube round the polyline.
+        let base = positions.len() as u32;
+        for i in 0..=SEGMENTS {
+            let tangent = if i == 0 {
+                points[1] - points[0]
+            } else if i == SEGMENTS {
+                points[i] - points[i - 1]
+            } else {
+                points[i + 1] - points[i - 1]
+            }
+            .normalize_or(dir);
+            let (a, b) = tangent.any_orthonormal_pair();
+            // Thinner where it enters the needle or burr.
+            let r = thick * (1.0 - 0.6 * smooth(0.9, 1.0, i as f32 / SEGMENTS as f32));
+            for k in 0..SIDES {
+                let angle = k as f32 / SIDES as f32 * std::f32::consts::TAU;
+                let n = a * angle.cos() + b * angle.sin();
+                positions.push((points[i] + n * r).to_array());
+                normals.push(n.to_array());
+            }
         }
+        for i in 0..SEGMENTS as u32 {
+            for k in 0..SIDES as u32 {
+                let k2 = (k + 1) % SIDES as u32;
+                let (p0, p1) = (base + i * SIDES as u32 + k, base + i * SIDES as u32 + k2);
+                let (q0, q1) = (p0 + SIDES as u32, p1 + SIDES as u32);
+                indices.extend_from_slice(&[p0, q0, p1, p1, q0, q1]);
+            }
+        }
+    }
+    if let Some(mut mesh) = meshes.get_mut(&handle.0) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_indices(Indices::U32(indices));
+        **strands = Visibility::Visible;
     }
 }
