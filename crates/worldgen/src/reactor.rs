@@ -84,16 +84,19 @@ pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> 
             out.push(piece);
         }
     }
-    // Fins like a heatsink's: many thin blades of one depth all the way
-    // up, following the spool's curve; every eighth with a lit edge.
-    let fins = 48;
-    let fin_deep = (radius * 0.07).clamp(6.0, 14.0);
+    // Fins like a heatsink's: thin blades all the way up, following the
+    // spool's curve; every sixth with a lit edge.
+    // Deep and shallower in turn, protruding well out: jagged against the
+    // spool's roundness.
+    let fins = 36;
+    let fin_deep = (radius * 0.24).clamp(12.0, 40.0);
     let fin_bands = 180;
     for f in 0..fins {
         let a = TAU * (f as f32 + 0.5) / fins as f32;
         let turn = Quat::from_rotation_y(-a);
         let out_dir = Vec3::new(a.cos(), 0.0, a.sin());
-        let lit = f % 8 == 0;
+        let lit = f % 6 == 0;
+        let deep = if f % 2 == 0 { fin_deep } else { fin_deep * 0.5 };
         for b in 0..fin_bands {
             let (t0, t1) = (b as f32 / fin_bands as f32, (b + 1) as f32 / fin_bands as f32);
             let (r0, r1) = (radius * profile(t0), radius * profile(t1));
@@ -105,9 +108,9 @@ pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> 
             let tilt = turn * Quat::from_rotation_z(-dr.atan2(dy));
             let across = tilt * Vec3::X;
             let mid = center + out_dir * ((r0 + r1) * 0.5) + Vec3::Y * ((y0 + y1) * 0.5);
-            out.push(boxed(mid + across * (fin_deep * 0.5 - 1.0), Vec3::new(fin_deep * 0.5 + 1.0, len * 0.5 + 0.05, 0.6), tilt, tone + 0.04));
+            out.push(boxed(mid + across * (deep * 0.5 - 1.0), Vec3::new(deep * 0.5 + 1.0, len * 0.5 + 0.05, 0.8), tilt, tone + 0.04));
             if lit {
-                let mut edge = boxed(mid + across * fin_deep, Vec3::new(0.35, len * 0.5 + 0.05, 0.35), tilt, tone + 0.12);
+                let mut edge = boxed(mid + across * deep, Vec3::new(0.45, len * 0.5 + 0.05, 0.45), tilt, tone + 0.12);
                 edge.glow = 0.8;
                 out.push(edge);
             }
