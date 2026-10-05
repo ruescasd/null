@@ -37,8 +37,9 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt peace                               no swarm
-    --opt fight|holdfire|god|watch            for captures: keep the swarm in a capture and fire by itself / don't fire /
-                                              never die / face the nearest hunter
+    --opt fight|holdfire|huntfire|god|tough|watch   for captures: keep the swarm in a capture and fire by itself /
+                                              don't fire / fire only at a hunter / never die / hunters ten times
+                                              tougher / face the nearest hunter
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
@@ -210,9 +211,13 @@ faster the longer you last, so standing still is death; the time you last
 and what you destroyed show at the top. Left alone, seven or more close
 together assemble (you hear them grinding, and have a few seconds to break
 them) into a hunter about 3 m tall, each member a piece of its body, which
-stalks you and lunges after a crouch you can see. A shard knocks a member
-off, free (and fragile) again; below five members it falls apart into a
-swarm. Under a dark drone, the swarm buzzes and grates from where it is.
+stalks you and lunges after a crouch you can see. It takes hits as a whole
+(about four good shots): each shard jolts the piece it strikes and staggers
+the body back, and when it breaks the whole body bursts at once. Every hit
+shows: splinters burst back, a flash lights the body, the struck piece
+flares, a diamond marks the crosshair (bigger on a kill), and one impact
+sound per frame, heavier and lower the more shards struck. Under a dark
+drone, the swarm buzzes and grates from where it is.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so

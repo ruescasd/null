@@ -2,8 +2,9 @@
 //! they fly together (with a grinding you can hear from afar) and, unless
 //! enough of them are broken first, become one body: each takes a slot on a
 //! tall, long-armed body plan. The hunter stalks at a walk and lunges, with
-//! a crouch you can see coming. A shard that hits it knocks a member off,
-//! free again; below a handful of members it falls apart into a swarm.
+//! a crouch you can see coming. It takes hits as a whole: each shard jolts
+//! the piece it strikes and staggers the body, and when its health is gone
+//! the whole body bursts at once.
 
 use super::*;
 
@@ -25,6 +26,8 @@ const RECOVER: f32 = 1.1;
 const LUNGE: f32 = 30.0;
 /// Members are drawn this much bigger than free swarmers.
 const MEMBER_SCALE: f32 = 1.5;
+/// Shards it takes to break (about four good shots at close range).
+const HUNTER_HEALTH: f32 = 45.0;
 
 #[derive(Component)]
 pub(super) struct Assembly {
@@ -45,6 +48,19 @@ pub(super) struct Hunter {
     heading: f32,
     stance: Stance,
     timer: f32,
+    health: f32,
+    /// Pushed back by hits (m/s, decaying), and frozen for a moment.
+    knock: Vec3,
+    stun: f32,
+}
+
+impl Hunter {
+    /// A shard struck it, flying along `dir`.
+    pub(super) fn hurt(&mut self, dir: Vec3) {
+        self.health -= 1.0;
+        self.knock = (self.knock + Vec3::new(dir.x, 0.0, dir.z) * 1.2).clamp_length_max(9.0);
+        self.stun = self.stun.max(0.12);
+    }
 }
 
 /// Slots on the body plan, feet at the origin, facing +Z, most important
@@ -87,6 +103,7 @@ const SLOTS: usize = 20;
 pub(super) fn gather(
     mut commands: Commands,
     time: Res<Time>,
+    args: Res<Args>,
     world: Res<WorldGen>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
@@ -170,7 +187,7 @@ pub(super) fn gather(
         let to = player.translation - feet;
         let hunter = commands
             .spawn((
-                Hunter { heading: to.x.atan2(to.z), stance: Stance::Stalk, timer: 0.0 },
+                Hunter { heading: to.x.atan2(to.z), stance: Stance::Stalk, timer: 0.0, health: HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 }, knock: Vec3::ZERO, stun: 0.0 },
                 Transform::from_translation(feet),
                 Visibility::default(),
             ))
@@ -200,17 +217,40 @@ pub(super) fn hunt(
     world: Res<WorldGen>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
+    mut feedback: ResMut<Feedback>,
     mut player: Single<(&Transform, &mut Player), Without<Swarmer>>,
     mut hunters: Query<(Entity, &mut Hunter, &mut Transform), (Without<Swarmer>, Without<Player>)>,
-    mut swarm: Query<(&mut Transform, &mut Swarmer), (Without<Hunter>, Without<Player>)>,
+    mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), (Without<Hunter>, Without<Player>)>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let target = player.0.translation;
     for (entity, mut h, mut transform) in &mut hunters {
-        let count = swarm.iter().filter(|(_, s)| matches!(s.mode, Mode::Bound { hunter, .. } if hunter == entity)).count();
+        let mine = |s: &Swarmer| matches!(s.mode, Mode::Bound { hunter, .. } if hunter == entity);
+        if h.health <= 0.0 {
+            // Broken: the whole body bursts at once.
+            let at = transform.translation + Vec3::Y * 1.6;
+            commands.spawn((
+                AudioPlayer::new(assets.death.clone()),
+                PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
+                Transform::from_translation(at),
+            ));
+            for (e, t, s) in &swarm {
+                if mine(s) {
+                    let out = (t.translation - at).normalize_or(Vec3::Y) * 9.0 + h.knock;
+                    shatter_quiet(&mut commands, &assets, t.translation, out, e.index_u32());
+                    commands.entity(e).despawn();
+                }
+            }
+            director.kills += 1;
+            feedback.kill = 1.0;
+            info!("a hunter is broken");
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let count = swarm.iter().filter(|(_, _, s)| mine(s)).count();
         if count < MIN_MEMBERS {
             // Falls apart: everything left is a swarm again.
-            for (t, mut s) in &mut swarm {
+            for (_, t, mut s) in &mut swarm {
                 if matches!(s.mode, Mode::Bound { hunter, .. } if hunter == entity) {
                     s.mode = Mode::Free;
                     s.velocity = (t.translation - transform.translation - Vec3::Y).normalize_or(Vec3::Y) * 10.0;
@@ -226,9 +266,15 @@ pub(super) fn hunt(
         let distance = flat.length();
         let facing = flat.x.atan2(flat.z);
         let turn = (facing - h.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        // Staggered by hits: pushed back, and frozen for an instant.
+        let knock = h.knock;
+        h.knock *= (-dt * 7.0).exp();
+        let stunned = h.stun > 0.0;
+        h.stun -= dt;
         h.timer -= dt;
         let mut step = Vec3::ZERO;
         match h.stance {
+            _ if stunned => {}
             Stance::Stalk => {
                 h.heading += turn.clamp(-2.5 * dt, 2.5 * dt);
                 step = Vec3::new(h.heading.sin(), 0.0, h.heading.cos()) * HUNTER_SPEED * dt;
@@ -265,7 +311,7 @@ pub(super) fn hunt(
                 }
             }
         }
-        let mut p = transform.translation + step;
+        let mut p = transform.translation + step + knock * dt;
         p.y = world.ground_height(p.x, p.z);
         transform.translation = p;
         transform.rotation = Quat::from_rotation_y(h.heading);
@@ -283,12 +329,13 @@ pub(super) fn hunt(
             transform.translation + transform.rotation * v
         };
         let pull = 1.0 - (-dt * 10.0).exp();
-        for (mut mt, mut s) in &mut swarm {
+        for (_, mut mt, mut s) in &mut swarm {
             let Mode::Bound { hunter, slot: i } = s.mode else { continue };
             if hunter != entity {
                 continue;
             }
-            let goal = pose(slot(i));
+            s.jolt *= (-dt * 12.0).exp();
+            let goal = pose(slot(i)) + s.jolt;
             let before = mt.translation;
             mt.translation = before.lerp(goal, pull);
             s.velocity = (mt.translation - before) / dt.max(1e-4);

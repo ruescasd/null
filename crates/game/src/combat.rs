@@ -37,12 +37,15 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/drone.wav");
         embedded_asset!(app, "sounds/hurt.wav");
         embedded_asset!(app, "sounds/assemble.wav");
+        embedded_asset!(app, "sounds/hit.wav");
+        embedded_asset!(app, "sounds/death.wav");
         app.init_resource::<Gun>()
             .init_resource::<Director>()
+            .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
             .add_systems(
                 Update,
-                (fire, fly_shards, swarm, hunter::gather, hunter::hunt, hunter::watch, bite, die, debris, swarm_sound, hud)
+                (fire, fly_shards, swarm, hunter::gather, hunter::hunt, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -111,6 +114,19 @@ struct Assets3 {
     hurt: Handle<AudioSource>,
     assemble: Handle<AudioSource>,
     swarm: Handle<AudioSource>,
+    hit: Handle<AudioSource>,
+    death: Handle<AudioSource>,
+}
+
+/// What landed this frame, for the feedback: how many shards hit something
+/// and where (summed), and the hit marker and impact light, decaying.
+#[derive(Resource, Default)]
+struct Feedback {
+    hits: u32,
+    at: Vec3,
+    marker: f32,
+    /// The marker is bigger after a kill.
+    kill: f32,
 }
 
 /// A shard in flight from the muzzle to where it hit.
@@ -143,6 +159,8 @@ struct Swarmer {
     /// Seconds until it may bite again.
     bite_in: f32,
     phase: f32,
+    /// A jolt from a hit, metres, decaying (a hunter's members).
+    jolt: Vec3,
 }
 
 /// A piece flying off something broken, or a spark.
@@ -160,6 +178,13 @@ struct Viewmodel;
 
 #[derive(Component)]
 struct MuzzleLight;
+
+/// Where shards land on a body.
+#[derive(Component)]
+struct ImpactLight;
+
+#[derive(Component)]
+struct HitMarker;
 
 #[derive(Component)]
 struct SwarmVoice;
@@ -216,6 +241,8 @@ fn setup(
         hurt: load("hurt"),
         assemble: load("assemble"),
         swarm: load("swarm"),
+        hit: load("hit"),
+        death: load("death"),
     };
 
     // The ear is the camera.
@@ -264,6 +291,27 @@ fn setup(
         ));
     }
     commands.insert_resource(assets);
+    commands.spawn((
+        ImpactLight,
+        PointLight { intensity: 0.0, range: 12.0, shadow_maps_enabled: false, ..default() },
+        Transform::default(),
+    ));
+    // The hit marker: a small diamond round the crosshair.
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_child((
+            HitMarker,
+            Node { width: px(18), height: px(18), border: UiRect::all(px(2)), ..default() },
+            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.0)),
+            UiTransform::from_rotation(Rot2::degrees(45.0)),
+        ));
 
     // A flash of black when bitten, and the score.
     commands.spawn((
@@ -298,15 +346,19 @@ fn fire(
     assets: Res<Assets3>,
     spatial: SpatialQuery,
     mut gun: ResMut<Gun>,
+    mut feedback: ResMut<Feedback>,
     camera: Single<(&Transform, &FlyCam), With<Player>>,
-    mut swarm: Query<(Entity, &Transform, &mut Swarmer), Without<FlyCam>>,
+    mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
+    mut hunters: Query<&mut hunter::Hunter>,
     mut light: Single<&mut PointLight, With<MuzzleLight>>,
 ) {
     let dt = time.delta_secs();
     gun.cooldown -= dt;
     light.intensity *= (-dt * 40.0).exp();
     let (transform, fly) = *camera;
-    if fly.noclip || !(input.fire || (args.opt("fight") && !args.opt("holdfire"))) || gun.cooldown > 0.0 {
+    // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
+    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && !hunters.is_empty());
+    if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 {
         return;
     }
     gun.cooldown = RELOAD;
@@ -343,18 +395,26 @@ fn fire(
             }
         }
         let end = best.map_or(wall, |(d, _)| d);
-        if let Some((_, entity)) = best
-            && let Ok((_, _, mut s)) = swarm.get_mut(entity)
+        if let Some((along, entity)) = best
+            && let Ok((_, mut t, mut s)) = swarm.get_mut(entity)
         {
-            if matches!(s.mode, Mode::Bound { .. }) {
-                // Knocked off a hunter: free again, and fragile.
-                s.mode = Mode::Free;
-                s.health = 1.0;
-                s.velocity = dir * 10.0 + Vec3::Y * 3.0;
+            let point = eye + dir * along;
+            if let Mode::Bound { hunter, .. } = s.mode {
+                // A hunter takes the hit as a whole: the piece struck is
+                // jolted, the body staggers.
+                if let Ok(mut h) = hunters.get_mut(hunter) {
+                    h.hurt(dir);
+                }
+                s.jolt += dir * 0.35;
             } else {
                 s.health -= 1.0;
                 s.velocity += dir * 4.0;
             }
+            // The piece struck pops.
+            t.scale *= 1.18;
+            feedback.hits += 1;
+            feedback.at += point;
+            sparks(&mut commands, &assets, point, -dir, gun.shots * 31 + k as u32);
         }
         commands.spawn((
             Streak { from: muzzle, to: eye + dir * end, travelled: 0.0, impact: best.is_none() && end < RANGE },
@@ -439,7 +499,7 @@ fn swarm(
             let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
             commands
                 .spawn((
-                    Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0 },
+                    Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0, jolt: Vec3::ZERO },
                     Mesh3d(assets.swarmer.clone()),
                     MeshMaterial3d(assets.dark.clone()),
                     Transform::from_translation(p),
@@ -528,6 +588,7 @@ fn die(
     args: Res<Args>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
+    mut feedback: ResMut<Feedback>,
     mut player: Single<&mut Player>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
     bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>)>>,
@@ -537,6 +598,7 @@ fn die(
             continue;
         }
         director.kills += 1;
+        feedback.kill = feedback.kill.max(0.6);
         shatter(&mut commands, &assets, transform.translation, s.velocity, entity.index_u32());
         commands.entity(entity).despawn();
     }
@@ -561,12 +623,65 @@ fn die(
     }
 }
 
+/// Bright splinters bursting back from where a shard struck a body.
+fn sparks(commands: &mut Commands, assets: &Assets3, at: Vec3, back: Vec3, seed: u32) {
+    for k in 0..5 {
+        let r = |j: i32| hash01(seed as i32, k, j, 0x5b9) - 0.5;
+        let out = (back + Vec3::new(r(0), r(1), r(2)) * 1.6).normalize_or(back);
+        commands.spawn((
+            Debris { velocity: out * (9.0 + 9.0 * (r(3) + 0.5)), spin: Vec3::new(r(4), r(5), r(6)) * 30.0, life: 0.22, total: 0.22, size: Vec3::new(0.6, 0.9, 0.6) },
+            Mesh3d(assets.shard.clone()),
+            MeshMaterial3d(assets.bright.clone()),
+            Transform::from_translation(at).with_rotation(Quat::from_rotation_arc(Vec3::Y, out)),
+        ));
+    }
+}
+
+/// What landed this frame: one impact sound (louder and lower the more
+/// shards struck), a flash where they struck, and the hit marker.
+#[allow(clippy::type_complexity)]
+fn feedback(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<Assets3>,
+    mut feedback: ResMut<Feedback>,
+    mut light: Single<(&mut Transform, &mut PointLight), With<ImpactLight>>,
+    mut marker: Single<(&mut BorderColor, &mut Node), With<HitMarker>>,
+) {
+    let dt = time.delta_secs();
+    let n = feedback.hits;
+    if n > 0 {
+        let k = n.min(12) as f32;
+        commands.spawn((
+            AudioPlayer::new(assets.hit.clone()),
+            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.45 + 0.07 * k)).with_speed(1.15 - 0.025 * k),
+        ));
+        light.0.translation = feedback.at / n as f32;
+        light.1.intensity = light.1.intensity.max(4.0e5 * k);
+        feedback.marker = feedback.marker.max(0.5 + 0.05 * k);
+        feedback.hits = 0;
+        feedback.at = Vec3::ZERO;
+    }
+    light.1.intensity *= (-dt * 30.0).exp();
+    feedback.marker = (feedback.marker - dt * 4.0).max(0.0);
+    feedback.kill = (feedback.kill - dt * 2.0).max(0.0);
+    let size = 18.0 + 14.0 * feedback.kill;
+    *marker.0 = BorderColor::all(Color::srgba(1.0, 1.0, 1.0, feedback.marker.max(feedback.kill).min(1.0)));
+    marker.1.width = px(size);
+    marker.1.height = px(size);
+}
+
 fn shatter(commands: &mut Commands, assets: &Assets3, at: Vec3, velocity: Vec3, seed: u32) {
+    shatter_quiet(commands, assets, at, velocity, seed);
     commands.spawn((
         AudioPlayer::new(assets.shatter.clone()),
         PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.0)),
         Transform::from_translation(at),
     ));
+}
+
+/// The pieces of something broken, without its sound.
+fn shatter_quiet(commands: &mut Commands, assets: &Assets3, at: Vec3, velocity: Vec3, seed: u32) {
     for k in 0..9 {
         let r = |j: i32| hash01(seed as i32, k, j, 0x5b8) - 0.5;
         let out = Vec3::new(r(0), r(1) + 0.3, r(2)).normalize_or(Vec3::Y);
