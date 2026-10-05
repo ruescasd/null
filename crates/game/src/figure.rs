@@ -133,6 +133,8 @@ impl Anatomy {
 const KEEP_AWAY: f32 = 5.0;
 /// Spring holding each fragment to its place: stiffness and damping.
 const STIFFNESS: f32 = 220.0;
+/// The human's skull, larger than life (with its eyes).
+const HEAD: f32 = 1.15;
 const DAMPING: f32 = 18.0;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -481,7 +483,7 @@ fn spawn(
                 1 => {
                     // A skull, not a box: wide at the cranium and cheekbones,
                     // narrowing to a chin set forward, a ridge down the face.
-                    pieces.push((Vec3::new(0.0, l * 0.5, 0.0), Vec3::new(0.105, l * 0.5, 0.125), Quat::IDENTITY, 3));
+                    pieces.push((Vec3::new(0.0, l * 0.5, 0.0), Vec3::new(0.105 * HEAD, l * 0.5, 0.125 * HEAD), Quat::IDENTITY, 3));
                 }
                 5 => {
                     // The first hard head: a box and a jaw.
@@ -517,7 +519,7 @@ fn spawn(
             };
             let eyes: Vec<(Vec3, Vec3, Quat, usize)> = match head {
                 1 => [-1.0f32, 1.0]
-                    .map(|sx| (Vec3::new(sx * 0.04, l * 0.62, 0.105), eye_half, Quat::from_rotation_y(-sx * 0.43) * Quat::from_rotation_z(sx * slant), eye_shape))
+                    .map(|sx| (Vec3::new(sx * 0.04 * HEAD, l * 0.62, 0.105 * HEAD), eye_half * HEAD, Quat::from_rotation_y(-sx * 0.43) * Quat::from_rotation_z(sx * slant), eye_shape))
                     .to_vec(),
                 5 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.042, l * 0.62, 0.116), eye_half, Quat::from_rotation_z(sx * slant), eye_shape)).to_vec(),
                 2 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.064, l * 0.55, 0.22), Vec3::new(0.004, 0.008, 0.03), Quat::IDENTITY, 0)).to_vec(),
@@ -830,7 +832,9 @@ fn walk(
                 Bone::Chest => pose(waist, shoulders),
                 Bone::Neck => pose(shoulders - forward * 0.05, neck_end),
                 Bone::Skull if creature => pose(neck_end - skull_dir * 0.08, neck_end + skull_dir * 0.52),
-                Bone::Skull if human => pose(neck_end - skull_dir * 0.02, neck_end + skull_dir * 0.31),
+                // Sunk into the neck, so it sits down on the shoulders
+                // rather than perched on them.
+                Bone::Skull if human => pose(neck_end - skull_dir * 0.07, neck_end + skull_dir * (0.33 * HEAD - 0.07)),
                 Bone::Skull => pose(neck_end - skull_dir * 0.04, neck_end + skull_dir * 0.32),
                 Bone::UpperArm(side) | Bone::Forearm(side) | Bone::Claw(side) => {
                     let s = side.sign();
