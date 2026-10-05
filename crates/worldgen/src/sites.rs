@@ -172,6 +172,10 @@ pub struct SiteRule {
     pub form: Option<String>,
     #[serde(default = "default_footprint")]
     pub footprint: (f32, f32),
+    /// Grow that form on a square (turned with the earthwork) instead of
+    /// the big plate's outline: a city needs the whole width.
+    #[serde(default)]
+    pub square: bool,
     /// Slope the ground continuously instead of in terraces (over the same
     /// `rings` x `ring_width`).
     #[serde(default)]
@@ -322,6 +326,9 @@ pub struct Site {
     pub stairs: f32,
     /// A form grown on the whole footprint, and the footprint's radius.
     pub form: Option<(String, f32)>,
+    /// The footprint is a square turned by this much (radians), not the
+    /// big plate.
+    pub square: Option<f32>,
 }
 
 /// How far a site's centre may stray from its cell's centre, as a fraction
@@ -484,6 +491,7 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
         terraces: rule.terraces.clone().filter(|_| rule.plinth),
         terrace_chance: rule.terrace_chance,
         stairs: rule.stairs,
+        square: (rule.square && form.is_some()).then(|| (r(7) * 360.0).to_radians()),
         form,
     })
 }
@@ -744,7 +752,7 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
     };
     let mut grower = Grower {
         library,
-        budget: MAX_PRISMS,
+        budget: MAX_PRISMS.max(max_leaves),
         leaves: max_leaves.saturating_sub(solids.len()),
         out: Growth::default(),
     };
@@ -762,7 +770,16 @@ pub fn build(library: &Library, world: &PlateWorld, site: &Site, max_leaves: usi
                 let local: Vec<Vec2> = plate.iter().map(|p| Vec2::new(p.x as f32, p.y as f32)).collect();
                 let c = forms::centroid(&local);
                 let reach = local.iter().map(|p| (*p - c).length()).fold(0.0, f32::max).max(1.0);
-                let footprint: Vec<Vec2> = local.iter().map(|p| (*p - c) * (radius / reach)).collect();
+                let footprint: Vec<Vec2> = match site.square {
+                    // Corners on the footprint's radius, square to the earthwork.
+                    Some(yaw) => (0..4)
+                        .map(|k| {
+                            let a = yaw + std::f32::consts::FRAC_PI_4 + k as f32 * std::f32::consts::FRAC_PI_2;
+                            Vec2::new(a.cos(), a.sin()) * *radius
+                        })
+                        .collect(),
+                    None => local.iter().map(|p| (*p - c) * (radius / reach)).collect(),
+                };
                 let start = grower.out.prisms.len();
                 grower.grow(form, &footprint, 0.0, tone, site.seed ^ 0xf0f1, 0);
                 for prism in &mut grower.out.prisms[start..] {

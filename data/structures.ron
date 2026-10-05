@@ -1038,6 +1038,10 @@
             step: 2, terraces: "terrace", terrace_chance: 0.5, earthwork: (shape: Round, ramps: 1)),
         (district: Floor, form: "colossus_enclosure", footprint: (180, 260), lift: (-10, -4), rings: 2, ring_width: 40,
             terraces: "terrace", earthwork: (shape: Square)),
+        // The hanging city (the lab's city_tall) in the open floor, on a
+        // low square platform with ramps.
+        (district: Floor, weight: 3, form: "city_tall", footprint: (560, 600), square: true, lift: (2, 5), rings: 2,
+            ring_width: 40, terraces: "terrace", earthwork: (shape: Square, ramps: 1)),
         (district: Broken, form: "colossus_ruin", footprint: (140, 220), lift: (8, 18), rings: 3, ring_width: 30,
             terraces: "ruin", earthwork: (shape: Round, ramps: 0.3)),
     ],

@@ -24,6 +24,9 @@ $places = [ordered]@{
     "towers"      = "2450,30,560,-59.3,-4.0"
     "pillars"     = "2350,25,1150,108.4,-2.7"
     "spire"       = "2333,30,2204,-56.3,17.0"
+    # The first hanging city in the world (a Floor colossus).
+    "city"        = "3250,2,2721,140,14"
+    "city_air"    = "2132,380,4054,-40,-16"
     # The lab: candidates in a row along +x on flat ground (--opt lab).
     "lab"         = "1350,40,700,-68.2,-4.2"
 }

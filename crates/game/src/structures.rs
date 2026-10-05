@@ -50,6 +50,8 @@ impl Plugin for StructuresPlugin {
 
 /// Blocks per structure at most, to keep a typo from freezing the game.
 const MAX_LEAVES: usize = 40_000;
+/// A colossus may be a whole city (as in the lab).
+const MAX_COLOSSUS_LEAVES: usize = 500_000;
 
 /// Each layer of sites is built within the first distance of the camera
 /// and dropped beyond the second: colossi are seen from much further.
@@ -479,7 +481,8 @@ fn stream_sites(
         let key = Site(site.layer, site.cell);
         let (library, plates) = (library.clone(), plates.clone());
         let task = pool.spawn(async move {
-            let built = sites::build(&library, &plates, &site, MAX_LEAVES);
+            let budget = if site.layer == Layer::Colossi { MAX_COLOSSUS_LEAVES } else { MAX_LEAVES };
+            let built = sites::build(&library, &plates, &site, budget);
             let lift = built.base - ground;
             let solids = built.solids.into_iter().map(|s| Solid { center: s.center + Vec3::Y * lift, ..s }).collect();
             let prisms = built.prisms.into_iter().map(|p| Prism { y0: p.y0 + lift, y1: p.y1 + lift, ..p }).collect();

@@ -157,6 +157,19 @@ fn main() {
         );
     }
 
+    // The nearest of each kind (for photographing every kind).
+    println!("nearest of each kind:");
+    let mut seen: Vec<String> = Vec::new();
+    for site in &near {
+        let k = kind(site);
+        if seen.contains(&k) {
+            continue;
+        }
+        let (x, z) = site.at;
+        println!("  kind {k} {x:.0} {z:.0} {:.0}", site.ground.map_or(0.0, |g| g.radius));
+        seen.push(k);
+    }
+
     // The colossi: how many, and the nearest few with their height.
     let colossi = sites::all_in(sites::Layer::Colossi, &library, &world);
     println!("{} colossi", colossi.len());
@@ -165,18 +178,28 @@ fn main() {
         let d = |s: &sites::Site| (s.at.0 - 1200.0).hypot(s.at.1 - 900.0);
         d(a).total_cmp(&d(b))
     });
+    let mut seen: Vec<String> = Vec::new();
+    for site in &near {
+        let f = site.form.as_ref().map_or(String::new(), |f| f.0.clone());
+        if seen.contains(&f) {
+            continue;
+        }
+        seen.push(f.clone());
+        println!("  colossus {f} {:.0} {:.0} {:.0}", site.at.0, site.at.1, site.form.as_ref().map_or(0.0, |f| f.1));
+    }
     for site in near.iter().take(6) {
-        let built = sites::build(&library, &world, site, 40_000);
+        let built = sites::build(&library, &world, site, 500_000);
         let top = built.prisms.iter().map(|p| p.y1).fold(0.0, f32::max);
         let (x, z) = site.at;
         println!(
-            "{:>22} at {:6.0}, {:6.0}  ({}), {} pieces, {:.0} m tall, footprint {:.0} m",
+            "{:>22} at {:6.0}, {:6.0}  ({}), {} pieces + {} blocks, {:.0} m tall, footprint {:.0} m",
             site.form.as_ref().map_or("", |f| f.0.as_str()),
             x,
             z,
             world.district(x as f64, z as f64).name(),
             built.prisms.len(),
-            top,
+            built.solids.len(),
+            top.max(built.solids.iter().map(|s| s.center.y + s.half.y).fold(0.0, f32::max)),
             site.form.as_ref().map_or(0.0, |f| f.1),
         );
     }
