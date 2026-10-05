@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod hunter;
+mod ichor;
 
 pub struct CombatPlugin;
 
@@ -43,9 +44,10 @@ impl Plugin for CombatPlugin {
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
+            .add_systems(Startup, ichor::setup)
             .add_systems(
                 Update,
-                (fire, fly_shards, swarm, hunter::gather, hunter::hunt, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, swarm, hunter::gather, hunter::hunt, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -350,6 +352,7 @@ fn fire(
     camera: Single<(&Transform, &FlyCam), With<Player>>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<&mut hunter::Hunter>,
+    ichor: Res<ichor::Ichor>,
     mut light: Single<&mut PointLight, With<MuzzleLight>>,
 ) {
     let dt = time.delta_secs();
@@ -415,6 +418,7 @@ fn fire(
             feedback.hits += 1;
             feedback.at += point;
             sparks(&mut commands, &assets, point, -dir, gun.shots * 31 + k as u32);
+            ichor::spray(&mut commands, &ichor, point, dir, 1.0, gun.shots * 37 + k as u32);
         }
         commands.spawn((
             Streak { from: muzzle, to: eye + dir * end, travelled: 0.0, impact: best.is_none() && end < RANGE },
@@ -589,6 +593,7 @@ fn die(
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
     mut feedback: ResMut<Feedback>,
+    ichor: Res<ichor::Ichor>,
     mut player: Single<&mut Player>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
     bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>)>>,
@@ -599,6 +604,7 @@ fn die(
         }
         director.kills += 1;
         feedback.kill = feedback.kill.max(0.6);
+        ichor::spray(&mut commands, &ichor, transform.translation, s.velocity.normalize_or(Vec3::Y), 2.5, entity.index_u32());
         shatter(&mut commands, &assets, transform.translation, s.velocity, entity.index_u32());
         commands.entity(entity).despawn();
     }

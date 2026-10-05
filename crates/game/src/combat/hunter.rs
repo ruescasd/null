@@ -218,6 +218,7 @@ pub(super) fn hunt(
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
     mut feedback: ResMut<Feedback>,
+    ichor: Res<ichor::Ichor>,
     mut player: Single<(&Transform, &mut Player), Without<Swarmer>>,
     mut hunters: Query<(Entity, &mut Hunter, &mut Transform), (Without<Swarmer>, Without<Player>)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), (Without<Hunter>, Without<Player>)>,
@@ -238,6 +239,7 @@ pub(super) fn hunt(
                 if mine(s) {
                     let out = (t.translation - at).normalize_or(Vec3::Y) * 9.0 + h.knock;
                     shatter_quiet(&mut commands, &assets, t.translation, out, e.index_u32());
+                    ichor::spray(&mut commands, &ichor, t.translation, out.normalize_or(Vec3::Y), 2.0, e.index_u32());
                     commands.entity(e).despawn();
                 }
             }

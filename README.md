@@ -216,8 +216,13 @@ stalks you and lunges after a crouch you can see. It takes hits as a whole
 the body back, and when it breaks the whole body bursts at once. Every hit
 shows: splinters burst back, a flash lights the body, the struck piece
 flares, a diamond marks the crosshair (bigger on a kill), and one impact
-sound per frame, heavier and lower the more shards struck. Under a dark
-drone, the swarm buzzes and grates from where it is.
+sound per frame, heavier and lower the more shards struck. Bodies spill
+black ichor (`combat/ichor.rs`): each hit throws glossy droplets, streaked
+along their flight, mostly out of the far side along the shot; where one
+lands it leaves a splat (an irregular pool with satellite drops, its shape
+one of a few generated at startup), and on a wall the splat runs down for a
+while. The last 600 splats stay. Under a dark drone, the swarm buzzes and
+grates from where it is.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so
