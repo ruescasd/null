@@ -44,6 +44,12 @@ pub struct Settings {
     pub vary: f32,
     /// The share of the cores' sub-grid points that are cores (0..1).
     pub cores: f32,
+    /// The chance a cell joins its neighbours in a longer one (up to three
+    /// slots in a line).
+    pub bars: f32,
+    /// A city: each cell is a deck with a complex composed on it, in about
+    /// this many growth operations per slot of its length (0: plain cells).
+    pub content: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -321,12 +327,51 @@ fn grow(half: Vec2, s: Settings, seed: u32) -> Lattice {
     l
 }
 
+/// Cells joined into longer ones: runs of up to three slots along x or z
+/// (with chance `share`), all standing or all hung so that their decks are
+/// at one height. Each run and whether it lies along x.
+fn bars(l: &Lattice, share: f32, seed: u32) -> Vec<(Vec<Key>, bool)> {
+    let r = |a: i32, b: i32, c: i32| hash01(a * 7919 + c, b, 0xba5, seed);
+    let mut keys: Vec<Key> = l.slots.iter().filter(|(_, v)| matches!(v, Slot::Cell(_))).map(|(k, _)| *k).collect();
+    keys.sort();
+    let hung = |k: &Key| matches!(l.slots.get(k), Some(Slot::Cell(Support::Hang(_))));
+    let mut taken = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for k in keys {
+        if !taken.insert(k) {
+            continue;
+        }
+        let along_x = r(k.0, k.2, k.1) < 0.5;
+        let want = if r(k.0, k.2, k.1 + 50) < share { 2 + (r(k.0, k.2, k.1 + 90) * 2.0) as usize } else { 1 };
+        let d = if along_x { (1, 0) } else { (0, 1) };
+        let mut run = vec![k];
+        while run.len() < want {
+            let last = run[run.len() - 1];
+            let next = (last.0 + d.0, last.1, last.2 + d.1);
+            if !matches!(l.slots.get(&next), Some(Slot::Cell(_))) || hung(&next) != hung(&k) || taken.contains(&next) {
+                break;
+            }
+            taken.insert(next);
+            run.push(next);
+        }
+        out.push((run, along_x));
+    }
+    out
+}
+
 /// The lattice's solids, in a box `half` metres across (local x, z) from
 /// `origin` (its base at the ground) turned to `dir`.
 pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed: u32) -> Vec<Solid> {
     let (w, h) = (s.cell.0.max(4.0), s.cell.1.max(3.0));
     let l = grow(half, s, seed);
     let r = |a: i32, b: i32, c: i32| hash01(a * 7919 + c, b, 0x1a7, seed);
+    let groups = bars(&l, s.bars, seed);
+    let mut group_of: HashMap<Key, usize> = HashMap::new();
+    for (i, (run, _)) in groups.iter().enumerate() {
+        for &k in run {
+            group_of.insert(k, i);
+        }
+    }
 
     // Loads: each cell weighs one (a beam a third), passed down its supports.
     let mut load: HashMap<Key, f32> = HashMap::new();
@@ -366,9 +411,28 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
     let at = |x: i32, z: i32| Vec3::new(x as f32 * w, 0.0, z as f32 * w);
     let margin = w * 0.06;
     let gap = h * GAP;
+    let city = s.content > 0;
+    // A deck's thickness, in a city.
+    let deck = (h * 0.07).clamp(1.5, 4.0);
     let beam_depth = |load: f32| h * (0.14 + 0.04 * load.sqrt()).min(0.3);
     let core_half = |x: i32, z: i32| (w * 0.16 * (1.0 + 0.08 * load_of((x, 0, z)).sqrt())).min(w * 0.3);
     let structure = tone + 0.03;
+    let hung = |k: Key| matches!(l.slots.get(&k), Some(Slot::Cell(Support::Hang(_))));
+    // A cell's underside (its deck's, in a city): it floats on the gap
+    // below it, or, hung, leaves most of the gap above it to its rods.
+    let bottom = |k: Key| k.1 as f32 * h + if hung(k) { gap * 0.3 } else { gap };
+    // How high a cell's room reaches.
+    let ceiling = |k: Key| (k.1 + 1) as f32 * h - if hung(k) { gap * 0.7 } else { 0.0 };
+    // A cell's top: what others land on (its deck, in a city).
+    let surface = |k: Key| if city { bottom(k) + deck } else { ceiling(k) };
+    // A cell's extent across (x, z) about its slot's centre; single cells
+    // vary with `vary`.
+    let extent = |k: Key| {
+        let single = group_of.get(&k).is_none_or(|&g| groups[g].0.len() == 1);
+        let vary = if single && !city { s.vary } else { 0.0 };
+        let shrink = |a: i32| 1.0 - vary * 0.5 * r(k.0 * 5 + a, k.2 * 5 + k.1, 40);
+        (w * 0.5 * shrink(0) - margin, w * 0.5 * shrink(1) - margin)
+    };
 
     // The cores' shafts, whole.
     for &(x, z, top) in &l.cores {
@@ -376,18 +440,43 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
         let a = core_half(x, z);
         out.push(span(c + Vec3::new(-a, -FOUNDATION, -a), c + Vec3::new(a, top as f32 * h, a), structure));
     }
-    // A cell's extent across (x, z), with `vary`.
-    let extent = |k: Key| {
-        let shrink = |a: i32| 1.0 - s.vary * 0.5 * r(k.0 * 5 + a, k.2 * 5 + k.1, 40);
-        (w * 0.5 * shrink(0) - margin, w * 0.5 * shrink(1) - margin)
-    };
+    // The cells: a box each in the lattice; a deck in a city, with a
+    // complex composed on most (a few variants per length, reused).
+    let mut composed: HashMap<(usize, u32, i32), Vec<Solid>> = HashMap::new();
+    for (i, (run, along_x)) in groups.iter().enumerate() {
+        let (first, last) = (run[0], run[run.len() - 1]);
+        let (ex, ez) = extent(first);
+        let (a, b) = (at(first.0, first.2), at(last.0, last.2));
+        let (lo, hi) = (a.min(b) - Vec3::new(ex, 0.0, ez), a.max(b) + Vec3::new(ex, 0.0, ez));
+        let y0 = bottom(first);
+        let y1 = if city { y0 + deck } else { ceiling(first) };
+        out.push(span(Vec3::new(lo.x, y0, lo.z), Vec3::new(hi.x, y1, hi.z), tone));
+        if !city || r(i as i32, 3, 60) < 0.2 {
+            continue;
+        }
+        // Porticos and parapets rise about a level over the top terrace.
+        let levels = ((ceiling(first) - y1 - 6.0) / 4.5).floor() as i32;
+        let variant = (r(i as i32, 5, 61) * 3.0) as u32;
+        let len = run.len();
+        let content = composed.entry((len, variant, levels)).or_insert_with(|| {
+            let inset = 3.0;
+            let half = Vec2::new(len as f32 * w * 0.5 - margin - inset, w * 0.5 - margin - inset);
+            crate::compose::on_deck(half, s.content * len as u32, levels, tone, seed ^ (len as u32 * 7919 + variant * 104_729 + levels as u32))
+        });
+        // Along the run, turned end for end at random.
+        let flip = if r(i as i32, 7, 62) < 0.5 { std::f32::consts::PI } else { 0.0 };
+        let turn = Quat::from_rotation_y(if *along_x { 0.0 } else { -std::f32::consts::FRAC_PI_2 } + flip);
+        let place = Vec3::new((lo.x + hi.x) * 0.5, y1, (lo.z + hi.z) * 0.5);
+        out.extend(content.iter().map(|s| Solid { center: place + turn * s.center, rotation: turn * s.rotation, ..*s }));
+    }
+    // What carries each slot of each cell, and the beams.
     for (&k, slot) in &l.slots {
         let c = at(k.0, k.2);
-        let (base, top) = (k.1 as f32 * h, (k.1 + 1) as f32 * h);
         let lk = load_of(k);
         match *slot {
             Slot::Core => {}
             Slot::Beam(along_x) => {
+                let top = (k.1 + 1) as f32 * h;
                 let depth = beam_depth(lk);
                 let width = (w * 0.14 + 0.3 * lk.sqrt()).min(w * 0.35);
                 let (ax, az) = if along_x { (w * 0.5 + 0.02, width * 0.5) } else { (width * 0.5, w * 0.5 + 0.02) };
@@ -395,13 +484,9 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
             }
             Slot::Cell(support) => {
                 let (hx, hz) = extent(k);
-                // The cell floats on the gap below it; a hung one leaves the
-                // gap above it to its rods instead.
-                let (y0, y1) = match support {
-                    Support::Hang(_) => (base + gap * 0.3, top - gap * 0.7),
-                    _ => (base + gap, top),
-                };
-                out.push(span(c + Vec3::new(-hx, y0, -hz), c + Vec3::new(hx, y1, hz), tone));
+                let base = k.1 as f32 * h;
+                let y0 = bottom(k);
+                let y1 = if city { y0 + deck } else { ceiling(k) };
                 match support {
                     Support::Bearing => {
                         let below = (k.0, k.1 - 1, k.2);
@@ -419,10 +504,10 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
                                     out.push(span(p + Vec3::new(-post, base, -post), p + Vec3::new(post, y0, post), structure));
                                 }
                             }
-                            // Posts at the corners, within the cell below (or
+                            // Posts at the corners, down to the cell below (or
                             // into the ground).
                             _ => {
-                                let foot = if k.1 == 0 { -FOUNDATION } else { base };
+                                let foot = if k.1 == 0 { -FOUNDATION } else { surface(below) };
                                 let (bx, bz) = if k.1 == 0 { (hx, hz) } else { extent(below) };
                                 let (px, pz) = (hx.min(bx) * 0.7, hz.min(bz) * 0.7);
                                 for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
@@ -433,13 +518,14 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
                         }
                     }
                     Support::Column(n) => {
-                        let foot = if k.1 - n < 0 { -FOUNDATION } else { (k.1 - n + 1) as f32 * h };
+                        let target = (k.0, k.1 - n, k.2);
+                        let foot = if k.1 - n < 0 { -FOUNDATION } else { surface(target) };
                         let pier = (w * 0.06 * lk.sqrt()).clamp(1.0, w * 0.3);
                         out.push(span(c + Vec3::new(-pier, foot, -pier), c + Vec3::new(pier, y0, pier), structure));
                     }
                     Support::Cantilever(d) => {
-                        // Two arms in the gap, from the parent's middle to
-                        // the cell's far edge.
+                        // Two arms under the cell, from the parent's middle
+                        // to the cell's far edge.
                         let along = Vec3::new(d.0 as f32, 0.0, d.1 as f32);
                         let across = Vec3::new(-d.1 as f32, 0.0, d.0 as f32);
                         let reach = if d.0 != 0 { hx } else { hz };
@@ -457,22 +543,25 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
                     Support::Hang(n) => {
                         let above = (k.0, k.1 + n, k.2);
                         let rod = (w * 0.008 * lk.sqrt()).clamp(0.2, w * 0.05);
+                        // Near the deck's edge in a city, clear of what is
+                        // built on it.
+                        let out_to = if city { 0.95 } else { 0.75 };
                         // From a beam: rods along its line, to its underside.
-                        // From an outrigger cell: at the corners, to the
-                        // cell's underside.
+                        // From an outrigger cell: at the corners, to its
+                        // underside.
                         let (holder, points) = match l.slots.get(&above) {
                             Some(Slot::Beam(along_x)) => {
                                 let points = if *along_x {
-                                    vec![Vec3::X * (hx * 0.75), Vec3::X * (-hx * 0.75)]
+                                    vec![Vec3::X * (hx * out_to), Vec3::X * (-hx * out_to)]
                                 } else {
-                                    vec![Vec3::Z * (hz * 0.75), Vec3::Z * (-hz * 0.75)]
+                                    vec![Vec3::Z * (hz * out_to), Vec3::Z * (-hz * out_to)]
                                 };
                                 ((k.1 + n + 1) as f32 * h - beam_depth(load_of(above)), points)
                             }
                             _ => {
                                 let (ax, az) = extent(above);
-                                let (px, pz) = (hx.min(ax) * 0.75, hz.min(az) * 0.75);
-                                ((k.1 + n) as f32 * h + gap, vec![Vec3::new(px, 0.0, pz), Vec3::new(-px, 0.0, pz), Vec3::new(px, 0.0, -pz), Vec3::new(-px, 0.0, -pz)])
+                                let (px, pz) = (hx.min(ax) * out_to, hz.min(az) * out_to);
+                                (bottom(above), vec![Vec3::new(px, 0.0, pz), Vec3::new(-px, 0.0, pz), Vec3::new(px, 0.0, -pz), Vec3::new(-px, 0.0, -pz)])
                             }
                         };
                         for q in points {
@@ -493,7 +582,7 @@ mod tests {
     use super::*;
 
     fn settings() -> Settings {
-        Settings { cell: (24.0, 18.0), levels: 8, fill: 0.35, cluster: 0.5, thin: 0.3, hang: 0.4, vary: 0.2, cores: 0.5 }
+        Settings { cell: (24.0, 18.0), levels: 8, fill: 0.35, cluster: 0.5, thin: 0.3, hang: 0.4, vary: 0.2, cores: 0.5, bars: 0.5, content: 0 }
     }
 
     #[test]
@@ -524,6 +613,10 @@ mod tests {
             }
             let solids = lattice(Vec3::ZERO, Vec2::X, Vec2::splat(160.0), settings(), 0.15, seed);
             assert!(solids.len() >= cells);
+            // A city: decks with complexes on them, nothing below a deck.
+            let city = Settings { cell: (96.0, 45.0), levels: 6, content: 6, ..settings() };
+            let solids = lattice(Vec3::ZERO, Vec2::X, Vec2::splat(480.0), city, 0.15, seed);
+            assert!(solids.len() > 5 * cells, "{}", solids.len());
         }
     }
 }

@@ -84,6 +84,13 @@ pub enum Form {
         /// Share of the cores' sub-grid points that are cores.
         #[serde(default = "half")]
         cores: f32,
+        /// The chance a cell joins its neighbours in a longer one.
+        #[serde(default)]
+        bars: f32,
+        /// A city: each cell a deck with a complex composed on it, in about
+        /// this many operations per slot (0: plain cells).
+        #[serde(default)]
+        content: u32,
         #[serde(default)]
         tone: f32,
     },
@@ -612,7 +619,7 @@ impl Grower<'_> {
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
             }
-            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, tone: t } => {
+            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
                 let settings = crate::lattice::Settings {
                     cell: *cell,
@@ -623,6 +630,8 @@ impl Grower<'_> {
                     hang: *hang,
                     vary: *vary,
                     cores: *cores,
+                    bars: *bars,
+                    content: *content,
                 };
                 let solids = crate::lattice::lattice(Vec3::new(center.x, floor, center.y), dir, half, settings, tone + t, seed);
                 if solids.len() > self.budget {

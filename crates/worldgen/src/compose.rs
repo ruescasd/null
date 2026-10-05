@@ -29,6 +29,9 @@ thread_local! {
     /// level (metres). Set by `compose`; the units scale with it, the
     /// stairs and parapets do not (they stay at human size).
     static GRID: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((6.0, 4.5)) };
+    /// The highest level the complex being composed may reach (see
+    /// `on_deck`).
+    static CAP: std::cell::Cell<i32> = const { std::cell::Cell::new(i32::MAX) };
 }
 
 /// A bay (metres).
@@ -55,7 +58,7 @@ const MAX_HEIGHT: f32 = 420.0;
 
 /// The highest level anything reaches on the current grid.
 fn max_level() -> i32 {
-    (MAX_HEIGHT / level_m()) as i32
+    ((MAX_HEIGHT / level_m()) as i32).min(CAP.with(|c| c.get()))
 }
 /// How far everything reaches into the ground.
 const FOUNDATION: f32 = 6.0;
@@ -267,7 +270,7 @@ impl Composer {
         match op {
             Op::Up | Op::Down => {
                 let level = r.level + if op == Op::Up { 1 } else { -1 };
-                if level < 0 {
+                if level < 0 || level > max_level() {
                     return None;
                 }
                 let new = Self::rect_in(d, amax + 1, amax + len, c0, c1, level, false);
@@ -291,7 +294,7 @@ impl Composer {
                 Some(new)
             }
             Op::Raised => {
-                if amax - amin < 2 {
+                if amax - amin < 2 || r.level + 2 > max_level() {
                     return None;
                 }
                 let (s1, s2) = (from_frame(d, amax - 1, cs), from_frame(d, amax, cs));
@@ -892,8 +895,8 @@ fn grow_complex(
     }
     if roots.is_empty() {
         // The root: a platform in the middle, a few levels up.
-        let (w, d) = (2 + (r(0, 0) * 3.0) as i32, 2 + (r(0, 1) * 3.0) as i32);
-        let level = 3 + (r(0, 2) * 3.0) as i32;
+        let (w, d) = ((2 + (r(0, 0) * 3.0) as i32).min(c.nx - 1), (2 + (r(0, 1) * 3.0) as i32).min(c.nz - 1));
+        let level = (3 + (r(0, 2) * 3.0) as i32).min(max_level() - 1).max(1);
         let root = Rect { x0: -w, z0: -d, x1: w - 1, z1: d - 1, level, raised: false, tower: false, base: level, void: 0 };
         c.place(root);
     } else {
@@ -1113,6 +1116,29 @@ fn grand_stair(core: &Composer, core_grid: (f32, f32), fabric: (f32, f32), d: (i
     let (rl, rh) = lohi(root_lo, root_hi);
     let (tl, th) = lohi(taken_lo, taken_hi);
     Some(GrandStair { solids, root: (rl, rh, 1), taken: (tl, th), opening: ((cx, cz), d) })
+}
+
+/// A complex on a deck: grown on the 6 x 4.5 m grid in a box `half` metres
+/// across, no more than `levels` levels high, in its own frame (the deck's
+/// top at y = 0, x and z centred). Nothing reaches below the deck.
+pub fn on_deck(half: Vec2, steps: u32, levels: i32, tone: f32, seed: u32) -> Vec<Solid> {
+    if levels < 2 {
+        return Vec::new();
+    }
+    set_grid((6.0, 4.5));
+    CAP.with(|c| c.set(levels));
+    let solids = grow_complex(half, steps, false, None, &[], &[], tone, seed).map(|(c, p)| c.draw(&p)).unwrap_or_default();
+    CAP.with(|c| c.set(i32::MAX));
+    solids
+        .into_iter()
+        .filter_map(|s| {
+            let (bottom, top) = (s.center.y - s.half.y, s.center.y + s.half.y);
+            if s.wedge || s.round || bottom >= 0.0 {
+                return (bottom >= -0.01).then_some(s);
+            }
+            (top > 0.05).then(|| Solid { center: Vec3::new(s.center.x, top * 0.5, s.center.z), half: Vec3::new(s.half.x, top * 0.5, s.half.z), ..s })
+        })
+        .collect()
 }
 
 /// Composes a complex `half` metres across (local x, z) from `origin`
