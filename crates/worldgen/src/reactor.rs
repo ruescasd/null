@@ -46,7 +46,8 @@ pub fn surface(radius: f32, height: f32, y: f32) -> f32 {
 /// The reactor at `center` (its base on the ground), `radius` at its
 /// widest and `height` to the top: a smooth spool (wide, a long thin
 /// waist, wide) in many thin bands, cut by fine etchings running its whole
-/// height that glow faintly, a few of them brightly; thin rings hovering
+/// height that glow faintly, a few of them brightly; fins radiating from
+/// it, sinking into the ground in triangles; thin rings hovering
 /// round the waist with nothing holding them, their inner edges lit; a
 /// smooth base and a lit crown. No hoops, no rivets: not a boiler.
 pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> {
@@ -77,12 +78,49 @@ pub fn reactor(center: Vec3, radius: f32, height: f32, tone: f32) -> Vec<Solid> 
             out.push(piece);
         }
     }
+    // Fins radiating from it: thin blades whose outer edges run straight
+    // from the top flare down and out past the base, sinking into the
+    // ground, so each foot is a triangle digging in; jagged against the
+    // spool's roundness. Every other one has a lit edge.
+    let fins = 8;
+    let (foot, crest) = (radius * 1.95, top * 0.86);
+    let (r_crest, sink) = (radius * profile(0.86), -40.0);
+    let edge_at = |y: f32| foot + (r_crest - foot) * ((y - sink) / (crest - sink));
+    let step = 4.0;
+    for f in 0..fins {
+        let a = TAU * (f as f32 + 0.5) / fins as f32;
+        let turn = Quat::from_rotation_y(-a);
+        let out_dir = Vec3::new(a.cos(), 0.0, a.sin());
+        let mut y = sink;
+        while y < crest {
+            let y1 = (y + step).min(crest);
+            let ym = (y + y1) * 0.5;
+            let inner = radius * profile((ym / top).clamp(0.0, 1.0)) - 4.0;
+            let outer = edge_at(ym);
+            if outer > inner + 1.0 {
+                let p = center + out_dir * ((inner + outer) * 0.5) + Vec3::Y * ym;
+                out.push(boxed(p, Vec3::new((outer - inner) * 0.5, (y1 - y) * 0.5 + 0.02, 2.5), turn, tone + 0.05));
+            }
+            y = y1;
+        }
+        if f % 2 == 0 {
+            // The lit edge: a thin strip along the sloping outer edge.
+            let (p0, p1) = (out_dir * foot + Vec3::Y * sink, out_dir * r_crest + Vec3::Y * crest);
+            let d = p1 - p0;
+            let len = d.length();
+            let pitch = Quat::from_rotation_arc(Vec3::X, d / len);
+            let mut strip = boxed(center + (p0 + p1) * 0.5 + out_dir * 0.4, Vec3::new(len * 0.5, 0.5, 0.8), pitch, tone + 0.12);
+            strip.glow = 0.8;
+            out.push(strip);
+        }
+    }
     // Rings hovering round the waist: thin, flat, held by nothing, each a
     // little further out, their inner edges lit.
     let waist = radius * profile(0.5);
     for (k, t) in [0.36f32, 0.47, 0.58, 0.66].into_iter().enumerate() {
         let y = top * t;
-        let inner = waist + 45.0 + 22.0 * k as f32;
+        // Clear of the fins' edges at its height.
+        let inner = edge_at(y).max(waist) + 25.0 + 18.0 * k as f32;
         let wide = 14.0 + 6.0 * (k % 2) as f32;
         let m = 96;
         ring(&mut out, center, inner, wide, (y - 1.6, y + 1.6), m, tone + 0.06);
