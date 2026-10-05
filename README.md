@@ -16,7 +16,7 @@ Click to capture the mouse, Esc to release. F1 toggles the help overlay.
 | Space or Mouse 2 (hold) | jump; holding it bunny hops on landing |
 | (automatic) | mantle: in the air, push into a ledge whose top is within ~1.1 m of your feet to climb onto it (with a jump: ledges up to ~2.5 m). Small lips are stepped up even mid-air, and clipping an edge nudges you past it |
 | Mouse 1 | thrust beam: its recoil pushes you away from where you aim. Aim at your feet to lift off. Energy recharges on the ground |
-| E or Mouse 4/5 (hold) | tether: a spike flies out (60 m), roots where it hits and pulls you towards it; release to keep the momentum. The crosshair grows when a surface is in reach |
+| E or Mouse 4/5 (hold) | tether: a spike flies out (60 m), roots where it hits and pulls you towards it; hold jump while pulled to lift a little over a lip in the way; release to keep the momentum. The crosshair grows when a surface is in reach |
 | V | noclip fly: Space/E and Ctrl/Q up/down, Shift fast, wheel speed |
 | T | pause / resume the suns |
 | Left / Right | scrub time |

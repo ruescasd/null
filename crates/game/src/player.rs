@@ -119,6 +119,11 @@ const TETHER_DETACH: f32 = 1.4;
 /// When checking whether the line is blocked, this much of it next to the
 /// anchor is ignored, so the surface the spike is rooted in does not count.
 const TETHER_SEVER_MARGIN: f32 = 0.4;
+/// Holding jump while pulled lifts the player (m/s², upwards): not physical,
+/// but it carries the body over a lip the eye could see past, where the
+/// straight pull would hit it and sever the line. Against the pull it bends
+/// the path up by about fifteen degrees.
+const TETHER_LIFT: f32 = 16.0;
 
 #[derive(Component)]
 pub struct Player {
@@ -591,6 +596,9 @@ pub fn walk(
                 player.tether = Tether::Missed;
             } else {
                 pull_towards(&mut player.velocity, point - center, dt);
+                if jump && !player.grounded {
+                    player.velocity.y += TETHER_LIFT * dt;
+                }
             }
         }
 
