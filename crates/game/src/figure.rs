@@ -360,7 +360,10 @@ fn spawn(
     // pale ground and the black sky (all-dark fragments vanish against it).
     // With line art the fragments are pale and matte, so the black lines
     // read as ink on paper.
-    let tones = if args.opt("outline") { [(0.3, 0.75, 0.35), (0.23, 0.8, 0.35), (0.16, 0.75, 0.35)] } else { [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)] };
+    // Line art is on for the human by default (`--opt nooutline` turns it
+    // off), and for the others with `--opt outline`.
+    let outlined = !args.opt("nooutline") && (args.opt("outline") || anatomy == Anatomy::Human);
+    let tones = if outlined { [(0.3, 0.75, 0.35), (0.23, 0.8, 0.35), (0.16, 0.75, 0.35)] } else { [(0.22, 0.35, 0.7), (0.09, 0.55, 0.5), (0.03, 0.2, 0.9)] };
     let finishes = tones.map(|(tone, rough, refl)| {
         materials.add(StandardMaterial {
             base_color: Color::srgb(tone, tone, tone),
@@ -398,7 +401,7 @@ fn spawn(
 
     // Hard parts (the human's hands and feet): dark and glossy, smoother
     // than the fragments.
-    let hard_tone = if args.opt("outline") { 0.2 } else { 0.05 };
+    let hard_tone = if outlined { 0.2 } else { 0.05 };
     let hard = materials.add(StandardMaterial {
         base_color: Color::srgb(hard_tone, hard_tone, hard_tone),
         perceptual_roughness: 0.25,
@@ -408,7 +411,15 @@ fn spawn(
     // `--opt outline`: line art on the figure alone. Each piece gets a
     // slightly larger black copy that shows only its back faces, so a line
     // of constant width runs round every piece and nowhere else.
-    let outline = args.opt("outline").then(|| {
+    // The head darker still, so its eyes stand out; the eyes glow with the
+    // chest.
+    let head_dark = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.025, 0.025, 0.025),
+        perceptual_roughness: 0.3,
+        reflectance: 0.6,
+        ..default()
+    });
+    let outline = outlined.then(|| {
         materials.add(StandardMaterial {
             base_color: Color::BLACK,
             unlit: true,
@@ -439,12 +450,12 @@ fn spawn(
         // The human's hands and feet are hard, solid pieces rather than
         // fragments: a palm, jointed fingers and a thumb; a foot, a heel and
         // a toe cap. Offsets in metres along the bone, converted below.
-        // `--set head=N`: 0 fragments; 1 a hard human head; 2 a long narrow
+        // `--set head=N`: 0 fragments; 1 a hard human head (the default); 2 a long narrow
         // wedge of a head reaching forward; 3 a tall thin crest; 4 a wide
         // flat disc. `--set hand=N`: 0 hard human hands; 1 long three-digit
-        // hands; 2 a single blade; 3 two razor prongs.
-        let head = args.num("head", 0.0) as i32;
-        let hand = if args.opt("longhands") { 1 } else { args.num("hand", 0.0) as i32 };
+        // hands; 2 a single blade; 3 two razor prongs (the default).
+        let head = args.num("head", 1.0) as i32;
+        let hand = if args.opt("longhands") { 1 } else { args.num("hand", 3.0) as i32 };
         if solid && matches!(bone, Bone::Skull) && head > 0 {
             // The skull's frame: x across, y up, z forward.
             let l = part.length;
@@ -472,10 +483,28 @@ fn spawn(
                     pieces.push((Vec3::new(0.0, l * 0.62 + 0.06, 0.0), Vec3::new(0.12, 0.03, 0.1), Quat::IDENTITY, 0));
                 }
             }
+            // Eyes: two narrow bright slits on the face.
+            let eyes: Vec<(Vec3, Vec3)> = match head {
+                1 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.042, l * 0.62, 0.112), Vec3::new(0.022, 0.008, 0.006))).to_vec(),
+                2 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.064, l * 0.55, 0.22), Vec3::new(0.004, 0.008, 0.03))).to_vec(),
+                _ => Vec::new(),
+            };
             for (n, (offset, half, rotation, shape)) in pieces.into_iter().enumerate() {
                 let offset = Vec3::new(offset.x, offset.y / l.max(0.01), offset.z);
                 let phase = hash01(index as i32, n as i32, 9, 0xf18) * 100.0;
-                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, hard.clone(), half);
+                put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, head_dark.clone(), half);
+                count += 1;
+            }
+            for (n, (offset, half)) in eyes.into_iter().enumerate() {
+                let offset = Vec3::new(offset.x, offset.y / l.max(0.01), offset.z);
+                let phase = hash01(index as i32, n as i32 + 50, 9, 0xf18) * 100.0;
+                // No outline round the eyes: just the light.
+                commands.spawn((
+                    Element { bone: index, offset, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, phase },
+                    Mesh3d(shapes[0].clone()),
+                    MeshMaterial3d(glow.clone()),
+                    Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
+                ));
                 count += 1;
             }
             continue;

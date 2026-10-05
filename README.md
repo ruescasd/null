@@ -188,16 +188,17 @@ springs, a dense core with a frayed edge, so the body is held together
 rather than solid. A core of glowing shards and a lamp inside the chest
 light it from within, through its own gaps. The default is a human of exact
 proportions, about 2.4 m tall, upright and calm, heavy-limbed and fairly
-solid, glowing only in its chest. `--opt luminous` gives the same shape
-slimmer and finer-grained with glowing fragments threaded through every part
-(strange only in its substance). `--opt hunched`
-gives the earlier menacing humanoid (head forward and low, shoulders raised),
-`--opt creature` a feral creature with digitigrade legs. The human's hands and
-feet are hard, solid pieces. `--set hand=N` chooses its hands (0 hard human,
-1 long three-digit, 2 a single blade, 3 two razor prongs) and `--set head=N`
-its head (0 fragments, 1 hard human, 2 a long forward wedge, 3 a tall crest,
-4 a wide disc); `--opt outline` draws it as line art (each piece ringed in
-black), the rest of the world unchanged. One stands about 20 m ahead of
+solid, glowing only in its chest, drawn as line art (each piece ringed in
+black, the rest of the world unchanged; `--opt nooutline` turns it off), with
+a hard near-black head lit by two narrow eyes, hard feet and two razor prongs
+for hands. `--set hand=N` chooses its hands (0 hard human, 1 long
+three-digit, 2 a single blade, 3 two razor prongs) and `--set head=N` its
+head (0 fragments, 1 hard human, 2 a long forward wedge, 3 a tall crest, 4 a
+wide disc). `--opt luminous` gives the same shape slimmer and finer-grained
+with glowing fragments threaded through every part (strange only in its
+substance). `--opt hunched` gives the earlier menacing humanoid (head forward
+and low, shoulders raised), `--opt creature` a feral creature with
+digitigrade legs. One stands about 20 m ahead of
 the spawn point and walks towards you; `--opt statue` keeps it still,
 `--opt nofigures` removes it.
 
