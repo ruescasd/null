@@ -190,11 +190,13 @@ light it from within, through its own gaps. The default is a human of exact
 proportions, about 2.4 m tall, upright and calm, heavy-limbed and fairly
 solid, glowing only in its chest, drawn as line art (each piece ringed in
 black, the rest of the world unchanged; `--opt nooutline` turns it off), with
-a hard near-black head lit by two narrow eyes, hard feet and two razor prongs
-for hands. `--set hand=N` chooses its hands (0 hard human, 1 long
-three-digit, 2 a single blade, 3 two razor prongs) and `--set head=N` its
-head (0 fragments, 1 hard human, 2 a long forward wedge, 3 a tall crest, 4 a
-wide disc). `--opt luminous` gives the same shape slimmer and finer-grained
+a matte near-black faceted skull with two steady lit eyes, hard feet and two
+razor prongs for hands. `--set hand=N` chooses its hands (0 hard human, 1
+long three-digit, 2 a single blade, 3 two razor prongs), `--set head=N` its
+head (0 fragments, 1 the faceted skull, 2 a long forward wedge, 3 a tall
+crest, 4 a wide disc, 5 the first box head) and `--set eyes=N` its eyes (0
+slits, 1 flat slanted rhombuses, 2 upright rhombuses); `--opt eyepulse` has
+the eyes pulse with the chest. `--opt luminous` gives the same shape slimmer and finer-grained
 with glowing fragments threaded through every part (strange only in its
 substance). `--opt hunched` gives the earlier menacing humanoid (head forward
 and low, shoulders raised), `--opt creature` a feral creature with

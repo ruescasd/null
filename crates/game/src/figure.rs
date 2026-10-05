@@ -355,6 +355,12 @@ fn spawn(
             &[[-1., -1., -1.], [1., -1., -0.6], [-0.2, -1., 1.], [0.3, 1., 0.1]],
             &[&[0, 1, 2], &[0, 3, 1], &[1, 3, 2], &[2, 3, 0]],
         )),
+        // A faceted skull, and a flat rhombus (for eyes).
+        meshes.add(skull()),
+        meshes.add(faceted(
+            &[[1., 0., -1.], [0., 1., -1.], [-1., 0., -1.], [0., -1., -1.], [1., 0., 1.], [0., 1., 1.], [-1., 0., 1.], [0., -1., 1.]],
+            &[&[0, 1, 2, 3], &[4, 5, 6, 7], &[0, 1, 5, 4], &[1, 2, 6, 5], &[2, 3, 7, 6], &[3, 0, 4, 7]],
+        )),
     ];
     // Three finishes, from pale to dark, so the body reads against both the
     // pale ground and the black sky (all-dark fragments vanish against it).
@@ -413,12 +419,20 @@ fn spawn(
     // of constant width runs round every piece and nowhere else.
     // The head darker still, so its eyes stand out; the eyes glow with the
     // chest.
+    // Matte, so no facet catches the sun and drowns the eyes.
     let head_dark = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.025, 0.025, 0.025),
-        perceptual_roughness: 0.3,
-        reflectance: 0.6,
+        base_color: Color::srgb(0.018, 0.018, 0.018),
+        perceptual_roughness: 0.9,
+        reflectance: 0.1,
         ..default()
     });
+    // The eyes: a steady light, not the chest's pulse (an unwavering stare);
+    // `--opt eyepulse` has them pulse with it.
+    let eye_light = if args.opt("eyepulse") {
+        glow.clone()
+    } else {
+        materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(GLOW * 0.8, GLOW * 0.8, GLOW * 0.8), ..default() })
+    };
     let outline = outlined.then(|| {
         materials.add(StandardMaterial {
             base_color: Color::BLACK,
@@ -462,6 +476,12 @@ fn spawn(
             let mut pieces: Vec<(Vec3, Vec3, Quat, usize)> = Vec::new();
             match head {
                 1 => {
+                    // A skull, not a box: wide at the cranium and cheekbones,
+                    // narrowing to a chin set forward, a ridge down the face.
+                    pieces.push((Vec3::new(0.0, l * 0.5, 0.0), Vec3::new(0.105, l * 0.5, 0.125), Quat::IDENTITY, 3));
+                }
+                5 => {
+                    // The first hard head: a box and a jaw.
                     pieces.push((Vec3::new(0.0, l * 0.55, -0.01), Vec3::new(0.095, l * 0.42, 0.12), Quat::IDENTITY, 0));
                     pieces.push((Vec3::new(0.0, l * 0.14, 0.03), Vec3::new(0.072, l * 0.13, 0.09), Quat::IDENTITY, 0));
                 }
@@ -483,10 +503,21 @@ fn spawn(
                     pieces.push((Vec3::new(0.0, l * 0.62 + 0.06, 0.0), Vec3::new(0.12, 0.03, 0.1), Quat::IDENTITY, 0));
                 }
             }
-            // Eyes: two narrow bright slits on the face.
-            let eyes: Vec<(Vec3, Vec3)> = match head {
-                1 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.042, l * 0.62, 0.112), Vec3::new(0.022, 0.008, 0.006))).to_vec(),
-                2 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.064, l * 0.55, 0.22), Vec3::new(0.004, 0.008, 0.03))).to_vec(),
+            // Eyes, `--set eyes=N`: 0 narrow slits; 1 flat rhombuses
+            // slanting up and out; 2 upright rhombuses. On the skull they lie
+            // on the facets either side of the ridge.
+            let style = args.num("eyes", 1.0) as i32;
+            let (eye_shape, eye_half, slant) = match style {
+                0 => (0, Vec3::new(0.022, 0.008, 0.005), 0.0),
+                2 => (4, Vec3::new(0.012, 0.022, 0.004), 0.0),
+                _ => (4, Vec3::new(0.027, 0.011, 0.004), 0.22),
+            };
+            let eyes: Vec<(Vec3, Vec3, Quat, usize)> = match head {
+                1 => [-1.0f32, 1.0]
+                    .map(|sx| (Vec3::new(sx * 0.04, l * 0.62, 0.099), eye_half, Quat::from_rotation_y(-sx * 0.43) * Quat::from_rotation_z(sx * slant), eye_shape))
+                    .to_vec(),
+                5 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.042, l * 0.62, 0.112), eye_half, Quat::from_rotation_z(sx * slant), eye_shape)).to_vec(),
+                2 => [-1.0f32, 1.0].map(|sx| (Vec3::new(sx * 0.064, l * 0.55, 0.22), Vec3::new(0.004, 0.008, 0.03), Quat::IDENTITY, 0)).to_vec(),
                 _ => Vec::new(),
             };
             for (n, (offset, half, rotation, shape)) in pieces.into_iter().enumerate() {
@@ -495,14 +526,14 @@ fn spawn(
                 put(&mut commands, Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase }, shape, head_dark.clone(), half);
                 count += 1;
             }
-            for (n, (offset, half)) in eyes.into_iter().enumerate() {
+            for (n, (offset, half, rotation, shape)) in eyes.into_iter().enumerate() {
                 let offset = Vec3::new(offset.x, offset.y / l.max(0.01), offset.z);
                 let phase = hash01(index as i32, n as i32 + 50, 9, 0xf18) * 100.0;
                 // No outline round the eyes: just the light.
                 commands.spawn((
-                    Element { bone: index, offset, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, phase },
-                    Mesh3d(shapes[0].clone()),
-                    MeshMaterial3d(glow.clone()),
+                    Element { bone: index, offset, rotation, velocity: Vec3::ZERO, phase },
+                    Mesh3d(shapes[shape].clone()),
+                    MeshMaterial3d(eye_light.clone()),
                     Transform::from_translation(position + Vec3::Y * 2.0).with_scale(half),
                 ));
                 count += 1;
@@ -891,6 +922,31 @@ fn follow(
         let rotation = pose.rotation * e.rotation;
         transform.rotation = transform.rotation.slerp(rotation, (dt * 14.0).min(1.0));
     }
+}
+
+/// A faceted skull spanning -1..1: octagonal rings from the chin (narrow,
+/// set forward) through the cheekbones (widest) to the crown (bevelled),
+/// with a corner rather than a face at the front, so a ridge runs down it.
+fn skull() -> Mesh {
+    // Each ring: height, width, depth, how far forward.
+    let rings = [(-1.0f32, 0.32f32, 0.4f32, 0.28f32), (-0.45, 0.64, 0.72, 0.15), (0.15, 1.0, 0.92, 0.0), (0.7, 0.9, 1.0, -0.06), (1.0, 0.48, 0.64, -0.1)];
+    let n = 8;
+    let mut points = Vec::new();
+    for &(y, w, d, f) in &rings {
+        for i in 0..n {
+            let a = std::f32::consts::TAU * i as f32 / n as f32 + std::f32::consts::FRAC_PI_2;
+            points.push([a.cos() * w, y, a.sin() * d + f]);
+        }
+    }
+    let mut faces: Vec<Vec<usize>> = vec![(0..n).collect(), ((rings.len() - 1) * n..rings.len() * n).collect()];
+    for r in 0..rings.len() - 1 {
+        for i in 0..n {
+            let j = (i + 1) % n;
+            faces.push(vec![r * n + i, r * n + j, (r + 1) * n + j, (r + 1) * n + i]);
+        }
+    }
+    let faces: Vec<&[usize]> = faces.iter().map(|f| f.as_slice()).collect();
+    faceted(&points, &faces)
 }
 
 /// A flat-shaded convex mesh from corner points and faces (polygons of
