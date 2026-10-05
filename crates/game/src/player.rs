@@ -1,14 +1,9 @@
-//! Quake-style movement and the thrust gun.
+//! Quake-style movement, the player's health, and the HUD.
 //!
 //! Movement follows Quake 3's player physics: ground friction and
 //! acceleration, weak air acceleration that only adds speed along the wish
 //! direction (which is what makes strafe jumping gain speed), automatic
 //! bunny hopping while jump is held, and stepping up small ledges.
-//!
-//! The thrust gun fires a beam whose recoil pushes the player directly away
-//! from where it is aimed. Its thrust beats gravity, so aiming at your feet
-//! lifts you, and angling it gives flight; it drains energy that only
-//! recharges on the ground.
 //!
 //! The tether (see `tether.rs`) is a grappling hook: it flies out, roots
 //! itself in whatever it hits, and while held pulls the player towards that
@@ -21,7 +16,6 @@ use bevy::{
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
 };
-use worldgen::noise::hash01;
 
 use crate::{Args, camera::FlyCam, terrain::Streamer, terrain::WorldGen};
 
@@ -29,7 +23,7 @@ pub use bot::drive as bot_drive;
 use tether::Tether;
 
 mod bot;
-mod tether;
+pub(crate) mod tether;
 
 pub struct PlayerPlugin;
 
@@ -37,13 +31,13 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(PhysicsPlugins::default())
             .init_resource::<MoveInput>()
-            .add_systems(Startup, (setup_beam, setup_hud))
+            .add_systems(Startup, setup_hud)
             .add_systems(Update, update_hud)
             .add_systems(PostStartup, add_player)
             .add_systems(Startup, tether::setup)
             .add_systems(
                 PostUpdate,
-                (draw_beam, tether::draw).before(TransformSystems::Propagate),
+                tether::draw.before(TransformSystems::Propagate),
             );
     }
 }
@@ -97,14 +91,7 @@ pub const HALF_WIDTH: f32 = 0.45;
 const HEIGHT: f32 = 1.8;
 pub const EYE: f32 = 1.6;
 
-/// Beam recoil, in m/s². Greater than gravity, so aiming down lifts off.
-const THRUST: f32 = 34.0;
-const ENERGY_MAX: f32 = 100.0;
-/// Energy per second while firing: a little under five seconds of thrust.
-const ENERGY_DRAIN: f32 = 22.0;
-/// Energy per second while standing on the ground and not firing.
-const ENERGY_RECHARGE: f32 = 45.0;
-const BEAM_RANGE: f32 = 30.0;
+pub const HEALTH_MAX: f32 = 100.0;
 
 /// How far the tether reaches, and how fast its tip travels.
 const TETHER_RANGE: f32 = 60.0;
@@ -130,8 +117,8 @@ pub struct Player {
     pub velocity: Vec3,
     pub grounded: bool,
     ground_normal: Vec3,
-    pub energy: f32,
-    pub firing: bool,
+    /// Down to 0, and you start again (see `combat.rs`).
+    pub health: f32,
     pub tether: Tether,
     pub mantle: Option<Mantle>,
     /// Whether the player is on a canal's slick surface.
@@ -152,8 +139,7 @@ fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
         velocity: Vec3::ZERO,
         grounded: false,
         ground_normal: Vec3::Y,
-        energy: ENERGY_MAX,
-        firing: false,
+        health: HEALTH_MAX,
         tether: Tether::Idle,
         mantle: None,
         in_canal: false,
@@ -370,7 +356,7 @@ pub fn gather_input(
         wish: Vec2::new(axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS)),
         // Mouse 2 as well as Space, for easier testing until input is configurable.
         jump: pressed(KeyCode::Space) || (captured && mouse.pressed(MouseButton::Right)),
-        fire: args.opt("beam") || (captured && mouse.pressed(MouseButton::Left)),
+        fire: captured && mouse.pressed(MouseButton::Left),
         // (Forced on for captures once there is terrain to anchor to.)
         tether: (args.opt("tether") && streamer.settled)
             || pressed(KeyCode::KeyE)
@@ -449,7 +435,6 @@ pub fn walk(
         player.velocity = Vec3::ZERO;
         player.view_offset = 0.0;
     }
-    player.firing = input.fire && player.energy > 0.0;
     // Fire, fly and release the tether (once per frame; the pull itself is
     // integrated with the movement steps below).
     let aim = fly.rotation() * Vec3::NEG_Z;
@@ -507,7 +492,6 @@ pub fn walk(
     let right = Vec3::new(cos, 0.0, -sin);
     let wishdir = (forward * input.wish.y + right * input.wish.x).normalize_or_zero();
     let jump = input.jump;
-    let aim = fly.rotation() * Vec3::NEG_Z;
 
     let mover = Mover {
         query: &move_and_slide,
@@ -568,10 +552,6 @@ pub fn walk(
         });
         player.in_canal = pipe.is_some();
         if pipe.is_some() {
-            if player.firing {
-                player.velocity -= aim * THRUST * dt;
-                player.energy = (player.energy - ENERGY_DRAIN * dt).max(0.0);
-            }
             if let Tether::Anchored { point, .. } = player.tether {
                 pull_towards(&mut player.velocity, point - center, dt);
             }
@@ -602,13 +582,6 @@ pub fn walk(
             }
         }
 
-        if player.firing {
-            player.velocity -= aim * THRUST * dt;
-            player.energy = (player.energy - ENERGY_DRAIN * dt).max(0.0);
-        } else if player.grounded {
-            player.energy = (player.energy + ENERGY_RECHARGE * dt).min(ENERGY_MAX);
-        }
-
         // Airborne and pushing into a wall: climb it if its top is in reach.
         if !player.grounded && !tethered && wishdir != Vec3::ZERO && player.velocity.y < 5.0
             && let Some(target) = mover.find_mantle(center, wishdir)
@@ -624,7 +597,7 @@ pub fn walk(
         let rose = moved.y - center.y;
         center = moved;
         player.velocity = velocity;
-        if was_grounded && !tethered && !player.firing {
+        if was_grounded && !tethered {
             // Walking: rise no faster than the ground slopes. Catching the
             // corner of a step must not throw the player upwards.
             let n = player.ground_normal;
@@ -660,67 +633,6 @@ pub fn walk(
 }
 
 #[derive(Component)]
-struct BeamLight;
-
-fn setup_beam(mut commands: Commands, mut gizmos: ResMut<GizmoConfigStore>) {
-    gizmos.config_mut::<DefaultGizmoConfigGroup>().0.line.width = 3.0;
-    commands.spawn((
-        BeamLight,
-        PointLight {
-            intensity: 0.0,
-            range: 30.0,
-            shadow_maps_enabled: false,
-            ..default()
-        },
-        Transform::default(),
-    ));
-}
-
-/// Draws the beam as a jittering bolt and flickers a light where it lands.
-fn draw_beam(
-    time: Res<Time>,
-    spatial: SpatialQuery,
-    camera: Single<(&Transform, &FlyCam, &Player), Without<BeamLight>>,
-    mut light: Single<(&mut Transform, &mut PointLight), With<BeamLight>>,
-    mut gizmos: Gizmos,
-) {
-    let (transform, fly, player) = *camera;
-    let (light_transform, light) = &mut *light;
-    if !player.firing {
-        light.intensity = 0.0;
-        return;
-    }
-    let rotation = fly.rotation();
-    let (aim, right, up) = (rotation * Vec3::NEG_Z, rotation * Vec3::X, rotation * Vec3::Y);
-    let eye = transform.translation;
-    let hit = spatial.cast_ray(eye, Dir3::new(aim).unwrap_or(Dir3::NEG_Z), BEAM_RANGE, true, &default());
-    let end = eye + aim * hit.map_or(BEAM_RANGE, |h| h.distance);
-    let start = eye + aim * 0.6 + right * 0.25 - up * 0.22;
-
-    // A fresh random bolt every 1/40 s, two strands.
-    let frame = (time.elapsed_secs() * 40.0) as i32;
-    const SEGMENTS: i32 = 16;
-    for strand in 0..2 {
-        let mut prev = start;
-        for i in 1..=SEGMENTS {
-            let t = i as f32 / SEGMENTS as f32;
-            let r = |k: i32| hash01(frame, i * 4 + k, strand, 0xbea4) - 0.5;
-            let taper = (t * (1.0 - t) * 4.0).min(1.0);
-            let wobble = (right * r(0) + up * r(1)) * 0.5 * taper;
-            let point = start.lerp(end, t) + if i == SEGMENTS { Vec3::ZERO } else { wobble };
-            let brightness = if strand == 0 { 12.0 } else { 4.0 };
-            gizmos.line(prev, point, LinearRgba::rgb(brightness, brightness, brightness));
-            prev = point;
-        }
-    }
-
-    // Light the surroundings from just short of the impact point.
-    light_transform.translation = end - aim * 0.8;
-    let flicker = 0.6 + 0.4 * hash01(frame, 99, 0, 0x11a7);
-    light.intensity = 3.5e6 * flicker;
-}
-
-#[derive(Component)]
 struct Readout;
 
 /// The crosshair grows when the tether can reach what it points at.
@@ -746,7 +658,7 @@ fn setup_hud(mut commands: Commands, args: Res<Args>) {
             Node { width: px(4), height: px(4), ..default() },
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
         ));
-    // Speed and energy, bottom centre.
+    // Speed and health, bottom centre.
     commands
         .spawn(Node {
             position_type: PositionType::Absolute,
@@ -782,7 +694,7 @@ fn update_hud(
         return;
     }
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
-    let bars = (player.energy / ENERGY_MAX * 20.0).round() as usize;
+    let bars = (player.health.max(0.0) / HEALTH_MAX * 20.0).round() as usize;
     readout.0 = format!(
         "{speed:4.1} m/s   {:4.0} ups
 [{}{}]",

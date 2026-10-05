@@ -69,7 +69,7 @@ const LIGHT_FLYING: f32 = 5.0e4;
 
 /// Flat-shaded pyramids ("shards") from a common base point, each given as
 /// (direction, length, half-width at the base).
-fn shard_mesh(shards: &[(Vec3, f32, f32)]) -> Mesh {
+pub(crate) fn shard_mesh(shards: &[(Vec3, f32, f32)]) -> Mesh {
     let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
     for &(dir, len, width) in shards {
         let dir = dir.normalize();

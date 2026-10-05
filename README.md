@@ -15,7 +15,7 @@ Click to capture the mouse, Esc to release. F1 toggles the help overlay.
 | WASD | move (Quake 3 physics: strafe jumping gains speed) |
 | Space or Mouse 2 (hold) | jump; holding it bunny hops on landing |
 | (automatic) | mantle: in the air, push into a ledge whose top is within ~1.1 m of your feet to climb onto it (with a jump: ledges up to ~2.5 m). Small lips are stepped up even mid-air, and clipping an edge nudges you past it |
-| Mouse 1 | thrust beam: its recoil pushes you away from where you aim. Aim at your feet to lift off. Energy recharges on the ground |
+| Mouse 1 | shard shotgun (hold to keep firing) |
 | E or Mouse 4/5 (hold) | tether: a spike flies out (60 m), roots where it hits and pulls you towards it; hold jump while pulled to lift a little over a lip in the way; release to keep the momentum. The crosshair grows when a surface is in reach |
 | V | noclip fly: Space/E and Ctrl/Q up/down, Shift fast, wheel speed |
 | T | pause / resume the suns |
@@ -35,7 +35,11 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt shotpair                            with --shot: a second capture 5 frames later (<path>_b.png), to compare for flicker
     --set burst=N                             with --shot: N captures 3 frames apart (<path>_1.png, _2...)
     --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
-    --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
+    --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
+    --opt peace                               no swarm
+    --opt fight|holdfire|god|watch            for captures: keep the swarm in a capture and fire by itself / don't fire /
+                                              never die / face the nearest hunter
+    --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
@@ -67,10 +71,12 @@ crashed the GPU driver.
 - `crates/game` — Bevy app: column streaming with LOD (`terrain.rs`), curved
   horizon and AO shaders (`*.wgsl`), suns / stars / bounce and fill light and
   grading (`look.rs`), structures and streamed sites (`structures.rs`), kept
-  at their nearest wrapped copy (`landmarks.rs`), Quake-style movement, thrust beam and HUD (`player.rs`,
+  at their nearest wrapped copy (`landmarks.rs`), Quake-style movement, health and HUD (`player.rs`,
   tuning constants at the top; `player/tether.rs` is the grappling tether's
   state and look; `player/bot.rs` is the scripted test pilot),
-  mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`).
+  mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`),
+  the weapon, the swarm and its hunters (`combat.rs`, `combat/hunter.rs`;
+  their sounds are synthesised WAVs in `crates/game/src/sounds/`).
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 
 Lighting favours drama over physics. Though the world is airless, distant
@@ -195,6 +201,18 @@ finer-grained with glowing fragments threaded through every part (strange
 only in its substance). One stands about 20 m ahead of the spawn point and
 walks towards you; `--opt statue` keeps it still, `--opt nofigures` removes
 it.
+
+Combat, a first prototype (`combat.rs`). The shard shotgun throws a ring of
+16 shards (hitscan, drawn as streaks) about once a second. A swarm hunts
+you: small dark knots of shards with a lit core, slower than a running
+player but darting in to bite; three shards break one. More keep coming,
+faster the longer you last, so standing still is death; the time you last
+and what you destroyed show at the top. Left alone, seven or more close
+together assemble (you hear them grinding, and have a few seconds to break
+them) into a hunter about 3 m tall, each member a piece of its body, which
+stalks you and lunges after a crouch you can see. A shard knocks a member
+off, free (and fragile) again; below five members it falls apart into a
+swarm. Under a dark drone, the swarm buzzes and grates from where it is.
 
 Canals are huge smooth half-pipes running dead straight across the planet,
 each closing on itself around the torus (for now three parallel loops, so

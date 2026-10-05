@@ -1,7 +1,7 @@
 //! A scripted test pilot (`--opt bot`): drives the real movement code with
 //! synthetic input and logs telemetry, so movement can be checked without
 //! anyone at the keyboard. It stands, runs, strafe jumps at the optimal
-//! angle, then fires the thrust beam at its feet, and exits.
+//! angle, coasts, and exits.
 
 use bevy::prelude::*;
 
@@ -58,7 +58,7 @@ pub fn drive(
         t if t < 1.0 => "stand",
         t if t < 3.0 => "run",
         t if t < 11.0 => "strafe jump",
-        t if t < 14.0 => "thrust down",
+        t if t < 14.0 => "coast",
         t if t < 16.5 => "tether down",
         t if t < 18.5 => "step up",
         t if t < 21.0 => "mantle",
@@ -89,10 +89,6 @@ pub fn drive(
                 let vel_yaw = (-vel.x).atan2(-vel.y);
                 fly.yaw = vel_yaw + angle + std::f32::consts::FRAC_PI_2;
             }
-        }
-        "thrust down" => {
-            fly.pitch = -1.5;
-            input.fire = true;
         }
         "mantle" => {
             if state.mantle_target.is_none() {
@@ -204,13 +200,13 @@ pub fn drive(
         state.last_log = now;
         let p = transform.translation;
         info!(
-            "bot t={t:4.1} {phase:12} canal {}  speed {speed:5.2} m/s ({:4.0} ups)  vy {:6.2}  y {:7.2}  grounded {}  energy {:3.0}  tether {}  pos {:.0},{:.0}",
+            "bot t={t:4.1} {phase:12} canal {}  speed {speed:5.2} m/s ({:4.0} ups)  vy {:6.2}  y {:7.2}  grounded {}  health {:3.0}  tether {}  pos {:.0},{:.0}",
             player.in_canal,
             speed / 0.032,
             player.velocity.y,
             p.y,
             player.grounded,
-            player.energy,
+            player.health,
             match player.tether {
                 super::Tether::Idle => "idle",
                 super::Tether::Flying { .. } => "flying",

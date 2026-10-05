@@ -30,6 +30,13 @@ listed. The rest was judged in review and dropped.
   shading on structures. Geometry comes first, so this would only return with
   restraint (finest octave only).
 
+## Movement
+
+- **The thrust beam** (Mouse 1 before combat): recoil pushing the player
+  away from where it aimed, energy recharging on the ground, drawn as a
+  jittering bolt. Retired as propulsion for the shotgun (at `66b1785`); its
+  bolt may come back as the lightning gun.
+
 ## The creature
 
 - **The hunched humanoid and the feral creature** (`--opt hunched`,

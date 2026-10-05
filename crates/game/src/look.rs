@@ -191,7 +191,7 @@ fn setup(
         yaw: yaw.to_radians(),
         pitch: pitch.to_radians(),
         speed: 25.0,
-        noclip: args.shot.is_some() || args.opt("noclip") || args.opt("labshots"),
+        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots"),
     };
 
     let stars = star_cubemap(&mut images);
@@ -536,7 +536,7 @@ fn hud(
     text.0 = format!(
         "{fps:.0} fps\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}{}\n\n\
          click: capture mouse  esc: release  f1: this help  f12: screenshot\n\
-         wasd: move  space or mouse 2 (hold): jump / bunny hop  mouse 1: thrust beam (recoil pushes you away)\n\
+         wasd: move  space or mouse 2 (hold): jump / bunny hop  mouse 1: shard shotgun\n\
          e or mouse 4/5 (hold): tether - roots where you aim and pulls you in; let go to keep the momentum\n\
          v: noclip fly (space/ctrl: up/down, shift: fast, wheel: speed)\n\
          t: pause time  left/right: scrub time  up/down: time speed  p: soft shadows",

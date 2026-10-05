@@ -270,7 +270,7 @@ fn auto_shot(
         state.settled_frames += 1;
     }
     // Give temporal effects (TAA, soft shadows, auto exposure) time to converge.
-    if state.settled_frames >= 90 {
+    if state.settled_frames >= args.num("wait", 90.0) as u32 {
         state.requested = true;
         if let Some(fps) = diagnostics
             .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
