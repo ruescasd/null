@@ -25,6 +25,11 @@ struct AutoShot {
     settled_frames: u32,
     requested: bool,
     saved: bool,
+    /// With `--opt shotpair`: frames since the first shot, and whether the
+    /// second (a few frames later, `<path>_b.png`) is saved, to see what
+    /// flickers between frames.
+    after: u32,
+    second: bool,
 }
 
 #[derive(Resource, Default)]
@@ -235,6 +240,17 @@ fn auto_shot(
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
 ) {
     let Some(path) = &args.shot else { return };
+    if state.saved && args.opt("shotpair") && !state.second {
+        state.after += 1;
+        if state.after == 5 {
+            let second = path.strip_suffix(".png").map_or(format!("{path}_b"), |p| format!("{p}_b.png"));
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(second))
+                .observe(|_: On<ScreenshotCaptured>, mut state: ResMut<AutoShot>| state.second = true);
+        }
+        return;
+    }
     if state.saved {
         exit.write(AppExit::Success);
         return;

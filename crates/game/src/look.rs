@@ -215,7 +215,9 @@ fn setup(
     if !args.opt("notaa") {
         cam.insert((TemporalAntiAliasing::default(), ShadowFilteringMethod::Temporal));
     }
-    if !args.opt("nossao") {
+    // Off by default: its per-frame noise shimmers on finely broken
+    // facades (TAA cannot settle it), and the meshes carry their own AO.
+    if args.opt("ssao") {
         cam.insert(ScreenSpaceAmbientOcclusion::default());
     }
     if !args.opt("nocontact") {

@@ -40,8 +40,10 @@ use crate::Args;
 
 /// The ink settings on a camera. `a`: strength, width (pixels), depth
 /// sensitivity, crease sensitivity; `b`: the camera's near plane, the
-/// distance lines fade over, the ink's tone, unused.
+/// distance lines fade over, the ink's tone, unused. It reads the depth and
+/// normal prepasses, so the camera gets them.
 #[derive(Component, Clone, Copy, ExtractComponent, ShaderType, Default)]
+#[require(bevy::core_pipeline::prepass::DepthPrepass, bevy::core_pipeline::prepass::NormalPrepass)]
 pub struct Ink {
     pub a: Vec4,
     pub b: Vec4,

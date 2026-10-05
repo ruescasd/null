@@ -35,10 +35,12 @@ Command-line options, mostly for tuning and capturing reference frames:
     --shot path.png                           render once the view has loaded, save, exit
     --opt bot                                 scripted movement test: logs speed/height and exits
     --opt stairbot                            walks up a flight of stairs near spawn, logs every frame
+    --opt shotpair                            with --shot: a second capture 5 frames later (<path>_b.png), to compare for flicker
     --opt bench                               once everything in view has loaded: average and worst frame time, costliest render passes
     --opt noclip|beam|tether|spin             start flying / force the beam or tether on / turn the camera (for captures)
     --opt voxel                               the earlier organic voxel terrain
-    --opt flat|hard|noao|nossao|nocontact|notaa|nograin|nosites   switch features off
+    --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
+    --opt ssao                                screen-space AO (off by default: its noise shimmers on detailed facades)
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
     --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)
