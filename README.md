@@ -42,6 +42,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt voxel                               the earlier organic voxel terrain
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt ssao                                screen-space AO (off by default: its noise shimmers on detailed facades)
+    --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set grain=0.2 --set relief=2.5 --set soft0=1 --set soft1=1   tuning numbers
     --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)

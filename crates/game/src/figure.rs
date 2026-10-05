@@ -805,7 +805,7 @@ fn walk(
         let neck_end = if creature {
             shoulders + tip(forward, Vec3::Y, 0.25) * 0.42
         } else if human {
-            shoulders + tip(Vec3::Y, forward, 0.08) * 0.13
+            shoulders + tip(Vec3::Y, forward, 0.08) * 0.091
         } else {
             shoulders + tip(Vec3::Y, forward, 1.0) * 0.22
         };

@@ -51,7 +51,33 @@ impl Plugin for LookPlugin {
         .insert_resource(GlobalAmbientLight::NONE)
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .add_systems(Startup, setup)
-        .add_systems(Update, (sky_controls, move_suns, hud).chain());
+        .add_systems(Update, (sky_controls, move_suns, hud).chain())
+        .add_systems(Update, flicker);
+    }
+}
+
+/// Bloom flickers: on in short, irregular bursts (about 30 ms on, 80 ms off
+/// on average), so bright things (the creature's chest and eyes) seem to
+/// stutter like a failing light. It began as a bug (an unordered pass that
+/// threw bloom away most frames) and was kept for how it looked, measured
+/// from the bug. `--opt steadybloom` keeps bloom on.
+fn flicker(time: Res<Time>, args: Res<Args>, mut blooms: Query<&mut Bloom>, mut state: Local<(bool, u64)>) {
+    if args.opt("steadybloom") {
+        return;
+    }
+    let (on, seed) = &mut *state;
+    // A small xorshift: the flicker needs no quality, only irregularity.
+    *seed = if *seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { *seed };
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 7;
+    *seed ^= *seed << 17;
+    let roll = (*seed >> 11) as f32 / (1u64 << 53) as f32;
+    let mean = if *on { 0.03 } else { 0.08 };
+    if roll < time.delta_secs() / mean {
+        *on = !*on;
+    }
+    for mut bloom in &mut blooms {
+        bloom.intensity = if *on { 0.12 } else { 0.0001 };
     }
 }
 
