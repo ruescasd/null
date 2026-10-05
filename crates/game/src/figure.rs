@@ -206,9 +206,11 @@ impl Bone {
             let bulk = |part: Part, k: f32| Part { start: (part.start.0 * k, part.start.1 * k), end: (part.end.0 * k, part.end.1 * k), ..part };
             let (trunk, limb) = if anatomy == Anatomy::Human { (1.0, 1.35) } else { (1.0, 1.0) };
             let part = match self {
-                Bone::Pelvis => p((0.47, 0.3), (0.42, 0.28), 0.26, 2),
-                Bone::Waist => p((0.4, 0.27), (0.38, 0.27), 0.35, 2),
-                Bone::Chest => p((0.38, 0.27), (0.55, 0.3), 0.4, 2),
+                // Narrow hips and waist under broad shoulders: lean, not
+                // heavy-bottomed.
+                Bone::Pelvis => p((0.4, 0.25), (0.38, 0.25), 0.26, 2),
+                Bone::Waist => p((0.36, 0.25), (0.36, 0.26), 0.35, 2),
+                Bone::Chest => p((0.36, 0.26), (0.55, 0.3), 0.4, 2),
                 // Flared at the base, which starts inside the chest: the
                 // trapezius sloping from the neck down to the shoulders.
                 Bone::Neck => p((0.34, 0.2), (0.15, 0.16), 0.13, 1),
@@ -217,7 +219,9 @@ impl Bone {
                 Bone::Forearm(_) => p((0.1, 0.1), (0.07, 0.06), b.forearm, 1),
                 // A hand, not a claw.
                 Bone::Claw(_) => p((0.12, 0.04), (0.08, 0.03), 0.26, 1),
-                Bone::Thigh(_) => p((0.24, 0.25), (0.14, 0.14), b.thigh, 2),
+                // Slim at the top, so with the bulk the hips stay inside
+                // the shoulders.
+                Bone::Thigh(_) => p((0.19, 0.2), (0.14, 0.14), b.thigh, 2),
                 Bone::Shin(_) => p((0.15, 0.16), (0.09, 0.09), b.shin, 1),
                 Bone::Metatarsal(_) => p((0.12, 0.08), (0.11, 0.05), b.foot, 1),
                 Bone::Toe(_) => p((0.11, 0.04), (0.08, 0.03), 0.09, 1),
