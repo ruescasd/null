@@ -789,6 +789,10 @@
         "unit_tower_old": Cell(kind: "tower", old: true),
         "unit_plaza": Cell(kind: "plaza"),
         "unit_plaza_old": Cell(kind: "plaza", old: true),
+        "unit_cascade": Cell(kind: "cascade"),
+        "unit_cascade_long": Cell(kind: "cascade", len: 2),
+        "unit_garden": Cell(kind: "garden"),
+        "unit_garden_long": Cell(kind: "garden", len: 2),
         "complex_mixed_symmetric": Compose(steps: 200, symmetric: true, core: ((40, 27), 0.5, 18)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
@@ -1045,18 +1049,18 @@
     //   along members, on the truss, mountain and organ only.
     lab: [
         // Earlier candidates (complexes, spire, cities, the building-scale
-        // lattices) are still defined above; add a line here to bring one
-        // back.
-        (name: "unit_court_old", form: "unit_court_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
-        (name: "unit_court", form: "unit_court", footprint: 110, variants: 2, note: "Reworked"),
-        (name: "unit_terraces_old", form: "unit_terraces_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
-        (name: "unit_terraces", form: "unit_terraces", footprint: 110, variants: 2, note: "Reworked"),
-        (name: "unit_gallery_old", form: "unit_gallery_old", footprint: 200, variants: 1, note: "The first version: floors on columns"),
-        (name: "unit_gallery", form: "unit_gallery", footprint: 200, variants: 2, note: "Reworked"),
-        (name: "unit_tower_old", form: "unit_tower_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
-        (name: "unit_tower", form: "unit_tower", footprint: 110, variants: 2, note: "Reworked"),
-        (name: "unit_plaza_old", form: "unit_plaza_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
-        (name: "unit_plaza", form: "unit_plaza", footprint: 110, variants: 2, note: "Reworked"),
+        // lattices, the first units) are still defined above; add a line
+        // here to bring one back.
+        (name: "unit_cascade", form: "unit_cascade", footprint: 110, variants: 3, note: "Trays cantilevered off a solid core (after Fallingwater)"),
+        (name: "unit_cascade_long", form: "unit_cascade_long", footprint: 200, variants: 1, note: "Two cascades on a long cell"),
+        (name: "unit_terraces_old", form: "unit_terraces_old", footprint: 110, variants: 1, note: "The first terraces, for comparison"),
+        (name: "unit_garden", form: "unit_garden", footprint: 110, variants: 2, note: "A pool on the axis, pergolas, pavilions, obelisks, a gateway"),
+        (name: "unit_garden_long", form: "unit_garden_long", footprint: 200, variants: 1, note: "The same on a long cell"),
+        (name: "unit_court", form: "unit_court", footprint: 110, variants: 2, note: "Halls round a court; some with a giant loggia on top"),
+        (name: "unit_gallery", form: "unit_gallery", footprint: 200, variants: 2, note: "A hall, towers, a colonnade or vault"),
+        (name: "unit_plaza", form: "unit_plaza", footprint: 110, variants: 2, note: "Stoas, a rotunda or tower, gateways"),
+        (name: "unit_terraces", form: "unit_terraces", footprint: 110, variants: 1, note: "Terraces on the axis"),
+        (name: "unit_tower", form: "unit_tower", footprint: 110, variants: 1, note: "Towers on a podium"),
         (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1, note: "Yardstick: the Manifold Garden tower"),
     ],
 )

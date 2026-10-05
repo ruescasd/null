@@ -3,8 +3,10 @@
 //! it a few pieces from a varied vocabulary rather than one kind of
 //! building: halls with arcades below and a giant order above, slender
 //! towers with open belvederes and domes, stepped or spired caps,
-//! colonnades and stoas on round columns, rotundas, pergolas, and terraces
-//! climbed by a broad stair on the axis. Each kind of cell composes them
+//! colonnades and stoas on round columns, rotundas, pergolas, terraces
+//! climbed by a broad stair on the axis, cascades of cantilevered trays off
+//! a solid core (after Fallingwater), vaulted galleries, gateways,
+//! reflecting pools and obelisks. Each kind of cell composes them
 //! differently, with heights and choices varied cell by cell.
 //!
 //! On the composer's grid (6 m bays, 4.5 m storeys, 0.45 m steps), in the
@@ -29,6 +31,8 @@ pub enum Kind {
     Terraces,
     Gallery,
     Tower,
+    Cascade,
+    Garden,
 }
 
 impl Kind {
@@ -39,6 +43,8 @@ impl Kind {
             "terraces" => Kind::Terraces,
             "gallery" => Kind::Gallery,
             "tower" => Kind::Tower,
+            "cascade" => Kind::Cascade,
+            "garden" => Kind::Garden,
             _ => return None,
         })
     }
@@ -257,6 +263,10 @@ fn hall(k: &mut Kit, r: Rect, storeys: i32) {
     }
     // The gallery's ceiling.
     k.span(Vec3::new(r.lo.x, ground - 0.6, r.lo.y), Vec3::new(r.hi.x, ground, r.hi.y), 0.01);
+    // Sometimes a giant open loggia crowns it, two storeys tall.
+    let loggia = storeys >= 4 && k.r() < 0.45;
+    let full = h;
+    let h = if loggia { h - 2.0 * STOREY } else { h };
     if h > ground + 0.1 {
         // The upper mass, a giant order of pilasters, a cornice.
         k.span(Vec3::new(r.lo.x + 0.4, ground, r.lo.y + 0.4), Vec3::new(r.hi.x - 0.4, h - 1.0, r.hi.y - 0.4), 0.0);
@@ -279,10 +289,18 @@ fn hall(k: &mut Kit, r: Rect, storeys: i32) {
         let c = 0.8;
         k.span(Vec3::new(r.lo.x - c * 0.5, h - 1.0, r.lo.y - c * 0.5), Vec3::new(r.hi.x + c * 0.5, h, r.hi.y + c * 0.5), 0.05);
     }
+    if loggia {
+        for (a, b, out) in r.sides(h) {
+            k.arcade(a, b, out, arches_for((b - a).length(), bay * 1.5), h, full - h - 0.8, 1.5, 0.04);
+        }
+        let c = 0.6;
+        k.span(Vec3::new(r.lo.x - c, full - 0.8, r.lo.y - c), Vec3::new(r.hi.x + c, full, r.hi.y + c), 0.06);
+    }
+    let h = full;
     for (a, b, _) in r.sides(h) {
         k.parapet(a, b, 0.04);
     }
-    if k.r() < 0.45 {
+    if !loggia && k.r() < 0.45 {
         let s = r.size();
         let p = Rect::new(r.lo.x + 2.0, r.lo.y + 2.0, r.lo.x + 2.0 + s.x * 0.5, r.hi.y - 2.0);
         pergola(k, p, h);
@@ -427,12 +445,141 @@ fn terraces(k: &mut Kit, r: Rect, levels: i32, cx: f32) {
     }
 }
 
+/// A cascade (after Fallingwater): a solid core with horizontal trays
+/// cantilevered from it, each lower one reaching further out and turned
+/// another way, deep parapet bands along their edges and dark recessed
+/// rooms beneath them; no columns.
+fn cascade(k: &mut Kit, b: Rect, top: f32) {
+    let s = b.size();
+    // The core: a tall chimney of masonry at the back, coursed, rising
+    // well over the trays.
+    let (cw, cd) = (k.pick(&[6.0, 8.0, 10.0]), k.pick(&[4.0, 5.0]));
+    let cc = Vec2::new(b.center().x + (k.r() - 0.5) * s.x * 0.3, b.hi.y - cd * 0.5 - 2.0);
+    let rise = top + STOREY + k.r() * STOREY;
+    k.span(Vec3::new(cc.x - cw * 0.5, 0.0, cc.y - cd * 0.5), Vec3::new(cc.x + cw * 0.5, rise, cc.y + cd * 0.5), -0.05);
+    let mut y = 2.0;
+    while y < rise - 0.5 {
+        k.fine(Vec3::new(cc.x - cw * 0.5 - 0.15, y, cc.y - cd * 0.5 - 0.15), Vec3::new(cc.x + cw * 0.5 + 0.15, y + 0.3, cc.y + cd * 0.5 + 0.15), -0.02);
+        y += 2.4;
+    }
+    k.span(Vec3::new(cc.x - cw * 0.5 - 0.4, rise, cc.y - cd * 0.5 - 0.4), Vec3::new(cc.x + cw * 0.5 + 0.4, rise + 0.6, cc.y + cd * 0.5 + 0.4), 0.0);
+    // The trays, from the top down: each anchored on the core and reaching
+    // forward and to one side or the other, sizes varied, not stacked.
+    let trays = ((top / STOREY).floor() as i32).clamp(2, 6);
+    for i in 0..trays {
+        let y = top - i as f32 * STOREY;
+        let side = if (i + (k.r() * 2.0) as i32) % 2 == 0 { -1.0 } else { 1.0 };
+        let wide = s.x * (0.3 + 0.35 * k.r());
+        let deep = s.y * (0.35 + 0.45 * k.r());
+        let x0 = (cc.x + side * (k.r() * wide * 0.5) - wide * 0.5).clamp(b.lo.x, b.hi.x - wide);
+        let lo = Vec2::new(x0.min(cc.x - cw * 0.5), (cc.y + cd * 0.5 - deep).max(b.lo.y));
+        let hi = Vec2::new((x0 + wide).max(cc.x + cw * 0.5).min(b.hi.x), cc.y + cd * 0.5);
+        if (hi - lo).min_element() < 6.0 {
+            continue;
+        }
+        let tray = Rect { lo, hi };
+        // The slab and its deep band, light against the dark core.
+        k.span(Vec3::new(lo.x, y - 0.7, lo.y), Vec3::new(hi.x, y, hi.y), 0.09);
+        for (a, e, out) in tray.sides(y) {
+            let len = (e - a).length();
+            k.face_box(a, (e - a) / len, out, (0.0, len), (y - 0.9, y + 1.1), (-0.05, 0.45), 0.1, false);
+        }
+        // A dark room recessed under it, along the core.
+        let floor = (y - STOREY).max(0.0);
+        let room = Rect::new(
+            (cc.x - cw * 0.5 - 6.0).max(lo.x + 3.0),
+            (lo.y + 3.0).max(cc.y - cd * 0.5 - 12.0),
+            (cc.x + cw * 0.5 + 6.0).min(hi.x - 3.0),
+            cc.y - cd * 0.5,
+        );
+        if room.size().min_element() > 2.0 && y - 0.7 > floor + 1.0 {
+            k.span(Vec3::new(room.lo.x, floor, room.lo.y), Vec3::new(room.hi.x, y - 0.7, room.hi.y), -0.08);
+            for (a, e, out) in room.sides(floor) {
+                let len = (e - a).length();
+                let along = (e - a) / len;
+                let n = ((len / 2.0) as i32).max(1);
+                for m in 1..n {
+                    let u = len * m as f32 / n as f32;
+                    k.face_box(a, along, out, (u - 0.08, u + 0.08), (floor, y - 0.7), (-0.1, 0.05), 0.06, true);
+                }
+            }
+        }
+    }
+    // A stair up beside the core from the deck.
+    let foot = Vec3::new(cc.x + cw * 0.5 + 1.5, 0.0, cc.y - cd * 0.5 - 6.0);
+    k.stair(foot, Vec3::Z, 2.5, STOREY, 0.05);
+}
+
+/// A vaulted gallery along `a`→`b`: arcades on both sides, a barrel vault
+/// over the walk between them.
+fn vault(k: &mut Kit, a: Vec3, b: Vec3, width: f32, height: f32) {
+    let len = (b - a).length();
+    let along = (b - a) / len;
+    let side = Vec3::new(-along.z, 0.0, along.x);
+    let n = arches_for(len, 5.0);
+    for sgn in [-1.0f32, 1.0] {
+        let off = side * (sgn * width * 0.5);
+        // Each arcade faces out from the walk.
+        let (p, q) = if sgn > 0.0 { (b + off, a + off) } else { (a + off, b + off) };
+        k.arcade(p, q, side * sgn, n, a.y, height, 1.0, 0.03);
+    }
+    // The vault: strips along, rising across in a flattened half circle.
+    let r = width * 0.5;
+    let strips = 8;
+    for j in 0..strips {
+        let v0 = -r + 2.0 * r * j as f32 / strips as f32;
+        let v1 = v0 + 2.0 * r / strips as f32;
+        let vm = (v0 + v1) * 0.5;
+        let y = a.y + height + (r * r - vm * vm).max(0.0).sqrt() * 0.7;
+        let (p, q) = (a + side * v0, b + side * v1);
+        k.span(Vec3::new(p.x.min(q.x), y - 0.6, p.z.min(q.z)), Vec3::new(p.x.max(q.x), y, p.z.max(q.z)), 0.05);
+    }
+}
+
+/// A gateway centred on `at`, facing `out`: two pylons and an arch between,
+/// an attic over them.
+fn gateway(k: &mut Kit, at: Vec3, out: Vec3, width: f32, height: f32) {
+    let across = Vec3::new(-out.z, 0.0, out.x);
+    let pylon = (width * 0.25).max(2.0);
+    let a = at - across * (width * 0.5 + pylon);
+    let b = at + across * (width * 0.5 + pylon);
+    k.arcade(a, b, out, 1, at.y, height, 2.5, 0.06);
+    k.face_box(a, across, out, (-0.4, width + 2.0 * pylon + 0.4), (at.y + height, at.y + height + 2.2), (-0.4, 2.9), 0.07, false);
+}
+
+/// A reflecting pool over `r`: a dark sheet in a light coping, a fountain
+/// in its middle.
+fn pool(k: &mut Kit, r: Rect) {
+    k.span(Vec3::new(r.lo.x, 0.0, r.lo.y), Vec3::new(r.hi.x, 0.2, r.hi.y), -0.12);
+    for (a, b, out) in r.sides(0.0) {
+        let len = (b - a).length();
+        k.face_box(a, (b - a) / len, out, (-0.6, len + 0.6), (0.0, 0.55), (-0.6, 0.0), 0.08, false);
+    }
+    let c = r.center();
+    k.cylinder(Vec3::new(c.x, 0.2, c.y), 0.8, 2.2, 0.06);
+    k.cylinder(Vec3::new(c.x, 1.0, c.y), 1.6, 0.5, 0.06);
+    k.cylinder(Vec3::new(c.x, 2.6, c.y), 0.4, 1.2, 0.06);
+}
+
+/// An obelisk on a plinth at `at`.
+fn obelisk(k: &mut Kit, at: Vec2, height: f32) {
+    let base = Vec3::new(at.x, 0.0, at.y);
+    k.span(base + Vec3::new(-1.6, 0.0, -1.6), base + Vec3::new(1.6, 1.6, 1.6), 0.03);
+    let tiers = 8;
+    for i in 0..tiers {
+        let t = i as f32 / tiers as f32;
+        let w = 0.9 * (1.0 - 0.6 * t);
+        let y0 = 1.6 + height * t;
+        k.span(base + Vec3::new(-w, y0, -w), base + Vec3::new(w, y0 + height / tiers as f32 + 0.01, w), 0.05);
+    }
+}
+
 /// The kinds a cell may be, by its length in slots.
 pub fn pick(len: usize, h: f32) -> Kind {
     let kinds: &[(Kind, f32)] = if len >= 2 {
-        &[(Kind::Gallery, 3.0), (Kind::Court, 2.0), (Kind::Terraces, 1.5), (Kind::Plaza, 0.6)]
+        &[(Kind::Gallery, 3.0), (Kind::Court, 2.0), (Kind::Terraces, 1.5), (Kind::Garden, 1.5), (Kind::Cascade, 1.0), (Kind::Plaza, 0.5)]
     } else {
-        &[(Kind::Court, 2.0), (Kind::Terraces, 2.0), (Kind::Tower, 1.5), (Kind::Plaza, 1.0), (Kind::Gallery, 1.0)]
+        &[(Kind::Court, 2.0), (Kind::Cascade, 2.0), (Kind::Terraces, 1.5), (Kind::Tower, 1.5), (Kind::Garden, 1.0), (Kind::Plaza, 1.0), (Kind::Gallery, 1.0)]
     };
     let total: f32 = kinds.iter().map(|k| k.1).sum();
     let mut x = h * total;
@@ -477,6 +624,12 @@ pub fn unit(kind: Kind, half: (f32, f32), storeys: i32, tone: f32, seed: u32) ->
             }
             pergola(&mut k, Rect::new(b.lo.x + 2.0, c.y - 6.0, b.lo.x + 12.0, c.y + 6.0), 0.0);
             pergola(&mut k, Rect::new(b.hi.x - 12.0, c.y - 6.0, b.hi.x - 2.0, c.y + 6.0), 0.0);
+            // Gateways at the ends of the cross axis, where walkways land.
+            for (x, out) in [(b.lo.x + 1.5, Vec3::NEG_X), (b.hi.x - 1.5, Vec3::X)] {
+                if k.r() < 0.6 {
+                    gateway(&mut k, Vec3::new(x, 0.0, c.y), out, 6.0, 8.0);
+                }
+            }
         }
         Kind::Court => {
             // Halls round a court (cloistered inside), a tower at a corner,
@@ -536,7 +689,49 @@ pub fn unit(kind: Kind, half: (f32, f32), storeys: i32, tone: f32, seed: u32) ->
             tower(&mut k, Vec2::new(b.hi.x - 4.5, b.hi.y - 4.5), 4.5, second);
             let stoa = k.r() < 0.5;
             colonnade(&mut k, Vec3::new(b.lo.x + 3.0, 0.0, b.lo.y + 3.0), Vec3::new(b.hi.x - 3.0, 0.0, b.lo.y + 3.0), Vec3::NEG_Z, (top * 0.3).clamp(5.0, 8.0), stoa, 4.5);
-            pergola(&mut k, Rect::new(c.x - 8.0, c.y - 5.0, c.x + 8.0, c.y + 3.0), 0.0);
+            if k.r() < 0.5 {
+                pergola(&mut k, Rect::new(c.x - 8.0, c.y - 5.0, c.x + 8.0, c.y + 3.0), 0.0);
+            } else {
+                vault(&mut k, Vec3::new(b.lo.x + 12.0, 0.0, c.y - 2.0), Vec3::new(b.hi.x - 12.0, 0.0, c.y - 2.0), 6.0, 5.0);
+            }
+        }
+        Kind::Cascade => {
+            // One cascade, or two (a big one and a small one) on a long cell;
+            // a vaulted gallery along the back sometimes.
+            if s.x > s.y * 1.6 {
+                let split = b.lo.x + s.x * 0.6;
+                cascade(&mut k, Rect::new(b.lo.x, b.lo.y, split - 3.0, b.hi.y), top);
+                cascade(&mut k, Rect::new(split + 3.0, b.lo.y, b.hi.x, b.hi.y), (top - STOREY).max(2.0 * STOREY));
+            } else {
+                cascade(&mut k, b, top);
+            }
+            if k.r() < 0.35 {
+                vault(&mut k, Vec3::new(b.lo.x + 2.0, 0.0, b.hi.y - 3.5), Vec3::new(b.hi.x - 2.0, 0.0, b.hi.y - 3.5), 6.0, 5.5);
+            }
+        }
+        Kind::Garden => {
+            // A reflecting pool on the axis, pergolas along it, pavilions at
+            // its ends, obelisks at its corners, a gateway on the front.
+            let pw = (s.y * 0.22).clamp(6.0, 14.0);
+            let p = Rect::new(b.lo.x + 14.0, c.y - pw * 0.5, b.hi.x - 14.0, c.y + pw * 0.5);
+            pool(&mut k, p);
+            pergola(&mut k, Rect::new(p.lo.x, p.hi.y + 3.0, p.hi.x, p.hi.y + 8.0), 0.0);
+            if k.r() < 0.5 {
+                pergola(&mut k, Rect::new(p.lo.x, p.lo.y - 8.0, p.hi.x, p.lo.y - 3.0), 0.0);
+            } else {
+                vault(&mut k, Vec3::new(p.lo.x, 0.0, p.lo.y - 6.0), Vec3::new(p.hi.x, 0.0, p.lo.y - 6.0), 5.0, 4.5);
+            }
+            for (x, last) in [(b.lo.x + 7.0, false), (b.hi.x - 7.0, true)] {
+                if k.r() < 0.5 || last {
+                    rotunda(&mut k, Vec2::new(x, c.y), 4.0, 5.5);
+                } else {
+                    tower(&mut k, Vec2::new(x, c.y), 3.5, top);
+                }
+            }
+            for (x, z) in [(p.lo.x, p.lo.y - 1.8), (p.hi.x, p.lo.y - 1.8), (p.lo.x, p.hi.y + 1.8), (p.hi.x, p.hi.y + 1.8)] {
+                obelisk(&mut k, Vec2::new(x, z), 7.0);
+            }
+            gateway(&mut k, Vec3::new(c.x, 0.0, b.lo.y + 1.5), Vec3::NEG_Z, 7.0, 9.0);
         }
         Kind::Tower => {
             // Two or three towers of different heights on a podium, a
@@ -590,7 +785,7 @@ mod tests {
 
     #[test]
     fn units_stay_on_the_deck() {
-        for kind in [Kind::Plaza, Kind::Court, Kind::Terraces, Kind::Gallery, Kind::Tower] {
+        for kind in [Kind::Plaza, Kind::Court, Kind::Terraces, Kind::Gallery, Kind::Tower, Kind::Cascade, Kind::Garden] {
             for seed in 0..6 {
                 let half = (42.0, 42.0);
                 let solids = unit(kind, half, 5, 0.15, seed);
