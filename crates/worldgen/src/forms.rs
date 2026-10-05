@@ -94,6 +94,21 @@ pub enum Form {
         #[serde(default)]
         tone: f32,
     },
+    /// One city cell on the ground, for the unit lab: a deck the size of a
+    /// lattice cell `len` slots long (96 m slots) with what stands on it
+    /// (`kind`: plaza, court, terraces, gallery, tower), up to `storeys`
+    /// high; `old` draws the first version of the units, for comparison.
+    Cell {
+        kind: String,
+        #[serde(default = "one")]
+        len: u32,
+        #[serde(default = "five")]
+        storeys: i32,
+        #[serde(default)]
+        old: bool,
+        #[serde(default)]
+        tone: f32,
+    },
     /// A shape made of copies of itself, in the biggest rectangle that fits,
     /// `height` tall: each copy placed (`at`, the parent's -1..1 frame,
     /// y up), scaled and turned within its parent, recursing `depth` times
@@ -359,6 +374,14 @@ fn one_tower() -> u32 {
     1
 }
 
+fn one() -> u32 {
+    1
+}
+
+fn five() -> i32 {
+    5
+}
+
 fn lattice_cell() -> (f32, f32) {
     (24.0, 18.0)
 }
@@ -453,7 +476,8 @@ pub fn references(form: &Form) -> Vec<&str> {
         | Form::Sierpinski { .. }
         | Form::Fractal { .. }
         | Form::Compose { .. }
-        | Form::Lattice { .. } => vec![],
+        | Form::Lattice { .. }
+        | Form::Cell { .. } => vec![],
         Form::Relief { then, .. } => then.iter().map(|s| s.as_str()).collect(),
         Form::Extrude { then, .. } | Form::Pillars { then, .. } | Form::Neck { then, .. } | Form::Facade { then, .. } => {
             then.iter().map(|s| s.as_str()).collect()
@@ -639,6 +663,38 @@ impl Grower<'_> {
                 }
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
+            }
+            Form::Cell { kind, len, storeys, old, tone: t } => {
+                let Some((center, dir, _)) = inscribed_box(poly) else { return };
+                let tone = tone + t;
+                let half = (*len as f32 * 48.0 - 5.76, 42.24);
+                let deck = 1.5;
+                let mut solids = vec![crate::structure::Solid {
+                    detail: false,
+                    wedge: false,
+                    round: false,
+                    center: Vec3::new(0.0, deck - 3.0, 0.0),
+                    rotation: glam::Quat::IDENTITY,
+                    half: Vec3::new(half.0, 3.0, half.1),
+                    albedo: tone,
+                }];
+                let unit = if *old {
+                    let kind = match kind.as_str() {
+                        "plaza" => crate::slabunit::Kind::Plaza,
+                        "court" => crate::slabunit::Kind::Court,
+                        "terraces" => crate::slabunit::Kind::Terraces,
+                        "gallery" => crate::slabunit::Kind::Gallery,
+                        _ => crate::slabunit::Kind::Tower,
+                    };
+                    crate::slabunit::unit(kind, half, *storeys, tone, seed)
+                } else {
+                    let kind = crate::cellunit::Kind::from_name(kind).unwrap_or(crate::cellunit::Kind::Court);
+                    crate::cellunit::unit(kind, half, *storeys, tone, seed)
+                };
+                solids.extend(unit.into_iter().map(|s| crate::structure::Solid { center: s.center + Vec3::Y * deck, ..s }));
+                let rot = glam::Quat::from_rotation_y((-dir.y).atan2(dir.x));
+                let origin = Vec3::new(center.x, floor, center.y);
+                self.out.solids.extend(solids.into_iter().map(|s| crate::structure::Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }));
             }
             Form::Fractal { height, depth: levels, leaf, copies, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };

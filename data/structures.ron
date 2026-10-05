@@ -777,6 +777,18 @@
         "city_hanging": Lattice(cell: (96, 45), levels: 10, bars: 0.5, content: 8, cluster: 0.7, hang: 0.85, cores: 0.7),
         "city_tall": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35),
         "city_soaring": Lattice(cell: (96, 45), levels: 20, bars: 0.5, content: 8, cluster: 0.7, thin: 0.08, cores: 0.3),
+        // The unit lab: one city cell on the ground per kind, the reworked
+        // units and the first version (old: true) side by side.
+        "unit_court": Cell(kind: "court"),
+        "unit_court_old": Cell(kind: "court", old: true),
+        "unit_terraces": Cell(kind: "terraces"),
+        "unit_terraces_old": Cell(kind: "terraces", old: true),
+        "unit_gallery": Cell(kind: "gallery", len: 2),
+        "unit_gallery_old": Cell(kind: "gallery", len: 2, old: true),
+        "unit_tower": Cell(kind: "tower"),
+        "unit_tower_old": Cell(kind: "tower", old: true),
+        "unit_plaza": Cell(kind: "plaza"),
+        "unit_plaza_old": Cell(kind: "plaza", old: true),
         "complex_mixed_symmetric": Compose(steps: 200, symmetric: true, core: ((40, 27), 0.5, 18)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
@@ -1032,12 +1044,19 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
-        // Earlier candidates (complexes, spire, Manifold Garden tower, the
-        // building-scale lattices) are still defined above; add a line here
-        // to bring one back.
-        (name: "city_tall", form: "city_tall", footprint: 880, variants: 1,
-            note: "Hanging city: 96 x 45 m slots, 14 levels, decks with open buildings, walkways"),
-        (name: "city_soaring", form: "city_soaring", footprint: 880, variants: 1, note: "20 levels, fewer cores"),
-        (name: "city_hanging", form: "city_hanging", footprint: 880, variants: 1, note: "Mostly hung, more cores"),
+        // Earlier candidates (complexes, spire, cities, the building-scale
+        // lattices) are still defined above; add a line here to bring one
+        // back.
+        (name: "unit_court_old", form: "unit_court_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
+        (name: "unit_court", form: "unit_court", footprint: 110, variants: 2, note: "Reworked"),
+        (name: "unit_terraces_old", form: "unit_terraces_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
+        (name: "unit_terraces", form: "unit_terraces", footprint: 110, variants: 2, note: "Reworked"),
+        (name: "unit_gallery_old", form: "unit_gallery_old", footprint: 200, variants: 1, note: "The first version: floors on columns"),
+        (name: "unit_gallery", form: "unit_gallery", footprint: 200, variants: 2, note: "Reworked"),
+        (name: "unit_tower_old", form: "unit_tower_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
+        (name: "unit_tower", form: "unit_tower", footprint: 110, variants: 2, note: "Reworked"),
+        (name: "unit_plaza_old", form: "unit_plaza_old", footprint: 110, variants: 1, note: "The first version: floors on columns"),
+        (name: "unit_plaza", form: "unit_plaza", footprint: 110, variants: 2, note: "Reworked"),
+        (name: "mg_tower", form: "mg_tower", footprint: 42, variants: 1, note: "Yardstick: the Manifold Garden tower"),
     ],
 )

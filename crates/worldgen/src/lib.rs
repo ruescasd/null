@@ -24,6 +24,7 @@ pub mod rack;
 pub mod stairs;
 pub mod relief;
 pub mod sites;
+pub mod slabunit;
 pub mod structure;
 pub mod tower;
 pub mod world;
