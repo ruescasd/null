@@ -801,6 +801,13 @@
         "back_aligned": Backdrop(fore: Some("field"), kind: "stairs", count: 4, varied: false),
         "back_plain": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true),
         "back_mixed": Backdrop(fore: Some("field"), kind: "mixed", count: 5, varied: true),
+        "back_ribs": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "ribs"),
+        "back_ridges": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "ridges"),
+        "back_flight": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "flight"),
+        "back_crossing": Backdrop(fore: Some("field"), kind: "crossing", count: 4),
+        // The hanging city with colossal ramps rising into it.
+        "city_ramps": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35, ramps: 6),
+        "city_ramps_ridges": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35, ramps: 6, ramp_grain: "ridges"),
         "complex_mixed_symmetric": Compose(steps: 200, symmetric: true, core: ((40, 27), 0.5, 18)),
         "complex_huge_symmetric": Compose(steps: 110, symmetric: true),
         // Shapes made of themselves (lab). A gate made of gates, drawn with
@@ -1058,10 +1065,10 @@
     lab: [
         // The backdrop lab (the unit lab and earlier candidates are still
         // defined above; add a line here to bring one back).
-        (name: "back_several", form: "back_several", footprint: 1300, variants: 1, note: "Four colossal stepped stairs, every which way"),
-        (name: "back_one", form: "back_one", footprint: 1300, variants: 1, note: "One"),
-        (name: "back_aligned", form: "back_aligned", footprint: 1300, variants: 1, note: "Four, all one way"),
-        (name: "back_plain", form: "back_plain", footprint: 1300, variants: 1, note: "Four plain wedges (the original look)"),
-        (name: "back_mixed", form: "back_mixed", footprint: 1300, variants: 1, note: "Stairs, leaning slabs, leaning pylons"),
+        (name: "back_plain", form: "back_plain", footprint: 1300, variants: 1, note: "Plain wedges (the control)"),
+        (name: "back_ribs", form: "back_ribs", footprint: 1300, variants: 1, note: "Wedges ribbed across"),
+        (name: "back_ridges", form: "back_ridges", footprint: 1300, variants: 1, note: "Wedges with ridges up them"),
+        (name: "back_flight", form: "back_flight", footprint: 1300, variants: 1, note: "Wedges with a human-scale flight up the middle"),
+        (name: "back_crossing", form: "back_crossing", footprint: 1300, variants: 1, note: "Plain wedges crossing in pairs"),
     ],
 )

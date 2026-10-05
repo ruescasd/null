@@ -50,6 +50,9 @@ pub struct Settings {
     /// A city: each cell is a deck with buildings on it (see
     /// `cellunit.rs`), joined by walkways and stairs (0: plain cells).
     pub content: u32,
+    /// Colossal wedges rising from the ground to decks near the edge.
+    pub ramps: u32,
+    pub ramp_grain: crate::mega::Grain,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -717,6 +720,43 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
             }
         }
     }
+    // Ramps: colossal wedges from the ground up to decks near the edge, each
+    // meeting a deck's outer side, turned off the grid.
+    if s.ramps > 0 {
+        let reach = |k: &Key| (k.0 as f32).hypot(k.2 as f32);
+        let mut outer: Vec<Key> = groups.iter().flat_map(|g| g.0.iter().copied()).filter(|k| k.1 >= 2).collect();
+        outer.sort_by(|a, b| reach(b).total_cmp(&reach(a)).then(a.cmp(b)));
+        outer.truncate((outer.len() / 3).max(s.ramps as usize));
+        let ex = w * 0.5 - margin;
+        let mut used = std::collections::HashSet::new();
+        for e in 0..s.ramps {
+            if outer.is_empty() {
+                break;
+            }
+            let pick = (r(e as i32, 11, 300) * outer.len() as f32) as usize % outer.len();
+            let k = outer[pick];
+            if !used.insert((k.0, k.2)) {
+                continue;
+            }
+            // The deck's outer side, the way the cell lies from the middle.
+            let away = Vec2::new(k.0 as f32, k.2 as f32).normalize_or(Vec2::X);
+            let side = if away.x.abs() > away.y.abs() { Vec2::new(away.x.signum(), 0.0) } else { Vec2::new(0.0, away.y.signum()) };
+            let edge = at(k.0, k.2) + Vec3::new(side.x, 0.0, side.y) * ex;
+            let top = surface(k);
+            // Off the grid: turned a little from straight out.
+            let out_angle = side.y.atan2(side.x) + (r(e as i32, 12, 301) - 0.5) * 1.1;
+            let slope = 0.45 + r(e as i32, 13, 302) * 0.25;
+            let run = top / slope.tan();
+            let width = 40.0 + r(e as i32, 14, 303) * 50.0;
+            let mut local = Vec::new();
+            crate::mega::wedge(&mut local, run, top, width, s.ramp_grain, tone + 0.02);
+            // Its +x (rising) points back in towards the deck.
+            let heading_in = out_angle + std::f32::consts::PI;
+            let turn = Quat::from_rotation_y(-heading_in);
+            let foot = edge - turn * Vec3::X * run;
+            out.extend(local.into_iter().map(|q| Solid { center: foot + turn * q.center, rotation: turn * q.rotation, ..q }));
+        }
+    }
     let rot = Quat::from_rotation_y((-dir.y).atan2(dir.x));
     out.into_iter().map(|s| Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }).collect()
 }
@@ -726,7 +766,20 @@ mod tests {
     use super::*;
 
     fn settings() -> Settings {
-        Settings { cell: (24.0, 18.0), levels: 8, fill: 0.35, cluster: 0.5, thin: 0.3, hang: 0.4, vary: 0.2, cores: 0.5, bars: 0.5, content: 0 }
+        Settings {
+            cell: (24.0, 18.0),
+            levels: 8,
+            fill: 0.35,
+            cluster: 0.5,
+            thin: 0.3,
+            hang: 0.4,
+            vary: 0.2,
+            cores: 0.5,
+            bars: 0.5,
+            content: 0,
+            ramps: 0,
+            ramp_grain: crate::mega::Grain::None,
+        }
     }
 
     #[test]

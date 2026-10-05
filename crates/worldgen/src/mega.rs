@@ -26,15 +26,41 @@ const FOUNDATION: f32 = 8.0;
 pub enum Kind {
     Stairs,
     Wedges,
+    /// Wedges in pairs crossing one another.
+    Crossing,
     Slabs,
     Pylons,
     Mixed,
+}
+
+/// Finer grain on a wedge's slope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grain {
+    None,
+    /// Ribs across the slope.
+    Ribs,
+    /// Ridges running up it.
+    Ridges,
+    /// A human-scale flight up its middle.
+    Flight,
+}
+
+impl Grain {
+    pub fn from_name(name: &str) -> Grain {
+        match name {
+            "ribs" => Grain::Ribs,
+            "ridges" => Grain::Ridges,
+            "flight" => Grain::Flight,
+            _ => Grain::None,
+        }
+    }
 }
 
 impl Kind {
     pub fn from_name(name: &str) -> Kind {
         match name {
             "wedges" => Kind::Wedges,
+            "crossing" => Kind::Crossing,
             "slabs" => Kind::Slabs,
             "pylons" => Kind::Pylons,
             "mixed" => Kind::Mixed,
@@ -74,8 +100,55 @@ fn stair(out: &mut Vec<Solid>, run: f32, rise: f32, width: f32, steps: i32, tone
     }
 }
 
+/// A plain sloped solid in its own frame: its foot at x = 0, rising along +x
+/// to `rise` at `run` (a sheer face there), `width` wide, from below the
+/// ground; with `grain` on its slope (drawn at every distance: grain is
+/// what reads from afar).
+pub fn wedge(out: &mut Vec<Solid>, run: f32, rise: f32, width: f32, grain: Grain, tone: f32) {
+    out.push(Solid { wedge: true, ..boxed(Vec3::new(run * 0.5, (rise - FOUNDATION) * 0.5, 0.0), Vec3::new(run * 0.5, (rise + FOUNDATION) * 0.5, width * 0.5), Quat::IDENTITY, tone) });
+    let slope = rise.atan2(run);
+    let length = (run * run + rise * rise).sqrt();
+    let lie = Quat::from_rotation_z(slope);
+    let normal = lie * Vec3::Y;
+    let along = lie * Vec3::X;
+    let mid = Vec3::new(run * 0.5, rise * 0.5, 0.0);
+    match grain {
+        Grain::None => {}
+        Grain::Ribs => {
+            let n = (length / 24.0) as i32;
+            for i in 1..n {
+                let c = along * (length * i as f32 / n as f32) + normal * 1.2;
+                out.push(Solid { ..boxed(c, Vec3::new(1.0, 1.2, width * 0.5 + 0.8), lie, tone + 0.04) });
+            }
+        }
+        Grain::Ridges => {
+            for k in [-0.38f32, -0.13, 0.13, 0.38] {
+                let c = mid + normal * 1.5 + Vec3::Z * (k * width);
+                out.push(boxed(c, Vec3::new(length * 0.5, 1.5, 1.4), lie, tone + 0.04));
+            }
+        }
+        Grain::Flight => {
+            // Steps 0.45 m high up a strip in the middle, proud of the slope
+            // by a step at most; low parapets either side.
+            let steps = (rise / 0.45).round() as i32;
+            let tread = run / steps as f32;
+            let half = (width * 0.06).clamp(3.0, 8.0);
+            for i in 0..steps {
+                let (x0, x1) = (tread * i as f32, tread * (i + 1) as f32);
+                let top = 0.45 * (i + 1) as f32;
+                let low = rise * x0 / run - 1.0;
+                out.push(Solid { ..boxed(Vec3::new((x0 + x1) * 0.5, (top + low) * 0.5, 0.0), Vec3::new((x1 - x0) * 0.5 + 0.01, (top - low) * 0.5, half), Quat::IDENTITY, tone + 0.05) });
+            }
+            for sgn in [-1.0f32, 1.0] {
+                let c = mid + normal * 0.9 + Vec3::Z * (sgn * (half + 0.4));
+                out.push(Solid { ..boxed(c, Vec3::new(length * 0.5, 0.9, 0.4), lie, tone + 0.06) });
+            }
+        }
+    }
+}
+
 /// The backdrop's solids, spread behind `origin` (towards +z).
-pub fn backdrop(origin: Vec3, kind: Kind, count: u32, varied: bool, tone: f32, seed: u32) -> Vec<Solid> {
+pub fn backdrop(origin: Vec3, kind: Kind, count: u32, varied: bool, grain: Grain, tone: f32, seed: u32) -> Vec<Solid> {
     let r = |a: u32, b: i32| hash01(a as i32, b, 0x3e6a, seed);
     let mut out = Vec::new();
     let n = count.max(1);
@@ -86,11 +159,21 @@ pub fn backdrop(origin: Vec3, kind: Kind, count: u32, varied: bool, tone: f32, s
         let at = Vec2::new((t - 0.5) * 900.0 + (r(e, 1) - 0.5) * 120.0, 650.0 + r(e, 2) * 350.0);
         // Which way: rising away (their tall ends into the sky behind),
         // turned every which way, or all the same way.
-        let heading = if varied { FRAC_PI_2 + (r(e, 3) - 0.5) * 1.8 } else { FRAC_PI_2 };
+        let mut heading = if varied { FRAC_PI_2 + (r(e, 3) - 0.5) * 1.8 } else { FRAC_PI_2 };
+        let mut at = at;
+        // Crossing: in pairs at one place, turned well apart.
+        if kind == Kind::Crossing {
+            let pair = e / 2;
+            let t = if n <= 2 { 0.5 } else { pair as f32 / ((n - 1) / 2).max(1) as f32 };
+            at = Vec2::new((t - 0.5) * 700.0, 700.0 + r(pair, 2) * 250.0);
+            let spread = 0.55 + r(pair, 9) * 0.35;
+            heading = FRAC_PI_2 + (r(pair, 3) - 0.5) * 0.6 + if e % 2 == 0 { spread } else { -spread };
+        }
         // (The frames' +x is turned to `heading`, measured from +x towards +z.)
         let yaw = Quat::from_rotation_y(-heading);
         let kind = match kind {
             Kind::Mixed => [Kind::Stairs, Kind::Slabs, Kind::Pylons, Kind::Stairs][e as usize % 4],
+            Kind::Crossing => Kind::Wedges,
             k => k,
         };
         let shade = tone + (r(e, 4) - 0.5) * 0.04;
@@ -103,8 +186,7 @@ pub fn backdrop(origin: Vec3, kind: Kind, count: u32, varied: bool, tone: f32, s
                 if kind == Kind::Stairs {
                     stair(&mut local, run, rise, width, 26 + (r(e, 8) * 10.0) as i32, shade);
                 } else {
-                    // A plain sloped solid: tall side (+x) at the top end.
-                    local.push(Solid { wedge: true, ..boxed(Vec3::new(run * 0.5, (rise - FOUNDATION) * 0.5, 0.0), Vec3::new(run * 0.5, (rise + FOUNDATION) * 0.5, width * 0.5), Quat::IDENTITY, shade) });
+                    wedge(&mut local, run, rise, width, grain, shade);
                 }
                 // The flight's foot at its place, rising away from it.
                 for s in &mut local {
@@ -139,7 +221,7 @@ pub fn backdrop(origin: Vec3, kind: Kind, count: u32, varied: bool, tone: f32, s
                     y += 60.0;
                 }
             }
-            Kind::Mixed => unreachable!(),
+            Kind::Mixed | Kind::Crossing => unreachable!(),
         }
         let place = origin + Vec3::new(at.x, 0.0, at.y);
         out.extend(local.into_iter().map(|s| Solid { center: place + yaw * s.center, rotation: yaw * s.rotation, ..s }));

@@ -91,6 +91,13 @@ pub enum Form {
         /// this many operations per slot (0: plain cells).
         #[serde(default)]
         content: u32,
+        /// Colossal wedges rising from the ground into the city, each to a
+        /// deck near its edge, at angles off the grid.
+        #[serde(default)]
+        ramps: u32,
+        /// Finer grain on the ramps' slopes: none, ribs, ridges, flight.
+        #[serde(default)]
+        ramp_grain: String,
         #[serde(default)]
         tone: f32,
     },
@@ -108,6 +115,9 @@ pub enum Form {
         count: u32,
         #[serde(default)]
         varied: bool,
+        /// Finer grain on wedges' slopes: none, ribs, ridges, flight.
+        #[serde(default)]
+        grain: String,
         #[serde(default)]
         tone: f32,
     },
@@ -678,7 +688,7 @@ impl Grower<'_> {
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
             }
-            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, tone: t } => {
+            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, ramps, ramp_grain, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
                 let settings = crate::lattice::Settings {
                     cell: *cell,
@@ -691,6 +701,8 @@ impl Grower<'_> {
                     cores: *cores,
                     bars: *bars,
                     content: *content,
+                    ramps: *ramps,
+                    ramp_grain: crate::mega::Grain::from_name(ramp_grain),
                 };
                 let solids = crate::lattice::lattice(Vec3::new(center.x, floor, center.y), dir, half, settings, tone + t, seed);
                 if solids.len() > self.budget {
@@ -699,7 +711,7 @@ impl Grower<'_> {
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
             }
-            Form::Backdrop { fore, fore_half, kind, count, varied, tone: t } => {
+            Form::Backdrop { fore, fore_half, kind, count, varied, grain, tone: t } => {
                 let Some((center, _, _)) = inscribed_box(poly) else { return };
                 if let Some(fore) = fore {
                     let h = *fore_half;
@@ -708,7 +720,8 @@ impl Grower<'_> {
                     self.grow(fore, &square, floor, tone, 0xf0e, depth + 1);
                 }
                 let kind = crate::mega::Kind::from_name(kind);
-                self.out.solids.extend(crate::mega::backdrop(Vec3::new(center.x, floor, center.y), kind, *count, *varied, tone + t, seed));
+                let grain = crate::mega::Grain::from_name(grain);
+                self.out.solids.extend(crate::mega::backdrop(Vec3::new(center.x, floor, center.y), kind, *count, *varied, grain, tone + t, seed));
             }
             Form::Field { n, tone: t } => {
                 let Some((center, _, _)) = inscribed_box(poly) else { return };
