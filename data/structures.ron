@@ -805,6 +805,10 @@
         "back_ridges": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "ridges"),
         "back_flight": Backdrop(fore: Some("field"), kind: "wedges", count: 4, varied: true, grain: "flight"),
         "back_crossing": Backdrop(fore: Some("field"), kind: "crossing", count: 4),
+        // Reactor city: a hanging city round a central void in which a
+        // colossal reactor rises, cables hung from it to the city.
+        "reactor_square": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.4, void: 440, reactor: true, cables: 26),
+        "reactor_round": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.45, radial: Some((300, 5)), reactor: true, cables: 28),
         // The hanging city with colossal ramps rising into it.
         "city_ramps": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35, ramps: 6),
         "city_ramps_ridges": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35, ramps: 6, ramp_grain: "ridges"),
@@ -1063,12 +1067,10 @@
     // Batch 3: pipework with round pipes, brackets, flanges and plates,
     //   along members, on the truss, mountain and organ only.
     lab: [
-        // The backdrop lab (the unit lab and earlier candidates are still
-        // defined above; add a line here to bring one back).
-        (name: "back_plain", form: "back_plain", footprint: 1300, variants: 1, note: "Plain wedges (the control)"),
-        (name: "back_ribs", form: "back_ribs", footprint: 1300, variants: 1, note: "Wedges ribbed across"),
-        (name: "back_ridges", form: "back_ridges", footprint: 1300, variants: 1, note: "Wedges with ridges up them"),
-        (name: "back_flight", form: "back_flight", footprint: 1300, variants: 1, note: "Wedges with a human-scale flight up the middle"),
-        (name: "back_crossing", form: "back_crossing", footprint: 1300, variants: 1, note: "Plain wedges crossing in pairs"),
+        // Reactor city (the backdrop lab, the unit lab and earlier
+        // candidates are still defined above; add a line here to bring one
+        // back).
+        (name: "reactor_square", form: "reactor_square", footprint: 1300, variants: 1, note: "A square hanging city round a void, a reactor in it"),
+        (name: "reactor_round", form: "reactor_round", footprint: 1300, variants: 1, note: "The city in rings round the reactor"),
     ],
 )

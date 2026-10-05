@@ -21,6 +21,7 @@ pub mod lab;
 pub mod lattice;
 pub mod mega;
 pub mod plates;
+pub mod reactor;
 pub mod rack;
 pub mod stairs;
 pub mod relief;

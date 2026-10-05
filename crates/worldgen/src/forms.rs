@@ -98,6 +98,17 @@ pub enum Form {
         /// Finer grain on the ramps' slopes: none, ribs, ridges, flight.
         #[serde(default)]
         ramp_grain: String,
+        /// A void this many metres across the middle.
+        #[serde(default)]
+        void: f32,
+        /// Round: rings round a void of this radius (metres), this many.
+        #[serde(default)]
+        radial: Option<(f32, u32)>,
+        /// A reactor in the void, and cables from it to the city.
+        #[serde(default)]
+        reactor: bool,
+        #[serde(default)]
+        cables: u32,
         #[serde(default)]
         tone: f32,
     },
@@ -688,7 +699,7 @@ impl Grower<'_> {
                 self.budget -= solids.len();
                 self.out.solids.extend(solids);
             }
-            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, ramps, ramp_grain, tone: t } => {
+            Form::Lattice { cell, levels, fill, cluster, thin, hang, vary, cores, bars, content, ramps, ramp_grain, void, radial, reactor, cables, tone: t } => {
                 let Some((center, dir, half)) = inscribed_box(poly) else { return };
                 let settings = crate::lattice::Settings {
                     cell: *cell,
@@ -703,6 +714,10 @@ impl Grower<'_> {
                     content: *content,
                     ramps: *ramps,
                     ramp_grain: crate::mega::Grain::from_name(ramp_grain),
+                    void: *void,
+                    radial: *radial,
+                    reactor: *reactor,
+                    cables: *cables,
                 };
                 let solids = crate::lattice::lattice(Vec3::new(center.x, floor, center.y), dir, half, settings, tone + t, seed);
                 if solids.len() > self.budget {

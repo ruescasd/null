@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use std::f32::consts::TAU;
+
 use glam::{Quat, Vec2, Vec3};
 
 use crate::noise::hash01;
@@ -53,6 +55,15 @@ pub struct Settings {
     /// Colossal wedges rising from the ground to decks near the edge.
     pub ramps: u32,
     pub ramp_grain: crate::mega::Grain,
+    /// A void this many metres across the middle, nothing in it.
+    pub void: f32,
+    /// Round: the lattice bent into rings round a void (its radius in
+    /// metres) and the number of rings; its rows run round the rings.
+    pub radial: Option<(f32, u32)>,
+    /// A reactor rising in the void, and this many cables hung from it to
+    /// the cells round it.
+    pub reactor: bool,
+    pub cables: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,6 +100,8 @@ struct Lattice {
     /// Each core: its column and its height in slots.
     cores: Vec<(i32, i32, i32)>,
     thin: f32,
+    /// The void in the middle, in slots across (none: 0).
+    void: f32,
 }
 
 impl Lattice {
@@ -107,7 +120,7 @@ impl Lattice {
     }
 
     fn inside(&self, (x, y, z): Key) -> bool {
-        x.abs() <= self.nx && z.abs() <= self.nz && (0..self.ny).contains(&y)
+        x.abs() <= self.nx && z.abs() <= self.nz && (0..self.ny).contains(&y) && (x as f32).hypot(z as f32) >= self.void
     }
 
     fn empty(&self, k: Key) -> bool {
@@ -218,23 +231,35 @@ impl Lattice {
 /// Grows the lattice's slots in a box `half` metres across.
 fn grow(half: Vec2, s: Settings, seed: u32) -> Lattice {
     let w = s.cell.0.max(4.0);
+    // Round: rings out from the void (x) by rows round them (z), as many
+    // rows as make the inner ring's cells about square.
+    let (nx, nz) = match s.radial {
+        Some((inner, rings)) => (((rings.max(1) as i32) - 1) / 2, ((TAU * (inner + w * 0.5) / w).round() as i32 - 1) / 2),
+        None => (((half.x / w - 0.5).floor() as i32).max(1), ((half.y / w - 0.5).floor() as i32).max(1)),
+    };
     let mut l = Lattice {
         slots: HashMap::new(),
-        nx: ((half.x / w - 0.5).floor() as i32).max(1),
-        nz: ((half.y / w - 0.5).floor() as i32).max(1),
+        nx,
+        nz,
         ny: s.levels.max(2) as i32,
         cores: Vec::new(),
         thin: s.thin,
+        void: if s.radial.is_some() { 0.0 } else { s.void / w * 0.5 },
     };
     let r = |a: i32, b: i32, c: i32| hash01(a * 7919 + c, b, 0x1a7, seed);
-    let focus = |x: i32, z: i32| 1.0 - (x as f32 / l.nx as f32).abs().max((z as f32 / l.nz as f32).abs());
+    // How central a column is: round, the inner rings (by the reactor);
+    // else the middle.
+    let radial = s.radial.is_some();
+    let focus = |x: i32, z: i32| {
+        if radial { 1.0 - (x + l.nx) as f32 / (2 * l.nx).max(1) as f32 } else { 1.0 - (x as f32 / l.nx as f32).abs().max((z as f32 / l.nz as f32).abs()) }
+    };
 
     // Cores: on every third slot, some of them, taller in the middle.
     let (ox, oz) = ((r(1, 2, 3) * 3.0) as i32, (r(4, 5, 6) * 3.0) as i32);
     let mut cores = Vec::new();
     for x in (-l.nx..=l.nx).filter(|x| (x + ox).rem_euclid(3) == 0) {
         for z in (-l.nz..=l.nz).filter(|z| (z + oz).rem_euclid(3) == 0) {
-            if r(x, z, 1) > s.cores {
+            if r(x, z, 1) > s.cores || !l.inside((x, 0, z)) {
                 continue;
             }
             let tall = 0.3 + 0.7 * (0.6 * focus(x, z) + 0.4 * r(x, z, 2));
@@ -242,7 +267,7 @@ fn grow(half: Vec2, s: Settings, seed: u32) -> Lattice {
         }
     }
     if cores.is_empty() {
-        cores.push((0, 0, l.ny));
+        cores.push((l.nx, 0, l.ny));
     }
     for &(x, z, top) in &cores {
         for y in 0..top {
@@ -333,7 +358,7 @@ fn grow(half: Vec2, s: Settings, seed: u32) -> Lattice {
 /// Cells joined into longer ones: runs of up to three slots along x or z
 /// (with chance `share`), all standing or all hung so that their decks are
 /// at one height. Each run and whether it lies along x.
-fn bars(l: &Lattice, share: f32, seed: u32) -> Vec<(Vec<Key>, bool)> {
+fn bars(l: &Lattice, share: f32, radial: bool, seed: u32) -> Vec<(Vec<Key>, bool)> {
     let r = |a: i32, b: i32, c: i32| hash01(a * 7919 + c, b, 0xba5, seed);
     let mut keys: Vec<Key> = l.slots.iter().filter(|(_, v)| matches!(v, Slot::Cell(_))).map(|(k, _)| *k).collect();
     keys.sort();
@@ -344,7 +369,7 @@ fn bars(l: &Lattice, share: f32, seed: u32) -> Vec<(Vec<Key>, bool)> {
         if !taken.insert(k) {
             continue;
         }
-        let along_x = r(k.0, k.2, k.1) < 0.5;
+        let along_x = radial || r(k.0, k.2, k.1) < 0.5;
         let want = if r(k.0, k.2, k.1 + 50) < share { 2 + (r(k.0, k.2, k.1 + 90) * 2.0) as usize } else { 1 };
         let d = if along_x { (1, 0) } else { (0, 1) };
         let mut run = vec![k];
@@ -368,7 +393,7 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
     let (w, h) = (s.cell.0.max(4.0), s.cell.1.max(3.0));
     let l = grow(half, s, seed);
     let r = |a: i32, b: i32, c: i32| hash01(a * 7919 + c, b, 0x1a7, seed);
-    let groups = bars(&l, s.bars, seed);
+    let groups = bars(&l, s.bars, s.radial.is_some(), seed);
     let mut group_of: HashMap<Key, usize> = HashMap::new();
     for (i, (run, _)) in groups.iter().enumerate() {
         for &k in run {
@@ -445,8 +470,17 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
     }
     // The cells: a box each in the lattice; a deck in a city, with a
     // complex composed on most (a few variants per length, reused).
-    let mut composed: HashMap<(crate::cellunit::Kind, usize, i32, u32), Vec<Solid>> = HashMap::new();
-    let deck_half = |len: usize| (len as f32 * w * 0.5 - margin, w * 0.5 - margin);
+    let mut composed: HashMap<(crate::cellunit::Kind, usize, i32, u32, i32), Vec<Solid>> = HashMap::new();
+    // Round: the rings and rows, and where a lattice point lies on them.
+    let rings = s.radial.map(|(inner, _)| (inner, TAU / (2 * l.nz + 1) as f32));
+    let polar = |p: Vec3| -> (Vec3, f32, f32) {
+        let (inner, step) = rings.unwrap_or((0.0, 0.0));
+        let radius = inner + p.x + (l.nx as f32 + 0.5) * w;
+        let angle = p.z / w * step;
+        (Vec3::new(radius * angle.cos(), p.y, radius * angle.sin()), angle, radius)
+    };
+    // What stands on the decks, when round, placed on the rings directly.
+    let mut placed: Vec<Solid> = Vec::new();
     for (i, (run, along_x)) in groups.iter().enumerate() {
         let (first, last) = (run[0], run[run.len() - 1]);
         let (ex, ez) = extent(first);
@@ -464,14 +498,26 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
         let kind = crate::cellunit::pick(len, r(i as i32, 9, 63));
         let storeys = ((ceiling(first) - y1 - 1.5) / 4.5).floor() as i32;
         let variant = (r(i as i32, 5, 61) * 3.0) as u32;
-        let content = composed.entry((kind, len, storeys, variant)).or_insert_with(|| {
-            crate::cellunit::unit(kind, deck_half(len), storeys, tone, seed ^ (len as u32 * 7919 + variant * 104_729 + storeys as u32 * 31))
+        let place = Vec3::new((lo.x + hi.x) * 0.5, y1, (lo.z + hi.z) * 0.5);
+        // Round, a deck is as wide across as its row is at its radius.
+        let (on_ring, angle, radius) = polar(place);
+        let across = match rings {
+            Some((_, step)) => radius * step * 0.5 - margin,
+            None => w * 0.5 - margin,
+        };
+        let half = (len as f32 * w * 0.5 - margin, across);
+        let content = composed.entry((kind, len, storeys, variant, across.round() as i32)).or_insert_with(|| {
+            crate::cellunit::unit(kind, half, storeys, tone, seed ^ (len as u32 * 7919 + variant * 104_729 + storeys as u32 * 31))
         });
         // Along the run, turned end for end at random.
         let flip = if r(i as i32, 7, 62) < 0.5 { std::f32::consts::PI } else { 0.0 };
         let turn = Quat::from_rotation_y(if *along_x { 0.0 } else { -std::f32::consts::FRAC_PI_2 } + flip);
-        let place = Vec3::new((lo.x + hi.x) * 0.5, y1, (lo.z + hi.z) * 0.5);
-        out.extend(content.iter().map(|s| Solid { center: place + turn * s.center, rotation: turn * s.rotation, ..*s }));
+        if rings.is_some() {
+            let turn = Quat::from_rotation_y(-angle) * turn;
+            placed.extend(content.iter().map(|s| Solid { center: on_ring + turn * s.center, rotation: turn * s.rotation, ..*s }));
+        } else {
+            out.extend(content.iter().map(|s| Solid { center: place + turn * s.center, rotation: turn * s.rotation, ..*s }));
+        }
     }
     if city {
         let ex = w * 0.5 - margin;
@@ -757,6 +803,65 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
             out.extend(local.into_iter().map(|q| Solid { center: foot + turn * q.center, rotation: turn * q.rotation, ..q }));
         }
     }
+    // Round: bend the lattice into its rings, each piece placed and turned
+    // at its own radius and stretched across to its row's width there.
+    if let Some((_, step)) = rings {
+        out = out
+            .into_iter()
+            .map(|q| {
+                let (center, angle, radius) = polar(q.center);
+                let mut half = q.half;
+                if q.rotation == Quat::IDENTITY && !q.round {
+                    half.z *= radius * step / w;
+                }
+                Solid { center, half, rotation: Quat::from_rotation_y(-angle) * q.rotation, ..q }
+            })
+            .collect();
+        out.extend(placed);
+    }
+    // The reactor in the void, and cables from it to the cells nearest it.
+    if s.reactor {
+        let void = match s.radial {
+            Some((inner, _)) => inner,
+            None => s.void * 0.5,
+        };
+        let radius = void * 0.55;
+        let height = l.ny as f32 * h * 1.25;
+        out.extend(crate::reactor::reactor(Vec3::ZERO, radius, height, tone));
+        // The cells nearest the void, and where each faces it.
+        let mut near: Vec<(Vec3, Vec3)> = Vec::new();
+        for g in &groups {
+            for &k in &g.0 {
+                let c = at(k.0, k.2);
+                let (point, facing) = match rings {
+                    Some(_) if k.0 == -l.nx => {
+                        let (p, _, _) = polar(c - Vec3::X * (w * 0.5 - margin) + Vec3::Y * (bottom(k) - 1.0));
+                        (p, -p.with_y(0.0).normalize_or_zero())
+                    }
+                    None if (k.0 as f32).hypot(k.2 as f32) < l.void + 1.6 => {
+                        let to = (-c).with_y(0.0).normalize_or_zero();
+                        let side = if to.x.abs() > to.z.abs() { Vec3::new(to.x.signum(), 0.0, 0.0) } else { Vec3::new(0.0, 0.0, to.z.signum()) };
+                        (c + side * (w * 0.5 - margin) + Vec3::Y * (bottom(k) - 1.0), side)
+                    }
+                    _ => continue,
+                };
+                if k.1 >= 1 {
+                    near.push((point, facing));
+                }
+            }
+        }
+        near.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
+        for e in 0..s.cables.min(near.len() as u32) {
+            let (point, facing) = near[(r(e as i32, 17, 400) * near.len() as f32) as usize % near.len()];
+            // From the drum, a little above, round towards the cell.
+            let toward = (point.with_y(0.0)).normalize_or_zero();
+            let toward = if toward == Vec3::ZERO { -facing } else { toward };
+            let from = toward * radius + Vec3::Y * (point.y + 30.0 + r(e as i32, 18, 401) * 120.0).min(height * 0.8);
+            let span = (point - from).length();
+            let thick = 2.5 + r(e as i32, 19, 402) * 3.5;
+            out.extend(crate::reactor::cable(from, point, span * (0.06 + 0.06 * r(e as i32, 20, 403)), thick, tone - 0.03));
+        }
+    }
     let rot = Quat::from_rotation_y((-dir.y).atan2(dir.x));
     out.into_iter().map(|s| Solid { center: origin + rot * s.center, rotation: rot * s.rotation, ..s }).collect()
 }
@@ -779,6 +884,10 @@ mod tests {
             content: 0,
             ramps: 0,
             ramp_grain: crate::mega::Grain::None,
+            void: 0.0,
+            radial: None,
+            reactor: false,
+            cables: 0,
         }
     }
 
