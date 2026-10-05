@@ -209,7 +209,9 @@ impl Bone {
                 Bone::Pelvis => p((0.47, 0.3), (0.42, 0.28), 0.26, 2),
                 Bone::Waist => p((0.4, 0.27), (0.38, 0.27), 0.35, 2),
                 Bone::Chest => p((0.38, 0.27), (0.55, 0.3), 0.4, 2),
-                Bone::Neck => p((0.16, 0.17), (0.15, 0.16), 0.13, 1),
+                // Flared at the base, which starts inside the chest: the
+                // trapezius sloping from the neck down to the shoulders.
+                Bone::Neck => p((0.34, 0.2), (0.15, 0.16), 0.13, 1),
                 Bone::Skull => p((0.2, 0.26), (0.17, 0.22), 0.31, 2),
                 Bone::UpperArm(_) => p((0.14, 0.14), (0.1, 0.1), b.upper_arm, 2),
                 Bone::Forearm(_) => p((0.1, 0.1), (0.07, 0.06), b.forearm, 1),
@@ -830,6 +832,7 @@ fn walk(
                 Bone::Pelvis => pose(pelvis - Vec3::Y * 0.13, pelvis + Vec3::Y * 0.13),
                 Bone::Waist => pose(pelvis, waist),
                 Bone::Chest => pose(waist, shoulders),
+                Bone::Neck if human => pose(shoulders - forward * 0.05 - Vec3::Y * 0.05, neck_end),
                 Bone::Neck => pose(shoulders - forward * 0.05, neck_end),
                 Bone::Skull if creature => pose(neck_end - skull_dir * 0.08, neck_end + skull_dir * 0.52),
                 // Sunk into the neck, so it sits down on the shoulders
