@@ -62,7 +62,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -85,6 +85,12 @@ const SHARD_SPEED: f32 = 260.0;
 const SWARMER_HEALTH: f32 = 3.0;
 const SWARMER_RADIUS: f32 = 0.55;
 const SWARMER_SPEED: f32 = 8.0;
+/// With `--opt dark`: faster, to keep up with a running player.
+const DARK_SPEED: f32 = 13.0;
+/// How far off a swarmer starts to darken the world, and how near it does
+/// so fully.
+const GLOOM_REACH: f32 = 20.0;
+const GLOOM_FULL: f32 = 3.0;
 const DART_SPEED: f32 = 24.0;
 const BITE: f32 = 8.0;
 
@@ -246,7 +252,13 @@ fn setup(
         reflectance: 0.6,
         ..default()
     });
-    let glow = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(9000.0, 9000.0, 9000.0), ..default() });
+    // (Not hazed: in the swarm's darkness the cores are what shows.)
+    let glow = materials.add(StandardMaterial {
+        base_color: Color::BLACK,
+        emissive: LinearRgba::rgb(9000.0, 9000.0, 9000.0),
+        fog_enabled: false,
+        ..default()
+    });
     let assets = Assets3 {
         shard: shard.clone(),
         swarmer,
@@ -547,7 +559,8 @@ fn swarm(
         let to = target - p;
         let distance = to.length().max(0.01);
         // Hunt, keep apart, wobble.
-        let mut want = to / distance * SWARMER_SPEED;
+        let speed = if args.opt("dark") { DARK_SPEED } else { SWARMER_SPEED };
+        let mut want = to / distance * speed;
         // Hold the player's height (seen against the ground, not the sky).
         want.y += (target.y + 0.3 - p.y) * 2.0;
         for &q in &positions {
@@ -585,7 +598,32 @@ fn swarm(
     }
 }
 
-/// A swarmer that reaches the player bites, and bounces off.
+/// `--opt dark`: the swarm does not bite; it brings darkness. Each swarmer
+/// within reach darkens the world, more the nearer it is, and together they
+/// all but blind you; it closes in fast and lifts slowly. (Those gathering
+/// into a hunter count too: it forms in the dark, and the dark lifts off it.)
+fn gloom(
+    time: Res<Time>,
+    args: Res<Args>,
+    player: Single<&Transform, With<Player>>,
+    swarm: Query<&Transform, (With<Swarmer>, Without<Player>)>,
+    mut gloom: ResMut<crate::look::Gloom>,
+) {
+    if !args.opt("dark") {
+        return;
+    }
+    let dt = time.delta_secs().min(0.05);
+    let sum: f32 = swarm
+        .iter()
+        .map(|t| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
+        .sum();
+    let target = 1.0 - (-0.35 * sum).exp();
+    let rate = if target > gloom.0 { 2.0 } else { 0.7 };
+    gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
+}
+
+/// A swarmer that reaches the player bites, and bounces off. (`--opt dark`:
+/// it only bounces off.)
 fn bite(
     mut commands: Commands,
     args: Res<Args>,
@@ -603,6 +641,9 @@ fn bite(
             s.bite_in = 1.0;
             s.darting = 0.0;
             s.velocity = (Vec3::new(d.x, 0.0, d.z).normalize_or(Vec3::X) + Vec3::Y * 0.15) * 12.0;
+            if args.opt("dark") {
+                continue;
+            }
             player.1.health -= BITE;
             director.hurt = 1.0;
             if args.opt("hurtsound") {

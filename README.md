@@ -38,6 +38,8 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt peace                               no swarm
     --opt swarm                               the swarm alone: it never assembles into hunters
+    --opt dark                                the swarm does not bite: it brings darkness, closing in the nearer and more
+                                              of them there are (--set gloom_near=6 metres at its darkest), and is faster
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
                                               times tougher / hunters circle at a distance (--set tame_at=14,

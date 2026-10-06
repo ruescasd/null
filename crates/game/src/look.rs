@@ -47,11 +47,12 @@ impl Plugin for LookPlugin {
             fog_day: args.num("fog_day", 0.04),
             fog_night: args.num("fog_night", 0.01),
         })
+        .init_resource::<Gloom>()
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight::NONE)
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .add_systems(Startup, setup)
-        .add_systems(Update, (sky_controls, move_suns, hud).chain())
+        .add_systems(Update, (sky_controls, move_suns, darken, hud).chain())
         .add_systems(Update, flicker);
     }
 }
@@ -346,6 +347,33 @@ fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut sky: ResMu
     }
     if !sky.paused {
         sky.time += sky.speed * dt;
+    }
+}
+
+/// The swarm's darkness (`--opt dark`; see `combat::gloom`): 0 clear, 1 all
+/// but blind.
+#[derive(Resource, Default)]
+pub struct Gloom(pub f32);
+
+/// Darkness closing in: the haze draws in to a few metres (`--set
+/// gloom_near`) and goes black, and the stars go out. What glows (the
+/// swarm's cores, eyeshine) is not hazed, so it is all that shows.
+fn darken(args: Res<Args>, gloom: Res<Gloom>, camera: Single<(Option<&mut DistanceFog>, &mut Skybox), With<FlyCam>>) {
+    let g = gloom.0;
+    let (fog, mut sky) = camera.into_inner();
+    sky.brightness = 900.0 * (1.0 - g) * (1.0 - g);
+    if let Some(mut fog) = fog {
+        let visibility = args.num("fog", 4500.0);
+        let near = args.num("gloom_near", 6.0);
+        // (Closing in fast at first: a little gloom already hides the far
+        // distance, a quarter of it leaves about twenty metres.)
+        fog.falloff = FogFalloff::from_visibility_squared(1.0 / (1.0 / visibility + g * (1.0 / near - 1.0 / visibility)));
+        // (Darker, not thinner: the alpha is how strongly the haze applies.)
+        let c = fog.color.to_linear() * (1.0 - g);
+        fog.color = Color::linear_rgb(c.red, c.green, c.blue);
+        // (The glow towards the suns goes first: it is lit by them, and
+        // would light the dark.)
+        fog.directional_light_color.set_alpha(args.num("fog_glow", 0.15) * (1.0 - g / 0.25).max(0.0));
     }
 }
 

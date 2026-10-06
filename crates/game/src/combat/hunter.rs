@@ -651,7 +651,13 @@ fn spawn_hunter(
         }
     }
     // Pale pinprick eyes, flaring when it looks at you (see `flesh`).
-    let eyes = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, ..default() });
+    // (Not hazed, so eyeshine shows in the swarm's darkness.)
+    let eyes = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.8, 0.8, 0.8),
+        perceptual_roughness: 0.4,
+        fog_enabled: false,
+        ..default()
+    });
     let (across, up, along) = HEAD_EYES[angler as usize];
     for side in [-1.0f32, 1.0] {
         commands.spawn((
