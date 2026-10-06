@@ -26,8 +26,8 @@ use crate::{
 };
 
 mod hunter;
+mod forms;
 mod ichor;
-mod swarmlab;
 mod weapon;
 
 pub struct CombatPlugin;
@@ -60,14 +60,14 @@ impl Plugin for CombatPlugin {
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
-            .add_systems(Startup, (ichor::setup, hunter::setup))
+            .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup))
             .add_systems(
                 Update,
                 (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
-            .add_systems(Update, swarmlab::lab)
+            .add_systems(Update, (forms::lab, forms::gaze).chain().after(swarm))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -506,12 +506,17 @@ fn swarm(
     streamer: Res<Streamer>,
     world: Res<WorldGen>,
     assets: Res<Assets3>,
+    kit: Res<forms::Kit>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<Director>,
     player: Single<(&Transform, &Player, &FlyCam)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let (ptransform, _, fly) = *player;
+    // (`--opt bud`, `face`, `chandelier`: the swarm in that form; see
+    // `forms.rs`.)
+    let form = forms::Form::chosen(&args);
     let target = ptransform.translation - Vec3::Y * 0.3;
     // (`--opt fight` keeps it going in a capture, and fires the gun.)
     let capture = args.shot.is_some() && !args.opt("fight");
@@ -543,9 +548,15 @@ fn swarm(
             let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
             let p = base + Vec3::new(r(0), 0.0, r(1)) * 8.0;
             let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
+            let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0 };
+            if let Some(form) = form {
+                let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id();
+                forms::build(&mut commands, &kit, &mut materials, root, form);
+                continue;
+            }
             commands
                 .spawn((
-                    Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0 },
+                    swarmer,
                     Mesh3d(assets.swarmer.clone()),
                     MeshMaterial3d(assets.dark.clone()),
                     Transform::from_translation(p),
@@ -565,7 +576,7 @@ fn swarm(
         let to = target - p;
         let distance = to.length().max(0.01);
         if args.opt("dark") {
-            stalk(&world, ptransform, &positions, &mut transform, &mut s, dt);
+            stalk(&world, ptransform, &positions, &mut transform, &mut s, form, dt);
             continue;
         }
         // Hunt, keep apart, wobble.
@@ -602,8 +613,12 @@ fn swarm(
             s.velocity.y = s.velocity.y.max(0.0);
         }
         transform.translation = next;
-        transform.rotate_local_y(dt * (3.0 + s.velocity.length() * 0.3));
-        transform.rotate_local_x(dt * 1.7);
+        if let Some(form) = form {
+            face(&mut transform, ptransform.translation, form, dt);
+        } else {
+            transform.rotate_local_y(dt * (3.0 + s.velocity.length() * 0.3));
+            transform.rotate_local_x(dt * 1.7);
+        }
     }
 }
 
@@ -612,9 +627,13 @@ fn swarm(
 /// there and waits, dead still; looked at, it stops dead where it is. Turn
 /// round and they are all still; turn back and they have moved behind you
 /// again. Arriving in front of you, they swing wide round your side.
-fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
+fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, form: Option<forms::Form>, dt: f32) {
     let p = transform.translation;
     let eye = player.translation;
+    // (A form turns to face you, even while it stands still.)
+    if let Some(form) = form {
+        face(transform, eye, form, dt);
+    }
     let seen = (p - eye).normalize_or(Vec3::Y).dot(*player.forward()) > 0.55;
     if seen && p.distance(eye) < STILL_WITHIN {
         s.velocity = Vec3::ZERO;
@@ -652,9 +671,25 @@ fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &m
     }
     transform.translation = next;
     // (Turning only while it moves; waiting, it is still.)
-    let moving = s.velocity.length();
-    transform.rotate_local_y(dt * moving * 0.5);
-    transform.rotate_local_x(dt * moving * 0.2);
+    if form.is_none() {
+        let moving = s.velocity.length();
+        transform.rotate_local_y(dt * moving * 0.5);
+        transform.rotate_local_x(dt * moving * 0.2);
+    }
+}
+
+/// A swarmer with a form turns, slowly, to face you (upright, or straight at
+/// you).
+fn face(transform: &mut Transform, eye: Vec3, form: forms::Form, dt: f32) {
+    let mut to = eye - transform.translation;
+    if form.upright() {
+        to.y = 0.0;
+    }
+    if to.length_squared() < 1e-4 {
+        return;
+    }
+    let want = Transform::IDENTITY.looking_to(to, Vec3::Y).rotation;
+    transform.rotation = transform.rotation.slerp(want, (dt * 3.0).min(1.0));
 }
 
 /// `--opt dark`: the swarm does not bite; it brings darkness. Each swarmer
