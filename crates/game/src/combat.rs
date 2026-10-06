@@ -133,7 +133,7 @@ struct Assets3 {
     /// Pale and matte: the markings on creatures that do not glow.
     pale: Handle<StandardMaterial>,
     /// The shot (a recording; `--opt oldgun` for the synthesised one), and
-    /// the reload as the cage turns.
+    /// the reload as the pump racks.
     gun: Handle<AudioSource>,
     reload: Handle<AudioSource>,
     shatter: Handle<AudioSource>,

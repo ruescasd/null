@@ -1,22 +1,24 @@
-//! The shard shotgun in view: an angular receiver and grip; a barrel whose
-//! middle is an open cage of six rails, a bundle of pale shards (the
-//! ammunition) lying in it, its front and back shrouded; a crown of prongs at
-//! the muzzle. Dark metal, a thin pale stripe along each side.
+//! The shard shotgun in view, a pump-action: a narrow slab of a receiver
+//! with a rail on top, a bolted plate and an ejection port (a pale shard
+//! showing in it) on the side you see; a barrel over a magazine tube, a
+//! window in the magazine with shards lined up in it; a ribbed pump round the
+//! magazine; a pistol grip; a stock running back out of view, so the gun
+//! reaches your shoulder. A crown of prongs at the muzzle. Dark metal, a pale
+//! stripe along the lower edge.
 //!
-//! It is a heavy-duty tool, grimy from hard use, never makeshift: an armour
-//! plate bolted on its flank, regular bolts, machined ridges on the grip, an
-//! armoured hose clamped under the barrel; soot where the shots go out,
-//! grease on the moving cage, a faint mottle of use on the metal.
+//! It is a heavy-duty tool, grimy from hard use, never makeshift: chamfered
+//! edges, regular bolts, machined ridges; soot where the shots go out, grease
+//! on the pump and the magazine, a faint mottle of use on the metal.
 //!
 //! Firing is excessive on purpose (a gun must not feel weak): a white star
 //! bursting from the muzzle and a ring of shock flung out from it, sparks
-//! spraying forward, the spent shard thrown out of the cage's window, the view kicking, shaking and punching out (FOV).
+//! spraying forward, the spent shard thrown out of the port, the view kicking,
+//! shaking and punching out (FOV).
 //!
 //! It moves: it kicks back and up as it fires, the prongs flare open and snap
-//! shut, and the cage turns a sixth of a turn to bring the next shard round,
-//! stopping with a jolt, in time with the reload. It lags behind the view as
-//! you turn and settles back, bobs with your steps (more running) and dips
-//! when you land.
+//! shut, and the pump racks back and forward in time with the reload. It lags
+//! behind the view as you turn and settles back, bobs with your steps (more
+//! running) and dips when you land.
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -26,21 +28,24 @@ use bevy::{
 use super::*;
 
 /// Where the gun sits in view, from the eye.
-const REST: Vec3 = Vec3::new(0.2, -0.17, -0.42);
+const REST: Vec3 = Vec3::new(0.21, -0.19, -0.4);
 
 #[derive(Component)]
 pub(super) struct Viewmodel;
 
-/// The barrel's cage (it turns about the barrel's axis).
+/// The pump (it slides back and forward along the magazine).
 #[derive(Component)]
-pub(super) struct Cage;
+pub(super) struct Pump;
+
+/// How far the pump racks back, metres.
+const STROKE: f32 = 0.05;
 
 /// A prong of the muzzle's crown, at this angle round the axis.
 #[derive(Component)]
 pub(super) struct Prong(f32);
 
 /// Where the muzzle is in the gun's frame, and from the eye.
-const MUZZLE: Vec3 = Vec3::new(0.0, 0.005, -0.33);
+const MUZZLE: Vec3 = Vec3::new(0.0, 0.014, -0.39);
 pub(super) const MUZZLE_VIEW: Vec3 = Vec3::new(REST.x + MUZZLE.x, REST.y + MUZZLE.y, REST.z + MUZZLE.z);
 
 /// What firing throws.
@@ -100,9 +105,7 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     // Soot, where the shots go out: matte, darker than the finish.
     let soot = materials.add(StandardMaterial { base_color: Color::srgb(0.025, 0.025, 0.025), perceptual_roughness: 0.9, reflectance: 0.2, ..default() });
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-    let ring = meshes.add(Torus::new(0.039, 0.051).mesh().major_resolution(6).minor_resolution(4));
     let needle = meshes.add(shard_mesh(&[(Vec3::Y, 1.0, 0.04), (Vec3::NEG_Y, 0.06, 0.04)]));
-    let shroud = meshes.add(Cylinder::new(0.056, 1.0).mesh().resolution(6));
     // A bolt: a hex head on a washer, a socket in it (unit sizes, along +Y).
     let hex = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(6));
     let disc = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(12));
@@ -130,27 +133,22 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     let rolled = |size: Vec3, at: Vec3, roll: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_z(roll)).with_scale(size), bevy::light::NotShadowCaster);
     let gun = commands.spawn((Viewmodel, Transform::from_translation(REST), Visibility::default())).id();
     commands.entity(gun).with_children(|g| {
-        // The receiver, a bevelled top, a stub of stock behind, the grip
-        // angled down and back, a trigger guard.
-        g.spawn((block(Vec3::new(0.075, 0.085, 0.21), Vec3::new(0.0, 0.0, 0.02), 0.0), MeshMaterial3d(metal.clone())));
-        g.spawn((block(Vec3::new(0.05, 0.03, 0.17), Vec3::new(0.0, 0.05, 0.04), 0.05), MeshMaterial3d(metal.clone())));
-        g.spawn((block(Vec3::new(0.06, 0.07, 0.09), Vec3::new(0.0, -0.012, 0.16), -0.15), MeshMaterial3d(metal.clone())));
-        g.spawn((block(Vec3::new(0.035, 0.13, 0.05), Vec3::new(0.0, -0.09, 0.08), -0.35), MeshMaterial3d(metal.clone())));
-        g.spawn((block(Vec3::new(0.012, 0.012, 0.07), Vec3::new(0.0, -0.06, 0.0), 0.0), MeshMaterial3d(metal.clone())));
-        // Plates angled on its flanks, and a fin along the top, so it is
-        // faceted rather than a block.
-        for side in [-1.0, 1.0] {
-            g.spawn((rolled(Vec3::new(0.012, 0.06, 0.15), Vec3::new(side * 0.042, -0.01, 0.03), side * 0.22), MeshMaterial3d(metal.clone())));
-        }
-        g.spawn((block(Vec3::new(0.012, 0.02, 0.13), Vec3::new(0.0, 0.07, 0.05), 0.12), MeshMaterial3d(metal.clone())));
+        // A tube along -Z: hexagonal, `radius`, from z0 back to z1, at height y.
+        let tube = |radius: f32, y: f32, z0: f32, z1: f32| {
+            (
+                Mesh3d(hex.clone()),
+                Transform::from_xyz(0.0, y, (z0 + z1) * 0.5).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(radius, (z1 - z0).abs(), radius)),
+                bevy::light::NotShadowCaster,
+            )
+        };
         // A bolt at `at` on a surface facing `normal`: washer, hex head,
         // socket.
         let bolt = |g: &mut ChildSpawnerCommands, at: Vec3, normal: Vec3| {
             let turn = Quat::from_rotation_arc(Vec3::Y, normal) * Quat::from_rotation_y(0.4);
             for (mesh, material, radius, height, lift) in [
-                (&disc, &metal, 0.0052, 0.0012, 0.0006),
-                (&hex, &worn, 0.0038, 0.0028, 0.0026),
-                (&hex, &wrap, 0.0017, 0.0008, 0.0041),
+                (&disc, &metal, 0.0045, 0.0012, 0.0006),
+                (&hex, &worn, 0.0033, 0.0026, 0.0025),
+                (&hex, &wrap, 0.0015, 0.0008, 0.0039),
             ] {
                 g.spawn((
                     Mesh3d(mesh.clone()),
@@ -160,96 +158,91 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
                 ));
             }
         };
-        // An armour plate bolted square on the left flank, bolts at its
-        // corners and along its middle.
-        let plate = Quat::from_rotation_z(-0.22);
-        let plate_at = Vec3::new(-0.05, -0.006, 0.07);
-        g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(metal.clone()), Transform::from_translation(plate_at).with_rotation(plate).with_scale(Vec3::new(0.006, 0.048, 0.1)), bevy::light::NotShadowCaster));
-        for y in [-0.018, 0.018] {
-            for z in [-0.04, 0.0, 0.04] {
-                bolt(g, plate_at + plate * Vec3::new(-0.003, y, z), plate * Vec3::NEG_X);
+
+        // The receiver: a narrow slab, its long edges chamfered, a rail on
+        // top.
+        g.spawn((block(Vec3::new(0.042, 0.07, 0.15), Vec3::ZERO, 0.0), MeshMaterial3d(metal.clone())));
+        for (x, y) in [(-1.0f32, 1.0f32), (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+            g.spawn((rolled(Vec3::new(0.012, 0.012, 0.15), Vec3::new(x * 0.019, y * 0.033, 0.0), std::f32::consts::FRAC_PI_4), MeshMaterial3d(metal.clone())));
+        }
+        g.spawn((block(Vec3::new(0.014, 0.008, 0.15), Vec3::new(0.0, 0.041, 0.0), 0.0), MeshMaterial3d(metal.clone())));
+        // On the side you see: a plate bolted at its corners, and in front
+        // of it the ejection port, a pale shard showing in it.
+        g.spawn((block(Vec3::new(0.004, 0.044, 0.09), Vec3::new(-0.0225, -0.002, 0.018), 0.0), MeshMaterial3d(metal.clone())));
+        for y in [-0.015, 0.015] {
+            for z in [-0.018, 0.054] {
+                bolt(g, Vec3::new(-0.0245, y - 0.002, z), Vec3::NEG_X);
             }
         }
-        // Bolts along the top of the receiver, evenly spaced.
-        for k in 0..5 {
-            let z = -0.06 + 0.042 * k as f32;
-            for side in [-1.0, 1.0] {
-                bolt(g, Vec3::new(side * 0.03, 0.0425, z), Vec3::Y);
-            }
+        g.spawn((block(Vec3::new(0.002, 0.02, 0.042), Vec3::new(-0.021, 0.01, -0.052), 0.0), MeshMaterial3d(wrap.clone())));
+        g.spawn((
+            Mesh3d(needle.clone()),
+            MeshMaterial3d(pale.clone()),
+            Transform::from_xyz(-0.0215, 0.01, -0.035).with_rotation(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z)).with_scale(Vec3::new(0.12, 0.034, 0.12)),
+            bevy::light::NotShadowCaster,
+        ));
+        // A pale stripe along the lower edge.
+        g.spawn((block(Vec3::new(0.003, 0.006, 0.13), Vec3::new(-0.0215, -0.025, 0.0), 0.0), MeshMaterial3d(pale.clone())));
+
+        // The barrel over the magazine, sooted at the muzzle; a band holding
+        // them together at the front.
+        g.spawn((tube(0.021, 0.014, -0.075, -0.33), MeshMaterial3d(metal.clone())));
+        g.spawn((tube(0.022, 0.014, -0.33, -0.385), MeshMaterial3d(soot.clone())));
+        g.spawn((tube(0.016, -0.024, -0.075, -0.235), MeshMaterial3d(grease.clone())));
+        g.spawn((tube(0.016, -0.024, -0.295, -0.33), MeshMaterial3d(metal.clone())));
+        g.spawn((block(Vec3::new(0.05, 0.07, 0.014), Vec3::new(0.0, -0.005, -0.315), 0.0), MeshMaterial3d(metal.clone())));
+        // The magazine's window: four rails, three pale shards lined up in it.
+        for k in 0..4 {
+            let a = (k as f32 + 0.5) / 4.0 * std::f32::consts::TAU;
+            g.spawn((block(Vec3::new(0.005, 0.005, 0.062), Vec3::new(a.cos() * 0.015, -0.024 + a.sin() * 0.015, -0.265), 0.0), MeshMaterial3d(grease.clone())));
         }
-        // Machined ridges on the grip.
-        let grip_axis = Quat::from_rotation_x(-0.35) * Vec3::Y;
-        let grip_at = Vec3::new(0.0, -0.09, 0.08);
-        for k in 0..8 {
-            let t = -0.05 + 0.0135 * k as f32;
+        for k in 0..3 {
             g.spawn((
-                Mesh3d(cube.clone()),
-                MeshMaterial3d(wrap.clone()),
-                Transform::from_translation(grip_at + grip_axis * t).with_rotation(Quat::from_rotation_x(-0.35)).with_scale(Vec3::new(0.039, 0.006, 0.055)),
+                Mesh3d(needle.clone()),
+                MeshMaterial3d(pale.clone()),
+                Transform::from_xyz(0.0, -0.024, -0.246 - 0.018 * k as f32).with_rotation(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z)).with_scale(Vec3::new(0.16, 0.017, 0.16)),
                 bevy::light::NotShadowCaster,
             ));
         }
-        // An armoured hose run straight under the barrel, in two clamps.
-        g.spawn((block(Vec3::new(0.011, 0.011, 0.26), Vec3::new(0.0, -0.058, -0.17), 0.0), MeshMaterial3d(wrap.clone())));
-        for z in [-0.1, -0.27] {
-            g.spawn((block(Vec3::new(0.02, 0.022, 0.012), Vec3::new(0.0, -0.054, z), 0.0), MeshMaterial3d(metal.clone())));
+        // The pump: ribbed, round the magazine.
+        g.spawn((Pump, Transform::default(), Visibility::default())).with_children(|p| {
+            p.spawn((block(Vec3::new(0.044, 0.038, 0.11), Vec3::new(0.0, -0.026, -0.16), 0.0), MeshMaterial3d(metal.clone())));
+            for k in 0..6 {
+                p.spawn((block(Vec3::new(0.048, 0.042, 0.007), Vec3::new(0.0, -0.026, -0.12 - 0.016 * k as f32), 0.0), MeshMaterial3d(wrap.clone())));
+            }
+        });
+
+        // The pistol grip, machined ridges on it; the trigger and its guard.
+        g.spawn((block(Vec3::new(0.032, 0.11, 0.045), Vec3::new(0.0, -0.08, 0.055), -0.35), MeshMaterial3d(metal.clone())));
+        let grip_axis = Quat::from_rotation_x(-0.35) * Vec3::Y;
+        for k in 0..7 {
+            g.spawn((
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(wrap.clone()),
+                Transform::from_translation(Vec3::new(0.0, -0.08, 0.055) + grip_axis * (-0.045 + 0.0135 * k as f32)).with_rotation(Quat::from_rotation_x(-0.35)).with_scale(Vec3::new(0.036, 0.006, 0.05)),
+                bevy::light::NotShadowCaster,
+            ));
         }
-        // A thin pale stripe along each side, on the plates.
-        for side in [-1.0, 1.0] {
-            g.spawn((rolled(Vec3::new(0.003, 0.007, 0.15), Vec3::new(side * 0.0505, 0.0, 0.03), side * 0.22), MeshMaterial3d(pale.clone())));
-        }
+        g.spawn((block(Vec3::new(0.008, 0.008, 0.055), Vec3::new(0.0, -0.058, 0.005), 0.0), MeshMaterial3d(metal.clone())));
+        g.spawn((block(Vec3::new(0.005, 0.022, 0.006), Vec3::new(0.0, -0.046, 0.012), 0.2), MeshMaterial3d(worn.clone())));
+        // The stock: back from the receiver and down, out of view.
+        g.spawn((block(Vec3::new(0.034, 0.056, 0.42), Vec3::new(0.0, -0.045, 0.28), 0.16), MeshMaterial3d(metal.clone())));
+        g.spawn((block(Vec3::new(0.037, 0.06, 0.03), Vec3::new(0.0, -0.016, 0.09), 0.16), MeshMaterial3d(wrap.clone())));
+
         // A faint light of its own, reaching no further than the gun, so its
         // facets read whichever way the sun is.
         g.spawn((
             PointLight { intensity: 25000.0, range: 0.9, radius: 0.0, shadow_maps_enabled: false, ..default() },
             Transform::from_xyz(-0.12, 0.16, 0.18),
         ));
-        // The barrel: a cage that turns, the ammunition lying in it; only
-        // its middle shows, between two shrouds.
-        let shrouded = |length: f32, z: f32| {
-            (
-                Mesh3d(shroud.clone()),
-                Transform::from_xyz(0.0, 0.005, z).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(1.0, length, 1.0)),
-                bevy::light::NotShadowCaster,
-            )
-        };
-        g.spawn((shrouded(0.08, -0.12), MeshMaterial3d(metal.clone())));
-        // (Sooted at the front, where the shots go out.)
-        g.spawn((shrouded(0.09, -0.28), MeshMaterial3d(soot.clone())));
-        // (A collar at each shroud's open end.)
-        // (Greasy round the cage, where it turns.)
-        for z in [-0.162, -0.235] {
-            g.spawn((
-                Mesh3d(ring.clone()),
-                MeshMaterial3d(grease.clone()),
-                Transform::from_xyz(0.0, 0.005, z).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::splat(1.18)),
-                bevy::light::NotShadowCaster,
-            ));
-        }
-        g.spawn((Cage, Transform::from_xyz(0.0, 0.005, -0.08), Visibility::default())).with_children(|c| {
-            for k in 0..6 {
-                let a = k as f32 / 6.0 * std::f32::consts::TAU;
-                c.spawn((block(Vec3::new(0.008, 0.008, 0.25), Vec3::new(a.cos() * 0.045, a.sin() * 0.045, -0.12), 0.0), MeshMaterial3d(grease.clone())));
-                // A shard of ammunition, pointing forward, in the window.
-                let b = a + std::f32::consts::PI / 6.0;
-                c.spawn((
-                    Mesh3d(needle.clone()),
-                    MeshMaterial3d(pale.clone()),
-                    Transform::from_xyz(b.cos() * 0.02, b.sin() * 0.02, -0.1)
-                        .with_rotation(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z))
-                        .with_scale(Vec3::new(0.18, 0.08, 0.18)),
-                    bevy::light::NotShadowCaster,
-                ));
-            }
-        });
-        // The muzzle's crown.
+        // The muzzle's crown, round the barrel.
         for k in 0..6 {
             let a = (k as f32 + 0.5) / 6.0 * std::f32::consts::TAU;
             g.spawn((
                 Prong(a),
                 Mesh3d(needle.clone()),
                 MeshMaterial3d(soot.clone()),
-                Transform::from_xyz(a.cos() * 0.045, 0.005 + a.sin() * 0.045, MUZZLE.z + 0.01).with_scale(Vec3::new(0.25, 0.09, 0.25)),
+                Transform::from_xyz(a.cos() * 0.024, MUZZLE.y + a.sin() * 0.024, MUZZLE.z + 0.012).with_scale(Vec3::new(0.2, 0.07, 0.2)),
                 bevy::light::NotShadowCaster,
             ));
         }
@@ -257,15 +250,15 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     gun
 }
 
-/// Sway, bob, recoil, the prongs' flare and the cage's turn.
+/// Sway, bob, recoil, the prongs' flare and the pump's stroke.
 #[allow(clippy::type_complexity)]
 pub(super) fn animate(
     time: Res<Time>,
     mut gun: ResMut<Gun>,
     camera: Single<(&FlyCam, &Player)>,
-    mut model: Single<&mut Transform, (With<Viewmodel>, Without<Cage>, Without<Prong>)>,
-    mut cage: Single<&mut Transform, (With<Cage>, Without<Viewmodel>, Without<Prong>)>,
-    mut prongs: Query<(&Prong, &mut Transform), (Without<Viewmodel>, Without<Cage>)>,
+    mut model: Single<&mut Transform, (With<Viewmodel>, Without<Pump>, Without<Prong>)>,
+    mut pump: Single<&mut Transform, (With<Pump>, Without<Viewmodel>, Without<Prong>)>,
+    mut prongs: Query<(&Prong, &mut Transform), (Without<Viewmodel>, Without<Pump>)>,
     // Sway (and its velocity), the last view angles, the step phase, the
     // landing dip, and whether it was on the ground.
     mut state: Local<(Vec2, Vec2, Option<Vec2>, f32, f32, bool)>,
@@ -309,12 +302,14 @@ pub(super) fn animate(
         let dir = Vec3::new(prong.0.cos() * out, prong.0.sin() * out, -1.0).normalize();
         t.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
     }
-    // The cage turns a sixth to the next shard, quickly, through the middle
-    // of the reload, with a little overshoot as it stops.
-    let s = ((progress - 0.25) / 0.35).clamp(0.0, 1.0);
-    let ease = 1.0 - (1.0 - s).powi(3) + 0.08 * (s * std::f32::consts::PI).sin() * (1.0 - s);
-    let turns = gun.shots.saturating_sub(1) as f32 + if gun.shots > 0 { ease } else { 0.0 };
-    cage.rotation = Quat::from_rotation_z(turns * std::f32::consts::TAU / 6.0);
+    // The pump racks back, then forward, as the reload is heard; quick out,
+    // a hard stop at each end.
+    let ease = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        1.0 - (1.0 - x).powi(3)
+    };
+    let back = if gun.shots > 0 { ease((progress - 0.12) / 0.14) - ease((progress - 0.34) / 0.14) } else { 0.0 };
+    pump.translation = Vec3::Z * STROKE * back;
 }
 
 /// Everything a shot throws, from the muzzle at `at` (in the world), along
@@ -353,11 +348,10 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
             bevy::light::NotShadowCaster,
         ));
     }
-    // The spent shard, flung out of the cage's window to the right,
-    // tumbling.
+    // The spent shard, flung out of the port to the left, tumbling.
     commands.spawn((
         Particle {
-            velocity: right * (3.0 + r(0, 14)) + up * (2.5 + r(0, 15)) - forward * 0.5,
+            velocity: -right * (3.0 + r(0, 14)) + up * (2.5 + r(0, 15)) - forward * 0.5,
             spin: Vec3::new(14.0 + r(0, 16) * 6.0, 4.0, 9.0),
             drag: 0.2,
             gravity: 14.0,
@@ -369,7 +363,7 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
         },
         Mesh3d(fx.needle.clone()),
         MeshMaterial3d(fx.pale.clone()),
-        Transform::from_translation(at - forward * 0.2 + right * 0.03),
+        Transform::from_translation(at - forward * 0.33 - right * 0.03 - up * 0.004),
         bevy::light::NotShadowCaster,
     ));
 }
