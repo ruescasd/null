@@ -238,6 +238,19 @@ pub(super) fn gather(
     }
     director.next_gather -= dt;
 
+    // `--opt hunters`: no swarm, no assembly; a hunter, already built,
+    // appears a little way off whenever there is none.
+    if args.opt("hunters") {
+        if hunters.is_empty() && director.next_gather <= 0.0 {
+            let k = (time.elapsed_secs() * 1000.0) as u32;
+            let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
+            let at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
+            spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, k, at, player.translation);
+            director.next_gather = 4.0;
+        }
+        return;
+    }
+
     // Start one: a free swarmer with enough free ones close by.
     let allowed = 1 + (director.alive / 90.0) as usize;
     if assemblies.is_empty() && hunters.iter().count() < allowed && director.next_gather <= 0.0 {
@@ -308,185 +321,201 @@ pub(super) fn gather(
             commands.entity(e).despawn();
         }
         commands.entity(entity).despawn();
-        let kind = if args.opt("beast") {
-            Kind::Beast
-        } else if args.opt("biped") {
-            Kind::Biped
-        } else if hash01(entity.index_u32() as i32, 0, 0, 0x6b1) < 0.5 {
-            Kind::Beast
-        } else {
-            Kind::Biped
-        };
-        let feet = Vec3::new(assembly.centre.x, world.ground_height(assembly.centre.x, assembly.centre.z), assembly.centre.z);
-        let to = player.translation - feet;
-        let ground = |x: f32, z: f32| world.ground_height(x, z);
-        let plan = if kind == Kind::Beast { Plan::beast() } else { Plan::biped() };
-        // Bones: three of torso, the neck, the head, then two per leg and per
-        // arm (upper, lower), then the tail.
-        let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
-        let rig = Rig::new(plan, feet, to.x.atan2(to.z), entity.index_u32(), &ground);
-        let bones = rig.bones.clone();
-        let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
-        let hunter = commands
-            .spawn((
-                Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
-                Transform::from_translation(feet + Vec3::Y * 1.5),
-                Visibility::default(),
-            ))
-            .with_child((
-                // Its voice: the swarm's, slowed down.
-                AudioPlayer::new(assets.swarm.clone()),
-                PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(1.4), speed: 0.5, spatial: true, ..default() },
-                Transform::default(),
-            ))
-            .id();
-        info!("a {} forms", if kind == Kind::Beast { "beast" } else { "hunter" });
+        spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation);
+    }
+}
 
-        // Its body: shards along every bone, thicker bones more and bigger,
-        // with pale markings.
-        let seed = entity.index_u32();
-        let pale = |commands: &mut Commands, bone: usize, along: f32, offset: Vec3, dir: Vec3, length: f32, width: f32| {
-            commands.spawn((
-                Part { hunter, bone, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y)), velocity: Vec3::ZERO, stiffness: if bone == 4 { RIGID } else { STIFFNESS * 1.5 } },
-                Mesh3d(assets.shard.clone()),
-                MeshMaterial3d(assets.pale.clone()),
-                Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
-            ));
-        };
-        for (i, bone) in bones.iter().enumerate() {
-            let length = bone.a.distance(bone.b);
-            if limbs.contains(&i) {
-                // A limb: long blades laid along it, overlapping, so it reads
-                // as one solid faceted limb; and a heavy paw at a foot.
-                let lower = (i - limbs.start) % 2 == 1;
-                let count = ((length / 0.18).round() as usize).clamp(3, 8);
-                for k in 0..count {
-                    let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b4) - 0.5;
-                    let along = (k as f32 + 0.5) / count as f32 + r(0) * 0.1;
-                    let a = r(1) * std::f32::consts::TAU;
-                    let offset = Vec3::new(a.cos(), 0.0, a.sin()) * bone.radius * 0.3;
-                    let rotation = Quat::from_euler(EulerRot::XYZ, r(2) * 0.3, r(3) * 6.0, r(4) * 0.3);
-                    let width = bone.radius * (0.9 + 0.4 * (r(5) + 0.5)) / 0.025;
-                    let scale = Vec3::new(width, length * 0.6 / 0.75, width);
-                    commands.spawn((
-                        Part { hunter, bone: i, along: along - 0.3 / count as f32, offset, rotation, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
-                        Mesh3d(assets.shard.clone()),
-                        MeshMaterial3d(assets.dark.clone()),
-                        Transform::from_translation(bone.a.lerp(bone.b, along)).with_scale(scale),
-                    ));
-                }
-                if lower {
-                    // A pale band above the paw.
-                    for k in 0..3 {
-                        let a = k as f32 / 3.0 * std::f32::consts::TAU;
-                        let (c, sn) = (a.cos(), a.sin());
-                        pale(&mut commands, i, 0.72, Vec3::new(c, 0.0, sn) * bone.radius * 1.1, Vec3::new(-sn, 0.0, c), bone.radius * 1.3, 0.02);
-                    }
-                    commands.spawn((
-                        Part { hunter, bone: i, along: 1.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
-                        Mesh3d(assets.swarmer.clone()),
-                        MeshMaterial3d(assets.dark.clone()),
-                        Transform::from_translation(bone.b).with_scale(Vec3::splat(bone.radius * 3.2)),
-                    ));
-                }
-                continue;
-            }
-            if i == 4 {
-                // The head: one skull, a hinged jaw beneath, a thin pale brow.
-                let (skull, jaw) = if kind == Kind::Beast { &heads.beast } else { &heads.biped };
-                let rr = bone.radius;
-                commands.spawn((
-                    Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
-                    Mesh3d(skull.clone()),
-                    MeshMaterial3d(assets.dark.clone()),
-                    Transform::from_translation(bone.a).with_scale(Vec3::new(rr, length, rr)),
-                ));
-                commands.spawn((
-                    Jaw,
-                    Part { hunter, bone: i, along: 0.3, offset: Vec3::new(0.0, 0.0, rr * 0.3), rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
-                    Mesh3d(jaw.clone()),
-                    MeshMaterial3d(assets.dark.clone()),
-                    Transform::from_translation(bone.a).with_scale(Vec3::new(rr, length * 0.66, rr)),
-                ));
-                for side in [-1.0, 1.0] {
-                    pale(&mut commands, i, 0.4, Vec3::new(side * rr * 0.6, 0.0, -rr * 0.66), Vec3::new(-side * 0.35, 1.0, 0.15), length * 0.3, 0.012);
-                }
-                continue;
-            }
-            let count = ((length / 0.11) * (bone.radius / 0.12).clamp(0.6, 2.2)).round().clamp(3.0, 40.0) as usize;
+/// A hunter, built, standing at `centre` and facing the player.
+#[allow(clippy::too_many_arguments)]
+fn spawn_hunter(
+    commands: &mut Commands,
+    args: &Args,
+    world: &WorldGen,
+    assets: &Assets3,
+    heads: &Heads,
+    materials: &mut Assets<StandardMaterial>,
+    seed: u32,
+    centre: Vec3,
+    player: Vec3,
+) {
+    let kind = if args.opt("beast") {
+        Kind::Beast
+    } else if args.opt("biped") {
+        Kind::Biped
+    } else if hash01(seed as i32, 0, 0, 0x6b1) < 0.5 {
+        Kind::Beast
+    } else {
+        Kind::Biped
+    };
+    let feet = Vec3::new(centre.x, world.ground_height(centre.x, centre.z), centre.z);
+    let to = player - feet;
+    let ground = |x: f32, z: f32| world.ground_height(x, z);
+    let plan = if kind == Kind::Beast { Plan::beast() } else { Plan::biped() };
+    // Bones: three of torso, the neck, the head, then two per leg and per
+    // arm (upper, lower), then the tail.
+    let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
+    let rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &ground);
+    let bones = rig.bones.clone();
+    let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
+    let hunter = commands
+        .spawn((
+            Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
+            Transform::from_translation(feet + Vec3::Y * 1.5),
+            Visibility::default(),
+        ))
+        .with_child((
+            // Its voice: the swarm's, slowed down.
+            AudioPlayer::new(assets.swarm.clone()),
+            PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(1.4), speed: 0.5, spatial: true, ..default() },
+            Transform::default(),
+        ))
+        .id();
+    info!("a {} forms", if kind == Kind::Beast { "beast" } else { "hunter" });
+
+    // Its body: shards along every bone, thicker bones more and bigger,
+    // with pale markings.
+    let seed = seed;
+    let pale = |commands: &mut Commands, bone: usize, along: f32, offset: Vec3, dir: Vec3, length: f32, width: f32| {
+        commands.spawn((
+            Part { hunter, bone, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y)), velocity: Vec3::ZERO, stiffness: if bone == 4 { RIGID } else { STIFFNESS * 1.5 } },
+            Mesh3d(assets.shard.clone()),
+            MeshMaterial3d(assets.pale.clone()),
+            Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
+        ));
+    };
+    for (i, bone) in bones.iter().enumerate() {
+        let length = bone.a.distance(bone.b);
+        if limbs.contains(&i) {
+            // A limb: long blades laid along it, overlapping, so it reads
+            // as one solid faceted limb; and a heavy paw at a foot.
+            let lower = (i - limbs.start) % 2 == 1;
+            let count = ((length / 0.18).round() as usize).clamp(3, 8);
             for k in 0..count {
-                let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b2) - 0.5;
-                let along = k as f32 / count as f32 + r(0) / count as f32;
+                let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b4) - 0.5;
+                let along = (k as f32 + 0.5) / count as f32 + r(0) * 0.1;
                 let a = r(1) * std::f32::consts::TAU;
-                let out = bone.radius * (0.35 + 0.6 * (r(2) + 0.5));
-                let mut offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
-                // A beast's belly is lean: what hangs under the torso (+Z in
-                // its frame) sits close in.
-                if kind == Kind::Beast && i < 3 && offset.z > 0.0 {
-                    offset.z *= 0.45;
-                }
-                // Knots, and now and then a long blade swept back.
-                let blade = r(3) > 0.3;
-                let rotation = if blade {
-                    Quat::from_rotation_arc(Vec3::Y, Vec3::new(a.cos() * 0.6, -0.8, a.sin() * 0.6).normalize())
-                } else {
-                    Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0)
-                };
-                // The neck thick at its base, tapering to the head.
-                let taper = if i == 3 { 1.25 - 0.6 * along } else { 1.0 };
-                let size = bone.radius * (0.9 + 0.8 * (r(7) + 0.5)) * taper;
-                let p = bone.a.lerp(bone.b, along) + bone.rotation() * offset;
-                let (mesh, scale) = if blade { (assets.shard.clone(), Vec3::new(size * 3.0, size * 1.4, size * 3.0)) } else { (assets.swarmer.clone(), Vec3::splat(size * 1.6)) };
+                let offset = Vec3::new(a.cos(), 0.0, a.sin()) * bone.radius * 0.3;
+                let rotation = Quat::from_euler(EulerRot::XYZ, r(2) * 0.3, r(3) * 6.0, r(4) * 0.3);
+                let width = bone.radius * (0.9 + 0.4 * (r(5) + 0.5)) / 0.025;
+                let scale = Vec3::new(width, length * 0.6 / 0.75, width);
                 commands.spawn((
-                    Part { hunter, bone: i, along, offset, rotation, velocity: Vec3::ZERO, stiffness: STIFFNESS },
-                    Mesh3d(mesh),
+                    Part { hunter, bone: i, along: along - 0.3 / count as f32, offset, rotation, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
+                    Mesh3d(assets.shard.clone()),
                     MeshMaterial3d(assets.dark.clone()),
-                    Transform::from_translation(p).with_scale(scale),
+                    Transform::from_translation(bone.a.lerp(bone.b, along)).with_scale(scale),
                 ));
             }
-            // In a bone's frame Y runs along it, X to the body's right, and
-            // -Z is the back (up on a beast's level torso).
-            if kind == Kind::Beast && (i == 2 || i == 3) {
-                // Muscle over the shoulders and up the back of the neck: a
-                // heavy hump of mass on top, where its strength is.
-                let (from, to) = if i == 2 { (0.45, 1.0) } else { (0.0, 0.45) };
-                for k in 0..10 {
-                    let r = |j: i32| hash01(seed as i32, (i * 53 + k) as i32, j, 0x6b7) - 0.5;
-                    let along = from + (to - from) * (k as f32 + 0.5 + r(0) * 0.5) / 10.0;
-                    let offset = Vec3::new(r(1) * bone.radius * 0.9, 0.0, -bone.radius * (0.55 + 0.3 * (r(2) + 0.5)));
-                    let size = bone.radius * (1.1 + 0.5 * (r(3) + 0.5));
-                    commands.spawn((
-                        Part { hunter, bone: i, along, offset, rotation: Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0), velocity: Vec3::ZERO, stiffness: STIFFNESS },
-                        Mesh3d(assets.swarmer.clone()),
-                        MeshMaterial3d(assets.dark.clone()),
-                        Transform::from_translation(bone.a).with_scale(Vec3::splat(size * 1.6)),
-                    ));
+            if lower {
+                // A pale band above the paw.
+                for k in 0..3 {
+                    let a = k as f32 / 3.0 * std::f32::consts::TAU;
+                    let (c, sn) = (a.cos(), a.sin());
+                    pale(commands, i, 0.72, Vec3::new(c, 0.0, sn) * bone.radius * 1.1, Vec3::new(-sn, 0.0, c), bone.radius * 1.3, 0.02);
                 }
+                commands.spawn((
+                    Part { hunter, bone: i, along: 1.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
+                    Mesh3d(assets.swarmer.clone()),
+                    MeshMaterial3d(assets.dark.clone()),
+                    Transform::from_translation(bone.b).with_scale(Vec3::splat(bone.radius * 3.2)),
+                ));
             }
-            if i < 3 {
-                // Thin stripes lying across the back.
-                for k in 0..2 {
-                    let r = |j: i32| hash01(seed as i32, (i * 31 + k) as i32, j, 0x6b6) - 0.5;
-                    let along = (k as f32 + 0.5 + r(0) * 0.4) / 2.0;
-                    for m in 0..3 {
-                        let a = (m as f32 - 1.0) * 0.5 + r(1) * 0.3;
-                        let (c, sn) = (a.cos(), a.sin());
-                        let out = Vec3::new(sn, 0.0, -c) * bone.radius * 1.02;
-                        pale(&mut commands, i, along, out, Vec3::new(c, r(2) * 0.4, sn), bone.radius * 0.5, 0.015);
-                    }
-                }
-            }
+            continue;
         }
-        // Pale eyes, flaring when it looks at you (see `flesh`).
-        let eyes = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, ..default() });
-        for side in [-1.0, 1.0] {
+        if i == 4 {
+            // The head: one skull, a hinged jaw beneath, a thin pale brow.
+            let (skull, jaw) = if kind == Kind::Beast { &heads.beast } else { &heads.biped };
+            let rr = bone.radius;
             commands.spawn((
-                Eye { hunter, side, material: eyes.clone() },
-                Mesh3d(assets.core.clone()),
-                MeshMaterial3d(eyes.clone()),
-                Transform::from_translation(feet).with_scale(Vec3::splat(0.24)),
+                Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                Mesh3d(skull.clone()),
+                MeshMaterial3d(assets.dark.clone()),
+                Transform::from_translation(bone.a).with_scale(Vec3::new(rr, length, rr)),
+            ));
+            commands.spawn((
+                Jaw,
+                Part { hunter, bone: i, along: 0.3, offset: Vec3::new(0.0, 0.0, rr * 0.3), rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                Mesh3d(jaw.clone()),
+                MeshMaterial3d(assets.dark.clone()),
+                Transform::from_translation(bone.a).with_scale(Vec3::new(rr, length * 0.66, rr)),
+            ));
+            for side in [-1.0, 1.0] {
+                pale(commands, i, 0.4, Vec3::new(side * rr * 0.6, 0.0, -rr * 0.66), Vec3::new(-side * 0.35, 1.0, 0.15), length * 0.3, 0.012);
+            }
+            continue;
+        }
+        let count = ((length / 0.11) * (bone.radius / 0.12).clamp(0.6, 2.2)).round().clamp(3.0, 40.0) as usize;
+        for k in 0..count {
+            let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b2) - 0.5;
+            let along = k as f32 / count as f32 + r(0) / count as f32;
+            let a = r(1) * std::f32::consts::TAU;
+            let out = bone.radius * (0.35 + 0.6 * (r(2) + 0.5));
+            let mut offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
+            // A beast's belly is lean: what hangs under the torso (+Z in
+            // its frame) sits close in.
+            if kind == Kind::Beast && i < 3 && offset.z > 0.0 {
+                offset.z *= 0.45;
+            }
+            // Knots, and now and then a long blade swept back.
+            let blade = r(3) > 0.3;
+            let rotation = if blade {
+                Quat::from_rotation_arc(Vec3::Y, Vec3::new(a.cos() * 0.6, -0.8, a.sin() * 0.6).normalize())
+            } else {
+                Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0)
+            };
+            // The neck thick at its base, tapering to the head.
+            let taper = if i == 3 { 1.25 - 0.6 * along } else { 1.0 };
+            let size = bone.radius * (0.9 + 0.8 * (r(7) + 0.5)) * taper;
+            let p = bone.a.lerp(bone.b, along) + bone.rotation() * offset;
+            let (mesh, scale) = if blade { (assets.shard.clone(), Vec3::new(size * 3.0, size * 1.4, size * 3.0)) } else { (assets.swarmer.clone(), Vec3::splat(size * 1.6)) };
+            commands.spawn((
+                Part { hunter, bone: i, along, offset, rotation, velocity: Vec3::ZERO, stiffness: STIFFNESS },
+                Mesh3d(mesh),
+                MeshMaterial3d(assets.dark.clone()),
+                Transform::from_translation(p).with_scale(scale),
             ));
         }
+        // In a bone's frame Y runs along it, X to the body's right, and
+        // -Z is the back (up on a beast's level torso).
+        if kind == Kind::Beast && (i == 2 || i == 3) {
+            // Muscle over the shoulders and up the back of the neck: a
+            // heavy hump of mass on top, where its strength is.
+            let (from, to) = if i == 2 { (0.45, 1.0) } else { (0.0, 0.45) };
+            for k in 0..10 {
+                let r = |j: i32| hash01(seed as i32, (i * 53 + k) as i32, j, 0x6b7) - 0.5;
+                let along = from + (to - from) * (k as f32 + 0.5 + r(0) * 0.5) / 10.0;
+                let offset = Vec3::new(r(1) * bone.radius * 0.9, 0.0, -bone.radius * (0.55 + 0.3 * (r(2) + 0.5)));
+                let size = bone.radius * (1.1 + 0.5 * (r(3) + 0.5));
+                commands.spawn((
+                    Part { hunter, bone: i, along, offset, rotation: Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0), velocity: Vec3::ZERO, stiffness: STIFFNESS },
+                    Mesh3d(assets.swarmer.clone()),
+                    MeshMaterial3d(assets.dark.clone()),
+                    Transform::from_translation(bone.a).with_scale(Vec3::splat(size * 1.6)),
+                ));
+            }
+        }
+        if i < 3 {
+            // Thin stripes lying across the back.
+            for k in 0..2 {
+                let r = |j: i32| hash01(seed as i32, (i * 31 + k) as i32, j, 0x6b6) - 0.5;
+                let along = (k as f32 + 0.5 + r(0) * 0.4) / 2.0;
+                for m in 0..3 {
+                    let a = (m as f32 - 1.0) * 0.5 + r(1) * 0.3;
+                    let (c, sn) = (a.cos(), a.sin());
+                    let out = Vec3::new(sn, 0.0, -c) * bone.radius * 1.02;
+                    pale(commands, i, along, out, Vec3::new(c, r(2) * 0.4, sn), bone.radius * 0.5, 0.015);
+                }
+            }
+        }
+    }
+    // Pale eyes, flaring when it looks at you (see `flesh`).
+    let eyes = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, ..default() });
+    for side in [-1.0, 1.0] {
+        commands.spawn((
+            Eye { hunter, side, material: eyes.clone() },
+            Mesh3d(assets.core.clone()),
+            MeshMaterial3d(eyes.clone()),
+            Transform::from_translation(feet).with_scale(Vec3::splat(0.24)),
+        ));
     }
 }
 

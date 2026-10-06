@@ -493,7 +493,8 @@ fn swarm(
     let count = swarm.iter().count();
     // More of them the longer you last.
     let wanted = (8.0 + director.alive / 10.0).min(40.0) as usize;
-    if director.next_wave <= 0.0 && count < wanted {
+    // (`--opt hunters`: no swarm, only built hunters; see `hunter.rs`.)
+    if director.next_wave <= 0.0 && count < wanted && !args.opt("hunters") {
         director.next_wave = 7.0;
         let t = time.elapsed_secs();
         let group = 4 + (director.alive / 40.0) as usize;

@@ -43,6 +43,8 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
                                               nearest hunter
     --opt biped|beast                         what the swarm assembles into (otherwise either)
+    --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
+                                              whenever there is none (with biped|beast to choose)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
