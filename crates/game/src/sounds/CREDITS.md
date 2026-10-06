@@ -8,6 +8,6 @@ names from Pixabay, are kept out of the repository in `samples/`):
 
 - `growl0`–`growl2`: capaholiczsfx, "Creature snarl very close" (403154).
 - `growl3`–`growl6`: freesound_community, "Angry creature" (38085).
-- `snarl0`–`snarl6` (the hound's): freesound_community, "Dog snarl" (72512).
+- `wet0`–`wet8` (the hound's growls): ponjisk, "Wet and slimy creature growls" (228546).
 - `pounce`: alesiadavina, "Threatening monster growl, dark creature" (541136).
 - `bite`: freesound_community, "Monster bite" (44538).
