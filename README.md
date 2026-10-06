@@ -39,8 +39,9 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt peace                               no swarm
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
-                                              times tougher / hunters circle at a distance (--set tame_at=14) /
-                                              face the nearest hunter
+                                              times tougher / hunters circle at a distance (--set tame_at=14,
+                                              tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
+                                              nearest hunter
     --opt biped|beast                         what the swarm assembles into (otherwise either)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
@@ -216,14 +217,20 @@ together assemble (you hear them grinding, and have a few seconds to break
 them) into a creature: a tall biped with long arms, or a beast the size of
 a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its
 body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
-coordinating the legs (a trot for the beast), feet that plant and swing on
+coordinating the legs (the beast walks, trots and gallops, blending with its
+speed, rocking and flexing its spine in the gallop; speeding up and slowing
+down take time), feet that plant and swing on
 an arc to where the body will be, two-bone IK legs, a body that bobs with
 the steps and leans into turns, a chest that leads a turn with the hips
 following, a head that tracks you and now and then glances away, a trailing
-tail, breathing when still, and poses for a crouch and a leap. Its body is
+tail, a beast's shoulder blades rising as each front leg takes the weight,
+its head held steady while the body bobs, breathing when still, and poses
+for a crouch and a leap. Its body is
 dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
-and settles, with glowing cores and two eyes. It stalks, crouches where you
-can see it, then the biped dashes and the beast pounces. It takes hits as a whole
+and settles, with glowing cores and two eyes. The biped stalks, crouches
+where you can see it, and dashes; the beast prowls low and slow, freezes
+with its head locked on you, then charges, building to a gallop, and
+pounces out of the run, skidding when it lands. It takes hits as a whole
 (about four good shots): each shard jolts the piece it strikes and staggers
 the body back, and when it breaks the whole body bursts at once. Every hit
 shows: splinters burst back, a flash lights the body, the struck piece

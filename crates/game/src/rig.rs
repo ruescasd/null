@@ -2,10 +2,14 @@
 //! frame from a body plan and what the creature wants to do.
 //!
 //! - A gait clock coordinates the legs: each leg swings during its own part
-//!   of the cycle (a trot pairs diagonal legs, a biped alternates), its foot
-//!   planted the rest of the time and swinging on an arc to where the body
-//!   will be when it lands. Standing still, the clock stops once every foot
-//!   is down, and a foot left far from its place takes a step on its own.
+//!   of the cycle, its foot planted the rest of the time and swinging on an
+//!   arc to where the body will be when it lands. The gait changes with the
+//!   speed, blending from one to the next (a beast walks, trots, then
+//!   gallops, rocking and flexing its spine), and speeding up and slowing
+//!   down take time. Standing still, the clock stops once every foot is
+//!   down, and a foot left far from its place takes a step on its own.
+//! - A beast's shoulder blades rise as each front leg takes the weight; the
+//!   head is held steady while the body bobs.
 //! - Two-bone legs (and arms) solved by IK, each bending its own way.
 //! - The body bobs with the steps, its chest leading a turn and its hips
 //!   following, leaning into the turn; it breathes when still.
@@ -37,9 +41,18 @@ pub struct LegPlan {
     pub lower: f32,
     /// Which way the knee points: +1 forward, -1 back.
     pub knee: f32,
-    /// Its part of the gait cycle (0..1).
-    pub phase: f32,
     pub radius: (f32, f32),
+}
+
+/// A gait, used from `speed` up (blending into the next): when in the
+/// cycle each leg swings (0..1, in the order of `legs`), the fraction of
+/// the cycle a leg swings, and the stride.
+#[derive(Clone)]
+pub struct Gait {
+    pub speed: f32,
+    pub offsets: Vec<f32>,
+    pub swing: f32,
+    pub stride: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -66,20 +79,24 @@ pub struct Plan {
     pub arms: Vec<ArmPlan>,
     /// Tail links and their length (0 for none).
     pub tail: (usize, f32),
-    /// Fraction of the cycle a leg is swinging, how high it lifts, and the
-    /// stride length at full speed.
-    pub swing: f32,
+    /// Its gaits, slowest first, and how high a foot lifts.
+    pub gaits: Vec<Gait>,
     pub lift: f32,
-    pub stride: f32,
-    /// How far the body bobs, and leans into turns.
+    /// Acceleration and deceleration (m/s²).
+    pub accel: f32,
+    pub decel: f32,
+    /// How far the body bobs, leans into turns, rocks and flexes in the
+    /// fastest gait, and how far a shoulder blade rises.
     pub bob: f32,
     pub lean: f32,
+    pub rock: f32,
+    pub shoulder: f32,
 }
 
 impl Plan {
     /// A tall biped with long arms, about 3 m.
     pub fn biped() -> Self {
-        let leg = |side: f32, phase: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, phase, radius: (0.16, 0.1) };
+        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, radius: (0.16, 0.1) };
         let arm = |side: f32| ArmPlan { side, upper: 0.75, lower: 0.9, radius: (0.11, 0.07) };
         Plan {
             hips: (0.0, 1.5),
@@ -87,38 +104,80 @@ impl Plan {
             torso_radius: 0.3,
             neck: (0.25, 0.15, 0.25),
             head: (0.35, 0.16),
-            legs: vec![leg(-0.22, 0.0), leg(0.22, 0.5)],
+            legs: vec![leg(-0.22), leg(0.22)],
             arms: vec![arm(-0.38), arm(0.38)],
             tail: (0, 0.0),
-            swing: 0.45,
+            gaits: vec![
+                Gait { speed: 0.0, offsets: vec![0.0, 0.5], swing: 0.42, stride: 1.4 },
+                Gait { speed: 6.0, offsets: vec![0.0, 0.5], swing: 0.5, stride: 2.6 },
+            ],
             lift: 0.3,
-            stride: 1.8,
+            accel: 8.0,
+            decel: 12.0,
             bob: 0.06,
             lean: 0.04,
+            rock: 0.0,
+            shoulder: 0.0,
         }
     }
 
     /// A beast the size of a horse, built like a big cat: low long body,
     /// heavy shoulders, a long tail.
     pub fn beast() -> Self {
-        let front = |side: f32, phase: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 0.65, lower: 0.65, knee: -1.0, phase, radius: (0.2, 0.13) };
-        let hind = |side: f32, phase: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 0.7, lower: 0.7, knee: -1.0, phase, radius: (0.23, 0.12) };
+        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 0.65, lower: 0.65, knee: -1.0, radius: (0.2, 0.13) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 0.7, lower: 0.7, knee: -1.0, radius: (0.23, 0.12) };
         Plan {
             hips: (-0.85, 1.25),
             chest: (0.85, 1.3),
             torso_radius: 0.38,
             neck: (0.55, 0.25, 0.22),
             head: (0.55, 0.2),
-            // A trot: diagonal pairs together.
-            legs: vec![front(-0.3, 0.0), front(0.3, 0.5), hind(-0.28, 0.5), hind(0.28, 0.0)],
+            // Front left, front right, hind left, hind right.
+            legs: vec![front(-0.3), front(0.3), hind(-0.28), hind(0.28)],
             arms: vec![],
             tail: (8, 0.22),
-            swing: 0.4,
+            gaits: vec![
+                // A walk: one foot after another down each side.
+                Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 1.5 },
+                // A trot: diagonal pairs together.
+                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.5, 0.0], swing: 0.38, stride: 2.6 },
+                // A gallop: the front pair, then the hind pair.
+                Gait { speed: 11.0, offsets: vec![0.0, 0.1, 0.6, 0.5], swing: 0.42, stride: 4.4 },
+            ],
             lift: 0.28,
-            stride: 2.6,
+            accel: 9.0,
+            decel: 13.0,
             bob: 0.05,
             lean: 0.06,
+            rock: 0.09,
+            shoulder: 0.06,
         }
+    }
+}
+
+impl Plan {
+    /// The gait at a speed, blended between the two nearest (offsets,
+    /// swing, stride), and how far into the fastest it is (0..1).
+    fn gait(&self, speed: f32) -> (Vec<f32>, f32, f32, f32) {
+        let g = &self.gaits;
+        let last = g.len() - 1;
+        let k = g.iter().rposition(|x| x.speed <= speed).unwrap_or(0);
+        let fastest = if last > 0 { ((speed - g[last - 1].speed) / (g[last].speed - g[last - 1].speed)).clamp(0.0, 1.0) } else { 0.0 };
+        if k >= last {
+            return (g[last].offsets.clone(), g[last].swing, g[last].stride * (speed / g[last].speed.max(0.1)).clamp(1.0, 1.4), fastest);
+        }
+        let (a, b) = (&g[k], &g[k + 1]);
+        let t = ((speed - a.speed) / (b.speed - a.speed)).clamp(0.0, 1.0);
+        let offsets = a
+            .offsets
+            .iter()
+            .zip(&b.offsets)
+            .map(|(&x, &y)| {
+                let d = (y - x + 0.5).rem_euclid(1.0) - 0.5;
+                (x + d * t).rem_euclid(1.0)
+            })
+            .collect();
+        (offsets, a.swing + (b.swing - a.swing) * t, a.stride + (b.stride - a.stride) * t, fastest)
     }
 }
 
@@ -193,6 +252,15 @@ pub struct Rig {
     hips_yaw: f32,
     turn_rate: f32,
     phase: f32,
+    /// The current gait: each leg's place in the cycle and where it is now,
+    /// the swing fraction, the stride, and how far into the fastest gait.
+    offsets: Vec<f32>,
+    local: Vec<f32>,
+    swing: f32,
+    stride: f32,
+    gallop: f32,
+    /// The head's height, held steady while the body bobs.
+    head_y: Option<f32>,
     feet: Vec<Foot>,
     head_dir: Vec3,
     glance: Vec3,
@@ -234,6 +302,12 @@ impl Rig {
             hips_yaw: heading,
             turn_rate: 0.0,
             phase: 0.0,
+            offsets: Vec::new(),
+            local: Vec::new(),
+            swing: 0.4,
+            stride: 2.0,
+            gallop: 0.0,
+            head_y: None,
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
@@ -242,6 +316,9 @@ impl Rig {
             seed,
             bones: Vec::new(),
         };
+        let (offsets, swing, stride, _) = rig.plan.gait(0.0);
+        rig.local = offsets.clone();
+        (rig.offsets, rig.swing, rig.stride) = (offsets, swing, stride);
         let homes: Vec<Vec3> = (0..rig.plan.legs.len()).map(|i| rig.home(i, ground)).collect();
         rig.feet = homes.into_iter().map(|h| Foot { planted: h, from: h, swinging: false }).collect();
         let back = -rig.forward_of(heading);
@@ -264,16 +341,21 @@ impl Rig {
         let mid = (self.plan.hips.0 + self.plan.chest.0) * 0.5;
         let forward = self.forward_of(yaw);
         let moving = (self.velocity.length() / 3.0).min(1.0);
-        let bob = -self.plan.bob * moving * (1.0 - (self.phase * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+        let bob = -self.plan.bob * moving * (1.0 - self.gallop) * (1.0 - (self.phase * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+        // Galloping: the body rocks (chest up as the hips go down) and the
+        // spine flexes, the hips reaching forward under the body.
+        let wave = (self.phase * std::f32::consts::TAU).sin();
+        let rock = self.plan.rock * self.gallop * wave * if root == Root::Chest { 1.0 } else { -1.0 };
+        let flex = if root == Root::Hips { self.plan.rock * 2.5 * self.gallop * (self.phase * std::f32::consts::TAU + 1.6).sin() } else { 0.0 };
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving);
         // Crouched: lower, and the chest lower still (the head goes down).
         let low = self.crouch * if root == Root::Chest { 0.42 } else { 0.3 };
-        let height = h * (1.0 - low) + bob + if root == Root::Chest { breath } else { 0.0 };
+        let height = h * (1.0 - low) + bob + rock + if root == Root::Chest { breath } else { 0.0 };
         // Leaning into a turn: the body swings towards its inside.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
-        self.root + forward * (f - mid) + Vec3::Y * height - right * roll * height
+        self.root + forward * (f - mid + flex) + Vec3::Y * height - right * roll * height
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -281,7 +363,11 @@ impl Rig {
         let yaw = if leg.root == Root::Hips { self.hips_yaw } else { self.chest_yaw };
         let forward = self.forward_of(yaw);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
-        self.anchor(leg.root) + right * leg.side + forward * leg.forward
+        // A shoulder blade rises while its leg bears the weight.
+        let local = self.local.get(i).copied().unwrap_or(0.5);
+        let stance = if local < self.swing { 0.0 } else { (std::f32::consts::PI * (local - self.swing) / (1.0 - self.swing)).sin() };
+        let blade = if leg.root == Root::Chest { self.plan.shoulder * stance * (self.velocity.length() / 2.0).min(1.0) } else { 0.0 };
+        self.anchor(leg.root) + right * leg.side + forward * leg.forward + Vec3::Y * blade
     }
 
     /// Where a foot belongs: under its hip, a little ahead when moving.
@@ -315,7 +401,8 @@ impl Rig {
         } else {
             // On the ground: accelerate towards the wanted velocity, turn to
             // face where it goes (or where it looks, standing).
-            let change = (intent.velocity - self.velocity).clamp_length_max(14.0 * dt);
+            let faster = intent.velocity.length() > self.velocity.length();
+            let change = (intent.velocity - self.velocity).clamp_length_max(if faster { self.plan.accel } else { self.plan.decel } * dt);
             self.velocity += change;
             self.velocity.y = 0.0;
             let face = if self.velocity.length() > 0.5 { self.velocity } else { intent.look - self.root };
@@ -342,35 +429,37 @@ impl Rig {
         // every foot is down.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let any_swinging = self.feet.iter().any(|f| f.swinging);
+        let (offsets, swing, stride, gallop) = self.plan.gait(speed);
+        (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
+        self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
         if self.airborne.is_none() && (speed > 0.3 || any_swinging) {
-            let stride = self.plan.stride * (0.45 + 0.55 * (speed / 7.0).min(1.3));
-            self.phase = (self.phase + speed.max(1.2) / stride * dt).fract();
+            self.phase = (self.phase + speed.max(1.0) / self.stride * dt).fract();
         }
         for i in 0..self.feet.len() {
-            let leg = self.plan.legs[i];
             let home = self.home(i, ground);
+            let local = (self.phase - self.offsets[i]).rem_euclid(1.0);
+            self.local[i] = local;
             if self.airborne.is_some() {
                 continue;
             }
-            let local = (self.phase - leg.phase).rem_euclid(1.0);
-            let in_swing = local < self.plan.swing && (speed > 0.3 || self.feet[i].swinging);
+            let in_swing = local < self.swing && (speed > 0.3 || self.feet[i].swinging);
             let foot = &mut self.feet[i];
             if in_swing {
                 if !foot.swinging {
                     foot.swinging = true;
                     foot.from = foot.planted;
                 }
-                let s = local / self.plan.swing;
+                let s = local / self.swing;
                 let arc = (s * std::f32::consts::PI).sin() * self.plan.lift;
                 foot.planted = foot.from.lerp(home, s * s * (3.0 - 2.0 * s)) + Vec3::Y * arc;
             } else if foot.swinging {
                 foot.swinging = false;
                 foot.planted = home;
-            } else if speed <= 0.3 && foot.planted.distance(home) > self.plan.stride * 0.35 {
+            } else if speed <= 0.3 && foot.planted.distance(home) > self.stride * 0.3 {
                 // Standing with a foot out of place: a settling step.
                 foot.from = foot.planted;
                 foot.swinging = true;
-                self.phase = (leg.phase + 0.01).fract();
+                self.phase = (self.offsets[i] + 0.01).fract();
             }
         }
 
@@ -384,6 +473,12 @@ impl Rig {
         let chest = self.anchor(Root::Chest);
         let want = ((intent.look - chest).normalize_or(self.forward_of(self.chest_yaw)) + self.glance * 0.35).normalize_or(Vec3::Z);
         self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * 7.0).exp()).normalize_or(want);
+        // The head's height follows the body's slowly: steady while it bobs.
+        let raw = self.neck_end().y;
+        self.head_y = Some(match self.head_y {
+            Some(y) => raw + (y + (raw - y) * (1.0 - (-dt * 4.0).exp()) - raw).clamp(-0.15, 0.15),
+            None => raw,
+        });
 
         // The tail: each link follows the last at its length, sagging, and
         // raised in a crouch.
@@ -419,12 +514,12 @@ impl Rig {
             let swell = 1.0 + 0.15 * (std::f32::consts::PI * (t0 + t1) * 0.5).sin();
             bones.push(Bone { a: hips.lerp(chest, t0), b: hips.lerp(chest, t1), radius: self.plan.torso_radius * swell, side: right });
         }
-        // Neck and head, along where it looks (the neck goes partway).
-        let (neck_len, neck_fwd, neck_up) = self.plan.neck;
-        let base = Vec3::new(neck_fwd, neck_up, 0.0).normalize_or(Vec3::Y);
-        let neck_dir = (forward * base.x + Vec3::Y * base.y).lerp(self.head_dir, 0.4).normalize_or(Vec3::Y);
-        let neck_dir = (neck_dir - Vec3::Y * 0.5 * self.crouch).normalize_or(forward);
-        let neck_end = chest + neck_dir * neck_len;
+        // Neck and head, along where it looks (the neck goes partway); the
+        // head at its steadied height.
+        let mut neck_end = self.neck_end();
+        if let Some(y) = self.head_y {
+            neck_end.y = y;
+        }
         bones.push(Bone { a: chest, b: neck_end, radius: self.plan.head.1 * 0.8, side: right });
         let head_end = neck_end + self.head_dir * self.plan.head.0;
         bones.push(Bone { a: neck_end, b: head_end, radius: self.plan.head.1, side: right });
@@ -466,6 +561,17 @@ impl Rig {
         self.bones = bones;
     }
 
+    /// Where the neck ends (the head starts), from the pose.
+    fn neck_end(&self) -> Vec3 {
+        let chest = self.anchor(Root::Chest);
+        let forward = self.forward_of(self.chest_yaw);
+        let (neck_len, neck_fwd, neck_up) = self.plan.neck;
+        let base = Vec3::new(neck_fwd, neck_up, 0.0).normalize_or(Vec3::Y);
+        let neck_dir = (forward * base.x + Vec3::Y * base.y).lerp(self.head_dir, 0.4).normalize_or(Vec3::Y);
+        let neck_dir = (neck_dir - Vec3::Y * 0.5 * self.crouch).normalize_or(forward);
+        chest + neck_dir * neck_len
+    }
+
     /// The head's tip and the direction it faces (for eyes).
     pub fn head(&self) -> (Vec3, Vec3) {
         // (Three torso segments, the neck, then the head.)
@@ -476,6 +582,11 @@ impl Rig {
     /// The middle of the chest.
     pub fn chest(&self) -> Vec3 {
         self.anchor(Root::Chest)
+    }
+
+    /// How fast it is moving over the ground.
+    pub fn speed(&self) -> f32 {
+        Vec2::new(self.velocity.x, self.velocity.z).length()
     }
 
     /// Leap towards `dir` (horizontal) with this speed and upward speed.

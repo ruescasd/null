@@ -52,6 +52,10 @@ enum Stance {
     /// Dashing (the biped) or in a pounce (the beast).
     Attack(Vec3),
     Recover,
+    /// The beast: still, low, head locked on you.
+    Freeze,
+    /// The beast: building to a gallop before it pounces.
+    Charge,
 }
 
 #[derive(Component)]
@@ -311,7 +315,7 @@ pub(super) fn gather(
             }
         }
         for side in [-1.0, 1.0] {
-            commands.spawn((Eye { hunter, side }, Mesh3d(assets.core.clone()), MeshMaterial3d(assets.glow.clone()), Transform::from_translation(feet).with_scale(Vec3::splat(0.55))));
+            commands.spawn((Eye { hunter, side }, Mesh3d(assets.core.clone()), MeshMaterial3d(assets.glow.clone()), Transform::from_translation(feet).with_scale(Vec3::splat(0.32))));
         }
     }
 }
@@ -373,66 +377,121 @@ pub(super) fn hunt(
         let distance = flat.length();
         let toward = flat.normalize_or(Vec3::Z);
         let beast = h.kind == Kind::Beast;
-        let (speed, range, windup) = if beast { (7.5, 12.0, 0.6) } else { (4.5, 9.0, 0.7) };
         h.timer -= dt;
         let stunned = h.stun > 0.0;
         h.stun -= dt;
-        let tame = args.opt("tame");
+        let around = Vec3::new(-toward.z, 0.0, toward.x);
+        let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
         let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0 };
-        match h.stance {
-            _ if stunned => {}
-            Stance::Stalk => {
-                if tame {
-                    // (`--opt tame`, for captures: it circles at a distance,
-                    // side on.)
-                    let keep = args.num("tame_at", 14.0);
-                    let around = Vec3::new(-toward.z, 0.0, toward.x);
-                    intent.velocity = (around * 0.7 + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * speed * 0.7;
-                } else if distance > 2.5 {
-                    intent.velocity = toward * speed * ((distance - 2.5) / 3.0).min(1.0);
+        if stunned {
+        } else if args.opt("tame") {
+            // (`--opt tame`, for captures: it circles at a distance, side on,
+            // its pace changing every 8 s: prowl, trot, gallop.)
+            let keep = args.num("tame_at", 14.0);
+            let fixed = args.num("tame_pace", 0.0);
+            let pace = if fixed > 0.0 { fixed } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
+            intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
+            intent.crouch = if pace < 3.0 { 0.35 } else { 0.0 };
+        } else if beast {
+            match h.stance {
+                // Prowling: low and slow, closing in; now and then it freezes,
+                // or breaks into a charge.
+                Stance::Stalk | Stance::Windup => {
+                    intent.crouch = 0.35;
+                    intent.velocity = if distance > 18.0 { toward * 3.2 } else { (toward * 0.4 + around * 0.8).normalize_or(toward) * 2.0 };
+                    if h.timer <= 0.0 {
+                        if distance < 28.0 && r(0) < 0.6 {
+                            h.stance = Stance::Charge;
+                            h.timer = 4.0;
+                        } else {
+                            h.stance = Stance::Freeze;
+                            h.timer = 0.6 + 1.2 * r(1);
+                        }
+                    }
                 }
-                if distance < range && h.timer <= 0.0 && !tame {
-                    h.stance = Stance::Windup;
-                    h.timer = windup;
+                // Still, low, head locked on you.
+                Stance::Freeze => {
+                    intent.crouch = 0.5;
+                    if h.timer <= 0.0 {
+                        h.stance = Stance::Stalk;
+                        h.timer = 1.2 + 2.5 * r(2);
+                    }
                 }
-            }
-            Stance::Windup => {
-                intent.crouch = 1.0;
-                if h.timer <= 0.0 {
-                    h.stance = Stance::Attack(toward);
-                    h.timer = if beast { 2.0 } else { 0.45 };
-                    if beast {
-                        h.rig.leap(toward, 17.0 * (distance / 10.0).clamp(0.6, 1.3), 7.0);
+                // Building to a gallop, then a pounce out of the run, keeping
+                // its momentum.
+                Stance::Charge => {
+                    intent.velocity = toward * 14.0;
+                    intent.crouch = 0.1;
+                    let speed = h.rig.speed();
+                    if speed > 7.0 && distance < 6.0 + speed * 0.3 {
+                        h.rig.leap(toward, (speed * 1.15).max(13.0), 6.5);
+                        h.stance = Stance::Attack(toward);
+                        h.timer = 2.0;
+                    } else if h.timer <= 0.0 {
+                        h.stance = Stance::Stalk;
+                        h.timer = 2.0;
+                    }
+                }
+                Stance::Attack(_) => {
+                    if h.rig.airborne.is_none() && h.timer < 1.9 {
+                        h.stance = Stance::Recover;
+                        h.timer = RECOVER;
+                        h.struck = false;
+                    }
+                }
+                // Landed: it skids to a stop (its deceleration), low.
+                Stance::Recover => {
+                    intent.crouch = 0.4 * (h.timer / RECOVER).max(0.0);
+                    if h.timer <= 0.0 {
+                        h.stance = Stance::Stalk;
+                        h.timer = 1.0 + 1.5 * r(3);
                     }
                 }
             }
-            Stance::Attack(dir) => {
-                if !beast {
-                    // A dash, low and reaching.
+        } else {
+            match h.stance {
+                Stance::Stalk | Stance::Freeze | Stance::Charge => {
+                    if distance > 2.5 {
+                        intent.velocity = toward * 4.5 * ((distance - 2.5) / 3.0).min(1.0);
+                    }
+                    if distance < 9.0 && h.timer <= 0.0 {
+                        h.stance = Stance::Windup;
+                        h.timer = 0.7;
+                    }
+                }
+                Stance::Windup => {
+                    intent.crouch = 1.0;
+                    if h.timer <= 0.0 {
+                        h.stance = Stance::Attack(toward);
+                        h.timer = 0.45;
+                    }
+                }
+                // A dash, low and reaching.
+                Stance::Attack(dir) => {
                     intent.velocity = dir * 20.0;
                     intent.crouch = 0.5;
                     h.rig.velocity = dir * 20.0;
+                    if h.timer <= 0.0 {
+                        h.stance = Stance::Recover;
+                        h.timer = RECOVER;
+                        h.struck = false;
+                    }
                 }
-                if h.rig.chest().distance(target) < 2.2 && !h.struck {
-                    h.struck = true;
-                    player.1.health -= ATTACK;
-                    director.hurt = 1.0;
-                    commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
-                }
-                let landed = beast && h.rig.airborne.is_none() && h.timer < 1.9;
-                if landed || h.timer <= 0.0 {
-                    h.stance = Stance::Recover;
-                    h.timer = RECOVER;
-                    h.struck = false;
-                }
-            }
-            Stance::Recover => {
-                intent.crouch = 0.3 * (h.timer / RECOVER).max(0.0);
-                if h.timer <= 0.0 {
-                    h.stance = Stance::Stalk;
-                    h.timer = 1.2;
+                Stance::Recover => {
+                    intent.crouch = 0.3 * (h.timer / RECOVER).max(0.0);
+                    if h.timer <= 0.0 {
+                        h.stance = Stance::Stalk;
+                        h.timer = 1.2;
+                    }
                 }
             }
+        }
+        // An attack that reaches the player strikes once.
+        if matches!(h.stance, Stance::Attack(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
+            h.struck = true;
+            player.1.health -= ATTACK;
+            director.hurt = 1.0;
+            commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
         }
         h.rig.update(dt, intent, &ground);
         transform.translation = h.rig.chest();
