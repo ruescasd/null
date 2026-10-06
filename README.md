@@ -205,9 +205,9 @@ black, the rest of the world unchanged), with a matte near-black faceted
 skull with two steady lit eyes (flat slanted rhombuses), hard feet and two
 razor prongs for hands. `--opt luminous` gives the same shape slimmer and
 finer-grained with glowing fragments threaded through every part (strange
-only in its substance). One stands about 20 m ahead of the spawn point and
-walks towards you; `--opt statue` keeps it still, `--opt nofigures` removes
-it.
+only in its substance). With `--opt figure` (or `--opt luminous`) one stands
+about 20 m ahead of the spawn point and walks towards you; `--opt statue`
+keeps it still.
 
 Combat, a first prototype (`combat.rs`). The shard shotgun throws a ring of
 16 shards (hitscan, drawn as streaks) about once a second. A swarm hunts

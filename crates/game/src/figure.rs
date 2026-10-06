@@ -25,7 +25,7 @@
 //! The walk is procedural: a foot stays planted until it is too far from
 //! where it should be, then steps there along an arc; legs bend with
 //! two-bone IK. For now the figure walks towards the player and stops a few
-//! metres away (`--opt nofigures`).
+//! metres away. It appears only with `--opt figure` (or `--opt luminous`).
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -260,7 +260,8 @@ fn spawn(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if args.opt("nofigures") {
+    // Only when asked for: `--opt figure`, or `--opt luminous`.
+    if !(args.opt("figure") || args.opt("luminous")) {
         return;
     }
     // About 22 m ahead of the default spawn point, facing it.
