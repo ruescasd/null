@@ -38,6 +38,9 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt peace                               no swarm
     --opt swarm                               the swarm alone: it never assembles into hunters
+    --opt swarmlab                            candidate swarmer forms in an arc in front of you, each turning into a second
+                                              form while you look at it (--set gaze=0..1 holds them, pick=1..5 one close,
+                                              gloom=0..1 holds the darkness; with --opt peace)
     --set wave=N --set wave_every=S           the swarm comes N at a time (4, more the longer you last), every S seconds (7)
     --opt dark                                the swarm does not bite: it brings darkness, closing in the nearer and more
                                               of them there are (--set gloom_near=6 metres at its darkest; gloom_each=0.12,

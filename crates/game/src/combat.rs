@@ -27,6 +27,7 @@ use crate::{
 
 mod hunter;
 mod ichor;
+mod swarmlab;
 mod weapon;
 
 pub struct CombatPlugin;
@@ -66,6 +67,7 @@ impl Plugin for CombatPlugin {
                     .chain()
                     .after(crate::player::walk),
             )
+            .add_systems(Update, swarmlab::lab)
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
