@@ -73,6 +73,8 @@ pub(super) struct Flash {
     grow: f32,
     size: Vec3,
     ring: bool,
+    /// A ring's growth: its radius goes as (age / life) to this power.
+    power: f32,
 }
 
 /// A particle in the world: sparks, the spent shard.
@@ -109,9 +111,8 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     let soot = materials.add(StandardMaterial { base_color: Color::srgb(0.025, 0.025, 0.025), perceptual_roughness: 0.9, reflectance: 0.2, ..default() });
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let needle = meshes.add(shard_mesh(&[(Vec3::Y, 1.0, 0.04), (Vec3::NEG_Y, 0.06, 0.04)]));
-    // A bolt: a hex head on a washer, a socket in it (unit sizes, along +Y).
+    // A hexagonal prism (unit sizes, along +Y): the tubes.
     let hex = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(6));
-    let disc = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(12));
     // What firing throws: a star of rays mostly forward, a ring, and the
     // materials (white-hot, bright).
     let star: Vec<(Vec3, f32, f32)> = (0..14)
@@ -144,38 +145,18 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
                 bevy::light::NotShadowCaster,
             )
         };
-        // A bolt at `at` on a surface facing `normal`: washer, hex head,
-        // socket.
-        let bolt = |g: &mut ChildSpawnerCommands, at: Vec3, normal: Vec3| {
-            let turn = Quat::from_rotation_arc(Vec3::Y, normal) * Quat::from_rotation_y(0.4);
-            for (mesh, material, radius, height, lift) in [
-                (&disc, &metal, 0.0045, 0.0012, 0.0006),
-                (&hex, &worn, 0.0033, 0.0026, 0.0025),
-                (&hex, &wrap, 0.0015, 0.0008, 0.0039),
-            ] {
-                g.spawn((
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material.clone()),
-                    Transform::from_translation(at + normal * lift).with_rotation(turn).with_scale(Vec3::new(radius, height, radius)),
-                    bevy::light::NotShadowCaster,
-                ));
-            }
-        };
-
-        // The receiver: a narrow slab, its long edges chamfered, a rail on
+        // The receiver: a broad slab, its long edges chamfered, a rail on
         // top.
         g.spawn((block(Vec3::new(0.07, 0.072, 0.15), Vec3::ZERO, 0.0), MeshMaterial3d(metal.clone())));
         for (x, y) in [(-1.0f32, 1.0f32), (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
             g.spawn((rolled(Vec3::new(0.012, 0.012, 0.15), Vec3::new(x * 0.033, y * 0.034, 0.0), std::f32::consts::FRAC_PI_4), MeshMaterial3d(metal.clone())));
         }
         g.spawn((block(Vec3::new(0.016, 0.008, 0.15), Vec3::new(0.0, 0.042, 0.0), 0.0), MeshMaterial3d(metal.clone())));
-        // On the side you see: a plate bolted at its corners, and in front
-        // of it the ejection port, a pale shard showing in it.
+        // On the side you see: a plate with machined grooves along it, and
+        // in front of it the ejection port, a pale shard showing in it.
         g.spawn((block(Vec3::new(0.004, 0.044, 0.09), Vec3::new(-0.0365, -0.002, 0.018), 0.0), MeshMaterial3d(metal.clone())));
-        for y in [-0.015, 0.015] {
-            for z in [-0.018, 0.054] {
-                bolt(g, Vec3::new(-0.0385, y - 0.002, z), Vec3::NEG_X);
-            }
+        for y in [-0.014, -0.002, 0.01] {
+            g.spawn((block(Vec3::new(0.0015, 0.0028, 0.078), Vec3::new(-0.0386, y, 0.018), 0.0), MeshMaterial3d(wrap.clone())));
         }
         g.spawn((block(Vec3::new(0.002, 0.02, 0.042), Vec3::new(-0.035, 0.01, -0.052), 0.0), MeshMaterial3d(wrap.clone())));
         g.spawn((
@@ -193,8 +174,19 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             g.spawn((tube(0.019, side * BARREL_X, MUZZLE.y, -0.075, -0.33), MeshMaterial3d(metal.clone())));
             g.spawn((tube(0.02, side * BARREL_X, MUZZLE.y, -0.33, -0.385), MeshMaterial3d(soot.clone())));
         }
-        // (A rib along the top, between them.)
-        g.spawn((block(Vec3::new(0.008, 0.008, 0.3), Vec3::new(0.0, MUZZLE.y + 0.016, -0.23), 0.0), MeshMaterial3d(metal.clone())));
+        // A ventilated heat shield over both: a plate on two mounts, its
+        // edges turned down, a row of vent slots across it.
+        let shield_y = MUZZLE.y + 0.026;
+        g.spawn((block(Vec3::new(0.064, 0.004, 0.19), Vec3::new(0.0, shield_y, -0.185), 0.0), MeshMaterial3d(metal.clone())));
+        for side in [-1.0f32, 1.0] {
+            g.spawn((rolled(Vec3::new(0.004, 0.014, 0.19), Vec3::new(side * 0.034, shield_y - 0.005, -0.185), side * 0.35), MeshMaterial3d(metal.clone())));
+        }
+        for z in [-0.1, -0.27] {
+            g.spawn((block(Vec3::new(0.02, 0.012, 0.012), Vec3::new(0.0, shield_y - 0.007, z), 0.0), MeshMaterial3d(metal.clone())));
+        }
+        for k in 0..7 {
+            g.spawn((block(Vec3::new(0.046, 0.0012, 0.009), Vec3::new(0.0, shield_y + 0.0021, -0.11 - 0.025 * k as f32), 0.0), MeshMaterial3d(wrap.clone())));
+        }
         g.spawn((tube(0.016, 0.0, -0.026, -0.075, -0.235), MeshMaterial3d(grease.clone())));
         g.spawn((tube(0.016, 0.0, -0.026, -0.295, -0.33), MeshMaterial3d(metal.clone())));
         g.spawn((block(Vec3::new(0.078, 0.072, 0.014), Vec3::new(0.0, -0.005, -0.315), 0.0), MeshMaterial3d(metal.clone())));
@@ -334,20 +326,23 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
     // shock flung out.
     commands.entity(gun).with_children(|g| {
         g.spawn((
-            Flash { age: 0.0, life: 0.075, grow: 0.012, size: Vec3::new(0.32, 0.32, 0.45), ring: false },
+            Flash { age: 0.0, life: 0.075, grow: 0.012, size: Vec3::new(0.32, 0.32, 0.45), ring: false, power: 1.0 },
             Mesh3d(fx.star.clone()),
             MeshMaterial3d(fx.flash.clone()),
             Transform::from_translation(muzzle).with_rotation(Quat::from_rotation_z(r(0, 0) * 6.0)).with_scale(Vec3::ZERO),
             bevy::light::NotShadowCaster,
         ));
-        g.spawn((
-            // (Half the effect it had: smaller, thinner, briefer.)
-            Flash { age: 0.0, life: 0.11, grow: 0.11, size: Vec3::new(0.22, 0.12, 0.22), ring: true },
-            Mesh3d(fx.ring.clone()),
-            MeshMaterial3d(fx.flash.clone()),
-            Transform::from_translation(muzzle + Vec3::NEG_Z * 0.04).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::ZERO),
-            bevy::light::NotShadowCaster,
-        ));
+        // A ring of shock, dark, flung out; inside it a thin bright ring
+        // born small and racing outwards, overtaking it as it fades.
+        for (material, size, power) in [(&fx.dark, Vec3::new(0.22, 0.12, 0.22), 0.5), (&fx.flash, Vec3::new(0.24, 0.05, 0.24), 1.6)] {
+            g.spawn((
+                Flash { age: 0.0, life: 0.11, grow: 0.11, size, ring: true, power },
+                Mesh3d(fx.ring.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation(muzzle + Vec3::NEG_Z * 0.04).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::ZERO),
+                bevy::light::NotShadowCaster,
+            ));
+        }
     });
     // Sparks spraying forward in a tight cone, half pale and half dark,
     // each leaving a fading trail of ghosts.
@@ -393,7 +388,8 @@ pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Quer
         t.scale = if f.ring {
             // A ring flung out: growing, thinning.
             let k = f.age / f.life;
-            Vec3::new(f.size.x * (0.2 + 0.8 * k.sqrt()), f.size.y * (1.0 - k) * 0.6, f.size.z * (0.2 + 0.8 * k.sqrt()))
+            let grow = 0.2 + 0.8 * k.powf(f.power);
+            Vec3::new(f.size.x * grow, f.size.y * (1.0 - k) * 0.6, f.size.z * grow)
         } else if f.age < f.grow {
             f.size * (f.age / f.grow)
         } else {

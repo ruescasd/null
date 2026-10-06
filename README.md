@@ -219,16 +219,17 @@ keeps it still.
 Combat, a first prototype (`combat.rs`). The shard shotgun throws a ring of
 16 shards (hitscan, drawn as streaks) every 1.5 seconds. In view
 (`combat/weapon.rs`, built from simple shapes in code), a double-barrelled
-pump-action (the barrels fire in turn): a broad, chamfered slab of a receiver with a rail on top, a bolted plate and
+pump-action (the barrels fire in turn): a broad, chamfered slab of a receiver with a rail on top, a grooved plate and
 an ejection port (a pale shard showing) on the side you see, two barrels
-side by side over a magazine tube with a window of shards lined up in it, a ribbed pump, a pistol
+side by side under a ventilated heat shield, over a magazine tube with a window of shards lined up in it, a ribbed pump, a pistol
 grip, and a stock running back out of view so the gun reaches your shoulder;
 a heavy-duty tool grimy from hard use, never makeshift (soot at the muzzle,
 grease on the magazine, a faint mottle of use). It kicks as it fires, the
 crown of prongs at the muzzle flares and snaps shut, and the pump racks back
 and forward in time with the reload; it lags as you turn, bobs with your
 steps and dips when you land. Firing is excessive on purpose: a white star bursts from
-the muzzle with a ring of shock flung out, sparks spray forward in a tight
+the muzzle with a dark ring of shock flung out (a bright ring racing out
+through it), sparks spray forward in a tight
 cone (half pale, half dark, each leaving a fading trail of ghosts), the spent
 shard is thrown out of the cage's window, a bright
 flash lights the surroundings, and the view kicks, shakes and punches out. A swarm hunts

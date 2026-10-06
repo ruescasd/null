@@ -46,6 +46,13 @@ listed. The rest was judged in review and dropped.
 - **The angler's lure** (a stalk with a bulb that flared like the eyes):
   too on the nose.
 
+## Weapons
+
+- **The shard shotgun with a turning cage** (a barrel whose middle was an
+  open cage of six rails turning a sixth per shot, shards lying in it, its
+  front and back shrouded): replaced by the pump-action, kept as a basis for
+  a rotary cannon. Git tag `rotary-cage` (`git show rotary-cage:crates/game/src/combat/weapon.rs`).
+
 ## The creature
 
 - **The hunched humanoid and the feral creature** (`--opt hunched`,
