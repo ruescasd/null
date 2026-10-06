@@ -37,6 +37,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bench                               once everything in view has loaded: average and worst frame time, entity count, costliest render passes
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt peace                               no swarm
+    --opt swarm                               the swarm alone: it never assembles into hunters
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
                                               times tougher / hunters circle at a distance (--set tame_at=14,

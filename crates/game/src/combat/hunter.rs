@@ -292,9 +292,10 @@ pub(super) fn gather(
         return;
     }
 
-    // Start one: a free swarmer with enough free ones close by.
+    // Start one: a free swarmer with enough free ones close by. (`--opt
+    // swarm`: never; the swarm alone.)
     let allowed = 1 + (director.alive / 90.0) as usize;
-    if assemblies.is_empty() && hunters.iter().count() < allowed && director.next_gather <= 0.0 {
+    if !args.opt("swarm") && assemblies.is_empty() && hunters.iter().count() < allowed && director.next_gather <= 0.0 {
         let free: Vec<(Entity, Vec3)> =
             swarm.iter().filter(|(_, _, s)| s.mode == Mode::Free).map(|(e, t, _)| (e, t.translation)).collect();
         let found = free.iter().find_map(|&(_, p)| {
