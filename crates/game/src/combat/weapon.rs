@@ -49,7 +49,9 @@ pub(super) struct Prong(f32);
 const MUZZLE: Vec3 = Vec3::new(0.0, 0.016, -0.39);
 /// How far each barrel is to the side of the middle.
 pub(super) const BARREL_X: f32 = 0.022;
-pub(super) const MUZZLE_VIEW: Vec3 = Vec3::new(REST.x + MUZZLE.x, REST.y + MUZZLE.y, REST.z + MUZZLE.z);
+pub(super) const MUZZLE_VIEW: Vec3 = Vec3::new(REST.x + MUZZLE.x * SCALE, REST.y + MUZZLE.y * SCALE, REST.z + MUZZLE.z * SCALE);
+/// The whole gun's size in view (its parts are laid out at 1).
+const SCALE: f32 = 1.1;
 
 /// What firing throws.
 #[derive(Resource)]
@@ -135,7 +137,7 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     });
     let block = |size: Vec3, at: Vec3, tilt: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_x(tilt)).with_scale(size), bevy::light::NotShadowCaster);
     let rolled = |size: Vec3, at: Vec3, roll: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_z(roll)).with_scale(size), bevy::light::NotShadowCaster);
-    let gun = commands.spawn((Viewmodel, Transform::from_translation(REST), Visibility::default())).id();
+    let gun = commands.spawn((Viewmodel, Transform::from_translation(REST).with_scale(Vec3::splat(SCALE)), Visibility::default())).id();
     commands.entity(gun).with_children(|g| {
         // A tube along -Z: hexagonal, `radius`, from z0 back to z1, at height y.
         let tube = |radius: f32, x: f32, y: f32, z0: f32, z1: f32| {
@@ -308,7 +310,7 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
     // The barrels fire in turn.
     let side = if shot % 2 == 0 { 1.0 } else { -1.0 };
     let muzzle = MUZZLE + Vec3::X * side * BARREL_X;
-    let at = at + right * side * BARREL_X;
+    let at = at + right * side * BARREL_X * SCALE;
     // On the gun: the star, turned a different way each shot, and a ring of
     // shock flung out.
     commands.entity(gun).with_children(|g| {
@@ -358,7 +360,7 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
         },
         Mesh3d(fx.needle.clone()),
         MeshMaterial3d(fx.pale.clone()),
-        Transform::from_translation(at - right * side * BARREL_X - forward * 0.33 - right * 0.045 - up * 0.006),
+        Transform::from_translation(at + (-right * side * BARREL_X - forward * 0.33 - right * 0.045 - up * 0.006) * SCALE),
         bevy::light::NotShadowCaster,
     ));
 }
