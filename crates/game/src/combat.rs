@@ -111,6 +111,8 @@ struct Assets3 {
     bright: Handle<StandardMaterial>,
     dark: Handle<StandardMaterial>,
     glow: Handle<StandardMaterial>,
+    /// Pale and matte: the markings on creatures that do not glow.
+    pale: Handle<StandardMaterial>,
     gun: Handle<AudioSource>,
     shatter: Handle<AudioSource>,
     hurt: Handle<AudioSource>,
@@ -234,6 +236,7 @@ fn setup(
         bright: bright.clone(),
         dark: dark.clone(),
         glow: glow.clone(),
+        pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
         gun: load("gun"),
         shatter: load("shatter"),
         hurt: load("hurt"),

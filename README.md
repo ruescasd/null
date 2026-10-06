@@ -227,7 +227,10 @@ tail, a beast's shoulder blades rising as each front leg takes the weight,
 its head held steady while the body bobs, breathing when still, and poses
 for a crouch and a leap. Its body is
 dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
-and settles, with glowing cores and two eyes. The biped stalks, crouches
+and settles. Glow is kept for rare, powerful creatures (the luminous figure):
+hunters are dark with pale markings (stripes across the torso, a ridge of
+spines along the back, a brow round the eyes, bands above the paws), and
+their pale eyes flare only when they look straight at you, like eyeshine. The biped stalks, crouches
 where you can see it, and dashes; the beast prowls low and slow, freezes
 with its head locked on you, then charges, building to a gallop, and
 pounces out of the run, skidding when it lands. It takes hits as a whole

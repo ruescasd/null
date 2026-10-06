@@ -6,7 +6,11 @@
 //! `rig.rs`): feet that plant and step, a spine that leads and follows, a
 //! head that tracks you, a tail. What it is made of, dark shards and a few
 //! glowing cores, hangs on the rig's bones by springs, so it lags, sways and
-//! settles. It stalks and attacks after a crouch you can see coming: the
+//! settles. Glow is kept for rare, powerful creatures: these are dark with
+//! pale markings (stripes across the torso, a ridge along the spine, a brow
+//! round the eyes, bands above the paws), and their pale eyes flare only
+//! when they look straight at you, like eyeshine. It stalks and attacks
+//! after a crouch you can see coming: the
 //! biped dashes, the beast pounces. It takes hits as a whole: each shard
 //! jolts the part it strikes and staggers the body, and when its health is
 //! gone the whole body bursts at once.
@@ -105,11 +109,13 @@ pub(super) struct Part {
     stiffness: f32,
 }
 
-/// One of a hunter's eyes.
+/// One of a hunter's eyes (each hunter's pair shares a material, which
+/// flares as it looks at you).
 #[derive(Component)]
 pub(super) struct Eye {
     hunter: Entity,
     side: f32,
+    material: Handle<StandardMaterial>,
 }
 
 /// Starts assemblies, draws their members together, and turns a finished
@@ -121,6 +127,7 @@ pub(super) fn gather(
     args: Res<Args>,
     world: Res<WorldGen>,
     assets: Res<Assets3>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<Director>,
     player: Single<&Transform, (With<Player>, Without<Swarmer>)>,
     mut assemblies: Query<(Entity, &mut Assembly)>,
@@ -237,10 +244,17 @@ pub(super) fn gather(
             .id();
         info!("a {} forms", if kind == Kind::Beast { "beast" } else { "hunter" });
 
-        // Its body: shards along every bone, thicker bones more and bigger;
-        // the torso's carry some of the members' glowing cores.
+        // Its body: shards along every bone, thicker bones more and bigger,
+        // with pale markings.
         let seed = entity.index_u32();
-        let mut cores = members.len().min(8);
+        let pale = |commands: &mut Commands, bone: usize, along: f32, offset: Vec3, dir: Vec3, length: f32, width: f32| {
+            commands.spawn((
+                Part { hunter, bone, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y)), velocity: Vec3::ZERO, stiffness: STIFFNESS * 1.5 },
+                Mesh3d(assets.shard.clone()),
+                MeshMaterial3d(assets.pale.clone()),
+                Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
+            ));
+        };
         for (i, bone) in bones.iter().enumerate() {
             let length = bone.a.distance(bone.b);
             if limbs.contains(&i) {
@@ -264,6 +278,12 @@ pub(super) fn gather(
                     ));
                 }
                 if lower {
+                    // A pale band above the paw.
+                    for k in 0..3 {
+                        let a = k as f32 / 3.0 * std::f32::consts::TAU;
+                        let (c, sn) = (a.cos(), a.sin());
+                        pale(&mut commands, i, 0.72, Vec3::new(c, 0.0, sn) * bone.radius * 1.1, Vec3::new(-sn, 0.0, c), bone.radius * 1.3, 0.02);
+                    }
                     commands.spawn((
                         Part { hunter, bone: i, along: 1.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
                         Mesh3d(assets.swarmer.clone()),
@@ -297,25 +317,39 @@ pub(super) fn gather(
                     Transform::from_translation(p).with_scale(scale),
                 ));
             }
+            // In a bone's frame Y runs along it, X to the body's right, and
+            // -Z is the back (up on a beast's level torso).
             if i < 3 {
-                for k in 0..2 {
-                    if cores == 0 {
-                        break;
+                // Stripes across the back and flanks, and a ridge of spines
+                // along the top.
+                for k in 0..3 {
+                    let r = |j: i32| hash01(seed as i32, (i * 31 + k) as i32, j, 0x6b6) - 0.5;
+                    let along = (k as f32 + 0.5 + r(0) * 0.3) / 3.0;
+                    for m in 0..5 {
+                        let a = (m as f32 - 2.0) * 0.42 + r(1) * 0.2;
+                        let (c, sn) = (a.cos(), a.sin());
+                        let out = Vec3::new(sn, 0.0, -c) * bone.radius * 1.12;
+                        pale(&mut commands, i, along, out, Vec3::new(c, r(2) * 0.3, sn), bone.radius * 0.75, 0.035);
                     }
-                    cores -= 1;
-                    let r = |j: i32| hash01(seed as i32, (i * 13 + k) as i32, j, 0x6b3) - 0.5;
-                    let offset = Vec3::new(r(0), 0.0, r(1)) * bone.radius * 0.6;
-                    commands.spawn((
-                        Part { hunter, bone: i, along: 0.5 + r(2) * 0.6, offset, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: STIFFNESS },
-                        Mesh3d(assets.core.clone()),
-                        MeshMaterial3d(assets.glow.clone()),
-                        Transform::from_translation(bone.a).with_scale(Vec3::splat(1.3)),
-                    ));
+                    pale(&mut commands, i, along + 0.15, Vec3::new(0.0, 0.0, -bone.radius * 1.15), Vec3::new(r(3) * 0.2, -0.5, -1.0), bone.radius * 0.9, 0.05);
+                }
+            }
+            if i == 4 {
+                // A brow, swept back over the eyes.
+                for side in [-1.0, 1.0] {
+                    pale(&mut commands, i, 0.62, Vec3::new(side * bone.radius * 0.75, 0.0, -bone.radius * 0.75), Vec3::new(side * 0.5, -1.0, -0.6), bone.radius * 1.6, 0.03);
                 }
             }
         }
+        // Pale eyes, flaring when it looks at you (see `flesh`).
+        let eyes = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, ..default() });
         for side in [-1.0, 1.0] {
-            commands.spawn((Eye { hunter, side }, Mesh3d(assets.core.clone()), MeshMaterial3d(assets.glow.clone()), Transform::from_translation(feet).with_scale(Vec3::splat(0.32))));
+            commands.spawn((
+                Eye { hunter, side, material: eyes.clone() },
+                Mesh3d(assets.core.clone()),
+                MeshMaterial3d(eyes.clone()),
+                Transform::from_translation(feet).with_scale(Vec3::splat(0.3)),
+            ));
         }
     }
 }
@@ -504,9 +538,11 @@ pub(super) fn hunt(
 #[allow(clippy::type_complexity)]
 pub(super) fn flesh(
     time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    camera: Single<&Transform, (With<FlyCam>, Without<Part>, Without<Eye>)>,
     mut hunters: Query<&mut Hunter>,
-    mut parts: Query<(&mut Part, &mut Transform), Without<Eye>>,
-    mut eyes: Query<(&Eye, &mut Transform), Without<Part>>,
+    mut parts: Query<(&mut Part, &mut Transform), (Without<Eye>, Without<FlyCam>)>,
+    mut eyes: Query<(&Eye, &mut Transform), (Without<Part>, Without<FlyCam>)>,
 ) {
     let dt = time.delta_secs().min(0.05);
     for (mut part, mut transform) in &mut parts {
@@ -537,6 +573,11 @@ pub(super) fn flesh(
         let side = dir.cross(Vec3::Y).normalize_or(Vec3::X);
         let r = if h.kind == Kind::Beast { 0.11 } else { 0.08 };
         transform.translation = tip - dir * 0.12 + side * eye.side * r + Vec3::Y * 0.06;
+        // Eyeshine: bright only when it looks straight at you.
+        let facing = dir.dot((camera.translation - tip).normalize_or(Vec3::Y)).max(0.0).powi(8);
+        if let Some(mut m) = materials.get_mut(&eye.material) {
+            m.emissive = LinearRgba::rgb(1.0, 1.0, 1.0) * 6000.0 * facing;
+        }
     }
     for mut h in &mut hunters {
         h.hits.clear();
