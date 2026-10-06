@@ -602,7 +602,8 @@ fn swarm(
 
 /// `--opt dark`: the swarm does not bite; it brings darkness. Each swarmer
 /// within reach darkens the world, more the nearer it is, and together they
-/// all but blind you; it closes in fast and lifts slowly. (Those gathering
+/// all but blind you (`--set gloom_each`: how much one close by does); it
+/// closes in fast and lifts slowly. (Those gathering
 /// into a hunter count too: it forms in the dark, and the dark lifts off it.)
 fn gloom(
     time: Res<Time>,
@@ -619,7 +620,7 @@ fn gloom(
         .iter()
         .map(|t| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
         .sum();
-    let target = 1.0 - (-0.35 * sum).exp();
+    let target = 1.0 - (-args.num("gloom_each", 0.12) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
 }
