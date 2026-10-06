@@ -81,6 +81,8 @@ pub(super) struct Hunter {
     struck: bool,
     /// How far its jaw is open (radians).
     jaw: f32,
+    /// An angler (a beast that is not a hound).
+    angler: bool,
     /// What it is doing beyond walking, and when it next does something.
     gesture: Gesture,
     gesture_in: f32,
@@ -407,7 +409,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
+            Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, angler, gesture: Gesture::None, gesture_in: 2.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -1026,7 +1028,9 @@ pub(super) fn voice(
         }
         voice.count += 1;
         let r = |k: i32| hash01(e.index_u32() as i32, voice.count as i32, k, 0x7c1);
-        let (sound, length) = assets.growls[(r(0) * assets.growls.len() as f32) as usize % assets.growls.len()].clone();
+        // The hound's growls are wet; the others' rough.
+        let bank = if h.kind == Kind::Beast && !h.angler { &assets.wet } else { &assets.growls };
+        let (sound, length) = bank[(r(0) * bank.len() as f32) as usize % bank.len()].clone();
         let speed = pitch * (0.9 + 0.18 * r(1));
         commands.entity(e).with_child((
             AudioPlayer::new(sound),

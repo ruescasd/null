@@ -47,6 +47,15 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/growl4.wav");
         embedded_asset!(app, "sounds/growl5.wav");
         embedded_asset!(app, "sounds/growl6.wav");
+        embedded_asset!(app, "sounds/wet0.wav");
+        embedded_asset!(app, "sounds/wet1.wav");
+        embedded_asset!(app, "sounds/wet2.wav");
+        embedded_asset!(app, "sounds/wet3.wav");
+        embedded_asset!(app, "sounds/wet4.wav");
+        embedded_asset!(app, "sounds/wet5.wav");
+        embedded_asset!(app, "sounds/wet6.wav");
+        embedded_asset!(app, "sounds/wet7.wav");
+        embedded_asset!(app, "sounds/wet8.wav");
         embedded_asset!(app, "sounds/pounce.wav");
         embedded_asset!(app, "sounds/bite.wav");
         // Spatial sounds fade with the square of the distance; at this scale
@@ -133,6 +142,8 @@ struct Assets3 {
     death: Handle<AudioSource>,
     /// A hunter's growls: phrases cut from recordings, and their lengths.
     growls: Vec<(Handle<AudioSource>, f32)>,
+    /// The hound's: wet and slimy.
+    wet: Vec<(Handle<AudioSource>, f32)>,
     pounce: Handle<AudioSource>,
     bite: Handle<AudioSource>,
 }
@@ -259,6 +270,7 @@ fn setup(
         hit: load("hit"),
         death: load("death"),
         growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("growl{k}")), l)).collect(),
+        wet: [3.07, 2.58, 1.56, 2.60, 3.12, 2.81, 3.54, 1.68, 2.00].iter().enumerate().map(|(k, &l)| (load(&format!("wet{k}")), l)).collect(),
         pounce: load("pounce"),
         bite: load("bite"),
     };
