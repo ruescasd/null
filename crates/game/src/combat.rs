@@ -44,7 +44,7 @@ impl Plugin for CombatPlugin {
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
-            .add_systems(Startup, ichor::setup)
+            .add_systems(Startup, (ichor::setup, hunter::setup))
             .add_systems(
                 Update,
                 (fire, fly_shards, ichor::fly, ichor::burst, swarm, hunter::gather, hunter::hunt, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)

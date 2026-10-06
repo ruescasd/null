@@ -9,7 +9,10 @@
 //!   down take time. Standing still, the clock stops once every foot is
 //!   down, and a foot left far from its place takes a step on its own.
 //! - A beast's shoulder blades rise as each front leg takes the weight; the
-//!   head is held steady while the body bobs.
+//!   head is held steady while the body bobs; walking, the spine undulates
+//!   from side to side.
+//! - Nothing is quite regular: the tempo drifts, and each step lifts a
+//!   little differently and lands a little off its ideal place.
 //! - Two-bone legs (and arms) solved by IK, each bending its own way.
 //! - The body bobs with the steps, its chest leading a turn and its hips
 //!   following, leaning into the turn; it breathes when still.
@@ -91,6 +94,8 @@ pub struct Plan {
     pub lean: f32,
     pub rock: f32,
     pub shoulder: f32,
+    /// How far the spine swings from side to side when walking.
+    pub sway: f32,
 }
 
 impl Plan {
@@ -118,6 +123,7 @@ impl Plan {
             lean: 0.04,
             rock: 0.0,
             shoulder: 0.0,
+            sway: 0.03,
         }
     }
 
@@ -151,6 +157,7 @@ impl Plan {
             lean: 0.06,
             rock: 0.09,
             shoulder: 0.06,
+            sway: 0.08,
         }
     }
 }
@@ -261,6 +268,8 @@ pub struct Rig {
     gallop: f32,
     /// The head's height, held steady while the body bobs.
     head_y: Option<f32>,
+    /// Steps each foot has taken (to vary each one).
+    steps: Vec<u32>,
     feet: Vec<Foot>,
     head_dir: Vec3,
     glance: Vec3,
@@ -308,6 +317,7 @@ impl Rig {
             stride: 2.0,
             gallop: 0.0,
             head_y: None,
+            steps: Vec::new(),
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
@@ -319,6 +329,7 @@ impl Rig {
         let (offsets, swing, stride, _) = rig.plan.gait(0.0);
         rig.local = offsets.clone();
         (rig.offsets, rig.swing, rig.stride) = (offsets, swing, stride);
+        rig.steps = vec![0; rig.plan.legs.len()];
         let homes: Vec<Vec3> = (0..rig.plan.legs.len()).map(|i| rig.home(i, ground)).collect();
         rig.feet = homes.into_iter().map(|h| Foot { planted: h, from: h, swinging: false }).collect();
         let back = -rig.forward_of(heading);
@@ -347,6 +358,9 @@ impl Rig {
         let wave = (self.phase * std::f32::consts::TAU).sin();
         let rock = self.plan.rock * self.gallop * wave * if root == Root::Chest { 1.0 } else { -1.0 };
         let flex = if root == Root::Hips { self.plan.rock * 2.5 * self.gallop * (self.phase * std::f32::consts::TAU + 1.6).sin() } else { 0.0 };
+        // Walking, the spine swings from side to side, chest and hips in
+        // opposition.
+        let sway = self.plan.sway * moving * (1.0 - self.gallop) * wave * if root == Root::Chest { 1.0 } else { -1.0 };
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving);
         // Crouched: lower, and the chest lower still (the head goes down).
         let low = self.crouch * if root == Root::Chest { 0.42 } else { 0.3 };
@@ -355,7 +369,7 @@ impl Rig {
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
-        self.root + forward * (f - mid + flex) + Vec3::Y * height - right * roll * height
+        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height)
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -374,7 +388,11 @@ impl Rig {
     fn home(&self, i: usize, ground: &impl Fn(f32, f32) -> f32) -> Vec3 {
         let hip = self.hip(i);
         let lead = self.velocity * 0.18;
-        let p = Vec3::new(hip.x, 0.0, hip.z) + Vec3::new(lead.x, 0.0, lead.z);
+        // Each step lands a little off its ideal place.
+        let k = self.steps.get(i).copied().unwrap_or(0) as i32;
+        let r = |j: i32| hash01(self.seed as i32 + i as i32 * 101, k, j, 0x61b) - 0.5;
+        let jitter = Vec3::new(r(0), 0.0, r(1)) * 0.12 * (self.velocity.length() / 2.0).min(1.0);
+        let p = Vec3::new(hip.x, 0.0, hip.z) + Vec3::new(lead.x, 0.0, lead.z) + jitter;
         Vec3::new(p.x, ground(p.x, p.z), p.z)
     }
 
@@ -433,7 +451,9 @@ impl Rig {
         (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
         if self.airborne.is_none() && (speed > 0.3 || any_swinging) {
-            self.phase = (self.phase + speed.max(1.0) / self.stride * dt).fract();
+            // The tempo drifts a little.
+            let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
+            self.phase = (self.phase + speed.max(1.0) / self.stride * drift * dt).fract();
         }
         for i in 0..self.feet.len() {
             let home = self.home(i, ground);
@@ -448,9 +468,11 @@ impl Rig {
                 if !foot.swinging {
                     foot.swinging = true;
                     foot.from = foot.planted;
+                    self.steps[i] += 1;
                 }
                 let s = local / self.swing;
-                let arc = (s * std::f32::consts::PI).sin() * self.plan.lift;
+                let lift = self.plan.lift * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
+                let arc = (s * std::f32::consts::PI).sin() * lift;
                 foot.planted = foot.from.lerp(home, s * s * (3.0 - 2.0 * s)) + Vec3::Y * arc;
             } else if foot.swinging {
                 foot.swinging = false;

@@ -224,13 +224,18 @@ an arc to where the body will be, two-bone IK legs, a body that bobs with
 the steps and leans into turns, a chest that leads a turn with the hips
 following, a head that tracks you and now and then glances away, a trailing
 tail, a beast's shoulder blades rising as each front leg takes the weight,
-its head held steady while the body bobs, breathing when still, and poses
-for a crouch and a leap. Its body is
+its spine swinging from side to side as it walks, its head held steady
+while the body bobs, breathing when still, and poses for a crouch and a
+leap. Nothing is quite regular: the tempo drifts, each step lifts a little
+differently and lands a little off its ideal place, and a prowling beast's
+path wanders and its pace comes and goes. Its body is
 dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
-and settles. Glow is kept for rare, powerful creatures (the luminous figure):
-hunters are dark with pale markings (stripes across the torso, a ridge of
-spines along the back, a brow round the eyes, bands above the paws), and
-their pale eyes flare only when they look straight at you, like eyeshine. The biped stalks, crouches
+and settles. Its head is one faceted skull (a long muzzle on the beast) with
+a hinged jaw that opens as it crouches and strikes. Glow is kept for rare,
+powerful creatures (the luminous figure): hunters are dark with thin pale
+markings (stripes across the back, a brow over the eyes, bands above the
+paws), and their pale eyes flare only when they look straight at you, like
+eyeshine. The biped stalks, crouches
 where you can see it, and dashes; the beast prowls low and slow, freezes
 with its head locked on you, then charges, building to a gallop, and
 pounces out of the run, skidding when it lands. It takes hits as a whole
