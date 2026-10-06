@@ -156,7 +156,7 @@ pub(super) struct Heads {
 
 /// Where a beast head's eyes and brow sit: out from the bone and up, in
 /// head radii, and along it (0..1).
-const HEAD_EYES: [(f32, f32, f32); 4] = [(0.62, 0.32, 0.5), (0.6, 0.3, 0.5), (0.95, 0.45, 0.5), (0.5, 0.78, 0.3)];
+const HEAD_EYES: [(f32, f32, f32); 4] = [(0.62, 0.32, 0.5), (0.6, 0.3, 0.5), (0.95, 0.45, 0.5), (0.86, 0.9, 0.3)];
 /// The angler's head.
 const ANGLER: usize = 3;
 
