@@ -93,6 +93,7 @@ fn main() {
             primary_window: Some(Window {
                 title: "terrain".into(),
                 resolution: (1600, 900).into(),
+                position: bevy::window::WindowPosition::Centered(bevy::window::MonitorSelection::Primary),
                 present_mode: PresentMode::AutoNoVsync,
                 ..default()
             }),
