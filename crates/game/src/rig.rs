@@ -75,6 +75,11 @@ pub struct Plan {
     pub hips: (f32, f32),
     pub chest: (f32, f32),
     pub torso_radius: f32,
+    /// The torso's thickness at the hips, the waist and the chest (times
+    /// `torso_radius`): a beast is deep-chested with a tucked-up waist.
+    pub torso_profile: [f32; 3],
+    /// The neck's thickness at its base (it tapers to the head).
+    pub neck_radius: f32,
     /// Neck length and direction (forward, up), head length and radius.
     pub neck: (f32, f32, f32),
     pub head: (f32, f32),
@@ -107,8 +112,10 @@ impl Plan {
             hips: (0.0, 1.5),
             chest: (0.1, 2.3),
             torso_radius: 0.3,
+            torso_profile: [1.0, 1.0, 1.15],
+            neck_radius: 0.2,
             neck: (0.25, 0.15, 0.25),
-            head: (0.35, 0.16),
+            head: (0.38, 0.18),
             legs: vec![leg(-0.22), leg(0.22)],
             arms: vec![arm(-0.38), arm(0.38)],
             tail: (0, 0.0),
@@ -135,9 +142,11 @@ impl Plan {
         Plan {
             hips: (-0.85, 1.25),
             chest: (0.85, 1.3),
-            torso_radius: 0.38,
+            torso_radius: 0.33,
+            torso_profile: [0.82, 0.72, 1.12],
+            neck_radius: 0.32,
             neck: (0.55, 0.25, 0.22),
-            head: (0.55, 0.2),
+            head: (0.68, 0.25),
             // Front left, front right, hind left, hind right.
             legs: vec![front(-0.3), front(0.3), hind(-0.28), hind(0.28)],
             arms: vec![],
@@ -197,6 +206,8 @@ pub struct Intent {
     pub look: Vec3,
     /// 0 standing, 1 fully crouched.
     pub crouch: f32,
+    /// A leg to hold raised (standing still): a paw lifted, poised.
+    pub paw: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -270,6 +281,8 @@ pub struct Rig {
     head_y: Option<f32>,
     /// Steps each foot has taken (to vary each one).
     steps: Vec<u32>,
+    /// A raised paw: which leg, and how far up (0..1).
+    paw: (usize, f32),
     feet: Vec<Foot>,
     head_dir: Vec3,
     glance: Vec3,
@@ -318,6 +331,7 @@ impl Rig {
             gallop: 0.0,
             head_y: None,
             steps: Vec::new(),
+            paw: (0, 0.0),
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
@@ -400,6 +414,14 @@ impl Rig {
     pub fn update(&mut self, dt: f32, intent: Intent, ground: &impl Fn(f32, f32) -> f32) {
         self.time += dt;
         self.crouch += (intent.crouch - self.crouch) * (1.0 - (-dt * 8.0).exp());
+        // A raised paw goes up slowly, comes down quicker.
+        let still = Vec2::new(self.velocity.x, self.velocity.z).length() < 0.4;
+        match intent.paw {
+            Some(leg) if still && (self.paw.1 < 0.01 || self.paw.0 == leg) => {
+                self.paw = (leg, (self.paw.1 + dt * 2.5).min(1.0));
+            }
+            _ => self.paw.1 = (self.paw.1 - dt * 5.0).max(0.0),
+        }
         let old_heading = self.heading;
         if let Some(vy) = self.airborne.as_mut() {
             // A leap: ballistic.
@@ -533,7 +555,7 @@ impl Rig {
         let n = 3;
         for k in 0..n {
             let (t0, t1) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
-            let swell = 1.0 + 0.15 * (std::f32::consts::PI * (t0 + t1) * 0.5).sin();
+            let swell = self.plan.torso_profile[k.min(2)];
             bones.push(Bone { a: hips.lerp(chest, t0), b: hips.lerp(chest, t1), radius: self.plan.torso_radius * swell, side: right });
         }
         // Neck and head, along where it looks (the neck goes partway); the
@@ -542,7 +564,7 @@ impl Rig {
         if let Some(y) = self.head_y {
             neck_end.y = y;
         }
-        bones.push(Bone { a: chest, b: neck_end, radius: self.plan.head.1 * 0.8, side: right });
+        bones.push(Bone { a: chest, b: neck_end, radius: self.plan.neck_radius, side: right });
         let head_end = neck_end + self.head_dir * self.plan.head.0;
         bones.push(Bone { a: neck_end, b: head_end, radius: self.plan.head.1, side: right });
         // Legs.
@@ -555,6 +577,11 @@ impl Rig {
             let target = match self.airborne {
                 // In a leap: front legs flung forward, hind legs back.
                 Some(_) => hip - Vec3::Y * reach * 0.7 + fwd * reach * 0.6 * if leg.root == Root::Chest { 1.0 } else { -1.0 },
+                None if self.paw.0 == i && self.paw.1 > 0.0 && !self.feet[i].swinging => {
+                    // Poised: lifted and drawn up under the chest.
+                    let k = self.paw.1 * self.paw.1 * (3.0 - 2.0 * self.paw.1);
+                    self.feet[i].planted + Vec3::Y * reach * 0.38 * k - fwd * reach * 0.12 * k
+                }
                 None => self.feet[i].planted,
             };
             let (knee, end) = ik(hip, target, leg.upper, leg.lower, fwd * leg.knee);

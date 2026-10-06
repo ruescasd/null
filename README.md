@@ -228,7 +228,11 @@ its spine swinging from side to side as it walks, its head held steady
 while the body bobs, breathing when still, and poses for a crouch and a
 leap. Nothing is quite regular: the tempo drifts, each step lifts a little
 differently and lands a little off its ideal place, and a prowling beast's
-path wanders and its pace comes and goes. Its body is
+path wanders and its pace comes and goes. Gestures break up the prowl at
+irregular intervals: it sniffs the ground ahead, glances back over a
+shoulder, stops dead with a front paw raised, or breaks into a short trot.
+The beast is deep-chested with a tucked-up waist and a lean belly, the mass
+riding high on a thick neck and a hump of muscle over the shoulders. Its body is
 dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
 and settles. Its head is one faceted skull (a long muzzle on the beast) with
 a hinged jaw that opens as it crouches and strikes. Glow is kept for rare,

@@ -81,6 +81,23 @@ pub(super) struct Hunter {
     struck: bool,
     /// How far its jaw is open (radians).
     jaw: f32,
+    /// What it is doing beyond walking, and when it next does something.
+    gesture: Gesture,
+    gesture_in: f32,
+}
+
+/// Gestures that break up a prowl.
+#[derive(Clone, Copy, PartialEq)]
+enum Gesture {
+    None,
+    /// Head down to the ground ahead, slowing.
+    Sniff(f32),
+    /// A look back over a shoulder (-1 left, 1 right).
+    Glance(f32, f32),
+    /// Stopped dead with a front paw raised.
+    Paw(f32, usize),
+    /// A short trot.
+    Burst(f32),
 }
 
 impl Hunter {
@@ -312,7 +329,7 @@ pub(super) fn gather(
         let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
         let hunter = commands
             .spawn((
-                Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0 },
+                Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
                 Transform::from_translation(feet + Vec3::Y * 1.5),
                 Visibility::default(),
             ))
@@ -402,7 +419,12 @@ pub(super) fn gather(
                 let along = k as f32 / count as f32 + r(0) / count as f32;
                 let a = r(1) * std::f32::consts::TAU;
                 let out = bone.radius * (0.35 + 0.6 * (r(2) + 0.5));
-                let offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
+                let mut offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
+                // A beast's belly is lean: what hangs under the torso (+Z in
+                // its frame) sits close in.
+                if kind == Kind::Beast && i < 3 && offset.z > 0.0 {
+                    offset.z *= 0.45;
+                }
                 // Knots, and now and then a long blade swept back.
                 let blade = r(3) > 0.3;
                 let rotation = if blade {
@@ -410,7 +432,9 @@ pub(super) fn gather(
                 } else {
                     Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0)
                 };
-                let size = bone.radius * (0.9 + 0.8 * (r(7) + 0.5));
+                // The neck thick at its base, tapering to the head.
+                let taper = if i == 3 { 1.25 - 0.6 * along } else { 1.0 };
+                let size = bone.radius * (0.9 + 0.8 * (r(7) + 0.5)) * taper;
                 let p = bone.a.lerp(bone.b, along) + bone.rotation() * offset;
                 let (mesh, scale) = if blade { (assets.shard.clone(), Vec3::new(size * 3.0, size * 1.4, size * 3.0)) } else { (assets.swarmer.clone(), Vec3::splat(size * 1.6)) };
                 commands.spawn((
@@ -422,6 +446,23 @@ pub(super) fn gather(
             }
             // In a bone's frame Y runs along it, X to the body's right, and
             // -Z is the back (up on a beast's level torso).
+            if kind == Kind::Beast && (i == 2 || i == 3) {
+                // Muscle over the shoulders and up the back of the neck: a
+                // heavy hump of mass on top, where its strength is.
+                let (from, to) = if i == 2 { (0.45, 1.0) } else { (0.0, 0.45) };
+                for k in 0..10 {
+                    let r = |j: i32| hash01(seed as i32, (i * 53 + k) as i32, j, 0x6b7) - 0.5;
+                    let along = from + (to - from) * (k as f32 + 0.5 + r(0) * 0.5) / 10.0;
+                    let offset = Vec3::new(r(1) * bone.radius * 0.9, 0.0, -bone.radius * (0.55 + 0.3 * (r(2) + 0.5)));
+                    let size = bone.radius * (1.1 + 0.5 * (r(3) + 0.5));
+                    commands.spawn((
+                        Part { hunter, bone: i, along, offset, rotation: Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0), velocity: Vec3::ZERO, stiffness: STIFFNESS },
+                        Mesh3d(assets.swarmer.clone()),
+                        MeshMaterial3d(assets.dark.clone()),
+                        Transform::from_translation(bone.a).with_scale(Vec3::splat(size * 1.6)),
+                    ));
+                }
+            }
             if i < 3 {
                 // Thin stripes lying across the back.
                 for k in 0..2 {
@@ -511,7 +552,7 @@ pub(super) fn hunt(
         h.stun -= dt;
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
-        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0 };
+        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None };
         if stunned {
         } else if args.opt("tame") {
             // (`--opt tame`, for captures: it circles at a distance, side on,
@@ -535,10 +576,51 @@ pub(super) fn hunt(
                     let base = if distance > 18.0 { toward } else { (toward * 0.4 + around * 0.8).normalize_or(toward) };
                     let dir = Quat::from_rotation_y(wander) * base;
                     intent.velocity = dir * if distance > 18.0 { 3.2 } else { 2.0 } * pace;
+                    // Now and then a gesture breaks the prowl.
+                    h.gesture_in -= dt;
+                    if h.gesture == Gesture::None && h.gesture_in <= 0.0 {
+                        let pick = r(5);
+                        h.gesture = if pick < 0.3 {
+                            Gesture::Sniff(1.2 + r(6))
+                        } else if pick < 0.55 {
+                            Gesture::Glance(0.8 + 0.5 * r(6), if r(7) < 0.5 { -1.0 } else { 1.0 })
+                        } else if pick < 0.8 {
+                            Gesture::Paw(0.8 + 0.8 * r(6), if r(7) < 0.5 { 0 } else { 1 })
+                        } else {
+                            Gesture::Burst(0.8 + 0.6 * r(6))
+                        };
+                        h.gesture_in = 1.5 + 3.0 * r(8);
+                    }
+                    let forward = Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos());
+                    h.gesture = match h.gesture {
+                        Gesture::Sniff(t) => {
+                            intent.velocity *= 0.35;
+                            intent.look = root + forward * 1.4;
+                            if t > dt { Gesture::Sniff(t - dt) } else { Gesture::None }
+                        }
+                        Gesture::Glance(t, side) => {
+                            let back = Vec3::new(-forward.z, 0.0, forward.x) * side * 4.0 - forward * 3.0;
+                            intent.look = root + back + Vec3::Y * 1.2;
+                            if t > dt { Gesture::Glance(t - dt, side) } else { Gesture::None }
+                        }
+                        Gesture::Paw(t, leg) => {
+                            intent.velocity = Vec3::ZERO;
+                            intent.crouch = 0.45;
+                            intent.paw = Some(leg);
+                            if t > dt { Gesture::Paw(t - dt, leg) } else { Gesture::None }
+                        }
+                        Gesture::Burst(t) => {
+                            intent.velocity = intent.velocity.normalize_or(toward) * 6.0;
+                            intent.crouch = 0.1;
+                            if t > dt { Gesture::Burst(t - dt) } else { Gesture::None }
+                        }
+                        Gesture::None => Gesture::None,
+                    };
                     if h.timer <= 0.0 {
                         if distance < 28.0 && r(0) < 0.6 {
                             h.stance = Stance::Charge;
                             h.timer = 4.0;
+                            h.gesture = Gesture::None;
                         } else {
                             h.stance = Stance::Freeze;
                             h.timer = 0.6 + 1.2 * r(1);
