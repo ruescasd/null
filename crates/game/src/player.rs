@@ -635,6 +635,10 @@ pub fn walk(
 #[derive(Component)]
 struct Readout;
 
+/// The health bar's fill: a thin pale line over a dark track.
+#[derive(Component)]
+struct HealthBar;
+
 /// The crosshair grows when the tether can reach what it points at.
 #[derive(Component)]
 struct Crosshair;
@@ -658,28 +662,39 @@ fn setup_hud(mut commands: Commands, args: Res<Args>) {
             Node { width: px(4), height: px(4), ..default() },
             BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
         ));
-    // Speed and health, bottom centre.
+    // Speed, and under it the health bar, bottom centre.
     commands
         .spawn(Node {
             position_type: PositionType::Absolute,
             width: percent(100),
             bottom: px(24),
-            justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: px(8),
             ..default()
         })
-        .with_child((
-            Readout,
-            Text::new(""),
-            TextFont { font_size: FontSize::Px(18.0), ..default() },
-            TextColor(Color::srgb(0.85, 0.85, 0.85)),
-            TextLayout::justify(Justify::Center),
-        ));
+        .with_children(|hud| {
+            hud.spawn((
+                Readout,
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(18.0), ..default() },
+                TextColor(Color::srgb(0.85, 0.85, 0.85)),
+                TextLayout::justify(Justify::Center),
+            ));
+            hud.spawn((Node { width: px(220), height: px(5), ..default() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75))))
+                .with_child((
+                    HealthBar,
+                    Node { width: percent(100), height: percent(100), ..default() },
+                    BackgroundColor(Color::srgba(0.9, 0.9, 0.9, 0.85)),
+                ));
+        });
 }
 
 fn update_hud(
     spatial: SpatialQuery,
     player: Single<(&Transform, &Player, &FlyCam)>,
     mut readout: Single<&mut Text, With<Readout>>,
+    mut bar: Single<&mut Node, (With<HealthBar>, Without<Crosshair>)>,
     mut crosshair: Single<(&mut Node, &mut BackgroundColor), With<Crosshair>>,
 ) {
     let (transform, player, fly) = *player;
@@ -689,17 +704,11 @@ fn update_hud(
     let size = if reachable { 7.0 } else { 4.0 };
     (node.width, node.height) = (px(size), px(size));
     color.0 = Color::srgba(1.0, 1.0, 1.0, if reachable { 0.95 } else { 0.5 });
+    bar.width = percent(player.health.clamp(0.0, HEALTH_MAX) / HEALTH_MAX * 100.0);
     if fly.noclip {
         readout.0 = "noclip".into();
         return;
     }
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
-    let bars = (player.health.max(0.0) / HEALTH_MAX * 20.0).round() as usize;
-    readout.0 = format!(
-        "{speed:4.1} m/s   {:4.0} ups
-[{}{}]",
-        speed / 0.032,
-        "|".repeat(bars),
-        " ".repeat(20 - bars),
-    );
+    readout.0 = format!("{speed:4.1} m/s   {:4.0} ups", speed / 0.032);
 }
