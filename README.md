@@ -50,8 +50,8 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt hurtsound                           the sound when you are hurt (off by default)
     --opt oldgun                              the synthesised shot instead of the recorded one
     --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
-    --set crowd=N                             with --opt hunters: N of them at once, round you (for measuring their cost)
                                               whenever there is none (with biped|beast to choose)
+    --set crowd=N                             with --opt hunters: N of them at once, round you (for measuring their cost)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nograin|nosites   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
