@@ -71,7 +71,7 @@ impl Plugin for CombatPlugin {
 }
 
 /// Seconds between shots.
-const RELOAD: f32 = 1.2;
+const RELOAD: f32 = 1.5;
 /// Shards per shot, the cone they spread in (radians, half-angle), how far
 /// they reach and how fast they are drawn flying.
 const SHARDS: usize = 16;
@@ -379,7 +379,7 @@ fn fire(
     gun.recoil += 0.11;
     gun.shots += 1;
     light.intensity = 1.2e7;
-    commands.spawn((AudioPlayer::new(assets.gun.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.8))));
+    commands.spawn((AudioPlayer::new(assets.gun.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.96))));
     gun.reload_in = Some(0.12);
 
     let eye = transform.translation;
