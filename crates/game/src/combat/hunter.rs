@@ -149,9 +149,14 @@ pub(super) struct Jaw;
 /// The skulls and jaws, built once.
 #[derive(Resource)]
 pub(super) struct Heads {
-    beast: (Handle<Mesh>, Handle<Mesh>),
+    /// The beast's heads, to compare (`--set beast_head=N`).
+    beast: Vec<(Handle<Mesh>, Handle<Mesh>)>,
     biped: (Handle<Mesh>, Handle<Mesh>),
 }
+
+/// Where a beast head's eyes and brow sit: out from the bone and up, in
+/// head radii.
+const HEAD_EYES: [(f32, f32); 3] = [(0.62, 0.32), (0.6, 0.3), (0.95, 0.45)];
 
 /// A faceted solid from rings along +Y (y, half width, half height, how far
 /// up): flat shaded, closed at both ends. "Up" is -Z, as in a bone's frame
@@ -210,8 +215,14 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     // A shorter, rounder head with a jutting brow.
     let biped = rings_mesh(&[(0.0, 0.75, 0.8, 0.0), (0.3, 1.0, 1.0, 0.1), (0.6, 0.85, 0.75, 0.05), (0.85, 0.55, 0.5, -0.1), (1.0, 0.3, 0.3, -0.15)]);
     let biped_jaw = rings_mesh(&[(0.0, 0.6, 0.25, 0.0), (0.6, 0.45, 0.2, 0.0), (1.0, 0.25, 0.12, 0.0)]);
+    // An elongated cranium sweeping back and up, far behind the jaw.
+    let crest = rings_mesh(&[(-0.75, 0.12, 0.12, 0.75), (-0.45, 0.35, 0.35, 0.55), (-0.1, 0.55, 0.55, 0.3), (0.3, 0.52, 0.45, 0.08), (0.68, 0.34, 0.28, -0.04), (1.0, 0.13, 0.12, -0.08)]);
+    // Heavy and high-domed, a short blunt muzzle: a hyena's.
+    let heavy = rings_mesh(&[(0.0, 0.8, 0.8, 0.1), (0.25, 1.0, 1.0, 0.32), (0.5, 0.88, 0.72, 0.15), (0.8, 0.62, 0.5, -0.02), (1.0, 0.46, 0.36, -0.05)]);
+    let heavy_jaw = rings_mesh(&[(0.0, 0.7, 0.28, 0.0), (0.6, 0.55, 0.24, 0.0), (1.0, 0.4, 0.16, 0.0)]);
+    let beast_jaw = meshes.add(beast_jaw);
     commands.insert_resource(Heads {
-        beast: (meshes.add(beast), meshes.add(beast_jaw)),
+        beast: vec![(meshes.add(beast), beast_jaw.clone()), (meshes.add(crest), beast_jaw), (meshes.add(heavy), meshes.add(heavy_jaw))],
         biped: (meshes.add(biped), meshes.add(biped_jaw)),
     });
 }
@@ -221,7 +232,10 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
 #[derive(Component)]
 pub(super) struct Eye {
     hunter: Entity,
-    side: f32,
+    /// Where on the head: across and up (head radii), and along it (0..1);
+    /// and a roll (radians) for slits.
+    at: Vec3,
+    roll: f32,
     material: Handle<StandardMaterial>,
 }
 
@@ -250,6 +264,19 @@ pub(super) fn gather(
 
     // `--opt hunters`: no swarm, no assembly; a hunter, already built,
     // appears a little way off whenever there is none.
+    // `--opt specimen`: one hunter standing still in front of you, to look
+    // at (`--set specimen_at` metres ahead, `specimen_yaw` degrees turned
+    // from facing you, `jaw` radians open, `stretch` 0..1).
+    if args.opt("specimen") {
+        if hunters.is_empty() && director.next_gather <= 0.0 {
+            let ahead = player.forward();
+            let at = player.translation + Vec3::new(ahead.x, 0.0, ahead.z).normalize_or(Vec3::Z) * args.num("specimen_at", 3.5);
+            let face = at + Quat::from_rotation_y(args.num("specimen_yaw", 0.0).to_radians()) * (player.translation - at);
+            spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, 7, at, face);
+            director.next_gather = f32::MAX;
+        }
+        return;
+    }
     if args.opt("hunters") {
         if hunters.is_empty() && director.next_gather <= 0.0 {
             let k = (time.elapsed_secs() * 1000.0) as u32;
@@ -429,7 +456,9 @@ fn spawn_hunter(
         }
         if i == 4 {
             // The head: one skull, a hinged jaw beneath, a thin pale brow.
-            let (skull, jaw) = if kind == Kind::Beast { &heads.beast } else { &heads.biped };
+            let style = (args.num("beast_head", 0.0) as usize).min(heads.beast.len() - 1);
+            let (skull, jaw) = if kind == Kind::Beast { &heads.beast[style] } else { &heads.biped };
+            let (across, up) = if kind == Kind::Beast { HEAD_EYES[style] } else { HEAD_EYES[0] };
             let rr = bone.radius;
             commands.spawn((
                 Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
@@ -445,36 +474,52 @@ fn spawn_hunter(
                 Transform::from_translation(bone.a).with_scale(Vec3::new(rr, length * 0.66, rr)),
             ));
             for side in [-1.0, 1.0] {
-                pale(commands, i, 0.4, Vec3::new(side * rr * 0.6, 0.0, -rr * 0.66), Vec3::new(-side * 0.35, 1.0, 0.15), length * 0.3, 0.012);
+                pale(commands, i, 0.4, Vec3::new(side * rr * across, 0.0, -rr * (up + 0.34)), Vec3::new(-side * 0.35, 1.0, 0.15), length * 0.3, 0.012);
             }
             if kind == Kind::Beast {
-                // Teeth: pale needles along both jaws, hidden when the
-                // jaw is shut, bared when it opens.
-                for k in 0..18 {
+                // Teeth, bared when the jaw opens (`--set beast_teeth=N`):
+                // 0 two rows of needles; 1 a few long crooked fangs. Each:
+                // where along the head, out from the middle (head radii),
+                // how long (head radii), on the skull or the jaw, a lean.
+                let mut teeth: Vec<(f32, f32, f32, bool, f32)> = Vec::new();
+                if args.num("beast_teeth", 0.0) as i32 == 1 {
+                    for (t, w, l, lean) in [(0.5, 0.42, 1.5, 0.12), (0.64, 0.36, 0.9, -0.2), (0.8, 0.28, 1.15, 0.3)] {
+                        teeth.push((t, w, l, true, lean));
+                    }
+                    for (t, w, l, lean) in [(0.58, 0.38, 1.1, -0.15), (0.76, 0.3, 0.8, 0.25)] {
+                        teeth.push((t, w, l, false, lean));
+                    }
+                } else {
                     // Two rows, the inner one shorter and set back between
                     // the outer teeth.
-                    let inner = k >= 10;
-                    let j = if inner { k - 10 } else { k };
-                    let t = if inner { 0.46 + 0.065 * j as f32 } else { 0.42 + 0.056 * j as f32 };
-                    let w = rr * (0.42 - 0.25 * (t - 0.42)) * if inner { 0.62 } else { 1.0 };
-                    let long = rr * (0.6 - 0.3 * (t - 0.42)) * if inner { 0.7 } else { 1.0 };
+                    for k in 0..18 {
+                        let inner = k >= 10;
+                        let j = if inner { k - 10 } else { k };
+                        let t = if inner { 0.46 + 0.065 * j as f32 } else { 0.42 + 0.056 * j as f32 };
+                        let w = (0.42 - 0.25 * (t - 0.42)) * if inner { 0.62 } else { 1.0 };
+                        let l = (0.6 - 0.3 * (t - 0.42)) * if inner { 0.7 } else { 1.0 };
+                        teeth.push((t, w, l, true, 0.0));
+                        teeth.push((t, w * 0.85, l * 0.8, false, 0.0));
+                    }
+                }
+                for (k, &(t, w, l, upper, lean)) in teeth.iter().enumerate() {
                     for side in [-1.0, 1.0] {
-                        // Upper, fixed to the skull, pointing down.
-                        commands.spawn((
-                            Part { hunter, bone: i, along: t, offset: Vec3::new(side * w, 0.0, rr * 0.22), rotation: Quat::from_rotation_arc(Vec3::Y, Vec3::new(0.0, 0.25, 1.0).normalize()), velocity: Vec3::ZERO, stiffness: RIGID },
+                        // Crooked: each side leans its own way.
+                        let lean = lean * side * if k % 2 == 0 { 1.0 } else { -0.6 };
+                        let (along, offset, dir) = if upper {
+                            (t, Vec3::new(side * w * rr, 0.0, rr * 0.22), Vec3::new(lean, 0.25, 1.0))
+                        } else {
+                            (0.3, Vec3::new(side * w * rr, length * 0.66 * (t - 0.3) / 0.7, rr * 0.22), Vec3::new(lean, 0.25, -1.0))
+                        };
+                        let mut tooth = commands.spawn((
+                            Part { hunter, bone: i, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize()), velocity: Vec3::ZERO, stiffness: RIGID },
                             Mesh3d(assets.shard.clone()),
                             MeshMaterial3d(assets.pale.clone()),
-                            Transform::from_scale(Vec3::new(0.9, long / 0.75, 0.9)),
+                            Transform::from_scale(Vec3::new(0.9, l * rr / 0.75, 0.9)),
                         ));
-                        // Lower, on the jaw, pointing up.
-                        let along_jaw = (t - 0.3) / 0.7;
-                        commands.spawn((
-                            Jaw,
-                            Part { hunter, bone: i, along: 0.3, offset: Vec3::new(side * w * 0.85, length * 0.66 * along_jaw, rr * 0.22), rotation: Quat::from_rotation_arc(Vec3::Y, Vec3::new(0.0, 0.25, -1.0).normalize()), velocity: Vec3::ZERO, stiffness: RIGID },
-                            Mesh3d(assets.shard.clone()),
-                            MeshMaterial3d(assets.pale.clone()),
-                            Transform::from_scale(Vec3::new(0.8, long * 0.8 / 0.75, 0.8)),
-                        ));
+                        if !upper {
+                            tooth.insert(Jaw);
+                        }
                     }
                 }
             }
@@ -574,15 +619,31 @@ fn spawn_hunter(
             }
         }
     }
-    // Pale eyes, flaring when it looks at you (see `flesh`).
+    // Pale eyes, flaring when it looks at you (see `flesh`). The beast's
+    // (`--set beast_eyes=N`): 0 pinpricks; 1 vertical slits; 2 six small
+    // eyes, three a side.
     let eyes = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, ..default() });
-    for side in [-1.0, 1.0] {
-        commands.spawn((
-            Eye { hunter, side, material: eyes.clone() },
-            Mesh3d(assets.core.clone()),
-            MeshMaterial3d(eyes.clone()),
-            Transform::from_translation(feet).with_scale(Vec3::splat(0.13)),
-        ));
+    let style = (args.num("beast_head", 0.0) as usize).min(HEAD_EYES.len() - 1);
+    let (across, up) = if kind == Kind::Beast { HEAD_EYES[style] } else { HEAD_EYES[0] };
+    let looks = if kind == Kind::Beast { args.num("beast_eyes", 0.0) as i32 } else { 0 };
+    for side in [-1.0f32, 1.0] {
+        let set: Vec<(Vec3, f32, Vec3)> = match looks {
+            1 => vec![(Vec3::new(side * across, up, 0.5), side * 0.3, Vec3::new(0.06, 0.06, 0.42))],
+            2 => vec![
+                (Vec3::new(side * across * 0.88, up * 1.3, 0.42), 0.0, Vec3::splat(0.1)),
+                (Vec3::new(side * across * 1.04, up * 0.85, 0.53), 0.0, Vec3::splat(0.12)),
+                (Vec3::new(side * across * 0.8, up * 1.15, 0.62), 0.0, Vec3::splat(0.08)),
+            ],
+            _ => vec![(Vec3::new(side * across, up, 0.5), 0.0, Vec3::splat(0.13))],
+        };
+        for (at, roll, scale) in set {
+            commands.spawn((
+                Eye { hunter, at, roll, material: eyes.clone() },
+                Mesh3d(assets.core.clone()),
+                MeshMaterial3d(eyes.clone()),
+                Transform::from_translation(feet).with_scale(scale),
+            ));
+        }
     }
 }
 
@@ -649,7 +710,10 @@ pub(super) fn hunt(
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
         let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
-        if stunned {
+        if args.opt("specimen") {
+            intent.look = h.rig.head().0 + Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos()) * 5.0;
+            intent.stretch = args.num("stretch", 0.0);
+        } else if stunned {
         } else if args.opt("tame") {
             // (`--opt tame`, for captures: it circles at a distance, side on,
             // its pace changing every 8 s: prowl, trot, gallop.)
@@ -835,6 +899,7 @@ pub(super) fn hunt(
             Stance::Freeze => 0.15,
             _ => 0.06 + 0.04 * (time.elapsed_secs() * 1.3).sin(),
         };
+        let open = if args.opt("specimen") { args.num("jaw", 0.1) } else { open };
         h.jaw += (open - h.jaw) * (1.0 - (-dt * 10.0).exp());
         // An attack that reaches the player strikes once.
         if matches!(h.stance, Stance::Attack(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
@@ -898,7 +963,9 @@ pub(super) fn flesh(
         let (tip, dir) = h.rig.head();
         // In the skull's sides, under the brow.
         let head = h.rig.bones[4];
-        transform.translation = head.a.lerp(head.b, 0.5) + head.rotation() * Vec3::new(eye.side * head.radius * 0.62, 0.0, -head.radius * 0.32);
+        let rotation = head.rotation();
+        transform.translation = head.a.lerp(head.b, eye.at.z) + rotation * Vec3::new(eye.at.x * head.radius, 0.0, -eye.at.y * head.radius);
+        transform.rotation = rotation * Quat::from_rotation_y(eye.roll);
         // Eyeshine: bright only when it looks straight at you.
         let facing = dir.dot((camera.translation - tip).normalize_or(Vec3::Y)).max(0.0).powi(8);
         if let Some(mut m) = materials.get_mut(&eye.material) {

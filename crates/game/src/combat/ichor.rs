@@ -247,7 +247,10 @@ pub(super) fn fly(
         let hit = Dir3::new(step).ok().and_then(|dir| spatial.cast_ray(from, dir, length, true, &default()));
         if let Some(hit) = hit {
             let at = from + step.normalize_or_zero() * hit.distance;
-            splat(&mut commands, &ichor, &mut splats, at, hit.normal, d.size, d.velocity, entity.index_u32());
+            // (About as many splats as when there were fewer droplets.)
+            if hash01(entity.index_u32() as i32, 3, 3, 0x1c9) < 0.57 {
+                splat(&mut commands, &ichor, &mut splats, at, hit.normal, d.size, d.velocity, entity.index_u32());
+            }
             commands.entity(entity).despawn();
             continue;
         }
@@ -280,7 +283,8 @@ pub(super) fn fly(
 fn splat(commands: &mut Commands, ichor: &Ichor, splats: &mut Splats, at: Vec3, normal: Vec3, size: f32, velocity: Vec3, seed: u32) {
     let r = |j: i32| hash01(seed as i32, j, 7, 0x1c5);
     // Bigger and longer the faster it struck, along its flight.
-    let width = size * (18.0 + 12.0 * r(0));
+    // (Sized as when droplets were smaller: big splats were too much.)
+    let width = size / 1.35 * (14.0 + 10.0 * r(0));
     let along = velocity - normal * velocity.dot(normal);
     let wall = normal.y.abs() < 0.6;
     // Local Y is the surface's normal; local Z runs down a wall, or along

@@ -43,6 +43,12 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
                                               nearest hunter
     --opt biped|beast                         what the swarm assembles into (otherwise either)
+    --opt specimen                            one hunter standing still in front of you, to look at: --set
+                                              specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
+                                              jaw (radians open), stretch (0..1)
+    --set beast_head=N beast_eyes=N beast_teeth=N   variants to compare: heads 0 narrow, 1 a cranium sweeping
+                                              back, 2 heavy (a hyena's); eyes 0 pinpricks, 1 slits, 2 six;
+                                              teeth 0 two rows, 1 a few long crooked fangs
     --opt hurtsound                           the sound when you are hurt (off by default)
     --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
                                               whenever there is none (with biped|beast to choose)
