@@ -228,7 +228,9 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     // over a gaping mouth; under it a huge jaw jutting past the snout and
     // curling up at the front.
     let angler = rings_mesh(&[(0.0, 0.85, 0.75, 0.15), (0.3, 1.05, 0.8, 0.35), (0.6, 1.0, 0.55, 0.3), (0.85, 0.85, 0.35, 0.22), (1.0, 0.7, 0.2, 0.18)]);
-    let angler_jaw = rings_mesh(&[(0.0, 0.8, 0.3, 0.0), (0.5, 1.05, 0.32, -0.05), (1.0, 1.08, 0.3, 0.1), (1.25, 0.92, 0.26, 0.42)]);
+    // (The jaw is deep: a heavy faceted chin and throat bulging below the
+    // teeth, reaching back under the skull.)
+    let angler_jaw = rings_mesh(&[(-0.2, 0.7, 0.55, -0.35), (0.3, 1.0, 0.78, -0.48), (0.75, 1.1, 0.62, -0.32), (1.05, 1.05, 0.42, -0.08), (1.25, 0.9, 0.25, 0.25)]);
     let beast_jaw = meshes.add(beast_jaw);
     commands.insert_resource(Heads {
         beast: vec![
@@ -496,9 +498,9 @@ fn spawn_hunter(
             }
             if angler {
                 // The lure: a stalk arching from the forehead out over the
-                // mouth (its bulb is an eye: see the eyes below).
-                // An arch of short, even segments, thinning towards the bulb,
-                // overlapping so it reads as one stalk.
+                // mouth.
+                // An arch of short, even segments, thinning towards a dark
+                // knob at its end, overlapping so it reads as one stalk.
                 let at = |along: f32, up: f32| Vec3::new(0.0, along * length, -up * rr);
                 let points = [at(0.3, 0.9), at(0.42, 2.0), at(0.62, 2.7), at(0.85, 2.95), at(1.05, 2.75), at(1.2, 2.25)];
                 let n = points.len() - 1;
@@ -512,6 +514,12 @@ fn spawn_hunter(
                         Transform::from_scale(Vec3::new(thick, d.length() + thick * 2.0, thick)),
                     ));
                 }
+                commands.spawn((
+                    Part { hunter, bone: i, along: 0.0, offset: points[n], rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                    Mesh3d(assets.core.clone()),
+                    MeshMaterial3d(assets.dark.clone()),
+                    Transform::from_scale(Vec3::splat(0.4)),
+                ));
             }
             if kind == Kind::Beast {
                 // Teeth, bared when the jaw opens (`--set beast_teeth=N`):
@@ -685,16 +693,6 @@ fn spawn_hunter(
     let style = (args.num("beast_head", 3.0) as usize).min(HEAD_EYES.len() - 1);
     let (across, up, along) = if kind == Kind::Beast { HEAD_EYES[style] } else { HEAD_EYES[0] };
     let looks = if kind == Kind::Beast { args.num("beast_eyes", 0.0) as i32 } else { 0 };
-    if kind == Kind::Beast && style == ANGLER {
-        // The lure's bulb: pale, and like the eyes it flares when the beast
-        // looks at you.
-        commands.spawn((
-            Eye { hunter, at: Vec3::new(0.0, 2.05, 1.22), roll: 0.0, material: eyes.clone() },
-            Mesh3d(assets.core.clone()),
-            MeshMaterial3d(eyes.clone()),
-            Transform::from_translation(feet).with_scale(Vec3::splat(0.5)),
-        ));
-    }
     for side in [-1.0f32, 1.0] {
         let set: Vec<(Vec3, f32, Vec3)> = match looks {
             1 => vec![(Vec3::new(side * across, up, along), side * 0.3, Vec3::new(0.06, 0.06, 0.42))],
