@@ -37,6 +37,15 @@ listed. The rest was judged in review and dropped.
   jittering bolt. Retired as propulsion for the shotgun (at `66b1785`); its
   bolt may come back as the lightning gun.
 
+## The beasts' heads (review 56)
+
+- **Two more skulls** (a cranium sweeping back and up; a heavy, domed,
+  hyena-like one), **slit and six-eyed variants**, and **a few long crooked
+  fangs**. Kept: the hound's narrow head with two rows of needles, and the
+  angler's. All at `8691ac6`.
+- **The angler's lure** (a stalk with a bulb that flared like the eyes):
+  too on the nose.
+
 ## The creature
 
 - **The hunched humanoid and the feral creature** (`--opt hunched`,
