@@ -37,6 +37,11 @@ impl Args {
         self.opts.iter().any(|o| o == name)
     }
 
+    /// A measurement or capture, running with nobody playing.
+    pub fn unattended(&self) -> bool {
+        self.opt("bench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("labshots")
+    }
+
     /// A tuning number, overridable with `--set name=value`.
     pub fn num(&self, name: &str, default: f32) -> f32 {
         self.sets.iter().rev().find(|(k, _)| k == name).map_or(default, |(_, v)| *v)
@@ -75,8 +80,7 @@ fn main() {
     let args = Args::parse();
     // Measurements and captures run flat out even without focus (Bevy
     // otherwise slows an unfocused window to 60 fps).
-    let unattended =
-        args.opt("bench") || args.shot.is_some() || args.opt("bot") || args.opt("stairbot") || args.opt("labshots");
+    let unattended = args.unattended();
     let mut app = App::new();
     if unattended {
         app.insert_resource(bevy::winit::WinitSettings {

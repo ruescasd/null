@@ -45,14 +45,28 @@ impl FlyCam {
     }
 }
 
+/// The cursor is captured from the start (once the window has focus, and not
+/// in a measurement or capture); Esc frees it and a click captures it again,
+/// the click not firing.
 fn grab_cursor(
+    args: Res<crate::Args>,
+    window: Single<&Window>,
     mut cursor: Single<&mut CursorOptions>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut started: Local<bool>,
 ) {
-    if mouse.just_pressed(MouseButton::Left) {
+    if !*started && window.focused {
+        *started = true;
+        if !args.unattended() {
+            cursor.visible = false;
+            cursor.grab_mode = CursorGrabMode::Locked;
+        }
+    }
+    if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
+        mouse.reset(MouseButton::Left);
     }
     if keys.just_pressed(KeyCode::Escape) {
         cursor.visible = true;
