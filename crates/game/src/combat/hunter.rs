@@ -450,10 +450,14 @@ fn spawn_hunter(
             if kind == Kind::Beast {
                 // Teeth: pale needles along both jaws, hidden when the
                 // jaw is shut, bared when it opens.
-                for k in 0..6 {
-                    let t = 0.42 + 0.09 * k as f32;
-                    let w = rr * (0.42 - 0.25 * (t - 0.42));
-                    let long = rr * (0.55 - 0.3 * (t - 0.42));
+                for k in 0..18 {
+                    // Two rows, the inner one shorter and set back between
+                    // the outer teeth.
+                    let inner = k >= 10;
+                    let j = if inner { k - 10 } else { k };
+                    let t = if inner { 0.46 + 0.065 * j as f32 } else { 0.42 + 0.056 * j as f32 };
+                    let w = rr * (0.42 - 0.25 * (t - 0.42)) * if inner { 0.62 } else { 1.0 };
+                    let long = rr * (0.6 - 0.3 * (t - 0.42)) * if inner { 0.7 } else { 1.0 };
                     for side in [-1.0, 1.0] {
                         // Upper, fixed to the skull, pointing down.
                         commands.spawn((
@@ -644,7 +648,7 @@ pub(super) fn hunt(
         h.stun -= dt;
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
-        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0 };
+        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
         if stunned {
         } else if args.opt("tame") {
             // (`--opt tame`, for captures: it circles at a distance, side on,
@@ -691,6 +695,7 @@ pub(super) fn hunt(
                             intent.velocity = Vec3::ZERO;
                             intent.crouch = 0.3;
                             intent.tilt = angle;
+                            intent.still = true;
                             if t > dt { Gesture::Tilt(t - dt, angle) } else { Gesture::None }
                         }
                         Gesture::Twitch(t, side) => {
@@ -720,13 +725,14 @@ pub(super) fn hunt(
                             h.gesture = Gesture::None;
                         } else {
                             h.stance = Stance::Freeze;
-                            h.timer = 0.6 + 1.2 * r(1);
+                            h.timer = 2.0 + 2.5 * r(1);
                         }
                     }
                 }
                 // Still, low, head locked on you.
                 Stance::Freeze => {
                     intent.crouch = 0.5;
+                    intent.still = true;
                     if h.timer <= 0.0 {
                         h.stance = Stance::Stalk;
                         h.timer = 1.2 + 2.5 * r(2);
@@ -750,6 +756,7 @@ pub(super) fn hunt(
                 Stance::Windup => {
                     intent.velocity = toward * 14.0;
                     intent.crouch = 1.0;
+                    intent.stretch = 1.0;
                     if h.timer <= 0.0 {
                         // Fast and flat, aimed to land on you: about a third
                         // of a second in the air.
@@ -766,6 +773,7 @@ pub(super) fn hunt(
                     }
                 }
                 Stance::Attack(_) => {
+                    intent.stretch = 1.0;
                     if h.rig.airborne.is_none() && h.timer < 1.9 {
                         h.stance = Stance::Recover;
                         h.timer = RECOVER;
@@ -821,8 +829,8 @@ pub(super) fn hunt(
         }
         // The jaw: nearly shut, open in a crouch, gaping in an attack.
         let open = match h.stance {
-            Stance::Windup => if beast { 0.9 } else { 0.55 },
-            Stance::Attack(_) => if beast { 1.25 } else { 0.8 },
+            Stance::Windup => if beast { 1.4 } else { 0.55 },
+            Stance::Attack(_) => if beast { 1.9 } else { 0.8 },
             Stance::Charge => 0.3,
             Stance::Freeze => 0.15,
             _ => 0.06 + 0.04 * (time.elapsed_secs() * 1.3).sin(),

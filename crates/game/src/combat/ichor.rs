@@ -170,7 +170,7 @@ fn splat_image(seed: u32) -> Image {
 pub(super) fn spray(commands: &mut Commands, ichor: &Ichor, at: Vec3, dir: Vec3, strength: f32, seed: u32) {
     // The impact: a white star, and the crown thrown out against it.
     let r = |j: i32| hash01(seed as i32, j, 9, 0x1c8);
-    let size = 0.35 * strength.sqrt();
+    let size = 0.45 * strength.sqrt();
     commands.spawn((
         Burst { age: 0.0, life: 0.09, grow: 0.015, size: Vec3::splat(size * 1.2) },
         Mesh3d(ichor.star.clone()),
@@ -186,7 +186,7 @@ pub(super) fn spray(commands: &mut Commands, ichor: &Ichor, at: Vec3, dir: Vec3,
         Transform::from_translation(at).with_rotation(Quat::from_rotation_arc(Vec3::Y, dir) * twist).with_scale(Vec3::ZERO),
         bevy::light::NotShadowCaster,
     ));
-    let count = (4.0 * strength).round() as i32;
+    let count = (7.0 * strength).round() as i32;
     for k in 0..count {
         let r = |j: i32| hash01(seed as i32, k, j, 0x1c4) - 0.5;
         let back = k % 4 == 3;
@@ -196,7 +196,7 @@ pub(super) fn spray(commands: &mut Commands, ichor: &Ichor, at: Vec3, dir: Vec3,
         let main = if back { -dir * 0.6 } else { dir };
         let spread = Vec3::new(r(0), r(1) + 0.35, r(2)) * if back { 1.4 } else { 0.9 };
         let speed = if glob { 5.0 + 4.0 * (r(3) + 0.5) } else { 8.0 + 12.0 * (r(3) + 0.5) } * strength.sqrt().min(1.6);
-        let size = if glob { 0.035 + 0.02 * (r(4) + 0.5) } else { 0.01 + 0.012 * (r(4) + 0.5) };
+        let size = if glob { 0.045 + 0.025 * (r(4) + 0.5) } else { 0.014 + 0.016 * (r(4) + 0.5) };
         commands.spawn((
             Droplet { velocity: (main + spread).normalize_or(Vec3::Y) * speed, size, life: 3.0 },
             Mesh3d(ichor.drop.clone()),
@@ -280,7 +280,7 @@ pub(super) fn fly(
 fn splat(commands: &mut Commands, ichor: &Ichor, splats: &mut Splats, at: Vec3, normal: Vec3, size: f32, velocity: Vec3, seed: u32) {
     let r = |j: i32| hash01(seed as i32, j, 7, 0x1c5);
     // Bigger and longer the faster it struck, along its flight.
-    let width = size * (14.0 + 10.0 * r(0));
+    let width = size * (18.0 + 12.0 * r(0));
     let along = velocity - normal * velocity.dot(normal);
     let wall = normal.y.abs() < 0.6;
     // Local Y is the surface's normal; local Z runs down a wall, or along

@@ -215,6 +215,11 @@ pub struct Intent {
     /// usual rate; much more for a sudden snap).
     pub tilt: f32,
     pub head_rate: f32,
+    /// How far the neck stretches out (0..1: up to 70% longer), the head
+    /// reaching ahead of the body.
+    pub stretch: f32,
+    /// Dead still: no breath, no glances, no sway.
+    pub still: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -294,6 +299,9 @@ pub struct Rig {
     /// in the air.
     air: (f32, f32),
     tilt: f32,
+    stretch: f32,
+    /// 1 moving as usual, 0 dead still.
+    alive: f32,
     feet: Vec<Foot>,
     head_dir: Vec3,
     glance: Vec3,
@@ -345,6 +353,8 @@ impl Rig {
             paw: (0, 0.0),
             air: (0.0, 1.0),
             tilt: 0.0,
+            stretch: 0.0,
+            alive: 1.0,
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
@@ -388,7 +398,7 @@ impl Rig {
         // Walking, the spine swings from side to side, chest and hips in
         // opposition.
         let sway = self.plan.sway * moving * (1.0 - self.gallop) * wave * if root == Root::Chest { 1.0 } else { -1.0 };
-        let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving);
+        let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving) * self.alive;
         // Crouched: lower, and the chest lower still (the head goes down).
         // Running, the body drops, so the legs can reach far fore and aft.
         let run = 0.2 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
@@ -533,8 +543,15 @@ impl Rig {
             }
         }
 
-        // The head: towards the target, with lag; now and then a glance.
-        self.glance_in -= dt;
+        // The neck stretches fast and draws back slowly; stillness sets in
+        // slowly and breaks at once.
+        let k = if intent.stretch > self.stretch { 12.0 } else { 3.0 };
+        self.stretch += (intent.stretch - self.stretch) * (1.0 - (-dt * k).exp());
+        self.alive = if intent.still { self.alive * (-dt * 2.5).exp() } else { 1.0 };
+        // The head: towards the target, with lag; now and then a glance (not
+        // when still).
+        self.glance_in -= dt * self.alive;
+        self.glance *= self.alive.max(0.02).powf(dt);
         if self.glance_in <= 0.0 {
             let r = |k: i32| hash01(self.seed as i32, (self.time * 10.0) as i32, k, 0x61a) - 0.5;
             self.glance = if r(0) > 0.1 { Vec3::new(r(1), r(2) * 0.4, r(3)) * 1.6 } else { Vec3::ZERO };
@@ -562,7 +579,7 @@ impl Rig {
             let len = self.plan.tail.1;
             for k in 1..self.tail.len() {
                 let prev = self.tail[k - 1];
-                let sway = Vec3::new(self.forward_of(self.hips_yaw).z, 0.0, -self.forward_of(self.hips_yaw).x) * 0.02 * (self.time * 2.5 + k as f32 * 0.6).sin();
+                let sway = Vec3::new(self.forward_of(self.hips_yaw).z, 0.0, -self.forward_of(self.hips_yaw).x) * 0.02 * (self.time * 2.5 + k as f32 * 0.6).sin() * self.alive;
                 let droop = Vec3::Y * (-0.04 + 0.09 * self.crouch);
                 let mut p = self.tail[k] + droop + sway + back * 0.01;
                 p = prev + (p - prev).normalize_or(back) * len;
@@ -657,7 +674,9 @@ impl Rig {
         let base = Vec3::new(neck_fwd, neck_up, 0.0).normalize_or(Vec3::Y);
         let neck_dir = (forward * base.x + Vec3::Y * base.y).lerp(self.head_dir, 0.4).normalize_or(Vec3::Y);
         let neck_dir = (neck_dir - Vec3::Y * 0.5 * self.crouch).normalize_or(forward);
-        chest + neck_dir * neck_len
+        // Stretched, the neck reaches along where it looks.
+        let neck_dir = neck_dir.lerp(self.head_dir, self.stretch * 0.8).normalize_or(forward);
+        chest + neck_dir * neck_len * (1.0 + 0.7 * self.stretch)
     }
 
     /// The head's tip and the direction it faces (for eyes).

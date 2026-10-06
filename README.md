@@ -240,9 +240,10 @@ The beast is deep-chested with a tucked-up waist and a lean belly, the mass
 riding high on a thick neck and a hump of muscle over the shoulders. Its body is
 dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
 and settles. Its head is one faceted skull (the beast's long, narrow and
-angular, with pale needle teeth on both jaws, bared when it opens, and
-pinprick eyes) with a hinged jaw that opens as it crouches and gapes as it
-strikes. `--opt wiry` builds bodies of thin long fibres instead, with gaps
+angular, with two rows of pale needle teeth on both jaws, bared when it
+opens, and pinprick eyes) with a hinged jaw that opens as it crouches and
+gapes, far wider than an animal's, as it strikes; the beast's neck stretches
+out in the strike, the head reaching ahead of the body. `--opt wiry` builds bodies of thin long fibres instead, with gaps
 between them and spines bristling out. A hunter growls now and then, a
 phrase picked at random from recorded growls, a little higher or lower each
 time: every few seconds as it prowls, quieter and rarer creeping, one after
@@ -256,7 +257,8 @@ markings (stripes across the back, a brow over the eyes, bands above the
 paws), and their pale eyes flare only when they look straight at you, like
 eyeshine. The biped stalks, crouches
 where you can see it, and dashes; the beast prowls low and slow, freezes
-with its head locked on you, then charges, building to a gallop, and
+for seconds, dead still (no breath, no glance, no sway), its head locked on
+you, then charges, building to a gallop, and
 pounces out of the run (running, its body drops and its feet are down
 only about a third of the time, so its legs reach far fore and aft and fold
 high), skidding when it lands: a quick gather, then a
