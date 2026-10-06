@@ -711,8 +711,11 @@ pub(super) fn hunt(
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
         let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
         if args.opt("specimen") {
-            intent.look = h.rig.head().0 + Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos()) * 5.0;
+            // Straight ahead from its body (not its head, or each glance
+            // would turn it), and dead still.
+            intent.look = h.rig.root + Vec3::new(h.rig.heading.sin(), 1.4, h.rig.heading.cos()) * 8.0;
             intent.stretch = args.num("stretch", 0.0);
+            intent.still = true;
         } else if stunned {
         } else if args.opt("tame") {
             // (`--opt tame`, for captures: it circles at a distance, side on,
