@@ -27,6 +27,7 @@ use crate::{
 
 mod hunter;
 mod ichor;
+mod weapon;
 
 pub struct CombatPlugin;
 
@@ -63,7 +64,7 @@ impl Plugin for CombatPlugin {
                     .chain()
                     .after(crate::player::walk),
             )
-            .add_systems(PostUpdate, (kick, viewmodel).before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (kick, weapon::animate).before(TransformSystems::Propagate));
     }
 }
 
@@ -188,8 +189,6 @@ struct Debris {
     size: Vec3,
 }
 
-#[derive(Component)]
-struct Viewmodel;
 
 #[derive(Component)]
 struct MuzzleLight;
@@ -238,12 +237,6 @@ fn setup(
         ..default()
     });
     let glow = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(9000.0, 9000.0, 9000.0), ..default() });
-    let metal = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.03, 0.03, 0.03),
-        perceptual_roughness: 0.3,
-        reflectance: 0.6,
-        ..default()
-    });
     let assets = Assets3 {
         shard: shard.clone(),
         swarmer,
@@ -265,29 +258,10 @@ fn setup(
 
     // The ear is the camera.
     commands.entity(*camera).insert(SpatialListener::new(2.0));
-    // The gun in view: a fan of dark shards round a glowing core, low right.
+    // The gun in view (see `weapon.rs`), and the flash at its muzzle.
+    let gun = weapon::spawn(&mut commands, &mut meshes, &mut materials, assets.pale.clone());
+    commands.entity(*camera).add_child(gun);
     commands.entity(*camera).with_children(|parent| {
-        parent
-            .spawn((Viewmodel, Transform::from_xyz(0.2, -0.17, -0.42), Visibility::default()))
-            .with_children(|gun| {
-                let mut fan = Vec::new();
-                for k in 0..6 {
-                    let a = k as f32 / 6.0 * std::f32::consts::TAU;
-                    fan.push((Vec3::new(a.cos() * 0.22, a.sin() * 0.22, -1.0), 0.2, 0.012));
-                }
-                gun.spawn((
-                    Mesh3d(meshes.add(shard_mesh(&fan))),
-                    MeshMaterial3d(metal.clone()),
-                    Transform::default(),
-                    bevy::light::NotShadowCaster,
-                ));
-                gun.spawn((
-                    Mesh3d(meshes.add(Sphere::new(0.016).mesh().ico(1).unwrap())),
-                    MeshMaterial3d(glow.clone()),
-                    Transform::from_xyz(0.0, 0.0, -0.03),
-                    bevy::light::NotShadowCaster,
-                ));
-            });
         parent.spawn((
             MuzzleLight,
             PointLight { intensity: 0.0, range: 25.0, shadow_maps_enabled: false, ..default() },
@@ -794,14 +768,7 @@ fn hud(
 }
 
 /// The view kicks up with each shot and settles back.
-fn kick(time: Res<Time>, mut gun: ResMut<Gun>, mut camera: Single<&mut Transform, (With<FlyCam>, Without<Viewmodel>)>) {
+fn kick(time: Res<Time>, mut gun: ResMut<Gun>, mut camera: Single<&mut Transform, (With<FlyCam>, Without<weapon::Viewmodel>)>) {
     gun.kick *= (-time.delta_secs() * 9.0).exp();
     camera.rotate_local_x(gun.kick);
-}
-
-/// The gun recoils back with each shot.
-fn viewmodel(time: Res<Time>, mut gun: ResMut<Gun>, mut model: Single<&mut Transform, With<Viewmodel>>) {
-    gun.recoil *= (-time.delta_secs() * 10.0).exp();
-    model.translation = Vec3::new(0.2, -0.17 - gun.recoil * 0.3, -0.42 + gun.recoil);
-    model.rotation = Quat::from_rotation_x(gun.recoil * 2.0);
 }
