@@ -252,7 +252,9 @@ paws), and their pale eyes flare only when they look straight at you, like
 eyeshine. The biped stalks, crouches
 where you can see it, and dashes; the beast prowls low and slow, freezes
 with its head locked on you, then charges, building to a gallop, and
-pounces out of the run, skidding when it lands: a quick gather, then a
+pounces out of the run (running, its body drops and its feet are down
+only about a third of the time, so its legs reach far fore and aft and fold
+high), skidding when it lands: a quick gather, then a
 fast, flat leap (about a third of a second) aimed to land on you, the body
 pitching with the arc, forelimbs thrown out wide to grab, hind legs kicking
 back and swinging under to land. It takes hits as a whole

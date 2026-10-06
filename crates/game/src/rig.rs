@@ -157,9 +157,10 @@ impl Plan {
                 // A walk: one foot after another down each side.
                 Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 1.5 },
                 // A trot: diagonal pairs together.
-                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.5, 0.0], swing: 0.38, stride: 2.6 },
+                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.5, 0.0], swing: 0.45, stride: 2.8 },
                 // A gallop: the front pair, then the hind pair.
-                Gait { speed: 11.0, offsets: vec![0.0, 0.1, 0.6, 0.5], swing: 0.42, stride: 4.4 },
+                // (Each foot is down for only about a third of the cycle.)
+                Gait { speed: 11.0, offsets: vec![0.0, 0.1, 0.6, 0.5], swing: 0.66, stride: 5.0 },
             ],
             lift: 0.28,
             accel: 9.0,
@@ -389,7 +390,9 @@ impl Rig {
         let sway = self.plan.sway * moving * (1.0 - self.gallop) * wave * if root == Root::Chest { 1.0 } else { -1.0 };
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving);
         // Crouched: lower, and the chest lower still (the head goes down).
-        let low = self.crouch * if root == Root::Chest { 0.42 } else { 0.3 };
+        // Running, the body drops, so the legs can reach far fore and aft.
+        let run = 0.2 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
+        let low = (self.crouch * if root == Root::Chest { 0.42 } else { 0.3 }).max(run);
         // In a leap the body pitches with its arc: nose up rising, down
         // falling.
         let pitch = (self.airborne.unwrap_or(0.0) * 0.04).clamp(-0.25, 0.25) * if root == Root::Chest { 1.0 } else { -1.0 };
@@ -416,7 +419,12 @@ impl Rig {
     /// Where a foot belongs: under its hip, a little ahead when moving.
     fn home(&self, i: usize, ground: &impl Fn(f32, f32) -> f32) -> Vec3 {
         let hip = self.hip(i);
-        let lead = self.velocity * 0.18;
+        // A foot lands half a stance ahead of its hip (it is down while the
+        // body passes over it), but never beyond the leg's reach.
+        let leg = self.plan.legs[i];
+        let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
+        let ahead = ((1.0 - self.swing) * self.stride * 0.5).min((leg.upper + leg.lower) * 0.6) * (speed / 1.5).min(1.0);
+        let lead = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero() * ahead;
         // Each step lands a little off its ideal place.
         let k = self.steps.get(i).copied().unwrap_or(0) as i32;
         let r = |j: i32| hash01(self.seed as i32 + i as i32 * 101, k, j, 0x61b) - 0.5;
@@ -509,7 +517,9 @@ impl Rig {
                     self.steps[i] += 1;
                 }
                 let s = local / self.swing;
-                let lift = self.plan.lift * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
+                // Higher the faster: at a gallop the paw is tucked up high.
+                let reach = self.plan.legs[i].upper + self.plan.legs[i].lower;
+                let lift = (self.plan.lift * (1.0 + speed / 5.0)).min(reach * 0.5) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
                 let arc = (s * std::f32::consts::PI).sin() * lift;
                 foot.planted = foot.from.lerp(home, s * s * (3.0 - 2.0 * s)) + Vec3::Y * arc;
             } else if foot.swinging {
