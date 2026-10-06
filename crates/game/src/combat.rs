@@ -91,6 +91,8 @@ const DARK_SPEED: f32 = 13.0;
 /// so fully.
 const GLOOM_REACH: f32 = 20.0;
 const GLOOM_FULL: f32 = 3.0;
+/// Within this, a swarmer you look at stops dead.
+const STILL_WITHIN: f32 = 12.0;
 const DART_SPEED: f32 = 24.0;
 const BITE: f32 = 8.0;
 
@@ -560,9 +562,12 @@ fn swarm(
         let p = transform.translation;
         let to = target - p;
         let distance = to.length().max(0.01);
+        if args.opt("dark") {
+            stalk(&world, ptransform, &positions, &mut transform, &mut s, dt);
+            continue;
+        }
         // Hunt, keep apart, wobble.
-        let speed = if args.opt("dark") { DARK_SPEED } else { SWARMER_SPEED };
-        let mut want = to / distance * speed;
+        let mut want = to / distance * SWARMER_SPEED;
         // Hold the player's height (seen against the ground, not the sky).
         want.y += (target.y + 0.3 - p.y) * 2.0;
         for &q in &positions {
@@ -598,6 +603,56 @@ fn swarm(
         transform.rotate_local_y(dt * (3.0 + s.velocity.length() * 0.3));
         transform.rotate_local_x(dt * 1.7);
     }
+}
+
+/// `--opt dark`: how a swarmer moves. Close by it moves only where you are
+/// not looking: each has a place of its own a few metres behind you, and goes
+/// there and waits, dead still; looked at, it stops dead where it is. Turn
+/// round and they are all still; turn back and they have moved behind you
+/// again. Arriving in front of you, they swing wide round your side.
+fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
+    let p = transform.translation;
+    let eye = player.translation;
+    let seen = (p - eye).normalize_or(Vec3::Y).dot(*player.forward()) > 0.55;
+    if seen && p.distance(eye) < STILL_WITHIN {
+        s.velocity = Vec3::ZERO;
+        return;
+    }
+    // Its place: within about 60 degrees of straight behind you, 4 to 8 m
+    // off, about head height.
+    let h = |j: i32| hash01((s.phase * 1000.0) as i32, j, 0, 0x5c1);
+    let back = Vec3::new(-player.forward().x, 0.0, -player.forward().z).normalize_or(Vec3::X);
+    let around = Quat::from_rotation_y((h(0) - 0.5) * 2.1) * back;
+    let mut place = eye + around * (4.0 + 4.0 * h(1)) + Vec3::Y * (h(2) * 1.5 - 0.6);
+    // Not yet behind you: out to your side first, wide.
+    let right = Vec3::new(-back.z, 0.0, back.x);
+    let rel = Vec3::new(p.x - eye.x, 0.0, p.z - eye.z);
+    if rel.dot(back) < 2.0 {
+        let side = if rel.dot(right) < 0.0 { -1.0 } else { 1.0 };
+        place = eye + right * side * 14.0 + back * 6.0 + Vec3::Y * (place.y - eye.y);
+    }
+    let to = place - p;
+    let distance = to.length();
+    let mut want = to.normalize_or(Vec3::ZERO) * DARK_SPEED * (distance / 3.0).min(1.0);
+    for &q in positions {
+        let d = p - q;
+        let l = d.length();
+        if l > 0.01 && l < 1.6 {
+            want += d / l * (1.6 - l) * 6.0;
+        }
+    }
+    s.velocity += (want - s.velocity).clamp_length_max(20.0 * dt);
+    let mut next = p + s.velocity * dt;
+    let ground = world.ground_height(next.x, next.z) + 0.8;
+    if next.y < ground {
+        next.y = ground;
+        s.velocity.y = s.velocity.y.max(0.0);
+    }
+    transform.translation = next;
+    // (Turning only while it moves; waiting, it is still.)
+    let moving = s.velocity.length();
+    transform.rotate_local_y(dt * moving * 0.5);
+    transform.rotate_local_x(dt * moving * 0.2);
 }
 
 /// `--opt dark`: the swarm does not bite; it brings darkness. Each swarmer
