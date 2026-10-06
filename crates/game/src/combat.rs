@@ -86,9 +86,9 @@ const SHARD_SPEED: f32 = 260.0;
 /// what a bite costs.
 const SWARMER_HEALTH: f32 = 3.0;
 const SWARMER_RADIUS: f32 = 0.55;
-const SWARMER_SPEED: f32 = 8.0;
+const SWARMER_SPEED: f32 = 14.0;
 /// With `--opt dark`: faster, to keep up with a running player.
-const DARK_SPEED: f32 = 13.0;
+const DARK_SPEED: f32 = 18.0;
 /// How far off a swarmer starts to darken the world, and how near it does
 /// so fully.
 const GLOOM_REACH: f32 = 20.0;

@@ -1,6 +1,6 @@
 //! Swarmer forms, each with a form at rest and a form when looked at: a
-//! swarmer you look straight at turns into its second form over a second and
-//! a half, and relaxes slowly when you look away. `--opt bud`, `face` or
+//! swarmer you look towards (within about 35 degrees) turns into its second
+//! form over a second and a half, and relaxes slowly when you look away. `--opt bud`, `face` or
 //! `chandelier` gives the swarm that form (otherwise the old knot of spikes).
 //!
 //! - The bud: black petals closed round a light leaking through the seam;
@@ -49,6 +49,14 @@ impl Form {
         self == Form::Chandelier
     }
 }
+
+/// The bud's size, closed and open.
+const BUD_CLOSED: f32 = 1.6;
+const BUD_OPEN: f32 = 1.35;
+/// Looking towards a form within this angle (its cosine), and this near,
+/// turns it.
+const LOOK_COS: f32 = 0.82;
+const LOOK_WITHIN: f32 = 25.0;
 
 /// How far something has turned into its second form.
 #[derive(Component, Default)]
@@ -178,7 +186,7 @@ pub(super) fn gaze(
             continue;
         }
         let to = transform.translation() - camera.translation;
-        let looked = to.length() < 15.0 && to.normalize_or(Vec3::Y).dot(*camera.forward()) > 0.97;
+        let looked = to.length() < LOOK_WITHIN && to.normalize_or(Vec3::Y).dot(*camera.forward()) > LOOK_COS;
         g.gaze = if looked { (g.gaze + dt / 1.5).min(1.0) } else { (g.gaze - dt / 2.5).max(0.0) };
     }
     for (m, mut transform) in &mut morphs {
@@ -222,7 +230,10 @@ fn light(commands: &mut Commands, kit: &Kit, parent: Entity, of: Entity, materia
 
 /// Its back is to you (+Z away); the petals' bases sit behind the core.
 fn bud(commands: &mut Commands, kit: &Kit, root: Entity, glow: Handle<StandardMaterial>) {
-    light(commands, kit, root, root, glow, 300.0, 3000.0, Transform::from_scale(Vec3::splat(0.7)), Transform::from_scale(Vec3::splat(0.85)));
+    // Large while closed, so the shut bud holds its own; a little smaller as
+    // it opens.
+    let whole = joint(commands, root, root, Transform::from_scale(Vec3::splat(BUD_CLOSED)), Transform::from_scale(Vec3::splat(BUD_OPEN)));
+    light(commands, kit, whole, root, glow, 300.0, 3000.0, Transform::from_scale(Vec3::splat(0.7)), Transform::from_scale(Vec3::splat(0.85)));
     for (count, length, width, material, closed, open, base) in [
         (7, 0.36, 0.09, &kit.dark, 0.38, 0.35, 0.16),
         (5, 0.24, 0.06, &kit.pale, 0.5, -0.3, 0.09),
@@ -235,7 +246,7 @@ fn bud(commands: &mut Commands, kit: &Kit, root: Entity, glow: Handle<StandardMa
             let tucked = if material == &kit.pale { scale * Vec3::new(1.0, 0.55, 1.0) } else { scale };
             let rest = Transform::from_translation(r * base + Vec3::Z * 0.08).with_rotation(aim(Vec3::NEG_Z - r * closed, t)).with_scale(tucked);
             let gazed = Transform::from_translation(r * base * 0.8 + Vec3::Z * 0.06).with_rotation(aim(r + Vec3::Z * open, t)).with_scale(scale);
-            piece(commands, root, root, &kit.blade, material, rest, gazed);
+            piece(commands, whole, root, &kit.blade, material, rest, gazed);
         }
     }
     // A short stalk of spines behind.
@@ -243,7 +254,7 @@ fn bud(commands: &mut Commands, kit: &Kit, root: Entity, glow: Handle<StandardMa
         let a = i as f32 / 3.0 * std::f32::consts::TAU;
         let d = Vec3::new(a.cos() * 0.4, a.sin() * 0.4, 1.0);
         let t = Transform::from_translation(Vec3::Z * 0.1).with_rotation(aim(d, Vec3::X)).with_scale(Vec3::new(0.02, 0.4, 0.02));
-        piece(commands, root, root, &kit.blade, &kit.dark, t, t);
+        piece(commands, whole, root, &kit.blade, &kit.dark, t, t);
     }
 }
 
