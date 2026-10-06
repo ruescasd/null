@@ -456,7 +456,7 @@ fn spawn_hunter(
         }
         if i == 4 {
             // The head: one skull, a hinged jaw beneath, a thin pale brow.
-            let style = (args.num("beast_head", 0.0) as usize).min(heads.beast.len() - 1);
+            let style = (args.num("beast_head", 2.0) as usize).min(heads.beast.len() - 1);
             let (skull, jaw) = if kind == Kind::Beast { &heads.beast[style] } else { &heads.biped };
             let (across, up) = if kind == Kind::Beast { HEAD_EYES[style] } else { HEAD_EYES[0] };
             let rr = bone.radius;
@@ -482,7 +482,7 @@ fn spawn_hunter(
                 // where along the head, out from the middle (head radii),
                 // how long (head radii), on the skull or the jaw, a lean.
                 let mut teeth: Vec<(f32, f32, f32, bool, f32)> = Vec::new();
-                if args.num("beast_teeth", 0.0) as i32 == 1 {
+                if args.num("beast_teeth", 1.0) as i32 == 1 {
                     for (t, w, l, lean) in [(0.5, 0.42, 1.5, 0.12), (0.64, 0.36, 0.9, -0.2), (0.8, 0.28, 1.15, 0.3)] {
                         teeth.push((t, w, l, true, lean));
                     }
@@ -623,9 +623,9 @@ fn spawn_hunter(
     // (`--set beast_eyes=N`): 0 pinpricks; 1 vertical slits; 2 six small
     // eyes, three a side.
     let eyes = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, ..default() });
-    let style = (args.num("beast_head", 0.0) as usize).min(HEAD_EYES.len() - 1);
+    let style = (args.num("beast_head", 2.0) as usize).min(HEAD_EYES.len() - 1);
     let (across, up) = if kind == Kind::Beast { HEAD_EYES[style] } else { HEAD_EYES[0] };
-    let looks = if kind == Kind::Beast { args.num("beast_eyes", 0.0) as i32 } else { 0 };
+    let looks = if kind == Kind::Beast { args.num("beast_eyes", 2.0) as i32 } else { 0 };
     for side in [-1.0f32, 1.0] {
         let set: Vec<(Vec3, f32, Vec3)> = match looks {
             1 => vec![(Vec3::new(side * across, up, 0.5), side * 0.3, Vec3::new(0.06, 0.06, 0.42))],
