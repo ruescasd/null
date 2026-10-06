@@ -64,7 +64,7 @@ impl Plugin for CombatPlugin {
                     .chain()
                     .after(crate::player::walk),
             )
-            .add_systems(PostUpdate, (kick, weapon::animate).before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
 
@@ -96,6 +96,8 @@ struct Gun {
     recoil: f32,
     /// Shots fired, for the shards' pattern.
     shots: u32,
+    /// The view's shake, 0..1, decaying.
+    shake: f32,
 }
 
 /// Sends the swarm: groups at a distance whenever there are too few, more
@@ -343,6 +345,8 @@ fn fire(
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
     ichor: Res<ichor::Ichor>,
+    fx: Res<weapon::Fx>,
+    viewmodel: Single<Entity, With<weapon::Viewmodel>>,
     mut light: Single<&mut PointLight, With<MuzzleLight>>,
 ) {
     let dt = time.delta_secs();
@@ -355,15 +359,17 @@ fn fire(
         return;
     }
     gun.cooldown = RELOAD;
-    gun.kick += 0.045;
-    gun.recoil += 0.09;
+    gun.kick += 0.07;
+    gun.shake = 1.0;
+    gun.recoil += 0.11;
     gun.shots += 1;
-    light.intensity = 4.0e6;
+    light.intensity = 1.2e7;
     commands.spawn((AudioPlayer::new(assets.gun.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.8))));
 
     let eye = transform.translation;
     let (right, up, forward) = (transform.right(), transform.up(), transform.forward());
-    let muzzle = eye + right * 0.2 - up * 0.15 + forward * 0.6;
+    let muzzle = eye + right * weapon::MUZZLE_VIEW.x + up * weapon::MUZZLE_VIEW.y - forward * weapon::MUZZLE_VIEW.z;
+    weapon::fire(&mut commands, &fx, *viewmodel, muzzle, *forward, *right, *up, gun.shots);
     for k in 0..SHARDS {
         // A ring pattern with a little jitter, so a shot reads the same way
         // every time (as in Quake 3) but never quite repeats.
@@ -768,7 +774,19 @@ fn hud(
 }
 
 /// The view kicks up with each shot and settles back.
-fn kick(time: Res<Time>, mut gun: ResMut<Gun>, mut camera: Single<&mut Transform, (With<FlyCam>, Without<weapon::Viewmodel>)>) {
-    gun.kick *= (-time.delta_secs() * 9.0).exp();
-    camera.rotate_local_x(gun.kick);
+/// The view kicks up with each shot and settles back; it shakes for an
+/// instant, and its field of view punches out and back.
+fn kick(time: Res<Time>, mut gun: ResMut<Gun>, mut camera: Single<(&mut Transform, &mut Projection), (With<FlyCam>, Without<weapon::Viewmodel>)>) {
+    let dt = time.delta_secs();
+    gun.kick *= (-dt * 9.0).exp();
+    gun.shake *= (-dt * 18.0).exp();
+    let (transform, projection) = &mut *camera;
+    transform.rotate_local_x(gun.kick);
+    let t = time.elapsed_secs();
+    let s = gun.shake * 0.012;
+    transform.rotate_local_y(s * (t * 83.0).sin());
+    transform.rotate_local_z(s * 1.5 * (t * 71.0).cos());
+    if let Projection::Perspective(p) = &mut **projection {
+        p.fov = (65.0 + 5.0 * gun.shake).to_radians();
+    }
 }

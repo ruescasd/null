@@ -218,12 +218,15 @@ keeps it still.
 Combat, a first prototype (`combat.rs`). The shard shotgun throws a ring of
 16 shards (hitscan, drawn as streaks) about once a second. In view
 (`combat/weapon.rs`, built from simple shapes in code): a faceted receiver
-and grip, an open cage of rails for a barrel with pale shards (the
-ammunition) lying in it, a crown of prongs at the muzzle, a pale stripe on
+and grip, a short barrel whose middle is an open cage of rails with pale
+shards (the ammunition) lying in it, front and back shrouded, a crown of prongs at the muzzle, a pale stripe on
 each side, and a faint light of its own so its facets read. It kicks as it
 fires, the prongs flare and snap shut, the cage turns a sixth to the next
 shard and stops with a jolt; it lags as you turn, bobs with your steps and
-dips when you land. A swarm hunts
+dips when you land. Firing is excessive on purpose: a white star bursts from
+the muzzle with a ring of shock flung out, sparks spray forward, dark smoke
+rolls off, the spent shard is thrown out of the cage's window, a bright
+flash lights the surroundings, and the view kicks, shakes and punches out. A swarm hunts
 you: small dark knots of shards with a lit core, slower than a running
 player but darting in to bite; three shards break one. More keep coming,
 faster the longer you last, so standing still is death; the time you last

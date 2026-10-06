@@ -1,7 +1,12 @@
-//! The shard shotgun in view: an angular receiver and grip; an open cage of
-//! six rails and three rings for a barrel, a bundle of pale shards (the
-//! ammunition) lying in it; a crown of prongs at the muzzle. Dark metal, a
-//! thin pale stripe along each side.
+//! The shard shotgun in view: an angular receiver and grip; a barrel whose
+//! middle is an open cage of six rails, a bundle of pale shards (the
+//! ammunition) lying in it, its front and back shrouded; a crown of prongs at
+//! the muzzle. Dark metal, a thin pale stripe along each side.
+//!
+//! Firing is excessive on purpose (a gun must not feel weak): a white star
+//! bursting from the muzzle and a ring of shock flung out from it, sparks
+//! spraying forward, dark smoke rolling off, the spent shard thrown out of the
+//! cage's window, the view kicking, shaking and punching out (FOV).
 //!
 //! It moves: it kicks back and up as it fires, the prongs flare open and snap
 //! shut, and the cage turns a sixth of a turn to bring the next shard round,
@@ -25,6 +30,51 @@ pub(super) struct Cage;
 #[derive(Component)]
 pub(super) struct Prong(f32);
 
+/// Where the muzzle is in the gun's frame, and from the eye.
+const MUZZLE: Vec3 = Vec3::new(0.0, 0.005, -0.33);
+pub(super) const MUZZLE_VIEW: Vec3 = Vec3::new(REST.x + MUZZLE.x, REST.y + MUZZLE.y, REST.z + MUZZLE.z);
+
+/// What firing throws.
+#[derive(Resource)]
+pub(super) struct Fx {
+    star: Handle<Mesh>,
+    ring: Handle<Mesh>,
+    puff: Handle<Mesh>,
+    needle: Handle<Mesh>,
+    flash: Handle<StandardMaterial>,
+    spark: Handle<StandardMaterial>,
+    smoke: Handle<StandardMaterial>,
+    pale: Handle<StandardMaterial>,
+}
+
+/// A flash on the gun: grows to `size` in `grow` seconds, then shrinks away
+/// by `life`. A ring grows instead, and thins.
+#[derive(Component)]
+pub(super) struct Flash {
+    age: f32,
+    life: f32,
+    grow: f32,
+    size: Vec3,
+    ring: bool,
+}
+
+/// A particle in the world: sparks, smoke, the spent shard.
+#[derive(Component)]
+pub(super) struct Particle {
+    velocity: Vec3,
+    spin: Vec3,
+    /// Fraction of its speed lost per second, and gravity (m/s²).
+    drag: f32,
+    gravity: f32,
+    age: f32,
+    life: f32,
+    /// Its size at birth and at death (it grows or shrinks between).
+    from: Vec3,
+    to: Vec3,
+    /// Stretched along its flight (sparks).
+    streak: bool,
+}
+
 /// Builds the gun, in the eye's frame (-Z forward, +Y up), and returns it.
 pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, pale: Handle<StandardMaterial>) -> Entity {
     // Dark, but matte enough that its facets catch the light (a glossy
@@ -33,6 +83,28 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let ring = meshes.add(Torus::new(0.039, 0.051).mesh().major_resolution(6).minor_resolution(4));
     let needle = meshes.add(shard_mesh(&[(Vec3::Y, 1.0, 0.04), (Vec3::NEG_Y, 0.06, 0.04)]));
+    let shroud = meshes.add(Cylinder::new(0.056, 1.0).mesh().resolution(6));
+    // What firing throws: a star of rays mostly forward, a ring, and the
+    // materials (white-hot, bright, smoke).
+    let star: Vec<(Vec3, f32, f32)> = (0..14)
+        .map(|k| {
+            let r = |j: i32| hash01(k, j, 4, 0x9f1) - 0.5;
+            let a = k as f32 / 14.0 * std::f32::consts::TAU;
+            let forward = k % 3 != 0;
+            let d = if forward { Vec3::new(a.cos() * 0.35, a.sin() * 0.35, -1.0) } else { Vec3::new(a.cos(), a.sin(), -0.15) };
+            (d.normalize(), if forward { 0.7 + 0.5 * (r(0) + 0.5) } else { 0.35 + 0.3 * (r(0) + 0.5) }, 0.06)
+        })
+        .collect();
+    commands.insert_resource(Fx {
+        star: meshes.add(shard_mesh(&star)),
+        ring: meshes.add(Torus::new(0.85, 1.0).mesh().major_resolution(12).minor_resolution(3)),
+        puff: meshes.add(Sphere::new(0.5).mesh().ico(0).unwrap()),
+        needle: needle.clone(),
+        flash: materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(4000.0, 4000.0, 4000.0), ..default() }),
+        spark: materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(600.0, 600.0, 600.0), ..default() }),
+        smoke: materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.05), perceptual_roughness: 1.0, ..default() }),
+        pale: pale.clone(),
+    });
     let block = |size: Vec3, at: Vec3, tilt: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_x(tilt)).with_scale(size), bevy::light::NotShadowCaster);
     let rolled = |size: Vec3, at: Vec3, roll: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_z(roll)).with_scale(size), bevy::light::NotShadowCaster);
     let gun = commands.spawn((Viewmodel, Transform::from_translation(REST), Visibility::default())).id();
@@ -60,27 +132,38 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             PointLight { intensity: 25000.0, range: 0.9, radius: 0.0, shadow_maps_enabled: false, ..default() },
             Transform::from_xyz(-0.12, 0.16, 0.18),
         ));
-        // The barrel: a cage that turns, the ammunition lying in it.
+        // The barrel: a cage that turns, the ammunition lying in it; only
+        // its middle shows, between two shrouds.
+        let shrouded = |length: f32, z: f32| {
+            (
+                Mesh3d(shroud.clone()),
+                Transform::from_xyz(0.0, 0.005, z).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(1.0, length, 1.0)),
+                bevy::light::NotShadowCaster,
+            )
+        };
+        g.spawn((shrouded(0.08, -0.12), MeshMaterial3d(metal.clone())));
+        g.spawn((shrouded(0.09, -0.28), MeshMaterial3d(metal.clone())));
+        // (A collar at each shroud's open end.)
+        for z in [-0.162, -0.235] {
+            g.spawn((
+                Mesh3d(ring.clone()),
+                MeshMaterial3d(metal.clone()),
+                Transform::from_xyz(0.0, 0.005, z).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::splat(1.18)),
+                bevy::light::NotShadowCaster,
+            ));
+        }
         g.spawn((Cage, Transform::from_xyz(0.0, 0.005, -0.08), Visibility::default())).with_children(|c| {
             for k in 0..6 {
                 let a = k as f32 / 6.0 * std::f32::consts::TAU;
-                c.spawn((block(Vec3::new(0.008, 0.008, 0.39), Vec3::new(a.cos() * 0.045, a.sin() * 0.045, -0.19), 0.0), MeshMaterial3d(metal.clone())));
-                // A shard of ammunition, pointing forward.
+                c.spawn((block(Vec3::new(0.008, 0.008, 0.25), Vec3::new(a.cos() * 0.045, a.sin() * 0.045, -0.12), 0.0), MeshMaterial3d(metal.clone())));
+                // A shard of ammunition, pointing forward, in the window.
                 let b = a + std::f32::consts::PI / 6.0;
                 c.spawn((
                     Mesh3d(needle.clone()),
                     MeshMaterial3d(pale.clone()),
-                    Transform::from_xyz(b.cos() * 0.02, b.sin() * 0.02, -0.04)
+                    Transform::from_xyz(b.cos() * 0.02, b.sin() * 0.02, -0.1)
                         .with_rotation(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z))
-                        .with_scale(Vec3::new(0.18, 0.3, 0.18)),
-                    bevy::light::NotShadowCaster,
-                ));
-            }
-            for z in [-0.01, -0.2, -0.385] {
-                c.spawn((
-                    Mesh3d(ring.clone()),
-                    MeshMaterial3d(metal.clone()),
-                    Transform::from_xyz(0.0, 0.0, z).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                        .with_scale(Vec3::new(0.18, 0.08, 0.18)),
                     bevy::light::NotShadowCaster,
                 ));
             }
@@ -92,7 +175,7 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
                 Prong(a),
                 Mesh3d(needle.clone()),
                 MeshMaterial3d(metal.clone()),
-                Transform::from_xyz(a.cos() * 0.04, 0.005 + a.sin() * 0.04, -0.46).with_scale(Vec3::new(0.25, 0.09, 0.25)),
+                Transform::from_xyz(a.cos() * 0.045, 0.005 + a.sin() * 0.045, MUZZLE.z + 0.01).with_scale(Vec3::new(0.25, 0.09, 0.25)),
                 bevy::light::NotShadowCaster,
             ));
         }
@@ -158,4 +241,124 @@ pub(super) fn animate(
     let ease = 1.0 - (1.0 - s).powi(3) + 0.08 * (s * std::f32::consts::PI).sin() * (1.0 - s);
     let turns = gun.shots.saturating_sub(1) as f32 + if gun.shots > 0 { ease } else { 0.0 };
     cage.rotation = Quat::from_rotation_z(turns * std::f32::consts::TAU / 6.0);
+}
+
+/// Everything a shot throws, from the muzzle at `at` (in the world), along
+/// `forward`. `gun` is the gun in view (the flash rides on it).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forward: Vec3, right: Vec3, up: Vec3, shot: u32) {
+    let r = |k: i32, j: i32| hash01(shot as i32, k, j, 0x9f2) - 0.5;
+    // On the gun: the star, turned a different way each shot, and a ring of
+    // shock flung out.
+    commands.entity(gun).with_children(|g| {
+        g.spawn((
+            Flash { age: 0.0, life: 0.075, grow: 0.012, size: Vec3::new(0.32, 0.32, 0.45), ring: false },
+            Mesh3d(fx.star.clone()),
+            MeshMaterial3d(fx.flash.clone()),
+            Transform::from_translation(MUZZLE).with_rotation(Quat::from_rotation_z(r(0, 0) * 6.0)).with_scale(Vec3::ZERO),
+            bevy::light::NotShadowCaster,
+        ));
+        g.spawn((
+            Flash { age: 0.0, life: 0.14, grow: 0.14, size: Vec3::splat(0.32), ring: true },
+            Mesh3d(fx.ring.clone()),
+            MeshMaterial3d(fx.flash.clone()),
+            Transform::from_translation(MUZZLE + Vec3::NEG_Z * 0.04).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::ZERO),
+            bevy::light::NotShadowCaster,
+        ));
+    });
+    // Sparks spraying forward in a cone.
+    for k in 0..26 {
+        let dir = (forward + right * r(k, 1) * 0.7 + up * r(k, 2) * 0.7).normalize();
+        commands.spawn((
+            Particle { velocity: dir * (22.0 + 30.0 * (r(k, 3) + 0.5)), spin: Vec3::ZERO, drag: 4.0, gravity: 6.0, age: 0.0, life: 0.12 + 0.2 * (r(k, 4) + 0.5), from: Vec3::new(0.25, 0.5, 0.25), to: Vec3::new(0.05, 0.1, 0.05), streak: true },
+            Mesh3d(fx.needle.clone()),
+            MeshMaterial3d(fx.spark.clone()),
+            Transform::from_translation(at).with_scale(Vec3::ZERO),
+            bevy::light::NotShadowCaster,
+        ));
+    }
+    // Dark smoke rolling off, slowing, rising a little, swelling.
+    for k in 0..7 {
+        let dir = (forward * (0.6 + 0.6 * (r(k, 5) + 0.5)) + right * r(k, 6) * 0.6 + up * (0.15 + r(k, 7) * 0.4)).normalize();
+        commands.spawn((
+            Particle {
+                velocity: dir * (4.0 + 5.0 * (r(k, 8) + 0.5)),
+                spin: Vec3::new(r(k, 9), r(k, 10), r(k, 11)) * 3.0,
+                drag: 3.0,
+                gravity: -0.6,
+                age: 0.0,
+                life: 0.7 + 0.6 * (r(k, 12) + 0.5),
+                from: Vec3::splat(0.05),
+                to: Vec3::splat(0.35 + 0.2 * (r(k, 13) + 0.5)),
+                streak: false,
+            },
+            Mesh3d(fx.puff.clone()),
+            MeshMaterial3d(fx.smoke.clone()),
+            Transform::from_translation(at + forward * 0.1).with_scale(Vec3::ZERO),
+            bevy::light::NotShadowCaster,
+        ));
+    }
+    // The spent shard, flung out of the cage's window to the right,
+    // tumbling.
+    commands.spawn((
+        Particle {
+            velocity: right * (3.0 + r(0, 14)) + up * (2.5 + r(0, 15)) - forward * 0.5,
+            spin: Vec3::new(14.0 + r(0, 16) * 6.0, 4.0, 9.0),
+            drag: 0.2,
+            gravity: 14.0,
+            age: 0.0,
+            life: 1.4,
+            from: Vec3::new(0.3, 0.14, 0.3),
+            to: Vec3::new(0.3, 0.14, 0.3),
+            streak: false,
+        },
+        Mesh3d(fx.needle.clone()),
+        MeshMaterial3d(fx.pale.clone()),
+        Transform::from_translation(at - forward * 0.2 + right * 0.03),
+        bevy::light::NotShadowCaster,
+    ));
+}
+
+/// Flashes grow and shrink away; particles fly.
+pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Query<(Entity, &mut Flash, &mut Transform), Without<Particle>>, mut particles: Query<(Entity, &mut Particle, &mut Transform), Without<Flash>>) {
+    let dt = time.delta_secs().min(0.05);
+    for (e, mut f, mut t) in &mut flashes {
+        f.age += dt;
+        if f.age >= f.life {
+            commands.entity(e).despawn();
+            continue;
+        }
+        t.scale = if f.ring {
+            // A ring flung out: growing, thinning.
+            let k = f.age / f.life;
+            Vec3::new(f.size.x * (0.2 + 0.8 * k.sqrt()), f.size.y * (1.0 - k) * 0.6, f.size.z * (0.2 + 0.8 * k.sqrt()))
+        } else if f.age < f.grow {
+            f.size * (f.age / f.grow)
+        } else {
+            f.size * (1.0 - ((f.age - f.grow) / (f.life - f.grow)).powi(2))
+        };
+    }
+    for (e, mut p, mut t) in &mut particles {
+        p.age += dt;
+        if p.age >= p.life {
+            commands.entity(e).despawn();
+            continue;
+        }
+        let drag = (-p.drag * dt).exp();
+        p.velocity *= drag;
+        p.velocity.y -= p.gravity * dt;
+        t.translation += p.velocity * dt;
+        let k = p.age / p.life;
+        let size = p.from.lerp(p.to, k);
+        if p.streak {
+            let speed = p.velocity.length();
+            t.rotation = Quat::from_rotation_arc(Vec3::Y, p.velocity / speed.max(1e-3));
+            t.scale = Vec3::new(size.x, size.y * (1.0 + speed * 0.06), size.z);
+        } else {
+            let spin = p.spin * dt;
+            t.rotate(Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z));
+            // Smoke swells, then thins away at the end.
+            t.scale = size * (1.0 - k.powi(4));
+        }
+    }
 }
