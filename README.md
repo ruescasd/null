@@ -231,20 +231,27 @@ while the body bobs, breathing when still, and poses for a crouch and a
 leap. Nothing is quite regular: the tempo drifts, each step lifts a little
 differently and lands a little off its ideal place, and a prowling beast's
 path wanders and its pace comes and goes. Gestures break up the prowl at
-irregular intervals: it sniffs the ground ahead, glances back over a
-shoulder, stops dead with a front paw raised, or breaks into a short trot.
+irregular intervals: it stops dead and stares, its head slowly tilting
+over; its head snaps aside and back; it creeps, very low and slow; or it
+breaks into a short trot.
 The beast is deep-chested with a tucked-up waist and a lean belly, the mass
 riding high on a thick neck and a hump of muscle over the shoulders. Its body is
 dark shards hung on the bones by springs (limbs stiffer), so it lags, sways
-and settles. Its head is one faceted skull (a long muzzle on the beast) with
-a hinged jaw that opens as it crouches and strikes. Glow is kept for rare,
+and settles. Its head is one faceted skull (the beast's long, narrow and
+angular, with pale needle teeth on both jaws, bared when it opens, and
+pinprick eyes) with a hinged jaw that opens as it crouches and gapes as it
+strikes. `--opt wiry` builds bodies of thin long fibres instead, with gaps
+between them and spines bristling out. Glow is kept for rare,
 powerful creatures (the luminous figure): hunters are dark with thin pale
 markings (stripes across the back, a brow over the eyes, bands above the
 paws), and their pale eyes flare only when they look straight at you, like
 eyeshine. The biped stalks, crouches
 where you can see it, and dashes; the beast prowls low and slow, freezes
 with its head locked on you, then charges, building to a gallop, and
-pounces out of the run, skidding when it lands. It takes hits as a whole
+pounces out of the run, skidding when it lands: a quick gather, then a
+fast, flat leap (about a third of a second) aimed to land on you, the body
+pitching with the arc, forelimbs thrown out wide to grab, hind legs kicking
+back and swinging under to land. It takes hits as a whole
 (about four good shots): each shard jolts the piece it strikes and staggers
 the body back, and when it breaks the whole body bursts at once. Every hit
 shows: splinters burst back, a flash lights the body, the struck piece

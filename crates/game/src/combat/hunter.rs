@@ -90,12 +90,12 @@ pub(super) struct Hunter {
 #[derive(Clone, Copy, PartialEq)]
 enum Gesture {
     None,
-    /// Head down to the ground ahead, slowing.
-    Sniff(f32),
-    /// A look back over a shoulder (-1 left, 1 right).
-    Glance(f32, f32),
-    /// Stopped dead with a front paw raised.
-    Paw(f32, usize),
+    /// Stopped, staring, the head slowly tilting over (radians).
+    Tilt(f32, f32),
+    /// The head snapping aside and back (-1 left, 1 right).
+    Twitch(f32, f32),
+    /// Very low and slow.
+    Creep(f32),
     /// A short trot.
     Burst(f32),
 }
@@ -194,9 +194,10 @@ fn rings_mesh(rings: &[(f32, f32, f32, f32)]) -> Mesh {
 }
 
 pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    // A long head: the cranium behind and raised, narrowing to a muzzle.
-    let beast = rings_mesh(&[(0.0, 0.7, 0.7, 0.0), (0.22, 0.95, 0.85, 0.15), (0.48, 0.8, 0.62, 0.1), (0.75, 0.5, 0.42, -0.08), (1.0, 0.26, 0.26, -0.12)]);
-    let beast_jaw = rings_mesh(&[(0.0, 0.55, 0.22, 0.0), (0.5, 0.42, 0.18, 0.0), (1.0, 0.2, 0.1, 0.0)]);
+    // A long, narrow, angular head: a ridge of cranium behind, the brow low
+    // over the eyes, a long muzzle; nothing round about it.
+    let beast = rings_mesh(&[(0.0, 0.5, 0.65, 0.1), (0.2, 0.68, 0.8, 0.22), (0.42, 0.55, 0.5, 0.06), (0.72, 0.38, 0.34, -0.04), (1.0, 0.16, 0.18, -0.1)]);
+    let beast_jaw = rings_mesh(&[(0.0, 0.5, 0.2, 0.0), (0.55, 0.36, 0.15, 0.0), (1.0, 0.14, 0.08, 0.0)]);
     // A shorter, rounder head with a jutting brow.
     let biped = rings_mesh(&[(0.0, 0.75, 0.8, 0.0), (0.3, 1.0, 1.0, 0.1), (0.6, 0.85, 0.75, 0.05), (0.85, 0.55, 0.5, -0.1), (1.0, 0.3, 0.3, -0.15)]);
     let biped_jaw = rings_mesh(&[(0.0, 0.6, 0.25, 0.0), (0.6, 0.45, 0.2, 0.0), (1.0, 0.25, 0.12, 0.0)]);
@@ -441,6 +442,63 @@ fn spawn_hunter(
             for side in [-1.0, 1.0] {
                 pale(commands, i, 0.4, Vec3::new(side * rr * 0.6, 0.0, -rr * 0.66), Vec3::new(-side * 0.35, 1.0, 0.15), length * 0.3, 0.012);
             }
+            if kind == Kind::Beast {
+                // Teeth: pale needles along both jaws, hidden when the
+                // jaw is shut, bared when it opens.
+                for k in 0..6 {
+                    let t = 0.42 + 0.09 * k as f32;
+                    let w = rr * (0.42 - 0.25 * (t - 0.42));
+                    let long = rr * (0.55 - 0.3 * (t - 0.42));
+                    for side in [-1.0, 1.0] {
+                        // Upper, fixed to the skull, pointing down.
+                        commands.spawn((
+                            Part { hunter, bone: i, along: t, offset: Vec3::new(side * w, 0.0, rr * 0.22), rotation: Quat::from_rotation_arc(Vec3::Y, Vec3::new(0.0, 0.25, 1.0).normalize()), velocity: Vec3::ZERO, stiffness: RIGID },
+                            Mesh3d(assets.shard.clone()),
+                            MeshMaterial3d(assets.pale.clone()),
+                            Transform::from_scale(Vec3::new(0.9, long / 0.75, 0.9)),
+                        ));
+                        // Lower, on the jaw, pointing up.
+                        let along_jaw = (t - 0.3) / 0.7;
+                        commands.spawn((
+                            Jaw,
+                            Part { hunter, bone: i, along: 0.3, offset: Vec3::new(side * w * 0.85, length * 0.66 * along_jaw, rr * 0.22), rotation: Quat::from_rotation_arc(Vec3::Y, Vec3::new(0.0, 0.25, -1.0).normalize()), velocity: Vec3::ZERO, stiffness: RIGID },
+                            Mesh3d(assets.shard.clone()),
+                            MeshMaterial3d(assets.pale.clone()),
+                            Transform::from_scale(Vec3::new(0.8, long * 0.8 / 0.75, 0.8)),
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+        if args.opt("wiry") {
+            // Fibres: thin, long, bundled along the bone and splaying from
+            // it, gaps between them; now and then a spine bristling out.
+            let count = ((length / 0.06) * (bone.radius / 0.12).clamp(0.6, 2.0)).round().clamp(4.0, 40.0) as usize;
+            for k in 0..count {
+                let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b9) - 0.5;
+                let along = k as f32 / count as f32 + r(0) / count as f32;
+                let a = r(1) * std::f32::consts::TAU;
+                let out = bone.radius * (0.2 + 0.85 * (r(2) + 0.5));
+                let mut offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
+                if kind == Kind::Beast && i < 3 && offset.z > 0.0 {
+                    offset.z *= 0.45;
+                }
+                let spine = r(3) > 0.4;
+                let dir = if spine {
+                    Vec3::new(a.cos() * 0.8, -0.6, a.sin() * 0.8)
+                } else {
+                    Vec3::new(r(4) * 0.5, 1.0, r(5) * 0.5)
+                };
+                let long = if spine { bone.radius * (1.0 + 1.2 * (r(6) + 0.5)) } else { length * (0.5 + 0.7 * (r(6) + 0.5)) };
+                let thin = if spine { 0.6 } else { 0.35 + 0.35 * (r(7) + 0.5) };
+                commands.spawn((
+                    Part { hunter, bone: i, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize()), velocity: Vec3::ZERO, stiffness: STIFFNESS },
+                    Mesh3d(assets.shard.clone()),
+                    MeshMaterial3d(assets.dark.clone()),
+                    Transform::from_translation(bone.a).with_scale(Vec3::new(thin, long / 0.75, thin)),
+                ));
+            }
             continue;
         }
         let count = ((length / 0.11) * (bone.radius / 0.12).clamp(0.6, 2.2)).round().clamp(3.0, 40.0) as usize;
@@ -514,7 +572,7 @@ fn spawn_hunter(
             Eye { hunter, side, material: eyes.clone() },
             Mesh3d(assets.core.clone()),
             MeshMaterial3d(eyes.clone()),
-            Transform::from_translation(feet).with_scale(Vec3::splat(0.24)),
+            Transform::from_translation(feet).with_scale(Vec3::splat(0.13)),
         ));
     }
 }
@@ -581,7 +639,7 @@ pub(super) fn hunt(
         h.stun -= dt;
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
-        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None };
+        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0 };
         if stunned {
         } else if args.opt("tame") {
             // (`--opt tame`, for captures: it circles at a distance, side on,
@@ -595,7 +653,7 @@ pub(super) fn hunt(
             match h.stance {
                 // Prowling: low and slow, closing in; now and then it freezes,
                 // or breaks into a charge.
-                Stance::Stalk | Stance::Windup => {
+                Stance::Stalk => {
                     intent.crouch = 0.35;
                     // Never quite straight, never quite steady: the path
                     // wanders either side, the pace comes and goes.
@@ -609,12 +667,13 @@ pub(super) fn hunt(
                     h.gesture_in -= dt;
                     if h.gesture == Gesture::None && h.gesture_in <= 0.0 {
                         let pick = r(5);
+                        let side = if r(7) < 0.5 { -1.0 } else { 1.0 };
                         h.gesture = if pick < 0.3 {
-                            Gesture::Sniff(1.2 + r(6))
-                        } else if pick < 0.55 {
-                            Gesture::Glance(0.8 + 0.5 * r(6), if r(7) < 0.5 { -1.0 } else { 1.0 })
-                        } else if pick < 0.8 {
-                            Gesture::Paw(0.8 + 0.8 * r(6), if r(7) < 0.5 { 0 } else { 1 })
+                            Gesture::Tilt(1.4 + 1.2 * r(6), side * (0.5 + 0.4 * r(9)))
+                        } else if pick < 0.6 {
+                            Gesture::Twitch(0.25, side)
+                        } else if pick < 0.85 {
+                            Gesture::Creep(1.5 + 1.5 * r(6))
                         } else {
                             Gesture::Burst(0.8 + 0.6 * r(6))
                         };
@@ -622,21 +681,25 @@ pub(super) fn hunt(
                     }
                     let forward = Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos());
                     h.gesture = match h.gesture {
-                        Gesture::Sniff(t) => {
-                            intent.velocity *= 0.35;
-                            intent.look = root + forward * 1.4;
-                            if t > dt { Gesture::Sniff(t - dt) } else { Gesture::None }
-                        }
-                        Gesture::Glance(t, side) => {
-                            let back = Vec3::new(-forward.z, 0.0, forward.x) * side * 4.0 - forward * 3.0;
-                            intent.look = root + back + Vec3::Y * 1.2;
-                            if t > dt { Gesture::Glance(t - dt, side) } else { Gesture::None }
-                        }
-                        Gesture::Paw(t, leg) => {
+                        Gesture::Tilt(t, angle) => {
+                            // Stopped dead, staring, the head rolling over.
                             intent.velocity = Vec3::ZERO;
-                            intent.crouch = 0.45;
-                            intent.paw = Some(leg);
-                            if t > dt { Gesture::Paw(t - dt, leg) } else { Gesture::None }
+                            intent.crouch = 0.3;
+                            intent.tilt = angle;
+                            if t > dt { Gesture::Tilt(t - dt, angle) } else { Gesture::None }
+                        }
+                        Gesture::Twitch(t, side) => {
+                            // A sudden snap of the head aside, and back.
+                            let aside = Vec3::new(-forward.z, 0.0, forward.x) * side * 3.0 + forward;
+                            intent.look = if t > 0.12 { root + aside + Vec3::Y * 1.0 } else { target };
+                            intent.head_rate = 45.0;
+                            intent.velocity *= 0.3;
+                            if t > dt { Gesture::Twitch(t - dt, side) } else { Gesture::None }
+                        }
+                        Gesture::Creep(t) => {
+                            intent.velocity *= 0.45;
+                            intent.crouch = 0.65;
+                            if t > dt { Gesture::Creep(t - dt) } else { Gesture::None }
                         }
                         Gesture::Burst(t) => {
                             intent.velocity = intent.velocity.normalize_or(toward) * 6.0;
@@ -670,12 +733,25 @@ pub(super) fn hunt(
                     intent.velocity = toward * 14.0;
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
-                    if speed > 7.0 && distance < 6.0 + speed * 0.3 {
-                        h.rig.leap(toward, (speed * 1.15).max(13.0), 6.5);
-                        h.stance = Stance::Attack(toward);
-                        h.timer = 2.0;
+                    if speed > 7.0 && distance < 5.0 + speed * 0.35 {
+                        // A quick gather, still running.
+                        h.stance = Stance::Windup;
+                        h.timer = 0.13;
                     } else if h.timer <= 0.0 {
                         h.stance = Stance::Stalk;
+                        h.timer = 2.0;
+                    }
+                }
+                Stance::Windup => {
+                    intent.velocity = toward * 14.0;
+                    intent.crouch = 1.0;
+                    if h.timer <= 0.0 {
+                        // Fast and flat, aimed to land on you: about a third
+                        // of a second in the air.
+                        let up = 4.5;
+                        let flight = 2.0 * up / 25.0;
+                        h.rig.leap(toward, (distance / flight).clamp(12.0, 28.0), up);
+                        h.stance = Stance::Attack(toward);
                         h.timer = 2.0;
                     }
                 }
@@ -735,8 +811,8 @@ pub(super) fn hunt(
         }
         // The jaw: nearly shut, open in a crouch, gaping in an attack.
         let open = match h.stance {
-            Stance::Windup => 0.55,
-            Stance::Attack(_) => 0.8,
+            Stance::Windup => if beast { 0.9 } else { 0.55 },
+            Stance::Attack(_) => if beast { 1.25 } else { 0.8 },
             Stance::Charge => 0.3,
             Stance::Freeze => 0.15,
             _ => 0.06 + 0.04 * (time.elapsed_secs() * 1.3).sin(),

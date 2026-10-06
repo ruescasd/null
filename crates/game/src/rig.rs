@@ -19,7 +19,9 @@
 //! - The head tracks a target with lag, and now and then glances away.
 //! - A tail trails behind, each link following the last.
 //! - Poses for attacking: a crouch (lowered, head down, tail up) and a leap
-//!   (a ballistic arc, legs flung forward and back).
+//!   (a fast, flat arc, the body pitching with it: forelimbs thrown out wide
+//!   to grab, hind legs kicking back and then swinging under to land).
+//! - The head can tilt (rolling about where it looks) and turn suddenly.
 //!
 //! The rig outputs bones (segments with a thickness); what a creature is
 //! made of hangs on them (see `combat/hunter.rs`).
@@ -208,6 +210,10 @@ pub struct Intent {
     pub crouch: f32,
     /// A leg to hold raised (standing still): a paw lifted, poised.
     pub paw: Option<usize>,
+    /// The head's roll (radians), and how fast it turns to look (0: its
+    /// usual rate; much more for a sudden snap).
+    pub tilt: f32,
+    pub head_rate: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -283,6 +289,10 @@ pub struct Rig {
     steps: Vec<u32>,
     /// A raised paw: which leg, and how far up (0..1).
     paw: (usize, f32),
+    /// In a leap: seconds since it left the ground, and how long it will be
+    /// in the air.
+    air: (f32, f32),
+    tilt: f32,
     feet: Vec<Foot>,
     head_dir: Vec3,
     glance: Vec3,
@@ -332,6 +342,8 @@ impl Rig {
             head_y: None,
             steps: Vec::new(),
             paw: (0, 0.0),
+            air: (0.0, 1.0),
+            tilt: 0.0,
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
@@ -378,7 +390,10 @@ impl Rig {
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving);
         // Crouched: lower, and the chest lower still (the head goes down).
         let low = self.crouch * if root == Root::Chest { 0.42 } else { 0.3 };
-        let height = h * (1.0 - low) + bob + rock + if root == Root::Chest { breath } else { 0.0 };
+        // In a leap the body pitches with its arc: nose up rising, down
+        // falling.
+        let pitch = (self.airborne.unwrap_or(0.0) * 0.04).clamp(-0.25, 0.25) * if root == Root::Chest { 1.0 } else { -1.0 };
+        let height = h * (1.0 - low) + bob + rock + pitch + if root == Root::Chest { breath } else { 0.0 };
         // Leaning into a turn: the body swings towards its inside.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
@@ -425,6 +440,7 @@ impl Rig {
         let old_heading = self.heading;
         if let Some(vy) = self.airborne.as_mut() {
             // A leap: ballistic.
+            self.air.0 += dt;
             *vy -= 25.0 * dt;
             self.root += Vec3::new(self.velocity.x, *vy, self.velocity.z) * dt;
             let floor = ground(self.root.x, self.root.z);
@@ -516,7 +532,10 @@ impl Rig {
         }
         let chest = self.anchor(Root::Chest);
         let want = ((intent.look - chest).normalize_or(self.forward_of(self.chest_yaw)) + self.glance * 0.35).normalize_or(Vec3::Z);
-        self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * 7.0).exp()).normalize_or(want);
+        // In a leap the head is thrown at its prey.
+        let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else { 7.0 };
+        self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
+        self.tilt += (intent.tilt - self.tilt) * (1.0 - (-dt * 3.0).exp());
         // The head's height follows the body's slowly: steady while it bobs.
         let raw = self.neck_end().y;
         self.head_y = Some(match self.head_y {
@@ -566,7 +585,8 @@ impl Rig {
         }
         bones.push(Bone { a: chest, b: neck_end, radius: self.plan.neck_radius, side: right });
         let head_end = neck_end + self.head_dir * self.plan.head.0;
-        bones.push(Bone { a: neck_end, b: head_end, radius: self.plan.head.1, side: right });
+        let tilted = Quat::from_axis_angle(self.head_dir.normalize_or(forward), self.tilt) * right;
+        bones.push(Bone { a: neck_end, b: head_end, radius: self.plan.head.1, side: tilted });
         // Legs.
         for i in 0..self.plan.legs.len() {
             let leg = self.plan.legs[i];
@@ -575,8 +595,17 @@ impl Rig {
             let fwd = self.forward_of(yaw);
             let reach = leg.upper + leg.lower;
             let target = match self.airborne {
-                // In a leap: front legs flung forward, hind legs back.
-                Some(_) => hip - Vec3::Y * reach * 0.7 + fwd * reach * 0.6 * if leg.root == Root::Chest { 1.0 } else { -1.0 },
+                // In a leap: forelimbs thrown forward and out wide to grab,
+                // dropping to land; hind legs kicked back, then swung under.
+                Some(_) => {
+                    let s = (self.air.0 / self.air.1.max(0.05)).clamp(0.0, 1.0);
+                    let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum();
+                    if leg.root == Root::Chest {
+                        hip + fwd * reach * 0.85 + out * reach * 0.35 - Vec3::Y * reach * (0.15 + 0.45 * s)
+                    } else {
+                        hip - fwd * reach * (0.85 * (1.0 - s) - 0.2 * s) - Vec3::Y * reach * (0.5 + 0.25 * s)
+                    }
+                }
                 None if self.paw.0 == i && self.paw.1 > 0.0 && !self.feet[i].swinging => {
                     // Poised: lifted and drawn up under the chest.
                     let k = self.paw.1 * self.paw.1 * (3.0 - 2.0 * self.paw.1);
@@ -642,6 +671,7 @@ impl Rig {
     pub fn leap(&mut self, dir: Vec3, speed: f32, up: f32) {
         self.velocity = Vec3::new(dir.x, 0.0, dir.z).normalize_or(Vec3::Z) * speed;
         self.airborne = Some(up);
+        self.air = (0.0, 2.0 * up / 25.0);
         self.root.y += 0.05;
     }
 }
