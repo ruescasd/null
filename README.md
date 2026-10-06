@@ -84,7 +84,8 @@ crashed the GPU driver.
   mouse look / noclip / world wrap (`camera.rs`), screenshots (`capture.rs`),
   the weapon, the swarm and its hunters (`combat.rs`, `combat/hunter.rs`,
   `combat/ichor.rs`; creatures move on the procedural rig in `rig.rs`;
-  their sounds are synthesised WAVs in `crates/game/src/sounds/`).
+  their sounds are WAVs in `crates/game/src/sounds/`, synthesised or cut from
+recordings).
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 
 Lighting favours drama over physics. Though the world is airless, distant
@@ -242,9 +243,13 @@ and settles. Its head is one faceted skull (the beast's long, narrow and
 angular, with pale needle teeth on both jaws, bared when it opens, and
 pinprick eyes) with a hinged jaw that opens as it crouches and gapes as it
 strikes. `--opt wiry` builds bodies of thin long fibres instead, with gaps
-between them and spines bristling out. A hunter growls (a low, rattling
-throat): steadily as it prowls, louder and higher as it charges, and not at
-all when it stops to stare; it snarls as it leaps. Spatial sounds are heard
+between them and spines bristling out. A hunter growls now and then, a
+phrase picked at random from recorded growls, a little higher or lower each
+time: every few seconds as it prowls, quieter and rarer creeping, one after
+another and higher as it charges, never while it stops to stare; it roars as
+it leaps, and its bite has its own sound (sources in
+`crates/game/src/sounds/CREDITS.md`; downloads go in `samples/`, which git
+ignores). Spatial sounds are heard
 at a scale where something 10 m away is about two thirds as loud as close by. Glow is kept for rare,
 powerful creatures (the luminous figure): hunters are dark with thin pale
 markings (stripes across the back, a brow over the eyes, bands above the

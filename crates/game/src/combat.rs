@@ -40,8 +40,15 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/assemble.wav");
         embedded_asset!(app, "sounds/hit.wav");
         embedded_asset!(app, "sounds/death.wav");
-        embedded_asset!(app, "sounds/growl.wav");
-        embedded_asset!(app, "sounds/snarl.wav");
+        embedded_asset!(app, "sounds/growl0.wav");
+        embedded_asset!(app, "sounds/growl1.wav");
+        embedded_asset!(app, "sounds/growl2.wav");
+        embedded_asset!(app, "sounds/growl3.wav");
+        embedded_asset!(app, "sounds/growl4.wav");
+        embedded_asset!(app, "sounds/growl5.wav");
+        embedded_asset!(app, "sounds/growl6.wav");
+        embedded_asset!(app, "sounds/pounce.wav");
+        embedded_asset!(app, "sounds/bite.wav");
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
@@ -124,8 +131,10 @@ struct Assets3 {
     assemble: Handle<AudioSource>,
     hit: Handle<AudioSource>,
     death: Handle<AudioSource>,
-    growl: Handle<AudioSource>,
-    snarl: Handle<AudioSource>,
+    /// A hunter's growls: phrases cut from recordings, and their lengths.
+    growls: Vec<(Handle<AudioSource>, f32)>,
+    pounce: Handle<AudioSource>,
+    bite: Handle<AudioSource>,
 }
 
 /// What landed this frame, for the feedback: how many shards hit something
@@ -249,8 +258,9 @@ fn setup(
         assemble: load("assemble"),
         hit: load("hit"),
         death: load("death"),
-        growl: load("growl"),
-        snarl: load("snarl"),
+        growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("growl{k}")), l)).collect(),
+        pounce: load("pounce"),
+        bite: load("bite"),
     };
 
     // The ear is the camera.
