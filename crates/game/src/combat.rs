@@ -71,7 +71,7 @@ impl Plugin for CombatPlugin {
 }
 
 /// Seconds between shots.
-const RELOAD: f32 = 0.85;
+const RELOAD: f32 = 1.2;
 /// Shards per shot, the cone they spread in (radians, half-angle), how far
 /// they reach and how fast they are drawn flying.
 const SHARDS: usize = 16;

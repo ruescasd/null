@@ -217,7 +217,7 @@ about 20 m ahead of the spawn point and walks towards you; `--opt statue`
 keeps it still.
 
 Combat, a first prototype (`combat.rs`). The shard shotgun throws a ring of
-16 shards (hitscan, drawn as streaks) about once a second. In view
+16 shards (hitscan, drawn as streaks) every 1.2 seconds. In view
 (`combat/weapon.rs`, built from simple shapes in code): a faceted receiver
 and grip, a short barrel whose middle is an open cage of rails with pale
 shards (the ammunition) lying in it, front and back shrouded, a crown of prongs at the muzzle, a pale stripe on
