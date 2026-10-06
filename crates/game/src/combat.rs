@@ -521,9 +521,11 @@ fn swarm(
     let wanted = (8.0 + director.alive / 10.0).min(40.0) as usize;
     // (`--opt hunters`: no swarm, only built hunters; see `hunter.rs`.)
     if director.next_wave <= 0.0 && count < wanted && !args.opt("hunters") && !args.opt("specimen") {
-        director.next_wave = 7.0;
+        // (`--set wave=N` and `wave_every=S`: N at a time, every S seconds,
+        // to watch them build up.)
+        director.next_wave = args.num("wave_every", 7.0);
         let t = time.elapsed_secs();
-        let group = 4 + (director.alive / 40.0) as usize;
+        let group = args.num("wave", (4 + (director.alive / 40.0) as usize) as f32) as usize;
         let a = hash01(t as i32, 1, 2, 0x5a1) * std::f32::consts::TAU;
         let dist = 50.0 + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
         let mut away = Vec3::new(a.cos(), 0.0, a.sin());
