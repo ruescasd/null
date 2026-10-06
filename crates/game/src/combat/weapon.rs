@@ -174,19 +174,6 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             g.spawn((tube(0.019, side * BARREL_X, MUZZLE.y, -0.075, -0.33), MeshMaterial3d(metal.clone())));
             g.spawn((tube(0.02, side * BARREL_X, MUZZLE.y, -0.33, -0.385), MeshMaterial3d(soot.clone())));
         }
-        // A ventilated heat shield over both: a plate on two mounts, its
-        // edges turned down, a row of vent slots across it.
-        let shield_y = MUZZLE.y + 0.026;
-        g.spawn((block(Vec3::new(0.064, 0.004, 0.19), Vec3::new(0.0, shield_y, -0.185), 0.0), MeshMaterial3d(metal.clone())));
-        for side in [-1.0f32, 1.0] {
-            g.spawn((rolled(Vec3::new(0.004, 0.014, 0.19), Vec3::new(side * 0.034, shield_y - 0.005, -0.185), side * 0.35), MeshMaterial3d(metal.clone())));
-        }
-        for z in [-0.1, -0.27] {
-            g.spawn((block(Vec3::new(0.02, 0.012, 0.012), Vec3::new(0.0, shield_y - 0.007, z), 0.0), MeshMaterial3d(metal.clone())));
-        }
-        for k in 0..7 {
-            g.spawn((block(Vec3::new(0.046, 0.0012, 0.009), Vec3::new(0.0, shield_y + 0.0021, -0.11 - 0.025 * k as f32), 0.0), MeshMaterial3d(wrap.clone())));
-        }
         g.spawn((tube(0.016, 0.0, -0.026, -0.075, -0.235), MeshMaterial3d(grease.clone())));
         g.spawn((tube(0.016, 0.0, -0.026, -0.295, -0.33), MeshMaterial3d(metal.clone())));
         g.spawn((block(Vec3::new(0.078, 0.072, 0.014), Vec3::new(0.0, -0.005, -0.315), 0.0), MeshMaterial3d(metal.clone())));
