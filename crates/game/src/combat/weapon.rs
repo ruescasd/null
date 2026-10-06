@@ -103,6 +103,9 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     let ring = meshes.add(Torus::new(0.039, 0.051).mesh().major_resolution(6).minor_resolution(4));
     let needle = meshes.add(shard_mesh(&[(Vec3::Y, 1.0, 0.04), (Vec3::NEG_Y, 0.06, 0.04)]));
     let shroud = meshes.add(Cylinder::new(0.056, 1.0).mesh().resolution(6));
+    // A bolt: a hex head on a washer, a socket in it (unit sizes, along +Y).
+    let hex = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(6));
+    let disc = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(12));
     // What firing throws: a star of rays mostly forward, a ring, and the
     // materials (white-hot, bright).
     let star: Vec<(Vec3, f32, f32)> = (0..14)
@@ -140,6 +143,23 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             g.spawn((rolled(Vec3::new(0.012, 0.06, 0.15), Vec3::new(side * 0.042, -0.01, 0.03), side * 0.22), MeshMaterial3d(metal.clone())));
         }
         g.spawn((block(Vec3::new(0.012, 0.02, 0.13), Vec3::new(0.0, 0.07, 0.05), 0.12), MeshMaterial3d(metal.clone())));
+        // A bolt at `at` on a surface facing `normal`: washer, hex head,
+        // socket.
+        let bolt = |g: &mut ChildSpawnerCommands, at: Vec3, normal: Vec3| {
+            let turn = Quat::from_rotation_arc(Vec3::Y, normal) * Quat::from_rotation_y(0.4);
+            for (mesh, material, radius, height, lift) in [
+                (&disc, &metal, 0.0052, 0.0012, 0.0006),
+                (&hex, &worn, 0.0038, 0.0028, 0.0026),
+                (&hex, &wrap, 0.0017, 0.0008, 0.0041),
+            ] {
+                g.spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_translation(at + normal * lift).with_rotation(turn).with_scale(Vec3::new(radius, height, radius)),
+                    bevy::light::NotShadowCaster,
+                ));
+            }
+        };
         // An armour plate bolted square on the left flank, bolts at its
         // corners and along its middle.
         let plate = Quat::from_rotation_z(-0.22);
@@ -147,14 +167,14 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(metal.clone()), Transform::from_translation(plate_at).with_rotation(plate).with_scale(Vec3::new(0.006, 0.048, 0.1)), bevy::light::NotShadowCaster));
         for y in [-0.018, 0.018] {
             for z in [-0.04, 0.0, 0.04] {
-                g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(worn.clone()), Transform::from_translation(plate_at + plate * Vec3::new(-0.0045, y, z)).with_rotation(plate).with_scale(Vec3::splat(0.0055)), bevy::light::NotShadowCaster));
+                bolt(g, plate_at + plate * Vec3::new(-0.003, y, z), plate * Vec3::NEG_X);
             }
         }
         // Bolts along the top of the receiver, evenly spaced.
         for k in 0..5 {
             let z = -0.06 + 0.042 * k as f32;
             for side in [-1.0, 1.0] {
-                g.spawn((block(Vec3::splat(0.0055), Vec3::new(side * 0.03, 0.044, z), 0.0), MeshMaterial3d(worn.clone())));
+                bolt(g, Vec3::new(side * 0.03, 0.0425, z), Vec3::Y);
             }
         }
         // Machined ridges on the grip.
