@@ -136,6 +136,40 @@ impl Plan {
         }
     }
 
+    /// The same plan, every length times `k` (a bigger or smaller animal of
+    /// the same build; its gaits change at the same speeds).
+    pub fn scaled(mut self, k: f32) -> Self {
+        self.hips = (self.hips.0 * k, self.hips.1 * k);
+        self.chest = (self.chest.0 * k, self.chest.1 * k);
+        self.torso_radius *= k;
+        self.neck_radius *= k;
+        self.neck.0 *= k;
+        self.head = (self.head.0 * k, self.head.1 * k);
+        for leg in &mut self.legs {
+            leg.side *= k;
+            leg.forward *= k;
+            leg.upper *= k;
+            leg.lower *= k;
+            leg.radius = (leg.radius.0 * k, leg.radius.1 * k);
+        }
+        for arm in &mut self.arms {
+            arm.side *= k;
+            arm.upper *= k;
+            arm.lower *= k;
+            arm.radius = (arm.radius.0 * k, arm.radius.1 * k);
+        }
+        self.tail.1 *= k;
+        for g in &mut self.gaits {
+            g.stride *= k;
+        }
+        self.lift *= k;
+        self.bob *= k;
+        self.rock *= k;
+        self.shoulder *= k;
+        self.sway *= k;
+        self
+    }
+
     /// A beast the size of a horse, built like a big cat: low long body,
     /// heavy shoulders, a long tail.
     pub fn beast() -> Self {

@@ -389,7 +389,8 @@ fn spawn_hunter(
     let feet = Vec3::new(centre.x, world.ground_height(centre.x, centre.z), centre.z);
     let to = player - feet;
     let ground = |x: f32, z: f32| world.ground_height(x, z);
-    let plan = if kind == Kind::Beast { Plan::beast() } else { Plan::biped() };
+    // (The angler is a size larger.)
+    let plan = if angler { Plan::beast().scaled(1.15) } else if kind == Kind::Beast { Plan::beast() } else { Plan::biped() };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
