@@ -249,7 +249,7 @@ opens, and pinprick eyes) with a hinged jaw that opens as it crouches and
 gapes, far wider than an animal's, as it strikes; the beast's neck stretches
 out in the strike, the head reaching ahead of the body. `--opt wiry` builds bodies of thin long fibres instead, with gaps
 between them and spines bristling out. A hunter growls now and then, a
-phrase picked at random from recorded growls (the hound's wet and slimy), a little higher or lower each
+phrase picked at random from recorded growls (the hound's a dog's snarls), a little higher or lower each
 time: every few seconds as it prowls, quieter and rarer creeping, one after
 another and higher as it charges, never while it stops to stare; it roars as
 it leaps, and its bite has its own sound (sources in
