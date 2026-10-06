@@ -49,7 +49,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --set beast_head=N beast_eyes=N beast_teeth=N   variants to compare: heads 0 narrow, 1 a cranium sweeping
                                               back, 2 heavy (a hyena's), 3 an angler fish's (the default: a huge
                                               underbite jaw, deep and heavy below the teeth, uneven
-                                              needle teeth leaning in, a dark lure on a stalk); eyes 0 pinpricks (default), 1
+                                              needle teeth leaning in); eyes 0 pinpricks (default), 1
                                               slits, 2 six; teeth 0 two rows, 1 a few long crooked fangs (default)
     --opt hurtsound                           the sound when you are hurt (off by default)
     --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away

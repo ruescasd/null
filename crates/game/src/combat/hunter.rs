@@ -152,8 +152,6 @@ pub(super) struct Heads {
     /// The beast's heads, to compare (`--set beast_head=N`).
     beast: Vec<(Handle<Mesh>, Handle<Mesh>)>,
     biped: (Handle<Mesh>, Handle<Mesh>),
-    /// A unit cylinder along +Y (the angler's stalk).
-    stalk: Handle<Mesh>,
 }
 
 /// Where a beast head's eyes and brow sit: out from the bone and up, in
@@ -240,7 +238,6 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
             (meshes.add(angler), meshes.add(angler_jaw)),
         ],
         biped: (meshes.add(biped), meshes.add(biped_jaw)),
-        stalk: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(6)),
     });
 }
 
@@ -495,31 +492,6 @@ fn spawn_hunter(
                 if !angler {
                     pale(commands, i, 0.4, Vec3::new(side * rr * across, 0.0, -rr * (up + 0.34)), Vec3::new(-side * 0.35, 1.0, 0.15), length * 0.3, 0.012);
                 }
-            }
-            if angler {
-                // The lure: a stalk arching from the forehead out over the
-                // mouth.
-                // An arch of short, even segments, thinning towards a dark
-                // knob at its end, overlapping so it reads as one stalk.
-                let at = |along: f32, up: f32| Vec3::new(0.0, along * length, -up * rr);
-                let points = [at(0.3, 0.9), at(0.42, 2.0), at(0.62, 2.7), at(0.85, 2.95), at(1.05, 2.75), at(1.2, 2.25)];
-                let n = points.len() - 1;
-                for (k, w) in points.windows(2).enumerate() {
-                    let d = w[1] - w[0];
-                    let thick = 0.022 * (1.0 - 0.55 * k as f32 / n as f32);
-                    commands.spawn((
-                        Part { hunter, bone: i, along: 0.0, offset: (w[0] + w[1]) * 0.5, rotation: Quat::from_rotation_arc(Vec3::Y, d.normalize()), velocity: Vec3::ZERO, stiffness: RIGID },
-                        Mesh3d(heads.stalk.clone()),
-                        MeshMaterial3d(assets.dark.clone()),
-                        Transform::from_scale(Vec3::new(thick, d.length() + thick * 2.0, thick)),
-                    ));
-                }
-                commands.spawn((
-                    Part { hunter, bone: i, along: 0.0, offset: points[n], rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
-                    Mesh3d(assets.core.clone()),
-                    MeshMaterial3d(assets.dark.clone()),
-                    Transform::from_scale(Vec3::splat(0.4)),
-                ));
             }
             if kind == Kind::Beast {
                 // Teeth, bared when the jaw opens (`--set beast_teeth=N`):
