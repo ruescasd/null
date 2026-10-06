@@ -220,10 +220,11 @@ Combat, a first prototype (`combat.rs`). The shard shotgun throws a ring of
 16 shards (hitscan, drawn as streaks) every 1.5 seconds. In view
 (`combat/weapon.rs`, built from simple shapes in code): a faceted receiver
 and grip, a short barrel whose middle is an open cage of rails with pale
-shards (the ammunition) lying in it, front and back shrouded, and grimy and worked
-against the clean world (a repair plate welded on askew, rivets, shrouds off
-true, the grip wrapped in cord, a cable looping to the barrel, edges worn to
-bare metal, scratches, grease round the cage, a faint grime texture), a crown of prongs at the muzzle, a pale stripe on
+shards (the ammunition) lying in it, front and back shrouded, a heavy-duty tool
+grimy from hard use against the clean world, never makeshift (an armour plate
+bolted on its flank, regular bolts, machined ridges on the grip, an armoured
+hose clamped under the barrel, soot at the front, grease on the cage, a faint
+mottle of use), a crown of prongs at the muzzle, a pale stripe on
 each side, and a faint light of its own so its facets read. It kicks as it
 fires, the prongs flare and snap shut, the cage turns a sixth to the next
 shard and stops with a jolt; it lags as you turn, bobs with your steps and

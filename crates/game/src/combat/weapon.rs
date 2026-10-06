@@ -3,10 +3,10 @@
 //! ammunition) lying in it, its front and back shrouded; a crown of prongs at
 //! the muzzle. Dark metal, a thin pale stripe along each side.
 //!
-//! It is grimy and worked, against the clean world: mismatched plates, a
-//! repair plate welded on askew, rivets, shrouds a little off true, the grip
-//! wrapped in cord, a cable looping to the barrel, edges worn to bare metal,
-//! scratches, grease round the moving cage, and a faint grime on the metal.
+//! It is a heavy-duty tool, grimy from hard use, never makeshift: an armour
+//! plate bolted on its flank, regular bolts, machined ridges on the grip, an
+//! armoured hose clamped under the barrel; soot where the shots go out,
+//! grease on the moving cage, a faint mottle of use on the metal.
 //!
 //! Firing is excessive on purpose (a gun must not feel weak): a white star
 //! bursting from the muzzle and a ring of shock flung out from it, sparks
@@ -95,8 +95,10 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     let wrap = materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.95, reflectance: 0.2, ..default() });
     // Grease: dark and glossy.
     let grease = materials.add(StandardMaterial { base_color: Color::srgb(0.035, 0.035, 0.035), perceptual_roughness: 0.12, reflectance: 0.7, ..default() });
-    // Bare metal where the finish is worn through.
+    // Bolt heads: bare, a little brighter than the finish.
     let worn = materials.add(StandardMaterial { base_color: Color::srgb(0.15, 0.15, 0.15), perceptual_roughness: 0.75, reflectance: 0.35, ..default() });
+    // Soot, where the shots go out: matte, darker than the finish.
+    let soot = materials.add(StandardMaterial { base_color: Color::srgb(0.025, 0.025, 0.025), perceptual_roughness: 0.9, reflectance: 0.2, ..default() });
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let ring = meshes.add(Torus::new(0.039, 0.051).mesh().major_resolution(6).minor_resolution(4));
     let needle = meshes.add(shard_mesh(&[(Vec3::Y, 1.0, 0.04), (Vec3::NEG_Y, 0.06, 0.04)]));
@@ -138,75 +140,39 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             g.spawn((rolled(Vec3::new(0.012, 0.06, 0.15), Vec3::new(side * 0.042, -0.01, 0.03), side * 0.22), MeshMaterial3d(metal.clone())));
         }
         g.spawn((block(Vec3::new(0.012, 0.02, 0.13), Vec3::new(0.0, 0.07, 0.05), 0.12), MeshMaterial3d(metal.clone())));
-        let grit = |k: i32, j: i32| hash01(k, j, 6, 0x9f5) - 0.5;
-        // A repair plate welded on askew over the left flank, rivets at its
-        // corners, a bead of weld along its top.
-        let patch = Quat::from_rotation_z(-0.22) * Quat::from_rotation_x(0.07);
-        let patch_at = Vec3::new(-0.05, -0.008, 0.075);
-        g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(metal.clone()), Transform::from_translation(patch_at).with_rotation(patch).with_scale(Vec3::new(0.006, 0.05, 0.065)), bevy::light::NotShadowCaster));
-        g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(worn.clone()), Transform::from_translation(patch_at + patch * Vec3::new(-0.002, 0.026, 0.0)).with_rotation(patch).with_scale(Vec3::new(0.007, 0.004, 0.066)), bevy::light::NotShadowCaster));
-        for (y, z) in [(-0.019, -0.026), (0.019, -0.026), (-0.019, 0.026), (0.019, 0.026)] {
-            g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(worn.clone()), Transform::from_translation(patch_at + patch * Vec3::new(-0.004, y, z)).with_rotation(patch).with_scale(Vec3::splat(0.005)), bevy::light::NotShadowCaster));
+        // An armour plate bolted square on the left flank, bolts at its
+        // corners and along its middle.
+        let plate = Quat::from_rotation_z(-0.22);
+        let plate_at = Vec3::new(-0.05, -0.006, 0.07);
+        g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(metal.clone()), Transform::from_translation(plate_at).with_rotation(plate).with_scale(Vec3::new(0.006, 0.048, 0.1)), bevy::light::NotShadowCaster));
+        for y in [-0.018, 0.018] {
+            for z in [-0.04, 0.0, 0.04] {
+                g.spawn((Mesh3d(cube.clone()), MeshMaterial3d(worn.clone()), Transform::from_translation(plate_at + plate * Vec3::new(-0.0045, y, z)).with_rotation(plate).with_scale(Vec3::splat(0.0055)), bevy::light::NotShadowCaster));
+            }
         }
-        // Rivets along the receiver's top, unevenly spaced.
+        // Bolts along the top of the receiver, evenly spaced.
         for k in 0..5 {
-            let z = -0.06 + 0.042 * k as f32 + 0.01 * grit(k, 0);
+            let z = -0.06 + 0.042 * k as f32;
             for side in [-1.0, 1.0] {
                 g.spawn((block(Vec3::splat(0.0055), Vec3::new(side * 0.03, 0.044, z), 0.0), MeshMaterial3d(worn.clone())));
             }
         }
-        // Edges worn through to bare metal, in broken lengths, along the top
-        // corners and the stock.
-        for (k, (x, y, z0, z1)) in [(-0.0375, 0.0425, -0.08, 0.12), (0.0375, 0.0425, -0.08, 0.12), (-0.03, 0.023, 0.12, 0.2)].into_iter().enumerate() {
-            let mut z = z0;
-            let mut j = 0;
-            while z < z1 {
-                let len = 0.012 + 0.03 * (grit(k as i32 * 10 + j, 1) + 0.5);
-                if grit(k as i32 * 10 + j, 2) > -0.15 {
-                    g.spawn((block(Vec3::new(0.004, 0.0035, len.min(z1 - z)), Vec3::new(x, y, z + len * 0.5), 0.0), MeshMaterial3d(worn.clone())));
-                }
-                z += len + 0.006 + 0.02 * (grit(k as i32 * 10 + j, 3) + 0.5);
-                j += 1;
-            }
-        }
-        // Scratches across the left plate.
-        for k in 0..6 {
-            let at = Vec3::new(-0.049, -0.03 + 0.04 * (grit(k, 4) + 0.5), -0.03 + 0.12 * (grit(k, 5) + 0.5));
-            g.spawn((
-                Mesh3d(cube.clone()),
-                MeshMaterial3d(worn.clone()),
-                Transform::from_translation(at).with_rotation(Quat::from_rotation_z(-0.22) * Quat::from_rotation_x(0.6 * grit(k, 6))).with_scale(Vec3::new(0.0015, 0.0012, 0.012 + 0.02 * (grit(k, 7) + 0.5))),
-                bevy::light::NotShadowCaster,
-            ));
-        }
-        // The grip wrapped in cord: bands round it, none quite square.
+        // Machined ridges on the grip.
         let grip_axis = Quat::from_rotation_x(-0.35) * Vec3::Y;
         let grip_at = Vec3::new(0.0, -0.09, 0.08);
-        for k in 0..9 {
-            let t = -0.055 + 0.0125 * k as f32;
+        for k in 0..8 {
+            let t = -0.05 + 0.0135 * k as f32;
             g.spawn((
                 Mesh3d(cube.clone()),
                 MeshMaterial3d(wrap.clone()),
-                Transform::from_translation(grip_at + grip_axis * t).with_rotation(Quat::from_rotation_x(-0.35 + 0.12 * grit(k, 8)) * Quat::from_rotation_z(0.08 * grit(k, 9))).with_scale(Vec3::new(0.04, 0.008, 0.056)),
+                Transform::from_translation(grip_at + grip_axis * t).with_rotation(Quat::from_rotation_x(-0.35)).with_scale(Vec3::new(0.039, 0.006, 0.055)),
                 bevy::light::NotShadowCaster,
             ));
         }
-        // A cable from the back of the receiver looping down and forward to
-        // the front shroud, clamped there.
-        let cable = |t: f32| {
-            let a = Vec3::new(-0.025, 0.035, 0.09);
-            let b = Vec3::new(-0.05, -0.01, -0.29);
-            a.lerp(b, t) + Vec3::new(-0.022, -0.035, 0.0) * (std::f32::consts::PI * t).sin()
-        };
-        for k in 0..10 {
-            let (p0, p1) = (cable(k as f32 / 10.0), cable((k + 1) as f32 / 10.0));
-            let d = p1 - p0;
-            g.spawn((
-                Mesh3d(cube.clone()),
-                MeshMaterial3d(wrap.clone()),
-                Transform::from_translation((p0 + p1) * 0.5).with_rotation(Quat::from_rotation_arc(Vec3::Z, d.normalize())).with_scale(Vec3::new(0.007, 0.007, d.length() + 0.004)),
-                bevy::light::NotShadowCaster,
-            ));
+        // An armoured hose run straight under the barrel, in two clamps.
+        g.spawn((block(Vec3::new(0.011, 0.011, 0.26), Vec3::new(0.0, -0.058, -0.17), 0.0), MeshMaterial3d(wrap.clone())));
+        for z in [-0.1, -0.27] {
+            g.spawn((block(Vec3::new(0.02, 0.022, 0.012), Vec3::new(0.0, -0.054, z), 0.0), MeshMaterial3d(metal.clone())));
         }
         // A thin pale stripe along each side, on the plates.
         for side in [-1.0, 1.0] {
@@ -223,20 +189,13 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         let shrouded = |length: f32, z: f32| {
             (
                 Mesh3d(shroud.clone()),
-                // (A little off true, each its own way.)
-                Transform::from_xyz(0.0, 0.005, z).with_rotation(Quat::from_rotation_z(z * 1.3) * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(1.0, length, 1.0)),
+                Transform::from_xyz(0.0, 0.005, z).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(1.0, length, 1.0)),
                 bevy::light::NotShadowCaster,
             )
         };
         g.spawn((shrouded(0.08, -0.12), MeshMaterial3d(metal.clone())));
-        g.spawn((shrouded(0.09, -0.28), MeshMaterial3d(metal.clone())));
-        // A strap clamping the cable to the front shroud.
-        g.spawn((
-            Mesh3d(ring.clone()),
-            MeshMaterial3d(wrap.clone()),
-            Transform::from_xyz(0.0, 0.005, -0.29).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(1.25, 1.6, 1.25)),
-            bevy::light::NotShadowCaster,
-        ));
+        // (Sooted at the front, where the shots go out.)
+        g.spawn((shrouded(0.09, -0.28), MeshMaterial3d(soot.clone())));
         // (A collar at each shroud's open end.)
         // (Greasy round the cage, where it turns.)
         for z in [-0.162, -0.235] {
@@ -269,7 +228,7 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
             g.spawn((
                 Prong(a),
                 Mesh3d(needle.clone()),
-                MeshMaterial3d(metal.clone()),
+                MeshMaterial3d(soot.clone()),
                 Transform::from_xyz(a.cos() * 0.045, 0.005 + a.sin() * 0.045, MUZZLE.z + 0.01).with_scale(Vec3::new(0.25, 0.09, 0.25)),
                 bevy::light::NotShadowCaster,
             ));
@@ -446,8 +405,8 @@ pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Quer
     }
 }
 
-/// The metal's grime: mottled stains, darker blotches of grease, and fine
-/// scratches, all faint (multiplied into the dark finish).
+/// The metal's mottle of use: faint, uneven stains (multiplied into the dark
+/// finish).
 fn grime_image() -> Image {
     const N: u32 = 96;
     let noise = |x: f32, y: f32, cells: f32, salt: i32| {
@@ -460,25 +419,12 @@ fn grime_image() -> Image {
         let bottom = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
         top + (bottom - top) * sy
     };
-    let scratches: Vec<(f32, f32, f32, f32)> = (0..18).map(|k| (hash01(k, 0, 7, 0x9f7), hash01(k, 1, 7, 0x9f7), hash01(k, 2, 7, 0x9f7) * 3.14, 0.1 + 0.25 * hash01(k, 3, 7, 0x9f7))).collect();
     let mut data = Vec::with_capacity((N * N * 4) as usize);
     for y in 0..N {
         for x in 0..N {
             let (u, v) = (x as f32 / N as f32, y as f32 / N as f32);
             let stain = 0.55 * noise(u, v, 4.0, 1) + 0.3 * noise(u, v, 9.0, 2) + 0.15 * noise(u, v, 23.0, 3);
-            let mut value = 0.7 + 0.22 * stain;
-            // Grease: blotches of darker.
-            if noise(u, v, 6.0, 4) > 0.7 {
-                value *= 0.86;
-            }
-            for &(cx, cy, a, len) in &scratches {
-                let (dx, dy) = (u - cx, v - cy);
-                let along = dx * a.cos() + dy * a.sin();
-                let across = -dx * a.sin() + dy * a.cos();
-                if along.abs() < len && across.abs() < 0.006 {
-                    value = value.max(1.0);
-                }
-            }
+            let value = 0.82 + 0.14 * stain;
             let byte = (value.clamp(0.0, 1.0) * 255.0) as u8;
             data.extend_from_slice(&[byte, byte, byte, 255]);
         }
