@@ -133,6 +133,12 @@ pub(super) struct Part {
     stiffness: f32,
 }
 
+/// A hunter's voice, kept at its head.
+#[derive(Component)]
+pub(super) struct Voice {
+    hunter: Entity,
+}
+
 /// A hunter's lower jaw: it opens about its hinge.
 #[derive(Component)]
 pub(super) struct Jaw;
@@ -364,13 +370,14 @@ fn spawn_hunter(
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
-        .with_child((
-            // Its voice: the swarm's, slowed down.
-            AudioPlayer::new(assets.swarm.clone()),
-            PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(1.4), speed: 0.5, spatial: true, ..default() },
-            Transform::default(),
-        ))
         .id();
+    // Its voice: a growl, louder as it closes in (see `voice`).
+    commands.spawn((
+        Voice { hunter },
+        AudioPlayer::new(assets.growl.clone()),
+        PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(0.0), spatial: true, ..default() },
+        Transform::from_translation(centre),
+    ));
     info!("a {} forms", if kind == Kind::Beast { "beast" } else { "hunter" });
 
     // Its body: shards along every bone, thicker bones more and bigger,
@@ -751,6 +758,11 @@ pub(super) fn hunt(
                         let up = 4.5;
                         let flight = 2.0 * up / 25.0;
                         h.rig.leap(toward, (distance / flight).clamp(12.0, 28.0), up);
+                        commands.spawn((
+                            AudioPlayer::new(assets.snarl.clone()),
+                            PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
+                            Transform::from_translation(h.rig.head().0),
+                        ));
                         h.stance = Stance::Attack(toward);
                         h.timer = 2.0;
                     }
@@ -823,7 +835,9 @@ pub(super) fn hunt(
             h.struck = true;
             player.1.health -= ATTACK;
             director.hurt = 1.0;
-            commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
+            if args.opt("hurtsound") {
+                commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
+            }
         }
         h.rig.update(dt, intent, &ground);
         transform.translation = h.rig.chest();
@@ -886,6 +900,38 @@ pub(super) fn flesh(
     }
     for mut h in &mut hunters {
         h.hits.clear();
+    }
+}
+
+/// The growl follows the head. Prowling it rumbles; charging it rises,
+/// louder and higher; stopped and staring it goes silent, which is worse.
+/// A voice whose hunter is gone stops.
+pub(super) fn voice(
+    mut commands: Commands,
+    time: Res<Time>,
+    hunters: Query<&Hunter>,
+    mut voices: Query<(Entity, &Voice, &mut Transform, Option<&mut SpatialAudioSink>)>,
+) {
+    let dt = time.delta_secs();
+    for (e, voice, mut transform, sink) in &mut voices {
+        let Ok(h) = hunters.get(voice.hunter) else {
+            commands.entity(e).despawn();
+            continue;
+        };
+        transform.translation = h.rig.head().0;
+        let Some(mut sink) = sink else { continue };
+        let (volume, speed) = match (h.stance, h.gesture) {
+            (_, Gesture::Tilt(..)) | (Stance::Freeze, _) => (0.0, 1.0),
+            (Stance::Charge | Stance::Windup, _) => (2.2, 1.3),
+            (Stance::Attack(_), _) => (0.6, 1.3),
+            (Stance::Recover, _) => (1.0, 0.85),
+            (_, Gesture::Creep(_)) => (0.5, 0.8),
+            _ => (1.1, 1.0),
+        };
+        let now = sink.volume().to_linear();
+        sink.set_volume(Volume::Linear(now + (volume - now) * (1.0 - (-dt * 6.0).exp())));
+        let s = sink.speed();
+        sink.set_speed(s + (speed - s) * (1.0 - (-dt * 4.0).exp()));
     }
 }
 

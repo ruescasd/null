@@ -43,6 +43,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
                                               nearest hunter
     --opt biped|beast                         what the swarm assembles into (otherwise either)
+    --opt hurtsound                           the sound when you are hurt (off by default)
     --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
                                               whenever there is none (with biped|beast to choose)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
@@ -241,7 +242,10 @@ and settles. Its head is one faceted skull (the beast's long, narrow and
 angular, with pale needle teeth on both jaws, bared when it opens, and
 pinprick eyes) with a hinged jaw that opens as it crouches and gapes as it
 strikes. `--opt wiry` builds bodies of thin long fibres instead, with gaps
-between them and spines bristling out. Glow is kept for rare,
+between them and spines bristling out. A hunter growls (a low, rattling
+throat): steadily as it prowls, louder and higher as it charges, and not at
+all when it stops to stare; it snarls as it leaps. Spatial sounds are heard
+at a scale where something 10 m away is about two thirds as loud as close by. Glow is kept for rare,
 powerful creatures (the luminous figure): hunters are dark with thin pale
 markings (stripes across the back, a brow over the eyes, bands above the
 paws), and their pale eyes flare only when they look straight at you, like

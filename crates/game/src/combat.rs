@@ -40,6 +40,11 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/assemble.wav");
         embedded_asset!(app, "sounds/hit.wav");
         embedded_asset!(app, "sounds/death.wav");
+        embedded_asset!(app, "sounds/growl.wav");
+        embedded_asset!(app, "sounds/snarl.wav");
+        // Spatial sounds fade with the square of the distance; at this scale
+        // something 10 m away is heard at about two thirds, 25 m at a tenth.
+        app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
         app.init_resource::<Gun>()
             .init_resource::<Director>()
             .init_resource::<Feedback>()
@@ -47,7 +52,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, hunter::gather, hunter::hunt, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -117,9 +122,10 @@ struct Assets3 {
     shatter: Handle<AudioSource>,
     hurt: Handle<AudioSource>,
     assemble: Handle<AudioSource>,
-    swarm: Handle<AudioSource>,
     hit: Handle<AudioSource>,
     death: Handle<AudioSource>,
+    growl: Handle<AudioSource>,
+    snarl: Handle<AudioSource>,
 }
 
 /// What landed this frame, for the feedback: how many shards hit something
@@ -241,13 +247,14 @@ fn setup(
         shatter: load("shatter"),
         hurt: load("hurt"),
         assemble: load("assemble"),
-        swarm: load("swarm"),
         hit: load("hit"),
         death: load("death"),
+        growl: load("growl"),
+        snarl: load("snarl"),
     };
 
     // The ear is the camera.
-    commands.entity(*camera).insert(SpatialListener::new(0.3));
+    commands.entity(*camera).insert(SpatialListener::new(2.0));
     // The gun in view: a fan of dark shards round a glowing core, low right.
     commands.entity(*camera).with_children(|parent| {
         parent
@@ -574,6 +581,7 @@ fn swarm(
 /// A swarmer that reaches the player bites, and bounces off.
 fn bite(
     mut commands: Commands,
+    args: Res<Args>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
     mut player: Single<(&Transform, &mut Player)>,
@@ -590,7 +598,9 @@ fn bite(
             s.velocity = (Vec3::new(d.x, 0.0, d.z).normalize_or(Vec3::X) + Vec3::Y * 0.15) * 12.0;
             player.1.health -= BITE;
             director.hurt = 1.0;
-            commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.7))));
+            if args.opt("hurtsound") {
+                commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.7))));
+            }
         }
     }
 }
@@ -738,7 +748,7 @@ fn debris(mut commands: Commands, time: Res<Time>, world: Res<WorldGen>, mut pie
 fn swarm_sound(
     player: Single<&Transform, (With<Player>, Without<SwarmVoice>)>,
     swarm: Query<&Transform, (With<Swarmer>, Without<SwarmVoice>, Without<Player>)>,
-    mut voice: Query<(&mut Transform, &mut AudioSink), With<SwarmVoice>>,
+    mut voice: Query<(&mut Transform, &mut SpatialAudioSink), With<SwarmVoice>>,
 ) {
     let Ok((mut transform, mut sink)) = voice.single_mut() else { return };
     let ear = player.translation;
