@@ -41,6 +41,8 @@ pub(super) struct Fx {
     needle: Handle<Mesh>,
     flash: Handle<StandardMaterial>,
     spark: Handle<StandardMaterial>,
+    /// Dark sparks (half of them), which read against a pale ground.
+    dark: Handle<StandardMaterial>,
     pale: Handle<StandardMaterial>,
 }
 
@@ -98,6 +100,7 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
         needle: needle.clone(),
         flash: materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(4000.0, 4000.0, 4000.0), ..default() }),
         spark: materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(600.0, 600.0, 600.0), ..default() }),
+        dark: materials.add(StandardMaterial { base_color: Color::BLACK, perceptual_roughness: 1.0, reflectance: 0.0, ..default() }),
         pale: pale.clone(),
     });
     let block = |size: Vec3, at: Vec3, tilt: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_x(tilt)).with_scale(size), bevy::light::NotShadowCaster);
@@ -254,20 +257,22 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
             bevy::light::NotShadowCaster,
         ));
         g.spawn((
-            Flash { age: 0.0, life: 0.14, grow: 0.14, size: Vec3::splat(0.32), ring: true },
+            // (Half the effect it had: smaller, thinner, briefer.)
+            Flash { age: 0.0, life: 0.11, grow: 0.11, size: Vec3::new(0.22, 0.12, 0.22), ring: true },
             Mesh3d(fx.ring.clone()),
             MeshMaterial3d(fx.flash.clone()),
             Transform::from_translation(MUZZLE + Vec3::NEG_Z * 0.04).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::ZERO),
             bevy::light::NotShadowCaster,
         ));
     });
-    // Sparks spraying forward in a cone.
+    // Sparks spraying forward in a tight cone, half pale and half dark,
+    // each leaving a fading trail of ghosts.
     for k in 0..26 {
-        let dir = (forward + right * r(k, 1) * 0.7 + up * r(k, 2) * 0.7).normalize();
+        let dir = (forward + right * r(k, 1) * 0.35 + up * r(k, 2) * 0.35).normalize();
         commands.spawn((
             Particle { velocity: dir * (22.0 + 30.0 * (r(k, 3) + 0.5)), spin: Vec3::ZERO, drag: 4.0, gravity: 6.0, age: 0.0, life: 0.12 + 0.2 * (r(k, 4) + 0.5), from: Vec3::new(0.25, 0.5, 0.25), to: Vec3::new(0.05, 0.1, 0.05), streak: true },
             Mesh3d(fx.needle.clone()),
-            MeshMaterial3d(fx.spark.clone()),
+            MeshMaterial3d(if k % 2 == 0 { fx.spark.clone() } else { fx.dark.clone() }),
             Transform::from_translation(at).with_scale(Vec3::ZERO),
             bevy::light::NotShadowCaster,
         ));
@@ -294,7 +299,7 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
 }
 
 /// Flashes grow and shrink away; particles fly.
-pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Query<(Entity, &mut Flash, &mut Transform), Without<Particle>>, mut particles: Query<(Entity, &mut Particle, &mut Transform), Without<Flash>>) {
+pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Query<(Entity, &mut Flash, &mut Transform), Without<Particle>>, mut particles: Query<(Entity, &mut Particle, &mut Transform, &Mesh3d, &MeshMaterial3d<StandardMaterial>), Without<Flash>>) {
     let dt = time.delta_secs().min(0.05);
     for (e, mut f, mut t) in &mut flashes {
         f.age += dt;
@@ -312,7 +317,7 @@ pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Quer
             f.size * (1.0 - ((f.age - f.grow) / (f.life - f.grow)).powi(2))
         };
     }
-    for (e, mut p, mut t) in &mut particles {
+    for (e, mut p, mut t, mesh, material) in &mut particles {
         p.age += dt;
         if p.age >= p.life {
             commands.entity(e).despawn();
@@ -327,7 +332,15 @@ pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Quer
         if p.streak {
             let speed = p.velocity.length();
             t.rotation = Quat::from_rotation_arc(Vec3::Y, p.velocity / speed.max(1e-3));
-            t.scale = Vec3::new(size.x, size.y * (1.0 + speed * 0.06), size.z);
+            t.scale = Vec3::new(size.x, size.y * (1.0 + speed * 0.09), size.z);
+            // A ghost left where it is, fading fast: a trail.
+            commands.spawn((
+                Particle { velocity: Vec3::ZERO, spin: Vec3::ZERO, drag: 0.0, gravity: 0.0, age: 0.0, life: 0.06, from: t.scale * 0.8, to: t.scale * 0.2, streak: false },
+                mesh.clone(),
+                material.clone(),
+                *t,
+                bevy::light::NotShadowCaster,
+            ));
         } else {
             let spin = p.spin * dt;
             t.rotate(Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z));
