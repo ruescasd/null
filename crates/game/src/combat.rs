@@ -225,6 +225,7 @@ fn setup(
     camera: Single<Entity, With<FlyCam>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let load = |name: &str| server.load::<AudioSource>(format!("embedded://game/sounds/{name}.wav"));
     // A long thin shard, pointing along +Y.
@@ -269,7 +270,7 @@ fn setup(
     // The ear is the camera.
     commands.entity(*camera).insert(SpatialListener::new(2.0));
     // The gun in view (see `weapon.rs`), and the flash at its muzzle.
-    let gun = weapon::spawn(&mut commands, &mut meshes, &mut materials, assets.pale.clone());
+    let gun = weapon::spawn(&mut commands, &mut meshes, &mut materials, &mut images, assets.pale.clone());
     commands.entity(*camera).add_child(gun);
     commands.entity(*camera).with_children(|parent| {
         parent.spawn((
