@@ -43,7 +43,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
                                               nearest hunter
     --opt biped|hound|angler|beast            what the swarm assembles into (beast: either beast; otherwise any;
-                                              the angler is the hound's build, 15% larger)
+                                              the angler's body is the hound's, 15% larger, with the same size head)
     --opt specimen                            one hunter standing still in front of you, to look at: --set
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)
