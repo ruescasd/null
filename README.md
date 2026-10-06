@@ -48,6 +48,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)
     --opt hurtsound                           the sound when you are hurt (off by default)
+    --opt oldgun                              the synthesised shot instead of the recorded one
     --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
                                               whenever there is none (with biped|beast to choose)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
@@ -224,8 +225,8 @@ each side, and a faint light of its own so its facets read. It kicks as it
 fires, the prongs flare and snap shut, the cage turns a sixth to the next
 shard and stops with a jolt; it lags as you turn, bobs with your steps and
 dips when you land. Firing is excessive on purpose: a white star bursts from
-the muzzle with a ring of shock flung out, sparks spray forward, dark smoke
-rolls off, the spent shard is thrown out of the cage's window, a bright
+the muzzle with a ring of shock flung out, sparks spray forward, the spent
+shard is thrown out of the cage's window, a bright
 flash lights the surroundings, and the view kicks, shakes and punches out. A swarm hunts
 you: small dark knots of shards with a lit core, slower than a running
 player but darting in to bite; three shards break one. More keep coming,

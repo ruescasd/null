@@ -49,6 +49,8 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/growl5.wav");
         embedded_asset!(app, "sounds/growl6.wav");
         embedded_asset!(app, "sounds/pounce.wav");
+        embedded_asset!(app, "sounds/shot.wav");
+        embedded_asset!(app, "sounds/reload.wav");
         embedded_asset!(app, "sounds/bite.wav");
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
@@ -98,6 +100,8 @@ struct Gun {
     shots: u32,
     /// The view's shake, 0..1, decaying.
     shake: f32,
+    /// Seconds until the reload is heard.
+    reload_in: Option<f32>,
 }
 
 /// Sends the swarm: groups at a distance whenever there are too few, more
@@ -128,7 +132,10 @@ struct Assets3 {
     glow: Handle<StandardMaterial>,
     /// Pale and matte: the markings on creatures that do not glow.
     pale: Handle<StandardMaterial>,
+    /// The shot (a recording; `--opt oldgun` for the synthesised one), and
+    /// the reload as the cage turns.
     gun: Handle<AudioSource>,
+    reload: Handle<AudioSource>,
     shatter: Handle<AudioSource>,
     hurt: Handle<AudioSource>,
     assemble: Handle<AudioSource>,
@@ -247,7 +254,8 @@ fn setup(
         dark: dark.clone(),
         glow: glow.clone(),
         pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
-        gun: load("gun"),
+        gun: load(if args.opt("oldgun") { "gun" } else { "shot" }),
+        reload: load("reload"),
         shatter: load("shatter"),
         hurt: load("hurt"),
         assemble: load("assemble"),
@@ -351,6 +359,13 @@ fn fire(
 ) {
     let dt = time.delta_secs();
     gun.cooldown -= dt;
+    if let Some(t) = gun.reload_in.as_mut() {
+        *t -= dt;
+        if *t <= 0.0 {
+            gun.reload_in = None;
+            commands.spawn((AudioPlayer::new(assets.reload.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.6))));
+        }
+    }
     light.intensity *= (-dt * 40.0).exp();
     let (transform, fly) = *camera;
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
@@ -365,6 +380,7 @@ fn fire(
     gun.shots += 1;
     light.intensity = 1.2e7;
     commands.spawn((AudioPlayer::new(assets.gun.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.8))));
+    gun.reload_in = Some(0.12);
 
     let eye = transform.translation;
     let (right, up, forward) = (transform.right(), transform.up(), transform.forward());

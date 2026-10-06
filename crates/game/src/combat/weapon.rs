@@ -5,8 +5,7 @@
 //!
 //! Firing is excessive on purpose (a gun must not feel weak): a white star
 //! bursting from the muzzle and a ring of shock flung out from it, sparks
-//! spraying forward, dark smoke rolling off, the spent shard thrown out of the
-//! cage's window, the view kicking, shaking and punching out (FOV).
+//! spraying forward, the spent shard thrown out of the cage's window, the view kicking, shaking and punching out (FOV).
 //!
 //! It moves: it kicks back and up as it fires, the prongs flare open and snap
 //! shut, and the cage turns a sixth of a turn to bring the next shard round,
@@ -39,11 +38,9 @@ pub(super) const MUZZLE_VIEW: Vec3 = Vec3::new(REST.x + MUZZLE.x, REST.y + MUZZL
 pub(super) struct Fx {
     star: Handle<Mesh>,
     ring: Handle<Mesh>,
-    puff: Handle<Mesh>,
     needle: Handle<Mesh>,
     flash: Handle<StandardMaterial>,
     spark: Handle<StandardMaterial>,
-    smoke: Handle<StandardMaterial>,
     pale: Handle<StandardMaterial>,
 }
 
@@ -58,7 +55,7 @@ pub(super) struct Flash {
     ring: bool,
 }
 
-/// A particle in the world: sparks, smoke, the spent shard.
+/// A particle in the world: sparks, the spent shard.
 #[derive(Component)]
 pub(super) struct Particle {
     velocity: Vec3,
@@ -85,7 +82,7 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     let needle = meshes.add(shard_mesh(&[(Vec3::Y, 1.0, 0.04), (Vec3::NEG_Y, 0.06, 0.04)]));
     let shroud = meshes.add(Cylinder::new(0.056, 1.0).mesh().resolution(6));
     // What firing throws: a star of rays mostly forward, a ring, and the
-    // materials (white-hot, bright, smoke).
+    // materials (white-hot, bright).
     let star: Vec<(Vec3, f32, f32)> = (0..14)
         .map(|k| {
             let r = |j: i32| hash01(k, j, 4, 0x9f1) - 0.5;
@@ -98,11 +95,9 @@ pub(super) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, material
     commands.insert_resource(Fx {
         star: meshes.add(shard_mesh(&star)),
         ring: meshes.add(Torus::new(0.85, 1.0).mesh().major_resolution(12).minor_resolution(3)),
-        puff: meshes.add(Sphere::new(0.5).mesh().ico(0).unwrap()),
         needle: needle.clone(),
         flash: materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(4000.0, 4000.0, 4000.0), ..default() }),
         spark: materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(600.0, 600.0, 600.0), ..default() }),
-        smoke: materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.05), perceptual_roughness: 1.0, ..default() }),
         pale: pale.clone(),
     });
     let block = |size: Vec3, at: Vec3, tilt: f32| (Mesh3d(cube.clone()), Transform::from_translation(at).with_rotation(Quat::from_rotation_x(tilt)).with_scale(size), bevy::light::NotShadowCaster);
@@ -277,27 +272,6 @@ pub(super) fn fire(commands: &mut Commands, fx: &Fx, gun: Entity, at: Vec3, forw
             bevy::light::NotShadowCaster,
         ));
     }
-    // Dark smoke rolling off, slowing, rising a little, swelling.
-    for k in 0..7 {
-        let dir = (forward * (0.6 + 0.6 * (r(k, 5) + 0.5)) + right * r(k, 6) * 0.6 + up * (0.15 + r(k, 7) * 0.4)).normalize();
-        commands.spawn((
-            Particle {
-                velocity: dir * (4.0 + 5.0 * (r(k, 8) + 0.5)),
-                spin: Vec3::new(r(k, 9), r(k, 10), r(k, 11)) * 3.0,
-                drag: 3.0,
-                gravity: -0.6,
-                age: 0.0,
-                life: 0.7 + 0.6 * (r(k, 12) + 0.5),
-                from: Vec3::splat(0.05),
-                to: Vec3::splat(0.35 + 0.2 * (r(k, 13) + 0.5)),
-                streak: false,
-            },
-            Mesh3d(fx.puff.clone()),
-            MeshMaterial3d(fx.smoke.clone()),
-            Transform::from_translation(at + forward * 0.1).with_scale(Vec3::ZERO),
-            bevy::light::NotShadowCaster,
-        ));
-    }
     // The spent shard, flung out of the cage's window to the right,
     // tumbling.
     commands.spawn((
@@ -357,7 +331,6 @@ pub(super) fn effects(mut commands: Commands, time: Res<Time>, mut flashes: Quer
         } else {
             let spin = p.spin * dt;
             t.rotate(Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z));
-            // Smoke swells, then thins away at the end.
             t.scale = size * (1.0 - k.powi(4));
         }
     }
