@@ -263,7 +263,8 @@ pub(super) fn gather(
     director.next_gather -= dt;
 
     // `--opt hunters`: no swarm, no assembly; a hunter, already built,
-    // appears a little way off whenever there is none.
+    // appears a little way off whenever there is none (`--set crowd=N`: N of
+    // them at once, round you, for measuring their cost).
     // `--opt specimen`: one hunter standing still in front of you, to look
     // at (`--set specimen_at` metres ahead, `specimen_yaw` degrees turned
     // from facing you, `jaw` radians open, `stretch` 0..1).
@@ -279,10 +280,13 @@ pub(super) fn gather(
     }
     if args.opt("hunters") {
         if hunters.is_empty() && director.next_gather <= 0.0 {
-            let k = (time.elapsed_secs() * 1000.0) as u32;
-            let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
-            let at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
-            spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, k, at, player.translation);
+            let crowd = args.num("crowd", 1.0).max(1.0) as u32;
+            for n in 0..crowd {
+                let k = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
+                let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
+                let at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
+                spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, k, at, player.translation);
+            }
             director.next_gather = 4.0;
         }
         return;

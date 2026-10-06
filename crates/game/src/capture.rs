@@ -53,6 +53,7 @@ fn bench(
     mut state: ResMut<Bench>,
     mut exit: MessageWriter<AppExit>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    entities: Query<()>,
 ) {
     if !args.opt("bench") {
         return;
@@ -75,6 +76,7 @@ fn bench(
     let average = state.frames.iter().sum::<f32>() / n;
     let worst = state.frames.iter().copied().fold(0.0, f32::max);
     info!("bench: {:.0} fps average ({:.2} ms), worst frame {:.2} ms", 1.0 / average, average * 1000.0, worst * 1000.0);
+    info!("bench: {} entities", entities.iter().count());
     // The costliest render passes, on the GPU and the CPU.
     let mut passes: Vec<(String, f64)> = diagnostics
         .iter()
