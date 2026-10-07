@@ -311,7 +311,10 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
 /// still.
 pub(in crate::combat) fn rope(points: &mut Vec<Vec3>, previous: &mut Vec<Vec3>, start: Vec3, end: Option<Vec3>, length: f32, world: &WorldGen, dt: f32) {
     if points.is_empty() || points[0].distance(start) > 3.0 {
-        let last = end.unwrap_or(start - Vec3::Y * length);
+        // (A hanging one a little off the vertical, by where it hangs from:
+        // dead straight down onto the ground it would stand up in a column.)
+        let lean = Vec3::new((start.x * 12.9898).sin(), 0.0, (start.z * 78.233).sin()) * 0.2;
+        let last = end.unwrap_or(start + (lean - Vec3::Y).normalize() * length);
         // (A point every half metre or so on a long one.)
         let nodes = ((length / 0.5).ceil() as usize).clamp(NODES, 32);
         *points = (0..nodes).map(|i| start.lerp(last, i as f32 / (nodes - 1) as f32)).collect();
