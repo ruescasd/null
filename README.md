@@ -257,8 +257,7 @@ like an eye while you look towards them. They do not bite: they bring
 darkness (the nearer and the more of them, the closer the haze draws in and
 the stars go out), and they stalk you, faster than you run, moving only
 where you are not looking, to places behind you where they wait, dead still.
-Settled there together they shoot cables to each other and reel themselves
-in (you hear them, and have a few seconds to turn and break one, which
+Three of them awake shoot cables to each other and reel themselves in (you hear them, and have a few seconds to turn and break one, which
 snaps the weave); three shards break one. The time you last and what you
 destroyed show at the top. A finished weave becomes a creature: a tall biped with long arms, or a beast the size of
 a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its

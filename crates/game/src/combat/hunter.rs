@@ -24,11 +24,9 @@ use crate::rig::{Intent, Plan, Rig};
 pub(super) mod cables;
 pub(super) use cables::run as cables;
 
-/// How many swarmers, settled and waiting near you (within this, near still),
-/// weave themselves into a hunter, how long it takes, and how near you it
-/// forms at most. Break one and the weave fails.
+/// How many free swarmers weave themselves into a hunter, how long it takes,
+/// and how near you it forms at most. Break one and the weave fails.
 const GATHER_COUNT: usize = 3;
-const SETTLED_WITHIN: f32 = 10.0;
 const GATHER_TIME: f32 = 3.5;
 const GATHER_NEAREST: f32 = 6.0;
 /// Seconds between assemblies.
@@ -302,13 +300,13 @@ pub(super) fn gather(
         return;
     }
 
-    // Start one: enough free swarmers settled and waiting near you (behind
-    // you, as they stalk). (`--opt swarm`: never; the swarm alone.)
+    // Start one: enough free swarmers, wherever they are. (`--opt swarm`:
+    // never; the swarm alone.)
     let allowed = 1 + (director.alive / 90.0) as usize;
     if !args.opt("swarm") && assemblies.is_empty() && hunters.iter().count() < allowed && director.next_gather <= 0.0 {
         let near: Vec<Entity> = swarm
             .iter()
-            .filter(|(_, t, s)| s.mode == Mode::Free && s.velocity.length() < 1.5 && t.translation.distance(player.translation) < SETTLED_WITHIN)
+            .filter(|(_, _, s)| s.mode == Mode::Free)
             .map(|(e, ..)| e)
             .take(GATHER_COUNT)
             .collect();
