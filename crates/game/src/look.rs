@@ -356,18 +356,25 @@ fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut sky: ResMu
 pub struct Gloom(pub f32);
 
 /// Darkness closing in: the haze draws in to a few metres (`--set
-/// gloom_near`) and goes black, and the stars go out. What glows (the
-/// swarm's cores, eyeshine) is not hazed, so it is all that shows.
-fn darken(args: Res<Args>, gloom: Res<Gloom>, camera: Single<(Option<&mut DistanceFog>, &mut Skybox), With<FlyCam>>) {
+/// gloom_near`), thickening from your feet out, and goes black; the light
+/// itself dims (`--set gloom_dim`, in stops at its darkest); the stars go
+/// out. What glows (the buds' lights, eyeshine) is not hazed, so it is all
+/// that shows.
+fn darken(args: Res<Args>, gloom: Res<Gloom>, camera: Single<(Option<&mut DistanceFog>, &mut Skybox, &mut Exposure), With<FlyCam>>) {
     let g = gloom.0;
-    let (fog, mut sky) = camera.into_inner();
+    let (fog, mut sky, mut exposure) = camera.into_inner();
     sky.brightness = 900.0 * (1.0 - g) * (1.0 - g);
+    exposure.ev100 = args.num("ev", 11.2) + args.num("gloom_dim", 2.5) * g;
     if let Some(mut fog) = fog {
         let visibility = args.num("fog", 4500.0);
-        let near = args.num("gloom_near", 6.0);
+        let near = args.num("gloom_near", 3.0);
         // (Closing in fast at first: a little gloom already hides the far
         // distance, a quarter of it leaves about twenty metres.)
-        fog.falloff = FogFalloff::from_visibility_squared(1.0 / (1.0 / visibility + g * (1.0 / near - 1.0 / visibility)));
+        // (In the swarm's darkness the haze thickens steadily from your feet,
+        // not with the square of the distance, which leaves the ground round
+        // you clear.)
+        let seen = 1.0 / (1.0 / visibility + g * (1.0 / near - 1.0 / visibility));
+        fog.falloff = if g > 0.0 { FogFalloff::from_visibility(seen) } else { FogFalloff::from_visibility_squared(seen) };
         // (Darker, not thinner: the alpha is how strongly the haze applies.)
         let c = fog.color.to_linear() * (1.0 - g);
         fog.color = Color::linear_rgb(c.red, c.green, c.blue);

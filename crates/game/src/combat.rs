@@ -641,7 +641,7 @@ fn gloom(
         .filter(|(_, s)| s.mode != Mode::Dormant)
         .map(|(t, _)| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
         .sum();
-    let target = 1.0 - (-args.num("gloom_each", 0.3) * sum).exp();
+    let target = 1.0 - (-args.num("gloom_each", 0.6) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
 }

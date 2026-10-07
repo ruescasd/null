@@ -53,8 +53,8 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               open, gloom=0..1 holds the darkness; with --opt peace)
     --set wave=N --set wave_every=S           the swarm comes N at a time (3), S seconds after the last group and what it
                                               made are gone (6), --set wave_at=M metres off (50, up to 15 more)
-    --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (6), K how much one bud
-                                              close by does (0.3)
+    --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (3), K how much one bud
+                                              close by does (0.6); --set gloom_dim=S, how many stops the light dims (2.5)
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
                                               times tougher / hunters circle at a distance (--set tame_at=14,
