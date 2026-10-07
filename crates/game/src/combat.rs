@@ -89,9 +89,6 @@ const SHARD_SPEED: f32 = 260.0;
 /// A swarmer: how many shards break it, its size, and how fast it flies
 /// (faster than a running player).
 const SWARMER_HEALTH: f32 = 3.0;
-/// Shut, a bud is armoured: shards glance off it (knocking it back) until it
-/// is this far open (`--opt noarmour`: never).
-const ARMOUR: f32 = 0.5;
 const SWARMER_RADIUS: f32 = 0.55;
 const SWARMER_SPEED: f32 = 18.0;
 /// How far off a swarmer starts to darken the world, and how near it does
@@ -164,8 +161,6 @@ struct Assets3 {
 #[derive(Resource, Default)]
 struct Feedback {
     hits: u32,
-    /// Shards that glanced off armour.
-    glances: u32,
     at: Vec3,
     marker: f32,
     /// The marker is bigger after a kill.
@@ -360,7 +355,7 @@ fn fire(
     mut gun: ResMut<Gun>,
     mut feedback: ResMut<Feedback>,
     camera: Single<(&Transform, &FlyCam), With<Player>>,
-    mut swarm: Query<(Entity, &mut Transform, &mut Swarmer, &forms::Gazed), Without<FlyCam>>,
+    mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
     ichor: Res<ichor::Ichor>,
     fx: Res<weapon::Fx>,
@@ -409,7 +404,7 @@ fn fire(
             .map_or(RANGE, |h| h.distance);
         // The nearest swarmer on the line, if before the wall.
         let mut best: Option<(f32, Entity)> = None;
-        for (entity, t, ..) in &swarm {
+        for (entity, t, _) in &swarm {
             let to = t.translation - eye;
             let along = to.dot(dir);
             if along <= 0.0 || along > wall {
@@ -438,24 +433,8 @@ fn fire(
             end = d;
             struck = Some(eye + dir * d);
         } else if let Some((along, entity)) = best
-            && let Ok((_, mut t, mut s, gazed)) = swarm.get_mut(entity)
+            && let Ok((_, mut t, mut s)) = swarm.get_mut(entity)
         {
-            if gazed.openness() < ARMOUR && !args.opt("noarmour") {
-                // Shut: it glances off the petals, knocking the bud back, and
-                // sparks; no harm done.
-                t.translation += dir * 0.3;
-                let point = eye + dir * along;
-                feedback.glances += 1;
-                sparks(&mut commands, &assets, point, -dir, gun.shots * 41 + k as u32);
-                end = along;
-                commands.spawn((
-                    Streak { from: muzzle, to: point, travelled: 0.0, impact: false },
-                    Mesh3d(assets.shard.clone()),
-                    MeshMaterial3d(assets.bright.clone()),
-                    Transform::from_translation(muzzle).with_rotation(Quat::from_rotation_arc(Vec3::Y, dir)).with_scale(Vec3::new(1.5, 6.0, 1.5)),
-                ));
-                continue;
-            }
             s.health -= 1.0;
             s.velocity += dir * 4.0;
             // It pops.
@@ -737,13 +716,6 @@ fn feedback(
     mut marker: Single<(&mut BorderColor, &mut Node), With<HitMarker>>,
 ) {
     let dt = time.delta_secs();
-    if feedback.glances > 0 {
-        commands.spawn((
-            AudioPlayer::new(assets.hit.clone()),
-            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.35 + 0.04 * feedback.glances.min(10) as f32)).with_speed(2.3),
-        ));
-        feedback.glances = 0;
-    }
     let n = feedback.hits;
     if n > 0 {
         let k = n.min(12) as f32;
