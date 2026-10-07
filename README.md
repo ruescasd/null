@@ -50,7 +50,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               35 m or running within 12 m wakes them; one waking wakes those near it
     --opt lonewake                            with --opt grove: now and then a bud wakes by itself, alone (within 15 m of
                                               you about once in 90 s, never beyond 30 m)
-    --opt leech                               a bud waiting near you where you are not looking may shoot a cable into you
+    --opt leech                               a bud waiting near you (seen or not) may shoot a cable into you
                                               and drink (1 health a second) until it is destroyed or you get 12 m away
     --opt hair                                strands hanging from each bud, swinging and trailing
     --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and

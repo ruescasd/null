@@ -1,5 +1,5 @@
-//! Leeches (`--opt leech`): a bud waiting near you, where you are not
-//! looking, may shoot a cable into you and drink: a little health a second,
+//! Leeches (`--opt leech`): a bud waiting near you (seen or not) may shoot a
+//! cable into you and drink: a little health a second,
 //! for as long as it holds. It snaps when the bud is destroyed or you get far
 //! enough away, whipping back and hanging before it goes. The cable glows
 //! faintly, pulsing as it drinks (in the dark, only what is lit shows); turn
@@ -69,14 +69,13 @@ pub(super) fn leech(
     let (eye, mut p) = player.into_inner();
     let into = chest(eye);
 
-    // A waiting bud near you, unseen, may latch on.
+    // A waiting bud near you may latch on.
     let held: Vec<Entity> = leeches.iter().filter(|(_, l)| l.snapped.is_none()).map(|(_, l)| l.bud).collect();
     if held.len() < AT_ONCE {
         let t = (time.elapsed_secs() * 1000.0) as i32;
         for (bud, transform, s) in &swarm {
             let to = transform.translation - eye.translation;
-            let seen = to.normalize_or(Vec3::Y).dot(*eye.forward()) > 0.55;
-            if s.mode != Mode::Free || s.dark < 0.5 || seen || to.length() > REACH || held.contains(&bud) {
+            if s.mode != Mode::Free || s.dark < 0.5 || to.length() > REACH || held.contains(&bud) {
                 continue;
             }
             if hash01(bud.index_u32() as i32, t, 0, 0x711) >= dt / EVERY {
