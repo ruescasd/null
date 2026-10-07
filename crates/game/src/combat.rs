@@ -99,6 +99,11 @@ const GLOOM_REACH: f32 = 20.0;
 const GLOOM_FULL: f32 = 3.0;
 /// Within this, a swarmer you look at stops dead.
 const STILL_WITHIN: f32 = 12.0;
+/// A swarmer slower than this is still, and casts its darkness, which
+/// creeps in over `DARK_IN` seconds and fades over `DARK_OUT` once it moves.
+const STILL: f32 = 1.5;
+const DARK_IN: f32 = 2.0;
+const DARK_OUT: f32 = 0.8;
 
 #[derive(Resource, Default)]
 struct Gun {
@@ -194,6 +199,9 @@ struct Swarmer {
     velocity: Vec3,
     health: f32,
     phase: f32,
+    /// How much of its darkness it casts, 0..1: it grows while it is still
+    /// (waiting, or frozen under your gaze), and fades while it moves.
+    dark: f32,
 }
 
 /// A piece flying off something broken, or a spark.
@@ -541,7 +549,7 @@ fn swarm(
             let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
             let p = base + Vec3::new(r(0), 0.0, r(1)) * if grove { 14.0 } else { 8.0 };
             let mode = if grove { Mode::Dormant } else { Mode::Free };
-            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0 };
+            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0 };
             let root = if grove {
                 // Low on its roots, opening to the sky, leaning a little.
                 let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 0.55, p.z);
@@ -563,6 +571,8 @@ fn swarm(
         }
         transform.scale = transform.scale.lerp(Vec3::ONE, (dt * 4.0).min(1.0));
         stalk(&world, ptransform, &positions, &mut transform, &mut s, dt);
+        // Still, its darkness creeps in; moving, it fades.
+        s.dark = if s.velocity.length() < STILL { (s.dark + dt / DARK_IN).min(1.0) } else { (s.dark - dt / DARK_OUT).max(0.0) };
     }
 }
 
@@ -625,8 +635,9 @@ fn face(transform: &mut Transform, eye: Vec3, dt: f32) {
 }
 
 /// The swarm does not bite; it brings darkness. Each swarmer within reach
-/// darkens the world, more the nearer it is, and together they all but blind
-/// you (`--set gloom_each`: how much one close by does); it closes in fast
+/// darkens the world once it is still (waiting, or frozen under your gaze;
+/// see `Swarmer::dark`), more the nearer it is, and together they all but
+/// blind you (`--set gloom_each`: how much one close by does); it closes in fast
 /// and lifts slowly. (Those gathering into a hunter count too: it forms in
 /// the dark, and the dark lifts off it.)
 fn gloom(
@@ -637,11 +648,11 @@ fn gloom(
     mut gloom: ResMut<crate::look::Gloom>,
 ) {
     let dt = time.delta_secs().min(0.05);
-    // (Asleep, they do nothing.)
+    // (Asleep, they do nothing; flying, nothing yet.)
     let sum: f32 = swarm
         .iter()
         .filter(|(_, s)| s.mode != Mode::Dormant)
-        .map(|(t, _)| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
+        .map(|(t, s)| s.dark * ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
         .sum();
     let target = 1.0 - (-args.num("gloom_each", 0.4) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
