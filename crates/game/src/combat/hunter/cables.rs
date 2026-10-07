@@ -8,7 +8,8 @@
 //! 3. Woven: strands spiralling round every bone in place of the shards (the
 //!    head keeps its own), the limbs and body bundles of cable, each strand
 //!    running the length of a chain of bones (back and neck, a leg, the tail).
-//! 4. A woven body: the same round the body only, the rest as before.
+//! 4. A cable waist: solid at the hips and the chest, as before, and between
+//!    them cables, rising out of the one and plunging into the other.
 //!
 //! Strung and hanging strands are chains of points kept at their length
 //! (Verlet); woven ones follow their place on the bones on springs, a little
@@ -50,8 +51,9 @@ enum Kind {
     /// Round the bones `first..=last` (each joined to the next): `turns`
     /// times along each, starting at `phase`, `out` of their radius away, and
     /// `slack` (0..1) how loosely: a slack strand bellies out and droops in
-    /// the middle of its run.
-    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32, slack: f32 },
+    /// the middle of its run. `inset`: how far into the first and last bones
+    /// it starts and ends (0 at their ends, 0.5 halfway in).
+    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32, slack: f32, inset: f32 },
 }
 
 struct Strand {
@@ -211,7 +213,7 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
                     let turns = if j % 2 == 0 { 0.3 } else { -0.3 } * (1.0 + r(k, 0) * 0.5);
                     let pale = j % 7 == 3;
                     add(
-                        Kind::Wound { first, last, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2) },
+                        Kind::Wound { first, last, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2), inset: if variant == 4 { 0.5 } else { 0.0 } },
                         (0.0, 0.0),
                         if pale { 0.55 } else { 0.05 + (r(k, 3) + 0.5) * 0.06 },
                     );
@@ -246,7 +248,7 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
 pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
     match args.num("cables", 0.0) as u32 {
         3 => bone != 4,
-        4 => bone <= 2,
+        4 => bone == 1,
         _ => false,
     }
 }
@@ -255,7 +257,7 @@ pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
 /// gravity, kept at their length, their ends held.
 fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
     let (from, to, length) = match s.kind {
-        Kind::Wound { first, last, phase, turns, out, slack } => {
+        Kind::Wound { first, last, phase, turns, out, slack, inset } => {
             if last >= bones.len() {
                 return;
             }
@@ -263,7 +265,8 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
             let m = chain.len();
             let n = WOUND_NODES * m + 1;
             let target = |i: usize| {
-                let u = i as f32 / (n - 1) as f32 * m as f32;
+                let run = m as f32 - 2.0 * inset;
+                let u = (inset + i as f32 / (n - 1) as f32 * run).min(m as f32 - 1e-4);
                 let k = (u as usize).min(m - 1);
                 let t = u - k as f32;
                 let b = &chain[k];
@@ -281,7 +284,7 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
                 let a = phase + turns * std::f32::consts::TAU * u;
                 // (Fuller in the middle of the chain; a slack strand more so,
                 // and hanging lower there.)
-                let middle = (std::f32::consts::PI * u / m as f32).sin();
+                let middle = (std::f32::consts::PI * (u - inset) / run).sin();
                 let swell = 0.8 + (0.2 + 0.35 * slack) * middle;
                 b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 0.6 * slack * middle
             };
