@@ -335,15 +335,20 @@ pub(super) fn gather(
         }
     }
 
-    // Members spiral in to the centre.
+    // Members spiral in to the centre (`--opt web`: drawn straight in by
+    // their cables; see `web.rs`).
     let t = time.elapsed_secs();
     for (_, mut transform, mut s) in &mut swarm {
         let Mode::Gather(a) = s.mode else { continue };
         // (An assembly started this frame exists from the next.)
         let Ok((_, assembly)) = assemblies.get(a) else { continue };
         let to = assembly.centre - transform.translation;
-        let around = Vec3::Y.cross(to).normalize_or_zero() * 6.0;
-        let want = to * 2.5 + around * (1.0 - assembly.time / GATHER_TIME) + Vec3::new((t * 7.0 + s.phase).sin(), 0.0, (t * 6.0 + s.phase).cos());
+        let around = if args.opt("web") { Vec3::ZERO } else { Vec3::Y.cross(to).normalize_or_zero() * 6.0 };
+        // (Reeled in by cables: slowly, then faster, the web tightening over
+        // the whole gathering.)
+        let k = assembly.time / GATHER_TIME;
+        let pull = if args.opt("web") { 0.3 + 2.5 * k * k } else { 2.5 };
+        let want = to * pull + around * (1.0 - k) + Vec3::new((t * 7.0 + s.phase).sin(), 0.0, (t * 6.0 + s.phase).cos());
         let change = (want - s.velocity).clamp_length_max(40.0 * dt);
         s.velocity += change;
         transform.translation += s.velocity * dt;

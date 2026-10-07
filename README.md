@@ -45,11 +45,14 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
                                               waist between a solid hips and chest
+    --opt web                                 the swarm gathers into a hunter by cables: each member shoots one to its two
+                                              nearest and they reel in; shooting a member snaps its cables
     --opt hair                                with a form: strands hanging from each swarmer, swinging and trailing
     --opt bud|face|chandelier                 the swarm in that form, each turning into a second form while you look at it
     --opt swarmlab                            the three forms in an arc in front of you (--set gaze=0..1 holds them, pick=1..3
                                               one close, gloom=0..1 holds the darkness; with --opt peace)
-    --set wave=N --set wave_every=S           the swarm comes N at a time (4, more the longer you last), every S seconds (7)
+    --set wave=N --set wave_every=S           the swarm comes N at a time (4, more the longer you last), every S seconds (7),
+                                              --set wave_at=M metres off (50, up to 15 more)
     --opt dark                                the swarm does not bite: it brings darkness, closing in the nearer and more
                                               of them there are (--set gloom_near=6 metres at its darkest; gloom_each=0.12,
                                               how much one close by does), and is faster

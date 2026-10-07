@@ -30,6 +30,7 @@ mod forms;
 mod hair;
 mod ichor;
 mod weapon;
+mod web;
 
 pub struct CombatPlugin;
 
@@ -64,7 +65,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -521,7 +522,10 @@ fn swarm(
     let target = ptransform.translation - Vec3::Y * 0.3;
     // (`--opt fight` keeps it going in a capture, and fires the gun.)
     let capture = args.shot.is_some() && !args.opt("fight");
-    if args.opt("peace") || capture || args.opt("bot") || !streamer.near || (fly.noclip && !args.opt("specimen")) {
+    // (Playing, it starts once the ground round you is in; measuring or
+    // capturing, once everything is, so it happens in view.)
+    let ready = if args.unattended() { streamer.settled } else { streamer.near };
+    if args.opt("peace") || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
         return;
     }
     director.alive += dt;
@@ -537,7 +541,7 @@ fn swarm(
         let t = time.elapsed_secs();
         let group = args.num("wave", (4 + (director.alive / 40.0) as usize) as f32) as usize;
         let a = hash01(t as i32, 1, 2, 0x5a1) * std::f32::consts::TAU;
-        let dist = 50.0 + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
+        let dist = args.num("wave_at", 50.0) + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
         let mut away = Vec3::new(a.cos(), 0.0, a.sin());
         if args.opt("fight") {
             // For captures: from straight ahead.
