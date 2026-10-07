@@ -45,17 +45,13 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
                                               waist between a solid hips and chest
-    --opt web                                 the swarm gathers into a hunter by cables: each member shoots one to its two
-                                              nearest and they reel in; shooting a member snaps its cables
-    --opt hair                                with a form: strands hanging from each swarmer, swinging and trailing
-    --opt bud|face|chandelier                 the swarm in that form, each turning into a second form while you look at it
-    --opt swarmlab                            the three forms in an arc in front of you (--set gaze=0..1 holds them, pick=1..3
-                                              one close, gloom=0..1 holds the darkness; with --opt peace)
-    --set wave=N --set wave_every=S           the swarm comes N at a time (4, more the longer you last), every S seconds (7),
-                                              --set wave_at=M metres off (50, up to 15 more)
-    --opt dark                                the swarm does not bite: it brings darkness, closing in the nearer and more
-                                              of them there are (--set gloom_near=6 metres at its darkest; gloom_each=0.12,
-                                              how much one close by does), and is faster
+    --opt hair                                strands hanging from each bud, swinging and trailing
+    --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
+                                              open, gloom=0..1 holds the darkness; with --opt peace)
+    --set wave=N --set wave_every=S           the swarm comes N at a time (3), S seconds after the last group and what it
+                                              made are gone (6), --set wave_at=M metres off (50, up to 15 more)
+    --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (6), K how much one bud
+                                              close by does (0.3)
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
                                               times tougher / hunters circle at a distance (--set tame_at=14,
@@ -252,13 +248,16 @@ the muzzle with a dark ring of shock flung out (a bright ring racing out
 through it), sparks spray forward in a tight
 cone (half pale, half dark, each leaving a fading trail of ghosts), the spent
 shard is thrown out of the cage's window, a bright
-flash lights the surroundings, and the view kicks, shakes and punches out. A swarm hunts
-you: small dark knots of shards with a lit core, slower than a running
-player but darting in to bite; three shards break one. More keep coming,
-faster the longer you last, so standing still is death; the time you last
-and what you destroyed show at the top. Left alone, seven or more close
-together assemble (you hear them grinding, and have a few seconds to break
-them) into a creature: a tall biped with long arms, or a beast the size of
+flash lights the surroundings, and the view kicks, shakes and punches out. The swarm
+comes three at a time: buds, black petals closed round a light, which open
+like an eye while you look towards them. They do not bite: they bring
+darkness (the nearer and the more of them, the closer the haze draws in and
+the stars go out), and they stalk you, faster than you run, moving only
+where you are not looking, to places behind you where they wait, dead still.
+Settled there together they shoot cables to each other and reel themselves
+in (you hear them, and have a few seconds to turn and break one, which
+snaps the weave); three shards break one. The time you last and what you
+destroyed show at the top. A finished weave becomes a creature: a tall biped with long arms, or a beast the size of
 a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its
 body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
 coordinating the legs (the beast walks, trots and gallops, blending with its

@@ -24,14 +24,15 @@ use crate::rig::{Intent, Plan, Rig};
 pub(super) mod cables;
 pub(super) use cables::run as cables;
 
-/// How many free swarmers close together start an assembly, how close, how
-/// long it takes, and how few members an assembly can be.
-const GATHER_COUNT: usize = 7;
-const GATHER_RADIUS: f32 = 9.0;
+/// How many swarmers, settled and waiting near you (within this, near still),
+/// weave themselves into a hunter, how long it takes, and how near you it
+/// forms at most. Break one and the weave fails.
+const GATHER_COUNT: usize = 3;
+const SETTLED_WITHIN: f32 = 10.0;
 const GATHER_TIME: f32 = 3.5;
-const MIN_MEMBERS: usize = 5;
+const GATHER_NEAREST: f32 = 6.0;
 /// Seconds between assemblies.
-const GATHER_COOLDOWN: f32 = 18.0;
+const GATHER_COOLDOWN: f32 = 8.0;
 
 const RECOVER: f32 = 1.1;
 const ATTACK: f32 = 30.0;
@@ -301,22 +302,22 @@ pub(super) fn gather(
         return;
     }
 
-    // Start one: a free swarmer with enough free ones close by. (`--opt
-    // swarm`: never; the swarm alone.)
+    // Start one: enough free swarmers settled and waiting near you (behind
+    // you, as they stalk). (`--opt swarm`: never; the swarm alone.)
     let allowed = 1 + (director.alive / 90.0) as usize;
     if !args.opt("swarm") && assemblies.is_empty() && hunters.iter().count() < allowed && director.next_gather <= 0.0 {
-        let free: Vec<(Entity, Vec3)> =
-            swarm.iter().filter(|(_, _, s)| s.mode == Mode::Free).map(|(e, t, _)| (e, t.translation)).collect();
-        let found = free.iter().find_map(|&(_, p)| {
-            let near: Vec<Entity> = free.iter().filter(|(_, q)| q.distance(p) < GATHER_RADIUS).map(|&(e, _)| e).collect();
-            (near.len() >= GATHER_COUNT).then_some(near)
-        });
-        if let Some(near) = found {
+        let near: Vec<Entity> = swarm
+            .iter()
+            .filter(|(_, t, s)| s.mode == Mode::Free && s.velocity.length() < 1.5 && t.translation.distance(player.translation) < SETTLED_WITHIN)
+            .map(|(e, ..)| e)
+            .take(GATHER_COUNT)
+            .collect();
+        if near.len() >= GATHER_COUNT {
             let mut centre = near.iter().filter_map(|&e| swarm.get(e).ok()).map(|(_, t, _)| t.translation).sum::<Vec3>() / near.len() as f32;
             // Not on top of the player: a little way off.
             let away = Vec3::new(centre.x - player.translation.x, 0.0, centre.z - player.translation.z);
-            if away.length() < 14.0 {
-                centre = player.translation + away.normalize_or(Vec3::X) * 14.0;
+            if away.length() < GATHER_NEAREST {
+                centre = player.translation + away.normalize_or(Vec3::X) * GATHER_NEAREST;
             }
             centre.y = world.ground_height(centre.x, centre.z) + 2.0;
             let assembly = commands.spawn((Assembly { centre, time: 0.0 }, Transform::from_translation(centre))).id();
@@ -325,7 +326,7 @@ pub(super) fn gather(
                 PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.6)),
                 Transform::from_translation(centre),
             ));
-            for &e in near.iter().take(24) {
+            for &e in &near {
                 if let Ok((_, _, mut s)) = swarm.get_mut(e) {
                     s.mode = Mode::Gather(assembly);
                 }
@@ -335,20 +336,17 @@ pub(super) fn gather(
         }
     }
 
-    // Members spiral in to the centre (`--opt web`: drawn straight in by
-    // their cables; see `web.rs`).
+    // Members are drawn straight in by their cables (see `web.rs`).
     let t = time.elapsed_secs();
     for (_, mut transform, mut s) in &mut swarm {
         let Mode::Gather(a) = s.mode else { continue };
         // (An assembly started this frame exists from the next.)
         let Ok((_, assembly)) = assemblies.get(a) else { continue };
         let to = assembly.centre - transform.translation;
-        let around = if args.opt("web") { Vec3::ZERO } else { Vec3::Y.cross(to).normalize_or_zero() * 6.0 };
-        // (Reeled in by cables: slowly, then faster, the web tightening over
-        // the whole gathering.)
+        // (Reeled in: slowly, then faster, the web tightening over the whole
+        // gathering.)
         let k = assembly.time / GATHER_TIME;
-        let pull = if args.opt("web") { 0.3 + 2.5 * k * k } else { 2.5 };
-        let want = to * pull + around * (1.0 - k) + Vec3::new((t * 7.0 + s.phase).sin(), 0.0, (t * 6.0 + s.phase).cos());
+        let want = to * (0.3 + 2.5 * k * k) + Vec3::new((t * 7.0 + s.phase).sin(), 0.0, (t * 6.0 + s.phase).cos());
         let change = (want - s.velocity).clamp_length_max(40.0 * dt);
         s.velocity += change;
         transform.translation += s.velocity * dt;
@@ -359,7 +357,7 @@ pub(super) fn gather(
     for (entity, mut assembly) in &mut assemblies {
         assembly.time += dt;
         let members: Vec<Entity> = swarm.iter().filter(|(_, _, s)| s.mode == Mode::Gather(entity)).map(|(e, ..)| e).collect();
-        if members.len() < MIN_MEMBERS {
+        if members.len() < GATHER_COUNT {
             for &e in &members {
                 if let Ok((_, _, mut s)) = swarm.get_mut(e) {
                     s.mode = Mode::Free;

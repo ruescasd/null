@@ -1,14 +1,16 @@
-//! Combat, a first prototype: the shard shotgun, a swarm that keeps coming,
-//! the player's health, and their sounds.
+//! Combat, a prototype: the shard shotgun, the swarm, the player's health,
+//! and their sounds.
 //!
 //! The shotgun (Mouse 1) throws a spray of shards: hitscan, each shard drawn
-//! as a bright streak flying out to what it hit. The swarm is made of small
-//! dark polygonal things with a lit core that hunt the player, darting in to
-//! bite; a few shards break one. More keep coming, a little faster the longer
-//! you last, so standing still is death. Left alone, enough of them close
-//! together assemble into a hunter (see `hunter.rs`). `--opt peace` leaves
-//! them out; `--opt fight` keeps them in a capture and fires the gun by
-//! itself (`--opt holdfire` stops it).
+//! as a bright streak flying out to what it hit. The swarm comes three at a
+//! time, buds (see `forms.rs`), the next three once these are gone. They do
+//! not bite: they bring darkness, the nearer and the more of them the darker
+//! (`gloom`), and they stalk you, moving only where you are not looking, to
+//! places behind you, where they wait (`stalk`). Settled there together they
+//! weave themselves into a hunter with cables (see `hunter.rs`, `web.rs`),
+//! unless you turn and break one first. A few shards break one. `--opt peace`
+//! leaves them out; `--opt fight` keeps them in a capture and fires the gun
+//! by itself (`--opt holdfire` stops it).
 
 use avian3d::prelude::*;
 use bevy::{
@@ -65,7 +67,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -83,22 +85,17 @@ const SPREAD: f32 = 0.085;
 const RANGE: f32 = 150.0;
 const SHARD_SPEED: f32 = 260.0;
 
-/// A swarmer: how many shards break it, its size, how fast it flies (a
-/// little slower than a running player, much faster when it darts in) and
-/// what a bite costs.
+/// A swarmer: how many shards break it, its size, and how fast it flies
+/// (faster than a running player).
 const SWARMER_HEALTH: f32 = 3.0;
 const SWARMER_RADIUS: f32 = 0.55;
-const SWARMER_SPEED: f32 = 14.0;
-/// With `--opt dark`: faster, to keep up with a running player.
-const DARK_SPEED: f32 = 18.0;
+const SWARMER_SPEED: f32 = 18.0;
 /// How far off a swarmer starts to darken the world, and how near it does
 /// so fully.
 const GLOOM_REACH: f32 = 20.0;
 const GLOOM_FULL: f32 = 3.0;
 /// Within this, a swarmer you look at stops dead.
 const STILL_WITHIN: f32 = 12.0;
-const DART_SPEED: f32 = 24.0;
-const BITE: f32 = 8.0;
 
 #[derive(Resource, Default)]
 struct Gun {
@@ -116,8 +113,8 @@ struct Gun {
     reload_in: Option<f32>,
 }
 
-/// Sends the swarm: groups at a distance whenever there are too few, more
-/// of them the longer the player lasts.
+/// Sends the swarm: a group at a distance once the last one is gone (and
+/// whatever it made).
 #[derive(Resource, Default)]
 struct Director {
     /// Seconds survived in this life (from when the ground has loaded).
@@ -141,7 +138,6 @@ struct Assets3 {
     core: Handle<Mesh>,
     bright: Handle<StandardMaterial>,
     dark: Handle<StandardMaterial>,
-    glow: Handle<StandardMaterial>,
     /// Pale and matte: the markings on creatures that do not glow.
     pale: Handle<StandardMaterial>,
     /// The shot (a recording; `--opt oldgun` for the synthesised one), and
@@ -180,7 +176,7 @@ struct Streak {
     impact: bool,
 }
 
-/// What a swarmer is doing: hunting on its own, or flying to an assembly.
+/// What a swarmer is doing: stalking on its own, or drawn into an assembly.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Free,
@@ -192,11 +188,6 @@ struct Swarmer {
     mode: Mode,
     velocity: Vec3,
     health: f32,
-    /// Seconds until it may dart again, and whether it is darting.
-    dart_in: f32,
-    darting: f32,
-    /// Seconds until it may bite again.
-    bite_in: f32,
     phase: f32,
 }
 
@@ -242,7 +233,7 @@ fn setup(
     let load = |name: &str| server.load::<AudioSource>(format!("embedded://game/sounds/{name}.wav"));
     // A long thin shard, pointing along +Y.
     let shard = meshes.add(shard_mesh(&[(Vec3::Y, 0.7, 0.025), (Vec3::NEG_Y, 0.05, 0.025)]));
-    // A swarmer: a knot of a few long shards round a small core.
+    // A knot of a few long shards (pieces of the hunters).
     let mut spikes = Vec::new();
     for k in 0..7 {
         let d = Vec3::new(hash01(k, 0, 1, 0x5a) - 0.5, hash01(k, 1, 1, 0x5a) - 0.5, hash01(k, 2, 1, 0x5a) - 0.5).normalize();
@@ -251,18 +242,11 @@ fn setup(
     let swarmer = meshes.add(shard_mesh(&spikes));
     let core = meshes.add(Sphere::new(0.13).mesh().ico(1).unwrap());
     let bright = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(60.0, 60.0, 60.0), ..default() });
-    // Dark against the bright ground; in the dark, only their cores show.
+    // Dark against the bright ground.
     let dark = materials.add(StandardMaterial {
         base_color: Color::srgb(0.03, 0.03, 0.03),
         perceptual_roughness: 0.35,
         reflectance: 0.6,
-        ..default()
-    });
-    // (Not hazed: in the swarm's darkness the cores are what shows.)
-    let glow = materials.add(StandardMaterial {
-        base_color: Color::BLACK,
-        emissive: LinearRgba::rgb(9000.0, 9000.0, 9000.0),
-        fog_enabled: false,
         ..default()
     });
     let assets = Assets3 {
@@ -271,7 +255,6 @@ fn setup(
         core,
         bright: bright.clone(),
         dark: dark.clone(),
-        glow: glow.clone(),
         pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
         gun: load(if args.opt("oldgun") { "gun" } else { "shot" }),
         reload: load("reload"),
@@ -498,8 +481,8 @@ fn fly_shards(mut commands: Commands, time: Res<Time>, assets: Res<Assets3>, mut
     }
 }
 
-/// The swarm: sent in groups from a distance; each one hunts the player,
-/// keeping a little apart from the others, and now and then darts in.
+/// The swarm: sent a group at a time from a distance, the next once the last
+/// is gone; each one stalks the player (see `stalk`).
 #[allow(clippy::too_many_arguments)]
 fn swarm(
     mut commands: Commands,
@@ -507,18 +490,15 @@ fn swarm(
     args: Res<Args>,
     streamer: Res<Streamer>,
     world: Res<WorldGen>,
-    assets: Res<Assets3>,
     kit: Res<forms::Kit>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<Director>,
     player: Single<(&Transform, &Player, &FlyCam)>,
+    hunters: Query<(), Or<(With<hunter::Hunter>, With<hunter::Assembly>)>>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let (ptransform, _, fly) = *player;
-    // (`--opt bud`, `face`, `chandelier`: the swarm in that form; see
-    // `forms.rs`.)
-    let form = forms::Form::chosen(&args);
     let target = ptransform.translation - Vec3::Y * 0.3;
     // (`--opt fight` keeps it going in a capture, and fires the gun.)
     let capture = args.shot.is_some() && !args.opt("fight");
@@ -529,17 +509,17 @@ fn swarm(
         return;
     }
     director.alive += dt;
-    director.next_wave -= dt;
-    let count = swarm.iter().count();
-    // More of them the longer you last.
-    let wanted = (8.0 + director.alive / 10.0).min(40.0) as usize;
-    // (`--opt hunters`: no swarm, only built hunters; see `hunter.rs`.)
-    if director.next_wave <= 0.0 && count < wanted && !args.opt("hunters") && !args.opt("specimen") {
-        // (`--set wave=N` and `wave_every=S`: N at a time, every S seconds,
-        // to watch them build up.)
-        director.next_wave = args.num("wave_every", 7.0);
+    // The next group a while after the last is gone, and what it made.
+    // (`--set wave=N`, `wave_every=S`, `wave_at=M`: N at a time, S seconds
+    // after, M metres off.)
+    if !swarm.is_empty() || !hunters.is_empty() {
+        director.next_wave = director.next_wave.max(args.num("wave_every", 6.0));
+    } else {
+        director.next_wave -= dt;
+    }
+    if director.next_wave <= 0.0 && swarm.is_empty() && !args.opt("hunters") && !args.opt("specimen") {
         let t = time.elapsed_secs();
-        let group = args.num("wave", (4 + (director.alive / 40.0) as usize) as f32) as usize;
+        let group = args.num("wave", 3.0) as usize;
         let a = hash01(t as i32, 1, 2, 0x5a1) * std::f32::consts::TAU;
         let dist = args.num("wave_at", 50.0) + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
         let mut away = Vec3::new(a.cos(), 0.0, a.sin());
@@ -553,92 +533,32 @@ fn swarm(
             let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
             let p = base + Vec3::new(r(0), 0.0, r(1)) * 8.0;
             let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
-            let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, dart_in: 2.0 + r(3) * 2.0, darting: 0.0, bite_in: 0.0, phase: r(4) * 50.0 };
-            if let Some(form) = form {
-                let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id();
-                forms::build(&mut commands, &kit, &mut materials, root, form);
-                continue;
-            }
-            commands
-                .spawn((
-                    swarmer,
-                    Mesh3d(assets.swarmer.clone()),
-                    MeshMaterial3d(assets.dark.clone()),
-                    Transform::from_translation(p),
-                ))
-                .with_child((Mesh3d(assets.core.clone()), MeshMaterial3d(assets.glow.clone()), Transform::default()));
+            let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0 };
+            let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id();
+            forms::build(&mut commands, &kit, &mut materials, root);
         }
     }
 
     let positions: Vec<Vec3> = swarm.iter().map(|(_, t, _)| t.translation).collect();
-    let t = time.elapsed_secs();
     for (_, mut transform, mut s) in &mut swarm {
         if s.mode != Mode::Free {
             continue;
         }
         transform.scale = transform.scale.lerp(Vec3::ONE, (dt * 4.0).min(1.0));
-        let p = transform.translation;
-        let to = target - p;
-        let distance = to.length().max(0.01);
-        if args.opt("dark") {
-            stalk(&world, ptransform, &positions, &mut transform, &mut s, form, dt);
-            continue;
-        }
-        // Hunt, keep apart, wobble.
-        let mut want = to / distance * SWARMER_SPEED;
-        // Hold the player's height (seen against the ground, not the sky).
-        want.y += (target.y + 0.3 - p.y) * 2.0;
-        for &q in &positions {
-            let d = p - q;
-            let l = d.length();
-            if l > 0.01 && l < 1.6 {
-                want += d / l * (1.6 - l) * 6.0;
-            }
-        }
-        want += Vec3::new((t * 2.3 + s.phase).sin(), (t * 3.1 + s.phase).sin() * 0.6, (t * 1.9 + s.phase * 1.3).sin()) * 3.0;
-        // Dart in when close enough.
-        s.dart_in -= dt;
-        s.darting -= dt;
-        s.bite_in -= dt;
-        if s.dart_in <= 0.0 && distance < 16.0 {
-            s.darting = 0.45;
-            s.dart_in = 2.0 + hash01(s.phase as i32, t as i32, 7, 0x5a3) * 2.0;
-        }
-        if s.darting > 0.0 {
-            want = to / distance * DART_SPEED;
-        }
-        let accel = if s.darting > 0.0 { 60.0 } else { 14.0 };
-        let change = (want - s.velocity).clamp_length_max(accel * dt);
-        s.velocity += change;
-        let mut next = p + s.velocity * dt;
-        // Stay off the ground.
-        let ground = world.ground_height(next.x, next.z) + 0.8;
-        if next.y < ground {
-            next.y = ground;
-            s.velocity.y = s.velocity.y.max(0.0);
-        }
-        transform.translation = next;
-        if let Some(form) = form {
-            face(&mut transform, ptransform.translation, form, dt);
-        } else {
-            transform.rotate_local_y(dt * (3.0 + s.velocity.length() * 0.3));
-            transform.rotate_local_x(dt * 1.7);
-        }
+        stalk(&world, ptransform, &positions, &mut transform, &mut s, dt);
     }
 }
 
-/// `--opt dark`: how a swarmer moves. Close by it moves only where you are
-/// not looking: each has a place of its own a few metres behind you, and goes
-/// there and waits, dead still; looked at, it stops dead where it is. Turn
-/// round and they are all still; turn back and they have moved behind you
-/// again. Arriving in front of you, they swing wide round your side.
-fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, form: Option<forms::Form>, dt: f32) {
+/// How a swarmer moves. Close by it moves only where you are not looking:
+/// each has a place of its own a few metres behind you, and goes there and
+/// waits, dead still; looked at, it stops dead where it is. Turn round and
+/// they are all still; turn back and they have moved behind you again.
+/// Arriving in front of you, they swing wide round your side.
+fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
     let p = transform.translation;
     let eye = player.translation;
-    // (A form turns to face you, even while it stands still.)
-    if let Some(form) = form {
-        face(transform, eye, form, dt);
-    }
+    // (It turns to face you, even while it stands still.)
+    face(transform, eye, dt);
     let seen = (p - eye).normalize_or(Vec3::Y).dot(*player.forward()) > 0.55;
     if seen && p.distance(eye) < STILL_WITHIN {
         s.velocity = Vec3::ZERO;
@@ -659,7 +579,7 @@ fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &m
     }
     let to = place - p;
     let distance = to.length();
-    let mut want = to.normalize_or(Vec3::ZERO) * DARK_SPEED * (distance / 3.0).min(1.0);
+    let mut want = to.normalize_or(Vec3::ZERO) * SWARMER_SPEED * (distance / 3.0).min(1.0);
     for &q in positions {
         let d = p - q;
         let l = d.length();
@@ -675,21 +595,11 @@ fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &m
         s.velocity.y = s.velocity.y.max(0.0);
     }
     transform.translation = next;
-    // (Turning only while it moves; waiting, it is still.)
-    if form.is_none() {
-        let moving = s.velocity.length();
-        transform.rotate_local_y(dt * moving * 0.5);
-        transform.rotate_local_x(dt * moving * 0.2);
-    }
 }
 
-/// A swarmer with a form turns, slowly, to face you (upright, or straight at
-/// you).
-fn face(transform: &mut Transform, eye: Vec3, form: forms::Form, dt: f32) {
-    let mut to = eye - transform.translation;
-    if form.upright() {
-        to.y = 0.0;
-    }
+/// A swarmer turns, slowly, to face you.
+fn face(transform: &mut Transform, eye: Vec3, dt: f32) {
+    let to = eye - transform.translation;
     if to.length_squared() < 1e-4 {
         return;
     }
@@ -697,11 +607,11 @@ fn face(transform: &mut Transform, eye: Vec3, form: forms::Form, dt: f32) {
     transform.rotation = transform.rotation.slerp(want, (dt * 3.0).min(1.0));
 }
 
-/// `--opt dark`: the swarm does not bite; it brings darkness. Each swarmer
-/// within reach darkens the world, more the nearer it is, and together they
-/// all but blind you (`--set gloom_each`: how much one close by does); it
-/// closes in fast and lifts slowly. (Those gathering
-/// into a hunter count too: it forms in the dark, and the dark lifts off it.)
+/// The swarm does not bite; it brings darkness. Each swarmer within reach
+/// darkens the world, more the nearer it is, and together they all but blind
+/// you (`--set gloom_each`: how much one close by does); it closes in fast
+/// and lifts slowly. (Those gathering into a hunter count too: it forms in
+/// the dark, and the dark lifts off it.)
 fn gloom(
     time: Res<Time>,
     args: Res<Args>,
@@ -709,48 +619,14 @@ fn gloom(
     swarm: Query<&Transform, (With<Swarmer>, Without<Player>)>,
     mut gloom: ResMut<crate::look::Gloom>,
 ) {
-    if !args.opt("dark") {
-        return;
-    }
     let dt = time.delta_secs().min(0.05);
     let sum: f32 = swarm
         .iter()
         .map(|t| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
         .sum();
-    let target = 1.0 - (-args.num("gloom_each", 0.12) * sum).exp();
+    let target = 1.0 - (-args.num("gloom_each", 0.3) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
-}
-
-/// A swarmer that reaches the player bites, and bounces off. (`--opt dark`:
-/// it only bounces off.)
-fn bite(
-    mut commands: Commands,
-    args: Res<Args>,
-    assets: Res<Assets3>,
-    mut director: ResMut<Director>,
-    mut player: Single<(&Transform, &mut Player)>,
-    mut swarm: Query<(&Transform, &mut Swarmer), Without<Player>>,
-) {
-    let centre = player.0.translation - Vec3::Y * 0.7;
-    for (transform, mut s) in &mut swarm {
-        let d = transform.translation - centre;
-        // The body is a capsule about 1.8 m tall.
-        let flat = Vec2::new(d.x, d.z).length();
-        if s.mode == Mode::Free && flat < 0.8 && d.y.abs() < 1.3 && s.bite_in <= 0.0 {
-            s.bite_in = 1.0;
-            s.darting = 0.0;
-            s.velocity = (Vec3::new(d.x, 0.0, d.z).normalize_or(Vec3::X) + Vec3::Y * 0.15) * 12.0;
-            if args.opt("dark") {
-                continue;
-            }
-            player.1.health -= BITE;
-            director.hurt = 1.0;
-            if args.opt("hurtsound") {
-                commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.7))));
-            }
-        }
-    }
 }
 
 /// Broken swarmers shatter; a dead player starts again.

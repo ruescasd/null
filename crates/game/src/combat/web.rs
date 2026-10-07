@@ -1,5 +1,5 @@
-//! The web (`--opt web`): when the swarm gathers into a hunter, each member
-//! shoots a cable to its two nearest fellows, and the cables reel in, taut
+//! The web: when the swarm gathers into a hunter, each member shoots a cable
+//! to its two nearest fellows, and the cables reel in, taut
 //! and trembling, as the members are drawn together. A member destroyed
 //! mid-gather snaps its cables, which whip back and hang from the others
 //! before they drop away; if the gathering fails, all of its cables snap.
@@ -15,7 +15,7 @@ use super::{
         cables::{rope, tubes},
     },
 };
-use crate::{Args, terrain::WorldGen};
+use crate::terrain::WorldGen;
 
 /// Seconds a cable takes to shoot across, how much longer than the gap it
 /// stays, how hard a taut one trembles (metres), and how long a snapped one
@@ -45,7 +45,6 @@ pub(super) struct Thread {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn web(
     mut commands: Commands,
-    args: Res<Args>,
     time: Res<Time>,
     world: Res<WorldGen>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -55,9 +54,6 @@ pub(super) fn web(
     swarm: Query<(Entity, &Transform, &Swarmer)>,
     mut threads: Query<(Entity, &mut Thread)>,
 ) {
-    if !args.opt("web") {
-        return;
-    }
     let dt = time.delta_secs().clamp(0.001, 1.0 / 30.0);
     let material = material
         .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.3, reflectance: 0.6, ..default() }))
