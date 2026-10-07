@@ -80,6 +80,9 @@ pub struct Plan {
     /// The torso's thickness at the hips, the waist and the chest (times
     /// `torso_radius`): a beast is deep-chested with a tucked-up waist.
     pub torso_profile: [f32; 3],
+    /// How far the body runs on behind the hip joints (a beast's rump, the
+    /// thighs hanging from under it rather than from its end).
+    pub rump: f32,
     /// The neck's thickness at its base (it tapers to the head).
     pub neck_radius: f32,
     /// Neck length and direction (forward, up), head length and radius.
@@ -115,6 +118,7 @@ impl Plan {
             chest: (0.1, 2.3),
             torso_radius: 0.3,
             torso_profile: [1.0, 1.0, 1.15],
+            rump: 0.0,
             neck_radius: 0.2,
             neck: (0.25, 0.15, 0.25),
             head: (0.38, 0.18),
@@ -142,6 +146,7 @@ impl Plan {
         self.hips = (self.hips.0 * k, self.hips.1 * k);
         self.chest = (self.chest.0 * k, self.chest.1 * k);
         self.torso_radius *= k;
+        self.rump *= k;
         self.neck_radius *= k;
         self.neck.0 *= k;
         self.head = (self.head.0 * k, self.head.1 * k);
@@ -180,6 +185,7 @@ impl Plan {
             chest: (0.85, 1.3),
             torso_radius: 0.33,
             torso_profile: [0.82, 0.72, 1.12],
+            rump: 0.35,
             neck_radius: 0.32,
             neck: (0.55, 0.25, 0.22),
             head: (0.68, 0.25),
@@ -631,12 +637,14 @@ impl Rig {
         let chest = self.anchor(Root::Chest);
         let forward = self.forward_of(self.chest_yaw);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
-        // Torso: a few segments from hips to chest.
+        // Torso: a few segments from the rump (behind the hips, sloping a
+        // little down) to the chest.
+        let rump = hips - self.forward_of(self.hips_yaw) * self.plan.rump - Vec3::Y * self.plan.rump * 0.2;
         let n = 3;
         for k in 0..n {
             let (t0, t1) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
             let swell = self.plan.torso_profile[k.min(2)];
-            bones.push(Bone { a: hips.lerp(chest, t0), b: hips.lerp(chest, t1), radius: self.plan.torso_radius * swell, side: right });
+            bones.push(Bone { a: rump.lerp(chest, t0), b: rump.lerp(chest, t1), radius: self.plan.torso_radius * swell, side: right });
         }
         // Neck and head, along where it looks (the neck goes partway); the
         // head at its steadied height.
