@@ -185,7 +185,7 @@ impl Plan {
             chest: (0.85, 1.3),
             torso_radius: 0.33,
             torso_profile: [0.82, 0.72, 1.12],
-            rump: 0.35,
+            rump: 0.5,
             neck_radius: 0.32,
             neck: (0.55, 0.25, 0.22),
             head: (0.68, 0.25),
