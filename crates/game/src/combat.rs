@@ -27,6 +27,7 @@ use crate::{
 
 mod hunter;
 mod forms;
+mod hair;
 mod ichor;
 mod weapon;
 
@@ -67,7 +68,7 @@ impl Plugin for CombatPlugin {
                     .chain()
                     .after(crate::player::walk),
             )
-            .add_systems(Update, (forms::lab, forms::gaze).chain().after(swarm))
+            .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }

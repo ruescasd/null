@@ -21,7 +21,7 @@ use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology};
 use super::*;
 use crate::rig::{Intent, Plan, Rig};
 
-mod cables;
+pub(super) mod cables;
 pub(super) use cables::run as cables;
 
 /// How many free swarmers close together start an assembly, how close, how

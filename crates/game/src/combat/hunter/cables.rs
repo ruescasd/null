@@ -110,7 +110,7 @@ pub(in crate::combat) fn run(
         // (Built whole from the start: the renderer does not take an empty
         // mesh growing.)
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-        tubes(&mut mesh, &strands);
+        tubes(&mut mesh, strands.iter().map(|s| (&s.points[..], s.width, s.shade)));
         let mesh = meshes.add(mesh);
         commands.spawn((
             Cables { hunter: entity, strands, mesh: mesh.clone() },
@@ -133,7 +133,7 @@ pub(in crate::combat) fn run(
             step(s, bones, &world, dt);
         }
         if let Some(mut mesh) = meshes.get_mut(&c.mesh) {
-            tubes(&mut mesh, &c.strands);
+            tubes(&mut mesh, c.strands.iter().map(|s| (&s.points[..], s.width, s.shade)));
         }
     }
 }
@@ -302,69 +302,79 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
     };
     let Some(start) = from.at(bones) else { return };
     let end = to.and_then(|t| t.at(bones));
-    // Far from where it was (a new hunter, a jump): start again, still.
-    if s.points[0].distance(start) > 3.0 {
+    rope(&mut s.points, &mut s.previous, start, end, length, world, dt);
+}
+
+/// One step of a rope: a chain of points swinging under gravity, kept at
+/// its length, held at `start` and (if given) `end`; a hanging one kept off
+/// the ground. Far from where it was (new, or after a jump), it starts again,
+/// still.
+pub(in crate::combat) fn rope(points: &mut Vec<Vec3>, previous: &mut Vec<Vec3>, start: Vec3, end: Option<Vec3>, length: f32, world: &WorldGen, dt: f32) {
+    if points.is_empty() || points[0].distance(start) > 3.0 {
         let last = end.unwrap_or(start - Vec3::Y * length);
-        s.points = (0..NODES).map(|i| start.lerp(last, i as f32 / (NODES - 1) as f32)).collect();
-        s.previous = s.points.clone();
+        // (A point every half metre or so on a long one.)
+        let nodes = ((length / 0.5).ceil() as usize).clamp(NODES, 32);
+        *points = (0..nodes).map(|i| start.lerp(last, i as f32 / (nodes - 1) as f32)).collect();
+        *previous = points.clone();
     }
-    let n = s.points.len();
+    let n = points.len();
     let gravity = Vec3::NEG_Y * 9.8 * dt * dt;
     for i in 1..n {
-        let p = s.points[i];
-        let v = (p - s.previous[i]) * 0.97;
-        s.previous[i] = p;
-        s.points[i] = p + v + gravity;
+        let p = points[i];
+        let v = (p - previous[i]) * 0.97;
+        previous[i] = p;
+        points[i] = p + v + gravity;
     }
     let segment = length / (n - 1) as f32;
-    for _ in 0..8 {
-        s.points[0] = start;
+    for _ in 0..(n + 4).max(8) {
+        points[0] = start;
         if let Some(end) = end {
-            s.points[n - 1] = end;
+            points[n - 1] = end;
         }
         for i in 0..n - 1 {
-            let d = s.points[i + 1] - s.points[i];
+            let d = points[i + 1] - points[i];
             let l = d.length().max(1e-5);
             let fix = d * ((l - segment) / l) * 0.5;
-            s.points[i] += fix;
-            s.points[i + 1] -= fix;
+            points[i] += fix;
+            points[i + 1] -= fix;
         }
     }
-    s.points[0] = start;
+    points[0] = start;
     if let Some(end) = end {
-        s.points[n - 1] = end;
+        points[n - 1] = end;
     }
-    // A hanging one not through the ground (taken as level under it).
-    if end.is_none() {
-        let floor = world.ground_height(start.x, start.z) + 0.02;
-        for p in s.points.iter_mut().skip(1) {
-            p.y = p.y.max(floor);
-        }
+    // Not through the ground (taken as running straight between the
+    // ground under its ends, or level under a hanging one).
+    let floor = world.ground_height(start.x, start.z) + 0.02;
+    let far = end.map_or(floor, |e| world.ground_height(e.x, e.z) + 0.02);
+    for (i, p) in points.iter_mut().enumerate().skip(1) {
+        p.y = p.y.max(floor + (far - floor) * i as f32 / (n - 1) as f32);
     }
 }
 
-/// All the strands as tubes, into one mesh.
-fn tubes(mesh: &mut Mesh, strands: &[Strand]) {
+/// Strands as tubes, into one mesh: each its points, its thickness at the
+/// start and the end, and its shade.
+pub(in crate::combat) fn tubes<'a>(mesh: &mut Mesh, strands: impl IntoIterator<Item = (&'a [Vec3], (f32, f32), f32)>) {
     let (mut positions, mut normals, mut colors, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for s in strands {
-        let n = s.points.len();
+    for (points, width, shade) in strands {
+        let n = points.len();
         if n < 2 {
             continue;
         }
-        let shade = [s.shade, s.shade, s.shade, 1.0];
-        let mut normal = (s.points[1] - s.points[0]).normalize_or(Vec3::Y).any_orthonormal_vector();
+        let shade = [shade, shade, shade, 1.0];
+        let mut normal = (points[1] - points[0]).normalize_or(Vec3::Y).any_orthonormal_vector();
         let base = positions.len() as u32;
         for i in 0..n {
-            let tangent = (s.points[(i + 1).min(n - 1)] - s.points[i.saturating_sub(1)]).normalize_or(Vec3::Y);
+            let tangent = (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or(Vec3::Y);
             // (Carried along so the tube does not twist.)
             normal = (normal - tangent * normal.dot(tangent)).normalize_or(tangent.any_orthonormal_vector());
             let binormal = tangent.cross(normal);
             let t = i as f32 / (n - 1) as f32;
-            let width = s.width.0 + (s.width.1 - s.width.0) * t;
+            let width = width.0 + (width.1 - width.0) * t;
             for k in 0..SIDES {
                 let a = k as f32 / SIDES as f32 * std::f32::consts::TAU;
                 let out = normal * a.cos() + binormal * a.sin();
-                positions.push((s.points[i] + out * width).to_array());
+                positions.push((points[i] + out * width).to_array());
                 normals.push(out.to_array());
                 colors.push(shade);
             }
