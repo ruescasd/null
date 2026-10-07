@@ -48,6 +48,10 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               waist between a solid hips and chest
     --opt grove                               buds grow in groves (7, about 30 m off), asleep and rooted, until a shot within
                                               35 m or running within 12 m wakes them; one waking wakes those near it
+    --opt lonewake                            with --opt grove: now and then a bud wakes by itself, alone (within 15 m of
+                                              you about once in 90 s, never beyond 30 m)
+    --opt leech                               a bud waiting near you where you are not looking may shoot a cable into you
+                                              and drink (1 health a second) until it is destroyed or you get 12 m away
     --opt hair                                strands hanging from each bud, swinging and trailing
     --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
                                               open, gloom=0..1 holds the darkness; with --opt peace)

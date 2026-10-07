@@ -32,6 +32,7 @@ mod forms;
 mod grove;
 mod hair;
 mod ichor;
+mod leech;
 mod weapon;
 mod web;
 
@@ -68,7 +69,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
