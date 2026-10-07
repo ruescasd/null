@@ -44,7 +44,7 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt peace                               no swarm
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
-                                              waist between a solid hips and chest (--opt loose: looser, to compare)
+                                              waist between a solid hips and chest
     --opt bud|face|chandelier                 the swarm in that form, each turning into a second form while you look at it
     --opt swarmlab                            the three forms in an arc in front of you (--set gaze=0..1 holds them, pick=1..3
                                               one close, gloom=0..1 holds the darkness; with --opt peace)
