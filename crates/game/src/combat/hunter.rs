@@ -44,6 +44,9 @@ const LIMB_STIFFNESS: f32 = 600.0;
 /// No spring at all: fixed to its bone.
 const RIGID: f32 = 0.0;
 const DAMPING: f32 = 13.0;
+/// How much of its bone's movement a piece is carried along with each frame
+/// before its spring acts (the rest it trails behind).
+const CARRY: f32 = 0.9;
 
 #[derive(Component)]
 pub(super) struct Assembly {
@@ -74,6 +77,9 @@ enum Stance {
 pub(super) struct Hunter {
     kind: Kind,
     rig: Rig,
+    /// Its bones last frame (the pieces on them are carried along with
+    /// them; see `flesh`).
+    last_bones: Vec<crate::rig::Bone>,
     stance: Stance,
     timer: f32,
     health: f32,
@@ -415,7 +421,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -967,6 +973,14 @@ pub(super) fn flesh(
         // (A jaw turns about its hinge, opening downwards.)
         let rotation = bone.rotation() * if jaw { Quat::from_rotation_x(h.jaw) } else { Quat::IDENTITY };
         let target = bone.a.lerp(bone.b, part.along) + rotation * part.offset;
+        // Carried along with its bone first (all but a little), so the
+        // springs give jiggle and a little lag, not a body trailing a metre
+        // behind its head at a run.
+        if let Some(last) = h.last_bones.get(part.bone) {
+            let last_rotation = last.rotation() * if jaw { Quat::from_rotation_x(h.jaw) } else { Quat::IDENTITY };
+            let last_target = last.a.lerp(last.b, part.along) + last_rotation * part.offset;
+            transform.translation += (target - last_target) * CARRY;
+        }
         for &(b, dir) in &h.hits {
             if b == part.bone {
                 part.velocity += dir * 7.0;
@@ -1006,6 +1020,7 @@ pub(super) fn flesh(
     }
     for mut h in &mut hunters {
         h.hits.clear();
+        h.last_bones = h.rig.bones.clone();
     }
 }
 

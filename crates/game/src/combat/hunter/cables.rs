@@ -6,7 +6,7 @@
 //! 2. Fibres: loose strands hanging from the underside of the body, the neck
 //!    and the legs, swinging as it moves, trailing when it runs.
 //! 3. A cable waist: solid at the hips and the chest, as before, and between
-//!    them a few loose cables winding round the body, rising out of the one
+//!    them cables winding round the body, rising out of the one
 //!    and plunging into the other. (Cables connect solid parts; a body woven
 //!    of nothing but cable did not work.)
 //!
@@ -59,6 +59,8 @@ struct Strand {
     kind: Kind,
     points: Vec<Vec3>,
     previous: Vec<Vec3>,
+    /// A wound strand's places last frame (it is carried along with them).
+    targets: Vec<Vec3>,
     /// Thickness at the root and the tip, and the shade.
     width: (f32, f32),
     shade: f32,
@@ -146,7 +148,7 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
     let mut out = Vec::new();
     let mut k = 0;
     let mut add = |kind: Kind, width: (f32, f32), shade: f32| {
-        out.push(Strand { kind, points: Vec::new(), previous: Vec::new(), width, shade });
+        out.push(Strand { kind, points: Vec::new(), previous: Vec::new(), targets: Vec::new(), width, shade });
     };
     let a = |bone: usize, along: f32, offset: Vec3| Anchor { bone, along, offset };
     match variant {
@@ -199,10 +201,10 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
         _ => {
             // Round the body, from halfway into the hips to halfway into the
             // chest.
-            let count = 6;
+            let count = 10;
             for j in 0..count {
                 k += 1;
-                let turns = if j % 2 == 0 { 0.2 } else { -0.2 } * (1.0 + r(k, 0) * 0.5);
+                let turns = if j % 2 == 0 { 0.3 } else { -0.3 } * (1.0 + r(k, 0) * 0.5);
                 let pale = j % 7 == 3;
                 add(
                     Kind::Wound { first: 0, last: 2, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2), inset: 0.5 },
@@ -272,22 +274,27 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
                 // (Fuller in the middle of the chain; a slack strand more so,
                 // and hanging lower there.)
                 let middle = (std::f32::consts::PI * (u - inset) / run).sin();
-                let swell = 0.8 + (0.2 + 0.6 * slack) * middle;
-                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 1.0 * slack * middle
+                let swell = 0.8 + (0.2 + 0.35 * slack) * middle;
+                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 0.6 * slack * middle
             };
             // On springs: a little behind where they belong, settling
             // (`previous` holds their velocities).
-            if s.points.len() != n || s.points[0].distance(target(0)) > 3.0 {
-                s.points = (0..n).map(target).collect();
+            let targets: Vec<Vec3> = (0..n).map(target).collect();
+            if s.points.len() != n || s.targets.len() != n || s.points[0].distance(targets[0]) > 3.0 {
+                s.points = targets.clone();
                 s.previous = vec![Vec3::ZERO; n];
+                s.targets = targets;
                 return;
             }
             for i in 0..n {
-                let to = target(i) - s.points[i];
-                let v = s.previous[i] + (to * 60.0 - s.previous[i] * 6.0) * dt;
+                // Carried along with its place first, as the shards are.
+                s.points[i] += (targets[i] - s.targets[i]) * super::CARRY;
+                let to = targets[i] - s.points[i];
+                let v = s.previous[i] + (to * 120.0 - s.previous[i] * 10.0) * dt;
                 s.previous[i] = v;
                 s.points[i] += v * dt;
             }
+            s.targets = targets;
             return;
         }
         Kind::Strung { from, to, length } => (from, Some(to), length),
