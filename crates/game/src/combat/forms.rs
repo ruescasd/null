@@ -26,6 +26,11 @@ pub(super) struct Gazed {
 }
 
 impl Gazed {
+    /// How open it is, 0 (shut) to 1.
+    pub(super) fn openness(&self) -> f32 {
+        self.gaze
+    }
+
     /// Thrown wide open, at once (it closes again slowly).
     pub(super) fn startle(&mut self) {
         self.gaze = 1.0;

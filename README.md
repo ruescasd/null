@@ -48,6 +48,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               waist between a solid hips and chest
     --opt grove                               buds grow in groves (7, about 30 m off), asleep and rooted, until a shot within
                                               35 m or running within 12 m wakes them; one waking wakes those near it
+    --opt noarmour                            shut buds take damage (normally shards glance off until a bud is half open)
     --opt hair                                strands hanging from each bud, swinging and trailing
     --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
                                               open, gloom=0..1 holds the darkness; with --opt peace)
@@ -259,7 +260,9 @@ the stars go out), and they stalk you, faster than you run, moving only
 where you are not looking, to places behind you where they wait, dead still.
 Settled there together they shoot cables to each other and reel themselves
 in (you hear them, and have a few seconds to turn and break one, which
-snaps the weave); three shards break one. The time you last and what you
+snaps the weave). Shut, a bud is armoured: shards glance off its petals with
+a spark and a ring, knocking it back; only once it has opened (looked at, it
+opens) do they reach the light inside, and three break it. The time you last and what you
 destroyed show at the top. A finished weave becomes a creature: a tall biped with long arms, or a beast the size of
 a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its
 body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
