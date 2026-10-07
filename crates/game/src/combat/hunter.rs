@@ -34,7 +34,7 @@ const GATHER_COOLDOWN: f32 = 8.0;
 
 const RECOVER: f32 = 1.1;
 const ATTACK: f32 = 30.0;
-/// Shards it takes to break (about four good shots at close range).
+/// What it takes to break (two or three good shots at close range).
 const HUNTER_HEALTH: f32 = 45.0;
 /// The body's pieces: how stiffly they follow their bones (limbs stiffer,
 /// so they stay limbs), and how they settle.
@@ -110,8 +110,8 @@ enum Gesture {
 
 impl Hunter {
     /// A shard struck bone `bone`, flying along `dir`.
-    pub(super) fn hurt(&mut self, bone: usize, dir: Vec3) {
-        self.health -= 1.0;
+    pub(super) fn hurt(&mut self, bone: usize, dir: Vec3, damage: f32) {
+        self.health -= damage;
         self.rig.knock = (self.rig.knock + Vec3::new(dir.x, 0.0, dir.z) * 1.2).clamp_length_max(9.0);
         self.stun = self.stun.max(0.12);
         self.hits.push((bone, dir));

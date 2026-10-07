@@ -53,8 +53,8 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               open, gloom=0..1 holds the darkness; with --opt peace)
     --set wave=N --set wave_every=S           the swarm comes N at a time (3), S seconds after the last group and what it
                                               made are gone (6), --set wave_at=M metres off (50, up to 15 more)
-    --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (3), K how much one bud
-                                              close by does (0.6); --set gloom_dim=S, how many stops the light dims (2.5)
+    --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (4), K how much one bud
+                                              close by does (0.4); --set gloom_dim=S, how many stops the light dims (2.5)
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
                                               times tougher / hunters circle at a distance (--set tame_at=14,
@@ -258,7 +258,7 @@ darkness (the nearer and the more of them, the closer the haze draws in and
 the stars go out), and they stalk you, faster than you run, moving only
 where you are not looking, to places behind you where they wait, dead still.
 Three of them awake shoot cables to each other and reel themselves in (you hear them, and have a few seconds to turn and break one, which
-snaps the weave); three shards break one. The time you last and what you
+snaps the weave); two shards break one. The time you last and what you
 destroyed show at the top. A finished weave becomes a creature: a tall biped with long arms, or a beast the size of
 a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its
 body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
@@ -306,7 +306,7 @@ high), skidding when it lands: a quick gather, then a
 fast, flat leap (about a third of a second) aimed to land on you, the body
 pitching with the arc, forelimbs thrown out wide to grab, hind legs kicking
 back and swinging under to land. It takes hits as a whole
-(about four good shots): each shard jolts the piece it strikes and staggers
+(two or three good shots): each shard jolts the piece it strikes and staggers
 the body back, and when it breaks the whole body bursts at once. Every hit
 shows: splinters burst back, a flash lights the body, the struck piece
 flares, a diamond marks the crosshair (bigger on a kill), and one impact

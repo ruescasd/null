@@ -85,6 +85,8 @@ const SHARDS: usize = 16;
 const SPREAD: f32 = 0.085;
 const RANGE: f32 = 150.0;
 const SHARD_SPEED: f32 = 260.0;
+/// What a shard does to what it strikes.
+const DAMAGE: f32 = 1.8;
 
 /// A swarmer: how many shards break it, its size, and how fast it flies
 /// (faster than a running player).
@@ -429,13 +431,13 @@ fn fire(
         if let Some((d, entity, bone)) = body
             && let Ok((_, mut h)) = hunters.get_mut(entity)
         {
-            h.hurt(bone, dir);
+            h.hurt(bone, dir, DAMAGE);
             end = d;
             struck = Some(eye + dir * d);
         } else if let Some((along, entity)) = best
             && let Ok((_, mut t, mut s)) = swarm.get_mut(entity)
         {
-            s.health -= 1.0;
+            s.health -= DAMAGE;
             s.velocity += dir * 4.0;
             // It pops.
             t.scale *= 1.18;
@@ -641,7 +643,7 @@ fn gloom(
         .filter(|(_, s)| s.mode != Mode::Dormant)
         .map(|(t, _)| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
         .sum();
-    let target = 1.0 - (-args.num("gloom_each", 0.6) * sum).exp();
+    let target = 1.0 - (-args.num("gloom_each", 0.4) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
 }

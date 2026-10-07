@@ -367,7 +367,7 @@ fn darken(args: Res<Args>, gloom: Res<Gloom>, camera: Single<(Option<&mut Distan
     exposure.ev100 = args.num("ev", 11.2) + args.num("gloom_dim", 2.5) * g;
     if let Some(mut fog) = fog {
         let visibility = args.num("fog", 4500.0);
-        let near = args.num("gloom_near", 3.0);
+        let near = args.num("gloom_near", 4.0);
         // (Closing in fast at first: a little gloom already hides the far
         // distance, a quarter of it leaves about twenty metres.)
         // (In the swarm's darkness the haze thickens steadily from your feet,
