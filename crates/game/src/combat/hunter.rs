@@ -435,11 +435,9 @@ fn spawn_hunter(
             Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
         ));
     };
-    // (`--set cables=3`: woven cable instead, all but the head; see
-    // `cables.rs`.)
-    let woven = args.num("cables", 0.0) as u32 == 3;
     for (i, bone) in bones.iter().enumerate() {
-        if woven && i != 4 {
+        // (Woven cable instead; see `cables.rs`.)
+        if cables::replaces(args, i) {
             continue;
         }
         let length = bone.a.distance(bone.b);

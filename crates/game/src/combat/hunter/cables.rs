@@ -2,15 +2,17 @@
 //! hunter's drawn as one mesh of tubes rebuilt every frame.
 //!
 //! 1. Muscles: cables strung between bones (body to thigh, across each knee,
-//!    up the neck, along the back), taut when the limb is stretched, sagging
-//!    when it folds.
+//!    up the neck), taut when the limb is stretched, sagging when it folds.
 //! 2. Fibres: loose strands hanging from the underside of the body, the neck
 //!    and the legs, swinging as it moves, trailing when it runs.
 //! 3. Woven: strands spiralling round every bone in place of the shards (the
-//!    head keeps its own), the limbs and body bundles of cable.
+//!    head keeps its own), the limbs and body bundles of cable, each strand
+//!    running the length of a chain of bones (back and neck, a leg, the tail).
+//! 4. A woven body: the same round the body only, the rest as before.
 //!
 //! Strung and hanging strands are chains of points kept at their length
-//! (Verlet); woven ones follow their bones exactly.
+//! (Verlet); woven ones follow their place on the bones on springs, a little
+//! behind.
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -45,9 +47,9 @@ enum Kind {
     Strung { from: Anchor, to: Anchor, length: f32 },
     /// From an anchor, its other end free.
     Hanging { from: Anchor, length: f32 },
-    /// Round a bone: `turns` times along it, starting at `phase`, `out` of
-    /// the bone's radius away.
-    Wound { bone: usize, phase: f32, turns: f32, out: f32 },
+    /// Round the bones `first..=last` (each joined to the next): `turns`
+    /// times along each, starting at `phase`, `out` of their radius away.
+    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32 },
 }
 
 struct Strand {
@@ -69,7 +71,7 @@ pub(in crate::combat) struct Cables {
 
 /// Points along a strung or hanging strand.
 const NODES: usize = 9;
-/// Points along a wound strand, and sides of every tube.
+/// Points along a wound strand, per bone, and sides of every tube.
 const WOUND_NODES: usize = 10;
 const SIDES: usize = 5;
 
@@ -168,10 +170,6 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
                 let t = j as f32 / 5.0 * std::f32::consts::TAU;
                 add(Kind::Strung { from: a(2, 0.4, Vec3::new(t.cos() * 0.7, 0.0, t.sin() * 0.7)), to: a(4, 0.15, Vec3::new(t.cos() * 0.8, 0.0, t.sin() * 0.8)), length: 0.0 }, (0.05, 0.035), if j == 2 { 0.5 } else { 0.06 });
             }
-            // Along the back, hips to shoulders.
-            for j in 0..3 {
-                add(Kind::Strung { from: a(0, 0.05, Vec3::new((j as f32 - 1.0) * 0.45, 0.0, -1.0)), to: a(2, 0.95, Vec3::new((j as f32 - 1.0) * 0.45, 0.0, -1.0)), length: 0.0 }, (0.04, 0.04), 0.07);
-            }
         }
         2 => {
             // Under the body and neck: a fringe.
@@ -196,22 +194,22 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
             }
         }
         _ => {
-            for bone in 0..bones.len() {
-                if bone == 4 {
-                    continue;
+            // (first, last, strands): the back and neck, each leg, the tail;
+            // or the body alone.
+            let mut chains = vec![(0, if variant == 4 { 2 } else { 3 }, 16)];
+            if variant != 4 {
+                chains.extend((0..limbs).map(|l| (5 + 2 * l, 6 + 2 * l, 8)));
+                if bones.len() > tail {
+                    chains.push((tail, bones.len() - 1, 5));
                 }
-                let count = match bone {
-                    0..=2 => 14,
-                    3 => 10,
-                    b if b < tail => 7,
-                    _ => 4,
-                };
+            }
+            for (first, last, count) in chains {
                 for j in 0..count {
                     k += 1;
                     let turns = if j % 2 == 0 { 0.45 } else { -0.45 } * (1.0 + r(k, 0) * 0.5);
                     let pale = j % 7 == 3;
                     add(
-                        Kind::Wound { bone, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3 },
+                        Kind::Wound { first, last, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3 },
                         (0.0, 0.0),
                         if pale { 0.55 } else { 0.05 + (r(k, 3) + 0.5) * 0.06 },
                     );
@@ -231,9 +229,9 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
                 let p = from.at(bones).unwrap_or_default();
                 s.points = (0..NODES).map(|i| p - Vec3::Y * length * i as f32 / (NODES - 1) as f32).collect();
             }
-            Kind::Wound { bone, .. } => {
-                let w = bones[bone].radius * 0.2;
-                s.width = (w, w);
+            Kind::Wound { first, last, .. } => {
+                // (Thinning along the chain, as its bones do.)
+                s.width = (bones[first].radius * 0.2, bones[last].radius * 0.25);
             }
         }
         s.previous = s.points.clone();
@@ -241,22 +239,61 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
     out
 }
 
+/// Whether `--set cables` replaces a bone's shards: woven, every bone but the
+/// head; a woven body, the body's.
+pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
+    match args.num("cables", 0.0) as u32 {
+        3 => bone != 4,
+        4 => bone <= 2,
+        _ => false,
+    }
+}
+
 /// One step: wound strands follow their bones; the others swing under
 /// gravity, kept at their length, their ends held.
 fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
     let (from, to, length) = match s.kind {
-        Kind::Wound { bone, phase, turns, out } => {
-            let Some(b) = bones.get(bone) else { return };
-            let rotation = b.rotation();
-            s.points = (0..WOUND_NODES)
-                .map(|i| {
-                    let t = i as f32 / (WOUND_NODES - 1) as f32;
-                    let a = phase + turns * std::f32::consts::TAU * t;
-                    // (Fuller in the middle of the bone.)
-                    let swell = 0.75 + 0.25 * (std::f32::consts::PI * t).sin();
-                    b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * b.radius * out * swell
-                })
-                .collect();
+        Kind::Wound { first, last, phase, turns, out } => {
+            if last >= bones.len() {
+                return;
+            }
+            let chain = &bones[first..=last];
+            let m = chain.len();
+            let n = WOUND_NODES * m + 1;
+            let target = |i: usize| {
+                let u = i as f32 / (n - 1) as f32 * m as f32;
+                let k = (u as usize).min(m - 1);
+                let t = u - k as f32;
+                let b = &chain[k];
+                // Radius and frame eased into the next bone's over each joint.
+                let (mut radius, mut rotation) = (b.radius, b.rotation());
+                if t < 0.5 && k > 0 {
+                    let w = 0.5 - t;
+                    radius += (chain[k - 1].radius - radius) * w;
+                    rotation = rotation.slerp(chain[k - 1].rotation(), w);
+                } else if t > 0.5 && k + 1 < m {
+                    let w = t - 0.5;
+                    radius += (chain[k + 1].radius - radius) * w;
+                    rotation = rotation.slerp(chain[k + 1].rotation(), w);
+                }
+                let a = phase + turns * std::f32::consts::TAU * u;
+                // (Fuller in the middle of the chain.)
+                let swell = 0.8 + 0.2 * (std::f32::consts::PI * u / m as f32).sin();
+                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell
+            };
+            // On springs: a little behind where they belong, settling
+            // (`previous` holds their velocities).
+            if s.points.len() != n || s.points[0].distance(target(0)) > 3.0 {
+                s.points = (0..n).map(target).collect();
+                s.previous = vec![Vec3::ZERO; n];
+                return;
+            }
+            for i in 0..n {
+                let to = target(i) - s.points[i];
+                let v = s.previous[i] + (to * 300.0 - s.previous[i] * 24.0) * dt;
+                s.previous[i] = v;
+                s.points[i] += v * dt;
+            }
             return;
         }
         Kind::Strung { from, to, length } => (from, Some(to), length),
