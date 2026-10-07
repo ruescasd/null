@@ -52,7 +52,8 @@ enum Kind {
     /// `slack` (0..1) how loosely: a slack strand bellies out and droops in
     /// the middle of its run. `inset`: how far into the first and last bones
     /// it starts and ends (0 at their ends, 0.5 halfway in).
-    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32, slack: f32, inset: f32 },
+    /// `loose`: slacker, on softer springs (`--opt loose`, to compare).
+    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32, slack: f32, inset: f32, loose: bool },
 }
 
 struct Strand {
@@ -103,7 +104,7 @@ pub(in crate::combat) fn run(
         })
         .clone();
     for (entity, hunter) in &added {
-        let mut strands = strands(variant, hunter, entity.index_u32());
+        let mut strands = strands(variant, args.opt("loose"), hunter, entity.index_u32());
         for s in &mut strands {
             step(s, &hunter.rig.bones, &world, 1.0 / 60.0);
         }
@@ -139,7 +140,7 @@ pub(in crate::combat) fn run(
 }
 
 /// The strands for a variant, laid out on the hunter's bones as they are.
-fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
+fn strands(variant: u32, loose: bool, hunter: &Hunter, seed: u32) -> Vec<Strand> {
     let plan = &hunter.rig.plan;
     let bones = &hunter.rig.bones;
     let limbs = plan.legs.len() + plan.arms.len();
@@ -201,13 +202,14 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
         _ => {
             // Round the body, from halfway into the hips to halfway into the
             // chest.
-            let count = 10;
+            // (`--opt loose`: fewer, wound less.)
+            let count = if loose { 6 } else { 10 };
             for j in 0..count {
                 k += 1;
-                let turns = if j % 2 == 0 { 0.3 } else { -0.3 } * (1.0 + r(k, 0) * 0.5);
+                let turns = if j % 2 == 0 { 1.0 } else { -1.0 } * if loose { 0.2 } else { 0.3 } * (1.0 + r(k, 0) * 0.5);
                 let pale = j % 7 == 3;
                 add(
-                    Kind::Wound { first: 0, last: 2, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2), inset: 0.5 },
+                    Kind::Wound { first: 0, last: 2, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2), inset: 0.5, loose },
                     (0.0, 0.0),
                     if pale { 0.55 } else { 0.05 + (r(k, 3) + 0.5) * 0.06 },
                 );
@@ -246,7 +248,8 @@ pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
 /// gravity, kept at their length, their ends held.
 fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
     let (from, to, length) = match s.kind {
-        Kind::Wound { first, last, phase, turns, out, slack, inset } => {
+        Kind::Wound { first, last, phase, turns, out, slack, inset, loose } => {
+            let (belly, sag, stiffness, damping) = if loose { (0.6, 1.0, 60.0, 6.0) } else { (0.35, 0.6, 120.0, 10.0) };
             if last >= bones.len() {
                 return;
             }
@@ -274,8 +277,8 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
                 // (Fuller in the middle of the chain; a slack strand more so,
                 // and hanging lower there.)
                 let middle = (std::f32::consts::PI * (u - inset) / run).sin();
-                let swell = 0.8 + (0.2 + 0.35 * slack) * middle;
-                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 0.6 * slack * middle
+                let swell = 0.8 + (0.2 + belly * slack) * middle;
+                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * sag * slack * middle
             };
             // On springs: a little behind where they belong, settling
             // (`previous` holds their velocities).
@@ -290,7 +293,7 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
                 // Carried along with its place first, as the shards are.
                 s.points[i] += (targets[i] - s.targets[i]) * super::CARRY;
                 let to = targets[i] - s.points[i];
-                let v = s.previous[i] + (to * 120.0 - s.previous[i] * 10.0) * dt;
+                let v = s.previous[i] + (to * stiffness - s.previous[i] * damping) * dt;
                 s.previous[i] = v;
                 s.points[i] += v * dt;
             }
