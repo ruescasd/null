@@ -48,8 +48,10 @@ enum Kind {
     /// From an anchor, its other end free.
     Hanging { from: Anchor, length: f32 },
     /// Round the bones `first..=last` (each joined to the next): `turns`
-    /// times along each, starting at `phase`, `out` of their radius away.
-    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32 },
+    /// times along each, starting at `phase`, `out` of their radius away, and
+    /// `slack` (0..1) how loosely: a slack strand bellies out and droops in
+    /// the middle of its run.
+    Wound { first: usize, last: usize, phase: f32, turns: f32, out: f32, slack: f32 },
 }
 
 struct Strand {
@@ -196,9 +198,9 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
         _ => {
             // (first, last, strands): the back and neck, each leg, the tail;
             // or the body alone.
-            let mut chains = vec![(0, if variant == 4 { 2 } else { 3 }, 16)];
+            let mut chains = vec![(0, if variant == 4 { 2 } else { 3 }, 10)];
             if variant != 4 {
-                chains.extend((0..limbs).map(|l| (5 + 2 * l, 6 + 2 * l, 8)));
+                chains.extend((0..limbs).map(|l| (5 + 2 * l, 6 + 2 * l, 6)));
                 if bones.len() > tail {
                     chains.push((tail, bones.len() - 1, 5));
                 }
@@ -206,10 +208,10 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
             for (first, last, count) in chains {
                 for j in 0..count {
                     k += 1;
-                    let turns = if j % 2 == 0 { 0.45 } else { -0.45 } * (1.0 + r(k, 0) * 0.5);
+                    let turns = if j % 2 == 0 { 0.3 } else { -0.3 } * (1.0 + r(k, 0) * 0.5);
                     let pale = j % 7 == 3;
                     add(
-                        Kind::Wound { first, last, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3 },
+                        Kind::Wound { first, last, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2) },
                         (0.0, 0.0),
                         if pale { 0.55 } else { 0.05 + (r(k, 3) + 0.5) * 0.06 },
                     );
@@ -253,7 +255,7 @@ pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
 /// gravity, kept at their length, their ends held.
 fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
     let (from, to, length) = match s.kind {
-        Kind::Wound { first, last, phase, turns, out } => {
+        Kind::Wound { first, last, phase, turns, out, slack } => {
             if last >= bones.len() {
                 return;
             }
@@ -277,9 +279,11 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
                     rotation = rotation.slerp(chain[k + 1].rotation(), w);
                 }
                 let a = phase + turns * std::f32::consts::TAU * u;
-                // (Fuller in the middle of the chain.)
-                let swell = 0.8 + 0.2 * (std::f32::consts::PI * u / m as f32).sin();
-                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell
+                // (Fuller in the middle of the chain; a slack strand more so,
+                // and hanging lower there.)
+                let middle = (std::f32::consts::PI * u / m as f32).sin();
+                let swell = 0.8 + (0.2 + 0.35 * slack) * middle;
+                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 0.6 * slack * middle
             };
             // On springs: a little behind where they belong, settling
             // (`previous` holds their velocities).
@@ -290,7 +294,7 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
             }
             for i in 0..n {
                 let to = target(i) - s.points[i];
-                let v = s.previous[i] + (to * 300.0 - s.previous[i] * 24.0) * dt;
+                let v = s.previous[i] + (to * 120.0 - s.previous[i] * 10.0) * dt;
                 s.previous[i] = v;
                 s.points[i] += v * dt;
             }
