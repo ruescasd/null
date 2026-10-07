@@ -20,7 +20,7 @@ use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, window::PresentMo
 /// `--seed n`
 /// `--focus name` in the lab, start looking at that candidate
 /// `--opt name` (repeatable) switch a rendering experiment on or off
-/// `--set name=value` (repeatable) override a tuning number
+/// `--set name=value` or `--set name value` (repeatable) override a tuning number
 #[derive(Resource, Clone, Debug)]
 pub struct Args {
     pub opts: Vec<String>,
@@ -61,11 +61,16 @@ impl Args {
                 "--shot" => args.shot = it.next(),
                 "--focus" => args.focus = it.next(),
                 "--opt" => args.opts.extend(it.next()),
+                // `--set name=value`, or `--set name value`.
                 "--set" => {
-                    if let Some((k, v)) = it.next().as_deref().and_then(|s| s.split_once('='))
-                        && let Ok(v) = v.parse()
-                    {
-                        args.sets.push((k.to_string(), v));
+                    let first = it.next().unwrap_or_default();
+                    let (k, v) = match first.split_once('=') {
+                        Some((k, v)) => (k.to_string(), v.to_string()),
+                        None => (first.clone(), it.next().unwrap_or_default()),
+                    };
+                    match v.parse() {
+                        Ok(v) if !k.is_empty() => args.sets.push((k, v)),
+                        _ => eprintln!("--set {first}: expected name=value (or name value) with a number"),
                     }
                 }
                 "--seed" => args.seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(1),
