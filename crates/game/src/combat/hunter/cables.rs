@@ -5,11 +5,10 @@
 //!    up the neck), taut when the limb is stretched, sagging when it folds.
 //! 2. Fibres: loose strands hanging from the underside of the body, the neck
 //!    and the legs, swinging as it moves, trailing when it runs.
-//! 3. Woven: strands spiralling round every bone in place of the shards (the
-//!    head keeps its own), the limbs and body bundles of cable, each strand
-//!    running the length of a chain of bones (back and neck, a leg, the tail).
-//! 4. A cable waist: solid at the hips and the chest, as before, and between
-//!    them cables, rising out of the one and plunging into the other.
+//! 3. A cable waist: solid at the hips and the chest, as before, and between
+//!    them a few loose cables winding round the body, rising out of the one
+//!    and plunging into the other. (Cables connect solid parts; a body woven
+//!    of nothing but cable did not work.)
 //!
 //! Strung and hanging strands are chains of points kept at their length
 //! (Verlet); woven ones follow their place on the bones on springs, a little
@@ -198,26 +197,18 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
             }
         }
         _ => {
-            // (first, last, strands): the back and neck, each leg, the tail;
-            // or the body alone.
-            let mut chains = vec![(0, if variant == 4 { 2 } else { 3 }, 10)];
-            if variant != 4 {
-                chains.extend((0..limbs).map(|l| (5 + 2 * l, 6 + 2 * l, 6)));
-                if bones.len() > tail {
-                    chains.push((tail, bones.len() - 1, 5));
-                }
-            }
-            for (first, last, count) in chains {
-                for j in 0..count {
-                    k += 1;
-                    let turns = if j % 2 == 0 { 0.3 } else { -0.3 } * (1.0 + r(k, 0) * 0.5);
-                    let pale = j % 7 == 3;
-                    add(
-                        Kind::Wound { first, last, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2), inset: if variant == 4 { 0.5 } else { 0.0 } },
-                        (0.0, 0.0),
-                        if pale { 0.55 } else { 0.05 + (r(k, 3) + 0.5) * 0.06 },
-                    );
-                }
+            // Round the body, from halfway into the hips to halfway into the
+            // chest.
+            let count = 6;
+            for j in 0..count {
+                k += 1;
+                let turns = if j % 2 == 0 { 0.2 } else { -0.2 } * (1.0 + r(k, 0) * 0.5);
+                let pale = j % 7 == 3;
+                add(
+                    Kind::Wound { first: 0, last: 2, phase: j as f32 / count as f32 * std::f32::consts::TAU + r(k, 1), turns, out: 0.8 + r(k, 2) * 0.3, slack: (r(k, 4) + 0.5).powi(2), inset: 0.5 },
+                    (0.0, 0.0),
+                    if pale { 0.55 } else { 0.05 + (r(k, 3) + 0.5) * 0.06 },
+                );
             }
         }
     }
@@ -243,14 +234,10 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
     out
 }
 
-/// Whether `--set cables` replaces a bone's shards: woven, every bone but the
-/// head; a woven body, the body's.
+/// Whether `--set cables` replaces a bone's shards: the cable waist, the
+/// middle of the body.
 pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
-    match args.num("cables", 0.0) as u32 {
-        3 => bone != 4,
-        4 => bone == 1,
-        _ => false,
-    }
+    args.num("cables", 0.0) as u32 == 3 && bone == 1
 }
 
 /// One step: wound strands follow their bones; the others swing under
@@ -285,8 +272,8 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
                 // (Fuller in the middle of the chain; a slack strand more so,
                 // and hanging lower there.)
                 let middle = (std::f32::consts::PI * (u - inset) / run).sin();
-                let swell = 0.8 + (0.2 + 0.35 * slack) * middle;
-                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 0.6 * slack * middle
+                let swell = 0.8 + (0.2 + 0.6 * slack) * middle;
+                b.a.lerp(b.b, t) + rotation * Vec3::new(a.cos(), 0.0, a.sin()) * radius * out * swell - Vec3::Y * radius * 1.0 * slack * middle
             };
             // On springs: a little behind where they belong, settling
             // (`previous` holds their velocities).
@@ -297,7 +284,7 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
             }
             for i in 0..n {
                 let to = target(i) - s.points[i];
-                let v = s.previous[i] + (to * 120.0 - s.previous[i] * 10.0) * dt;
+                let v = s.previous[i] + (to * 60.0 - s.previous[i] * 6.0) * dt;
                 s.previous[i] = v;
                 s.points[i] += v * dt;
             }
