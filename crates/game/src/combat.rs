@@ -63,7 +63,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, bite, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )

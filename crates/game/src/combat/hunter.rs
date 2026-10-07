@@ -21,6 +21,9 @@ use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology};
 use super::*;
 use crate::rig::{Intent, Plan, Rig};
 
+mod cables;
+pub(super) use cables::run as cables;
+
 /// How many free swarmers close together start an assembly, how close, how
 /// long it takes, and how few members an assembly can be.
 const GATHER_COUNT: usize = 7;
@@ -432,7 +435,13 @@ fn spawn_hunter(
             Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
         ));
     };
+    // (`--set cables=3`: woven cable instead, all but the head; see
+    // `cables.rs`.)
+    let woven = args.num("cables", 0.0) as u32 == 3;
     for (i, bone) in bones.iter().enumerate() {
+        if woven && i != 4 {
+            continue;
+        }
         let length = bone.a.distance(bone.b);
         if limbs.contains(&i) {
             // A limb: long blades laid along it, overlapping, so it reads
