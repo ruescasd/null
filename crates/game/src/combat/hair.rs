@@ -60,7 +60,8 @@ pub(super) fn hair(
             // Round the back of its rim, a little behind it.
             let from = Vec3::new(a.cos() * RIM, a.sin() * RIM, 0.12 + r(1) * 0.08);
             let length = LENGTH.0 + (LENGTH.1 - LENGTH.0) * r(2);
-            let shade = if k % 4 == 1 { 0.5 } else { 0.03 + r(3) * 0.04 };
+            // (Black, as the roots are.)
+            let shade = 0.035;
             let (mut points, mut previous) = (Vec::new(), Vec::new());
             rope(&mut points, &mut previous, transform.transform_point(from), None, length, &world, dt);
             strands.push((from, length, points, previous, shade));
