@@ -520,7 +520,7 @@ fn swarm(
     let target = ptransform.translation - Vec3::Y * 0.3;
     // (`--opt fight` keeps it going in a capture, and fires the gun.)
     let capture = args.shot.is_some() && !args.opt("fight");
-    if args.opt("peace") || capture || args.opt("bot") || !streamer.settled || (fly.noclip && !args.opt("specimen")) {
+    if args.opt("peace") || capture || args.opt("bot") || !streamer.near || (fly.noclip && !args.opt("specimen")) {
         return;
     }
     director.alive += dt;

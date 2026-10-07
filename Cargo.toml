@@ -20,3 +20,10 @@ opt-level = 3
 
 [profile.dev.package.worldgen]
 opt-level = 3
+
+# Quick iteration: release speed, but incremental and finely split, so a
+# small change rebuilds in seconds (`cargo build --profile fast`).
+[profile.fast]
+inherits = "release"
+incremental = true
+codegen-units = 256

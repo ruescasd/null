@@ -147,7 +147,7 @@ pub(super) fn lab(
     if *spawned {
         return;
     }
-    *settled_for = if streamer.settled { *settled_for + time.delta_secs() } else { 0.0 };
+    *settled_for = if streamer.near { *settled_for + time.delta_secs() } else { 0.0 };
     if *settled_for < 1.0 {
         return;
     }

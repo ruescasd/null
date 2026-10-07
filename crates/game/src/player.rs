@@ -358,7 +358,7 @@ pub fn gather_input(
         jump: pressed(KeyCode::Space) || (captured && mouse.pressed(MouseButton::Right)),
         fire: captured && mouse.pressed(MouseButton::Left),
         // (Forced on for captures once there is terrain to anchor to.)
-        tether: (args.opt("tether") && streamer.settled)
+        tether: (args.opt("tether") && streamer.near)
             || pressed(KeyCode::KeyE)
             || (captured
                 && (mouse.pressed(MouseButton::Back) || mouse.pressed(MouseButton::Forward))),
@@ -480,7 +480,7 @@ pub fn walk(
     let p = transform.translation;
     let ground_height = world.ground_height(p.x, p.z);
     if !player.ready {
-        if !streamer.settled {
+        if !streamer.near {
             return;
         }
         player.ready = true;

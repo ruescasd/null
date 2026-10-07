@@ -35,6 +35,9 @@ use crate::Args;
 
 /// Radius of each detail level's disc, in metres.
 pub const LOD_RADIUS: [f32; LOD_LEVELS as usize] = [450.0, 1700.0, 4800.0];
+/// How far round the camera the finest terrain must be in place to play
+/// (`Streamer::near`); the rest streams in while you do.
+const NEAR: f32 = 80.0;
 
 /// Radius of the fake planet used to bend the world below the horizon.
 pub const PLANET_RADIUS: f32 = 40_000.0;
@@ -180,6 +183,9 @@ pub struct Streamer {
     stale: HashMap<Key, Entity>,
     /// True once every column in view has been generated and spawned.
     pub settled: bool,
+    /// True once the finest ring round the camera is (enough to stand, walk
+    /// and fight on while the distance is still coming in).
+    pub near: bool,
 }
 
 impl Streamer {
@@ -190,6 +196,7 @@ impl Streamer {
         self.cache.clear();
         self.pending.clear();
         self.settled = false;
+        self.near = false;
     }
 }
 
@@ -313,6 +320,7 @@ fn stream_columns(
     let mut draw: HashSet<Key> = HashSet::new();
     let mut requests: Vec<(f32, Key)> = Vec::new();
     let mut settled = true;
+    let mut near = true;
     for lod in 0..LOD_LEVELS {
         let n = world.columns_per_side(lod);
         for &key in &wanted[lod as usize] {
@@ -330,12 +338,14 @@ fn stream_columns(
                 draw.insert((lod, key));
             } else {
                 settled = false;
+                near &= lod > 0 || column_distance(lod, key, pos) > NEAR;
                 let urgency = column_distance(lod, key, pos) / column_size(lod);
                 requests.push((urgency, (lod, wrapped)));
             }
         }
     }
     streamer.settled = settled;
+    streamer.near = near;
 
     // Start the most urgent generation work.
     requests.sort_by(|a, b| a.0.total_cmp(&b.0));

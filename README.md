@@ -6,9 +6,14 @@ Rust + Bevy 0.19.
 
 ## Run
 
-    cargo run -p game
+    cargo run -p game --profile fast
 
-Click to capture the mouse, Esc to release. F1 toggles the help overlay.
+The `fast` profile runs as fast as `--release` but rebuilds incrementally, so a
+small change rebuilds in about 5 s instead of 15. You can play as soon as the
+ground round you is in (a fraction of a second); the distance streams in after.
+
+The mouse is captured from the start; Esc releases it, a click captures it
+again. F1 toggles the help overlay.
 
 | Keys | |
 |---|---|
