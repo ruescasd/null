@@ -25,6 +25,17 @@ pub(super) struct Gazed {
     gaze: f32,
 }
 
+impl Gazed {
+    /// Thrown wide open, at once (it closes again slowly).
+    pub(super) fn startle(&mut self) {
+        self.gaze = 1.0;
+    }
+}
+
+/// Asleep: shut, whoever looks (see `grove.rs`).
+#[derive(Component)]
+pub(super) struct Asleep;
+
 /// A piece moving between its rest and looked-at forms (in its parent's
 /// space).
 #[derive(Component)]
@@ -121,13 +132,17 @@ pub(super) fn gaze(
     time: Res<Time>,
     camera: Single<&Transform, With<FlyCam>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut gazed: Query<(&GlobalTransform, &mut Gazed)>,
+    mut gazed: Query<(&GlobalTransform, &mut Gazed, Has<Asleep>)>,
     mut morphs: Query<(&Morph, &mut Transform), Without<FlyCam>>,
     glows: Query<&Glow>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let fixed = args.num("gaze", -1.0);
-    for (transform, mut g) in &mut gazed {
+    for (transform, mut g, asleep) in &mut gazed {
+        if asleep {
+            g.gaze = 0.0;
+            continue;
+        }
         if fixed >= 0.0 {
             g.gaze = fixed;
             continue;
@@ -137,14 +152,14 @@ pub(super) fn gaze(
         g.gaze = if looked { (g.gaze + dt / 1.5).min(1.0) } else { (g.gaze - dt / 2.5).max(0.0) };
     }
     for (m, mut transform) in &mut morphs {
-        let Ok((_, g)) = gazed.get(m.of) else { continue };
+        let Ok((_, g, _)) = gazed.get(m.of) else { continue };
         let k = g.gaze * g.gaze * (3.0 - 2.0 * g.gaze);
         transform.translation = m.rest.translation.lerp(m.gazed.translation, k);
         transform.rotation = m.rest.rotation.slerp(m.gazed.rotation, k);
         transform.scale = m.rest.scale.lerp(m.gazed.scale, k);
     }
     for glow in &glows {
-        let Ok((_, g)) = gazed.get(glow.of) else { continue };
+        let Ok((_, g, _)) = gazed.get(glow.of) else { continue };
         if let Some(mut material) = materials.get_mut(&glow.material) {
             let e = glow.rest + (glow.gazed - glow.rest) * g.gaze;
             material.emissive = LinearRgba::rgb(e, e, e);

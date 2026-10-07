@@ -29,6 +29,7 @@ use crate::{
 
 mod hunter;
 mod forms;
+mod grove;
 mod hair;
 mod ichor;
 mod weapon;
@@ -67,7 +68,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk),
             )
@@ -176,9 +177,11 @@ struct Streak {
     impact: bool,
 }
 
-/// What a swarmer is doing: stalking on its own, or drawn into an assembly.
+/// What a swarmer is doing: asleep in a grove, stalking on its own, or drawn
+/// into an assembly.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
+    Dormant,
     Free,
     Gather(Entity),
 }
@@ -519,9 +522,12 @@ fn swarm(
     }
     if director.next_wave <= 0.0 && swarm.is_empty() && !args.opt("hunters") && !args.opt("specimen") {
         let t = time.elapsed_secs();
-        let group = args.num("wave", 3.0) as usize;
+        // (`--opt grove`: a grove of them asleep on the ground, nearer; see
+        // `grove.rs`.)
+        let grove = args.opt("grove");
+        let group = args.num("wave", if grove { 7.0 } else { 3.0 }) as usize;
         let a = hash01(t as i32, 1, 2, 0x5a1) * std::f32::consts::TAU;
-        let dist = args.num("wave_at", 50.0) + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
+        let dist = args.num("wave_at", if grove { 30.0 } else { 50.0 }) + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
         let mut away = Vec3::new(a.cos(), 0.0, a.sin());
         if args.opt("fight") {
             // For captures: from straight ahead.
@@ -531,10 +537,19 @@ fn swarm(
         let base = target + away * dist;
         for k in 0..group {
             let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
-            let p = base + Vec3::new(r(0), 0.0, r(1)) * 8.0;
-            let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
-            let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0 };
-            let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id();
+            let p = base + Vec3::new(r(0), 0.0, r(1)) * if grove { 14.0 } else { 8.0 };
+            let mode = if grove { Mode::Dormant } else { Mode::Free };
+            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0 };
+            let root = if grove {
+                // Low on its roots, opening to the sky, leaning a little.
+                let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 0.55, p.z);
+                let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
+                let transform = Transform::from_translation(p).looking_to(lean * Vec3::Y, Vec3::Z);
+                commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id()
+            } else {
+                let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
+                commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id()
+            };
             forms::build(&mut commands, &kit, &mut materials, root);
         }
     }
@@ -616,13 +631,15 @@ fn gloom(
     time: Res<Time>,
     args: Res<Args>,
     player: Single<&Transform, With<Player>>,
-    swarm: Query<&Transform, (With<Swarmer>, Without<Player>)>,
+    swarm: Query<(&Transform, &Swarmer), Without<Player>>,
     mut gloom: ResMut<crate::look::Gloom>,
 ) {
     let dt = time.delta_secs().min(0.05);
+    // (Asleep, they do nothing.)
     let sum: f32 = swarm
         .iter()
-        .map(|t| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
+        .filter(|(_, s)| s.mode != Mode::Dormant)
+        .map(|(t, _)| ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
         .sum();
     let target = 1.0 - (-args.num("gloom_each", 0.3) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };

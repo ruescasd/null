@@ -18,6 +18,7 @@ again. F1 toggles the help overlay.
 | Keys | |
 |---|---|
 | WASD | move (Quake 3 physics: strafe jumping gains speed) |
+| Shift (hold) | walk: slower, and quiet |
 | Space or Mouse 2 (hold) | jump; holding it bunny hops on landing |
 | (automatic) | mantle: in the air, push into a ledge whose top is within ~1.1 m of your feet to climb onto it (with a jump: ledges up to ~2.5 m). Small lips are stepped up even mid-air, and clipping an edge nudges you past it |
 | Mouse 1 | shard shotgun (hold to keep firing) |
@@ -45,6 +46,8 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
                                               waist between a solid hips and chest
+    --opt grove                               buds grow in groves (7, about 30 m off), asleep and rooted, until a shot within
+                                              35 m or running within 12 m wakes them; one waking wakes those near it
     --opt hair                                strands hanging from each bud, swinging and trailing
     --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
                                               open, gloom=0..1 holds the darkness; with --opt peace)

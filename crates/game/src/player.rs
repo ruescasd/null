@@ -46,6 +46,8 @@ impl Plugin for PlayerPlugin {
 // unit is about 3.2 cm.
 /// Top running speed (320 units/s).
 const MAX_SPEED: f32 = 10.0;
+/// Walking (Shift): slower, and quiet (see `combat/grove.rs`).
+pub const WALK_SPEED: f32 = 4.0;
 const GROUND_ACCEL: f32 = 10.0;
 /// Air acceleration. Small, so air strafing adds speed only when the wish
 /// direction is nearly perpendicular to the velocity: strafe jumping.
@@ -339,6 +341,8 @@ pub struct MoveInput {
     pub jump: bool,
     pub fire: bool,
     pub tether: bool,
+    /// Walking instead of running.
+    pub walk: bool,
 }
 
 pub fn gather_input(
@@ -357,6 +361,7 @@ pub fn gather_input(
         // Mouse 2 as well as Space, for easier testing until input is configurable.
         jump: pressed(KeyCode::Space) || (captured && mouse.pressed(MouseButton::Right)),
         fire: captured && mouse.pressed(MouseButton::Left),
+        walk: pressed(KeyCode::ShiftLeft),
         // (Forced on for captures once there is terrain to anchor to.)
         tether: (args.opt("tether") && streamer.near)
             || pressed(KeyCode::KeyE)
@@ -564,7 +569,7 @@ pub fn walk(
             if !tethered {
                 friction(&mut player.velocity, dt);
             }
-            accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
+            accelerate(&mut player.velocity, wishdir, if input.walk { WALK_SPEED } else { MAX_SPEED }, GROUND_ACCEL, dt);
             player.velocity = clip(player.velocity, player.ground_normal);
         } else {
             accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
