@@ -359,7 +359,9 @@ fn strata(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32
             }
             ledges.push((bottom, bn, a, b));
         }
-        relief(parts, w, (u0, u1), (bottom, top), 0.0, 0, seed.wrapping_mul(97).wrapping_add(stratum));
+        // Each stratum its own boldness: bold steps, medium, or fine.
+        let bold = [1.0, 0.5, 0.25][(r(stratum, 9) * 3.0) as usize % 3];
+        relief(parts, w, (u0, u1), (bottom, top), 0.0, 0, bold, seed.wrapping_mul(97).wrapping_add(stratum));
         top = bottom - bh;
         stratum += 1;
     }
@@ -403,7 +405,7 @@ fn slab(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32),
             let proud = 0.6 + 1.5 * r(p, 5);
             w.block(&mut parts.stone, (a, b), (c, d), (0.0, proud));
             // Coarse relief only (three levels): the slab stays vast.
-            relief(parts, w, (a, b), (c, d), proud, 3, seed.wrapping_add(p * 13));
+            relief(parts, w, (a, b), (c, d), proud, 3, 0.5, seed.wrapping_add(p * 13));
         }
     }
     // A deep groove or two, top to bottom.
@@ -424,12 +426,20 @@ fn slab(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32),
 /// piece becomes a run of fins (rhythm along an axis), a seam carries a line
 /// of light, or the splitting stops early (bare at every scale); the
 /// smallest end in frames within frames, packed conduits, louvres or slits.
-fn relief(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), n: f32, depth: i32, seed: i32) {
+/// `bold` scales how far pieces stand out (1 bold, 0.25 fine). Now and then
+/// a piece near the top becomes a run of bays instead, breaking the pattern.
+#[allow(clippy::too_many_arguments)]
+fn relief(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), n: f32, depth: i32, bold: f32, seed: i32) {
     let (du, dv) = (u1 - u0, v1 - v0);
     let size = du.min(dv);
     let h = |a: i32, b: i32| hash01(seed, depth, a * 31 + b, 0x7cb);
     if size < 1.5 || depth >= 8 || (depth >= 3 && h(0, 0) < 0.1) {
         leaf(parts, w, (u0, u1), (v0, v1), n, seed);
+        return;
+    }
+    // A run of bays between pilasters, now and then.
+    if (1..=2).contains(&depth) && size > 10.0 && h(8, 0) < 0.15 {
+        bays(parts, &w.moved(w.offset + n), (u0, u1), (v0, v1), seed);
         return;
     }
     // A run of fins along the longer side, alternate ones standing out.
@@ -470,11 +480,36 @@ fn relief(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32
     const STANDS: [f32; 4] = [0.0, 0.03, 0.06, 0.12];
     for (k, (cu, cv)) in children.into_iter().enumerate() {
         let csize = (cu.1 - cu.0).min(cv.1 - cv.0);
-        let dn = (csize * STANDS[(h(7, k as i32) * 4.0) as usize % 4]).min(6.0);
+        let dn = (csize * STANDS[(h(7, k as i32) * 4.0) as usize % 4] * bold).min(6.0 * bold);
         if dn > 0.05 {
             w.block(&mut parts.stone, cu, cv, (n, n + dn));
         }
-        relief(parts, w, cu, cv, n + dn, depth + 1, seed.wrapping_mul(31).wrapping_add(k as i32 + 1));
+        relief(parts, w, cu, cv, n + dn, depth + 1, bold, seed.wrapping_mul(31).wrapping_add(k as i32 + 1));
+    }
+}
+
+/// A run of bays: pilasters standing out, between them frames within frames,
+/// packed conduits, louvres or slits, or bare.
+fn bays(parts: &mut Parts, w: &Wall, (start, end): (f32, f32), (v0, v1): (f32, f32), seed: i32) {
+    let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c2);
+    let mut u = start;
+    let mut k = 0;
+    while u < end {
+        let width = (4.0 + 20.0 * r(k, 0)).min(end - u);
+        let pw = 1.0 + 2.0 * r(k, 1);
+        w.block(&mut parts.stone, (u, u + pw), (v0, v1), (0.0, 1.0 + 1.5 * r(k, 2)));
+        let (b0, b1) = (u + pw, u + width);
+        if b1 - b0 > 1.5 {
+            match (r(k, 3) * 5.0) as u32 {
+                0 => frames(parts, w, (b0, b1), (v0, v1), 0.0, 4, r(k, 5)),
+                1 => conduits(parts, w, (b0, b1), (v0, v1), seed, k),
+                2 => louvres(parts, w, (b0, b1), (v0, v1), r(k, 6)),
+                3 => openings(parts, w, (b0, b1), (v0, v1), r(k, 4)),
+                _ => {}
+            }
+        }
+        u += width;
+        k += 1;
     }
 }
 
