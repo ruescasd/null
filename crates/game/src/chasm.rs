@@ -205,7 +205,7 @@ struct Parts {
 }
 
 /// How bright the chasm's own lights are (lumens; `--set chasm_light`).
-const LIGHT: f32 = 3.0e8;
+const LIGHT: f32 = 2.0e8;
 
 fn build(
     mut commands: Commands,
@@ -335,35 +335,31 @@ fn wall(parts: &mut Parts, nominal: Wall, seed: i32) -> Vec<Massif> {
     massifs
 }
 
-/// A part of a massif in strata: heights 8-34 m, a band under each (a rib;
-/// every third or so a ledge you can walk; some carry a line of light), each
-/// stratum in bays; zigzag stairs between its ledges.
+/// A part of a massif in tall strata (40-140 m), a walkable ledge under
+/// each (some carrying a line of light), each stratum's face in fractal
+/// relief; zigzag stairs between the ledges.
 fn strata(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), seed: i32) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c9);
     let mut top = v1;
     let mut stratum = 0;
     let mut ledges = Vec::new();
     while top > v0 {
-        let h = (8.0 + 26.0 * r(stratum, 0)).min(top - v0);
+        let h = (40.0 + 100.0 * r(stratum, 0)).min(top - v0);
         let bottom = top - h;
-        let walkway = stratum % 3 == 1 || r(stratum, 1) < 0.2;
-        let (bh, bn) = if walkway { (1.2, 4.0 + 2.0 * r(stratum, 2)) } else { (0.5 + 1.5 * r(stratum, 2), 0.8 + 1.8 * r(stratum, 3)) };
+        let (bh, bn) = (1.2, 4.0 + 2.0 * r(stratum, 2));
         if bottom > v0 {
-            // Bands stop short of the massif's ends now and then.
+            // Ledges stop short of the massif's ends now and then.
             let (a, b) = if r(stratum, 5) < 0.3 { (u0 + (u1 - u0) * 0.3 * r(stratum, 6), u1 - (u1 - u0) * 0.3 * r(stratum, 7)) } else { (u0, u1) };
             w.block(&mut parts.stone, (a, b), (bottom - bh, bottom), (0.0, bn));
-            if r(stratum, 4) < 0.45 {
+            if r(stratum, 4) < 0.5 {
                 w.block(&mut parts.glow, (a, b), (bottom - bh * 0.6, bottom - bh * 0.4), (bn, bn + 0.05));
-                // Now and then it lights the wall about it.
-                if r(stratum, 8) < 0.35 {
+                if r(stratum, 8) < 0.5 {
                     parts.lights.push((w.at((a + b) * 0.5, bottom - bh, bn + 2.0), 80.0));
                 }
             }
-            if walkway {
-                ledges.push((bottom, bn, a, b));
-            }
+            ledges.push((bottom, bn, a, b));
         }
-        bays(parts, w, (u0, u1), (bottom, top), seed, stratum);
+        relief(parts, w, (u0, u1), (bottom, top), 0.0, 0, seed.wrapping_mul(97).wrapping_add(stratum));
         top = bottom - bh;
         stratum += 1;
     }
@@ -394,8 +390,8 @@ fn strata(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32
 }
 
 /// A colossal slab: a vast bare face, a few broad shallow panels standing
-/// out from it, finely speckled all over; a deep groove or two running down
-/// it.
+/// out from it carrying a little coarse relief; a deep groove or two running
+/// down it.
 fn slab(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), seed: i32) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7ca);
     // Broad panels, a little proud.
@@ -404,11 +400,12 @@ fn slab(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32),
         let (a, b) = (u0 + (u1 - u0) * (0.05 + 0.4 * r(p, 1)), u1 - (u1 - u0) * (0.05 + 0.4 * r(p, 2)));
         let (c, d) = (v0 + (v1 - v0) * (0.05 + 0.4 * r(p, 3)), v1 - (v1 - v0) * (0.05 + 0.4 * r(p, 4)));
         if b - a > 4.0 && d - c > 4.0 {
-            w.block(&mut parts.stone, (a, b), (c, d), (0.0, 0.6 + 1.5 * r(p, 5)));
+            let proud = 0.6 + 1.5 * r(p, 5);
+            w.block(&mut parts.stone, (a, b), (c, d), (0.0, proud));
+            // Coarse relief only (three levels): the slab stays vast.
+            relief(parts, w, (a, b), (c, d), proud, 3, seed.wrapping_add(p * 13));
         }
     }
-    // Fine speckle over the whole face (tiny against it).
-    openings(parts, w, (u0 + 2.0, u1 - 2.0), (v0 + 2.0, v1 - 2.0), 0.4 + 0.6 * r(0, 6));
     // A deep groove or two, top to bottom.
     for g in 0..(r(0, 7) * 2.5) as i32 {
         let u = u0 + (u1 - u0) * (0.15 + 0.7 * r(g, 8));
@@ -420,77 +417,94 @@ fn slab(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32),
     }
 }
 
-/// A stratum's bays and what fills them.
-fn bays(parts: &mut Parts, w: &Wall, (start, end): (f32, f32), (v0, v1): (f32, f32), seed: i32, stratum: i32) {
-    let r = |a: i32, b: i32| hash01(seed, stratum * 1000 + a, b, 0x7c2);
-    let mut u = start;
-    let mut k = 0;
-    while u < end {
-        // A hierarchy of sizes: now and then a broad bay among narrow ones.
-        let width = if r(k, 9) < 0.15 { 30.0 + 50.0 * r(k, 0) } else { 4.0 + 20.0 * r(k, 0) }.min(end - u);
-        // A pilaster at its start.
-        let pw = 1.5 + 2.5 * r(k, 1);
-        let pn = 1.5 + 1.5 * r(k, 2);
-        w.block(&mut parts.stone, (u, u + pw), (v0, v1), (0.0, pn));
-        let (b0, b1) = (u + pw, u + width);
-        if b1 - b0 > 1.5 {
-            match (r(k, 3) * 6.0) as u32 {
-                0 => openings(parts, w, (b0, b1), (v0, v1), r(k, 4)),
-                1 => frames(parts, w, (b0, b1), (v0, v1), 0.0, 4, r(k, 5)),
-                2 => conduits(parts, w, (b0, b1), (v0, v1), seed, stratum * 100 + k),
-                3 => louvres(parts, w, (b0, b1), (v0, v1), r(k, 6)),
-                4 => {
-                    frames(parts, w, (b0, b1), (v0, v1), 0.0, 2, r(k, 7));
-                    let inset = 0.12 * (b1 - b0).min(v1 - v0);
-                    openings(parts, w, (b0 + inset, b1 - inset), (v0 + inset, v1 - inset), r(k, 8));
-                }
-                // Bare: breathing room.
-                _ => {}
-            }
-        }
-        u += width;
-        k += 1;
+/// Fractal relief: the face split again and again along its longer side,
+/// at proportions (a half, a third, the golden section) so it has rhythm,
+/// each piece standing out from its parent by an amount in proportion to its
+/// size, the same grammar from massifs down to a few metres. Now and then a
+/// piece becomes a run of fins (rhythm along an axis), a seam carries a line
+/// of light, or the splitting stops early (bare at every scale); the
+/// smallest end in frames within frames, packed conduits, louvres or slits.
+fn relief(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), n: f32, depth: i32, seed: i32) {
+    let (du, dv) = (u1 - u0, v1 - v0);
+    let size = du.min(dv);
+    let h = |a: i32, b: i32| hash01(seed, depth, a * 31 + b, 0x7cb);
+    if size < 1.5 || depth >= 8 || (depth >= 3 && h(0, 0) < 0.1) {
+        leaf(parts, w, (u0, u1), (v0, v1), n, seed);
+        return;
     }
-}
-
-/// Openings, tiny against the wall: either a fine speckle (rows of small
-/// holes, irregular, broken by gaps, some rows denser), or long dark slits
-/// running the bay. Never a grid of windows.
-fn openings(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), r: f32) {
-    let seed = (r * 1.0e6) as i32;
-    let h = |a: i32, b: i32| hash01(seed, a, b, 0x7c8);
-    if r < 0.35 {
-        // Slits: long horizontal slots, a few across the bay.
-        let pitch = 1.5 + 3.0 * h(0, 0);
-        let mut v = v0 + pitch * 0.5;
-        let mut j = 0;
-        while v < v1 - 0.3 {
-            let (a, b) = (u0 + (u1 - u0) * 0.15 * h(j, 1), u1 - (u1 - u0) * 0.15 * h(j, 2));
-            // (A few lit faintly from within.)
-            let lit = h(j, 4) < 0.25;
-            w.block(if lit { &mut parts.dim } else { &mut parts.dark }, (a, b), (v, v + 0.12 + 0.2 * h(j, 3)), (0.0, 0.06));
-            v += pitch;
-            j += 1;
+    // A run of fins along the longer side, alternate ones standing out.
+    if depth >= 2 && size > 4.0 && h(1, 0) < 0.15 {
+        let along_u = du > dv;
+        let len = if along_u { du } else { dv };
+        let count = (len / (1.2 + 3.0 * h(2, 0))).round().clamp(3.0, 24.0) as i32;
+        let step = len / count as f32;
+        let fin = (0.04 * size + 0.3 * h(3, 0)).min(3.0);
+        for i in (0..count).step_by(2) {
+            let (a, b) = (i as f32 * step, (i as f32 + 1.0) * step);
+            let (cu, cv) = if along_u { ((u0 + a, u0 + b), (v0, v1)) } else { ((u0, u1), (v0 + a, v0 + b)) };
+            w.block(&mut parts.stone, cu, cv, (n, n + fin));
         }
         return;
     }
-    // Speckle: small holes (0.15-0.4 m) on an uneven pitch, rows broken.
-    let size = 0.15 + 0.25 * h(0, 4);
-    let mut v = v0 + size;
-    let mut j = 0;
-    while v < v1 - size {
-        let pitch_u = size * (1.6 + 2.5 * h(j, 5));
-        let keep = 0.35 + 0.6 * h(j, 6);
-        let mut u = u0 + size;
-        let mut i = 0;
-        while u < u1 - size {
-            if h(i * 7 + j, 7) < keep {
-                w.block(&mut parts.dark, (u, u + size), (v, v + size * (1.0 + h(i, j + 9))), (0.0, 0.06));
-            }
-            u += pitch_u;
-            i += 1;
+    const RATIOS: [f32; 7] = [0.5, 0.3333, 0.6667, 0.25, 0.75, 0.382, 0.618];
+    let t = RATIOS[(h(4, 0) * RATIOS.len() as f32) as usize % RATIOS.len()];
+    let split_u = if du > dv * 1.3 { true } else if dv > du * 1.3 { false } else { h(5, 0) < 0.5 };
+    let children = if split_u {
+        let m = u0 + du * t;
+        [((u0, m), (v0, v1)), ((m, u1), (v0, v1))]
+    } else {
+        let m = v0 + dv * t;
+        [((u0, u1), (v0, m)), ((u0, u1), (m, v1))]
+    };
+    // A seam of light along the split, near the top of the hierarchy.
+    if depth <= 2 && h(6, 0) < 0.2 {
+        let (cu, cv) = children[0];
+        let line = if split_u { ((cu.1 - 0.12, cu.1 + 0.12), (v0, v1)) } else { ((u0, u1), (cv.1 - 0.12, cv.1 + 0.12)) };
+        w.block(&mut parts.glow, line.0, line.1, (n, n + 0.06));
+        // The big seams light the wall about them.
+        if depth == 0 {
+            let mid = w.at((line.0 .0 + line.0 .1) * 0.5, (line.1 .0 + line.1 .1) * 0.5, n + 3.0);
+            parts.lights.push((mid, 90.0));
         }
-        v += size * (2.0 + 3.0 * h(j, 8));
+    }
+    const STANDS: [f32; 4] = [0.0, 0.03, 0.06, 0.12];
+    for (k, (cu, cv)) in children.into_iter().enumerate() {
+        let csize = (cu.1 - cu.0).min(cv.1 - cv.0);
+        let dn = (csize * STANDS[(h(7, k as i32) * 4.0) as usize % 4]).min(6.0);
+        if dn > 0.05 {
+            w.block(&mut parts.stone, cu, cv, (n, n + dn));
+        }
+        relief(parts, w, cu, cv, n + dn, depth + 1, seed.wrapping_mul(31).wrapping_add(k as i32 + 1));
+    }
+}
+
+/// The end of the relief's splitting: bare mostly, or frames within frames,
+/// packed conduits, louvres or slits.
+fn leaf(parts: &mut Parts, w: &Wall, u: (f32, f32), v: (f32, f32), n: f32, seed: i32) {
+    let w = w.moved(w.offset + n);
+    let r = hash01(seed, 99, 0, 0x7cc);
+    match (r * 12.0) as u32 {
+        0 | 1 => frames(parts, &w, u, v, 0.0, 3, hash01(seed, 99, 1, 0x7cc)),
+        2 => conduits(parts, &w, u, v, seed, 7),
+        3 => louvres(parts, &w, u, v, hash01(seed, 99, 2, 0x7cc)),
+        4 => openings(parts, &w, u, v, 0.1),
+        _ => {}
+    }
+}
+
+/// Slits: long dark horizontal slots across a piece, a few lit faintly
+/// from within.
+fn openings(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32), r: f32) {
+    let seed = (r * 1.0e6) as i32;
+    let h = |a: i32, b: i32| hash01(seed, a, b, 0x7c8);
+    let pitch = 1.5 + 3.0 * h(0, 0);
+    let mut v = v0 + pitch * 0.5;
+    let mut j = 0;
+    while v < v1 - 0.3 {
+        let (a, b) = (u0 + (u1 - u0) * 0.15 * h(j, 1), u1 - (u1 - u0) * 0.15 * h(j, 2));
+        let lit = h(j, 4) < 0.25;
+        w.block(if lit { &mut parts.dim } else { &mut parts.dark }, (a, b), (v, v + 0.12 + 0.2 * h(j, 3)), (0.0, 0.06));
+        v += pitch;
         j += 1;
     }
 }
