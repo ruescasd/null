@@ -200,8 +200,23 @@ struct Parts {
     /// Cables: points, thickness.
     cables: Vec<(Vec<Vec3>, f32)>,
     /// Lights cast by the built-in light (the glowing strips light only
-    /// themselves): where, and how far they reach.
-    lights: Vec<(Vec3, f32)>,
+    /// themselves): where, how far they reach, and how bright (times the
+    /// chasm's light).
+    lights: Vec<(Vec3, f32, f32)>,
+    /// The chambers cut into the walls (for what joins them).
+    chambers: Vec<Chamber>,
+}
+
+/// A chamber cut into a wall: which wall, where its mouth is along the
+/// chasm, its floor and ceiling heights, the face it opens in (its
+/// `Wall`), and how deep it goes.
+#[derive(Clone, Copy)]
+struct Chamber {
+    wall: Wall,
+    u: (f32, f32),
+    floor: f32,
+    ceiling: f32,
+    depth: f32,
 }
 
 /// How bright the chasm's own lights are (lumens; `--set chasm_light`).
@@ -221,6 +236,7 @@ fn build(
     let near = wall(&mut parts, Wall { side: -1.0, offset: 0.0 }, seed);
     let far = wall(&mut parts, Wall { side: 1.0, offset: 0.0 }, seed + 7919);
     bridges(&mut parts, seed, &near, &far);
+    crossings(&mut parts);
     web(&mut parts, seed, &near, &far);
 
     let stone = materials.add(StandardMaterial { base_color: Color::srgb(0.62, 0.62, 0.62), perceptual_roughness: 0.92, ..default() });
@@ -244,8 +260,8 @@ fn build(
     tubes(&mut cable_mesh, parts.cables.iter().map(|(p, w)| (&p[..], (*w, *w), 0.05)));
     commands.spawn((Mesh3d(meshes.add(cable_mesh)), MeshMaterial3d(cable), Transform::IDENTITY));
     let power = args.num("chasm_light", LIGHT);
-    for &(at, range) in &parts.lights {
-        commands.spawn((PointLight { intensity: power, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
+    for &(at, range, k) in &parts.lights {
+        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
     }
     info!("the chasm: built ({} lights)", parts.lights.len());
 }
@@ -275,7 +291,7 @@ fn wall(parts: &mut Parts, nominal: Wall, seed: i32) -> Vec<Massif> {
             let c = (u0 + u1) * 0.5;
             w.block(&mut parts.glow, (c - 0.15, c + 0.15), (0.0, HEIGHT), (0.05, 0.1));
             for k in 0..3 {
-                parts.lights.push((w.at(c, HEIGHT * (0.2 + 0.3 * k as f32), 3.0), 100.0));
+                parts.lights.push((w.at(c, HEIGHT * (0.2 + 0.3 * k as f32), 3.0), 100.0, 1.0));
             }
             massifs.push(Massif { u: (u0, u1), split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, shaft: true });
         } else {
@@ -285,9 +301,20 @@ fn wall(parts: &mut Parts, nominal: Wall, seed: i32) -> Vec<Massif> {
             let high = (low + (r(m, 4) - 0.35) * 16.0).clamp(-4.0, 12.0);
             for (part, (v0, v1, n)) in [(0.0, split, low), (split, HEIGHT, high)].into_iter().enumerate() {
                 let w = nominal.moved(n);
-                w.block(&mut parts.stone, (u0, u1), (v0, v1), (-BACK - n, 0.0));
                 let k = seed + m * 31 + part as i32 * 7;
-                if r(m * 2 + part as i32, 5) < 0.2 {
+                let p = m * 2 + part as i32;
+                // Now and then a chamber cut into it (where there is room).
+                let (cw, ch) = (15.0 + 45.0 * r(p, 20), 12.0 + 28.0 * r(p, 21));
+                if r(p, 22) < 0.45 && u1 - u0 > cw + 12.0 && v1 - v0 > ch + 30.0 {
+                    let cu0 = u0 + 6.0 + (u1 - u0 - cw - 12.0) * r(p, 23);
+                    let cv0 = v0 + 15.0 + (v1 - v0 - ch - 30.0) * r(p, 24);
+                    let c = Chamber { wall: w, u: (cu0, cu0 + cw), floor: cv0, ceiling: cv0 + ch, depth: 20.0 + 30.0 * r(p, 25) };
+                    chamber(parts, &c, (u0, u1), (v0, v1), k);
+                    parts.chambers.push(c);
+                    continue;
+                }
+                w.block(&mut parts.stone, (u0, u1), (v0, v1), (-BACK - n, 0.0));
+                if r(p, 5) < 0.2 {
                     slab(parts, &w, (u0, u1), (v0, v1), k);
                 } else {
                     strata(parts, &w, (u0, u1), (v0, v1), k);
@@ -297,7 +324,7 @@ fn wall(parts: &mut Parts, nominal: Wall, seed: i32) -> Vec<Massif> {
             if high > low + 1.0 {
                 let w = nominal.moved(high);
                 w.block(&mut parts.glow, (u0, u1), (split - 0.3, split - 0.1), (-0.6, -0.4));
-                parts.lights.push((w.at((u0 + u1) * 0.5, split - 3.0, 1.0), 90.0));
+                parts.lights.push((w.at((u0 + u1) * 0.5, split - 3.0, 1.0), 90.0, 1.0));
             }
             massifs.push(Massif { u: (u0, u1), split, low, high, shaft: false });
         }
@@ -354,7 +381,7 @@ fn strata(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32
             if r(stratum, 4) < 0.5 {
                 w.block(&mut parts.glow, (a, b), (bottom - bh * 0.6, bottom - bh * 0.4), (bn, bn + 0.05));
                 if r(stratum, 8) < 0.5 {
-                    parts.lights.push((w.at((a + b) * 0.5, bottom - bh, bn + 2.0), 80.0));
+                    parts.lights.push((w.at((a + b) * 0.5, bottom - bh, bn + 2.0), 80.0, 1.0));
                 }
             }
             ledges.push((bottom, bn, a, b));
@@ -387,6 +414,108 @@ fn strata(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32
             u += dir * run;
             v += step;
             w.block(&mut parts.stone, (u - 1.2, u + 1.2), (v - 0.4, v), (n - 0.8, n + 0.8));
+        }
+    }
+}
+
+/// A massif part with a chamber cut into it: the mass built round the
+/// opening (below, above and to either side, and a back wall deep in), the
+/// face round it in strata; inside, a floor, rows of columns, a gallery round
+/// the back and sides with a lit edge, relief on the back wall, lights; a
+/// stepped portal round the mouth.
+fn chamber(parts: &mut Parts, c: &Chamber, (u0, u1): (f32, f32), (v0, v1): (f32, f32), seed: i32) {
+    let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d1);
+    let w = &c.wall;
+    let back = -BACK - w.offset;
+    let (cu0, cu1) = c.u;
+    let (f, top) = (c.floor, c.ceiling);
+    // The mass round the opening, and behind the chamber.
+    w.block(&mut parts.stone, (u0, u1), (v0, f), (back, 0.0));
+    w.block(&mut parts.stone, (u0, u1), (top, v1), (back, 0.0));
+    w.block(&mut parts.stone, (u0, cu0), (f, top), (back, 0.0));
+    w.block(&mut parts.stone, (cu1, u1), (f, top), (back, 0.0));
+    w.block(&mut parts.stone, (cu0, cu1), (f, top), (back, -c.depth));
+    // The face round it.
+    strata(parts, w, (u0, u1), (v0, f), seed);
+    strata(parts, w, (u0, u1), (top, v1), seed + 1);
+    relief(parts, w, (u0, cu0), (f, top), 0.0, 1, 0.5, seed + 2);
+    relief(parts, w, (cu1, u1), (f, top), 0.0, 1, 0.5, seed + 3);
+    // A stepped portal: frames round the mouth, each standing further out.
+    for step in 0..3 {
+        let t = 1.2 + step as f32 * 1.0;
+        let out = (0.6, 0.6 + 0.8 * (3 - step) as f32);
+        w.block(&mut parts.stone, (cu0 - t, cu0), (f, top + t), out);
+        w.block(&mut parts.stone, (cu1, cu1 + t), (f, top + t), out);
+        w.block(&mut parts.stone, (cu0 - t, cu1 + t), (top, top + t), out);
+    }
+    // A threshold, and a line of light along the floor's edge.
+    w.block(&mut parts.stone, (cu0, cu1), (f - 0.5, f + 0.3), (-0.5, 1.5));
+    w.block(&mut parts.glow, (cu0, cu1), (f + 0.25, f + 0.35), (1.45, 1.5));
+    // Inside: the back wall in relief.
+    let inner = w.moved(w.offset - c.depth);
+    relief(parts, &inner, (cu0, cu1), (f, top), 0.0, 1, 0.4, seed + 4);
+    // Rows of columns, floor to ceiling.
+    let rows = 1 + (r(0, 0) * 2.0) as i32;
+    let cols = ((cu1 - cu0) / (6.0 + 6.0 * r(0, 1))).floor().max(2.0) as i32;
+    let radius = 0.5 + 0.8 * r(0, 2);
+    for j in 0..rows {
+        let n = -c.depth * (j as f32 + 1.0) / (rows as f32 + 1.0);
+        for i in 0..cols {
+            let u = cu0 + (cu1 - cu0) * (i as f32 + 0.5) / cols as f32;
+            parts.stone.cylinder(w.at(u, f, n), w.at(u, top, n), radius, 10);
+        }
+    }
+    // A gallery round the back and sides at mid-height, a lit edge on it.
+    let g = f + (top - f) * (0.45 + 0.15 * r(0, 3));
+    let deep = 3.0 + 2.0 * r(0, 4);
+    if top - f > 14.0 {
+        w.block(&mut parts.stone, (cu0, cu1), (g - 0.6, g), (-c.depth, -c.depth + deep));
+        w.block(&mut parts.stone, (cu0, cu0 + deep), (g - 0.6, g), (-c.depth, -2.0));
+        w.block(&mut parts.stone, (cu1 - deep, cu1), (g - 0.6, g), (-c.depth, -2.0));
+        w.block(&mut parts.glow, (cu0 + deep, cu1 - deep), (g - 0.35, g - 0.25), (-c.depth + deep, -c.depth + deep + 0.05));
+    }
+    // Ribs up the side walls and beams across the ceiling, repeating along
+    // the depth and the width.
+    let pitch = 2.5 + 2.5 * r(0, 5);
+    let mut n = -c.depth + 1.0;
+    while n < -1.0 {
+        w.block(&mut parts.stone, (cu0, cu0 + 0.7), (f, top), (n, n + 0.6));
+        w.block(&mut parts.stone, (cu1 - 0.7, cu1), (f, top), (n, n + 0.6));
+        n += pitch;
+    }
+    let pitch = 3.0 + 3.0 * r(0, 6);
+    let mut u = cu0 + pitch * 0.5;
+    while u < cu1 {
+        w.block(&mut parts.stone, (u - 0.4, u + 0.4), (top - 1.4, top), (-c.depth, 0.0));
+        u += pitch;
+    }
+    // Lit from within: a light or two deep inside.
+    let lights = if cu1 - cu0 > 35.0 { 2 } else { 1 };
+    for i in 0..lights {
+        let u = cu0 + (cu1 - cu0) * (i as f32 + 0.5) / lights as f32;
+        parts.lights.push((w.at(u, f + (top - f) * 0.7, -c.depth * 0.5), 70.0, 0.25));
+    }
+}
+
+/// Bridges between chambers facing each other across the gap at similar
+/// heights: from floor to floor, sloping if they differ.
+fn crossings(parts: &mut Parts) {
+    let chambers = parts.chambers.clone();
+    for a in chambers.iter().filter(|c| c.wall.side < 0.0) {
+        for b in chambers.iter().filter(|c| c.wall.side > 0.0) {
+            let (lo, hi) = (a.u.0.max(b.u.0), a.u.1.min(b.u.1));
+            if hi - lo < 6.0 || (a.floor - b.floor).abs() > 25.0 {
+                continue;
+            }
+            let u = (lo + hi) * 0.5;
+            let from = a.wall.at(u, a.floor - 0.4, 0.0);
+            let to = b.wall.at(u, b.floor - 0.4, 0.0);
+            parts.stone.beam(from, to, 4.0, 0.8, Vec3::Y);
+            // A lit line along each edge.
+            for s in [-1.0, 1.0] {
+                let off = Vec3::Z * s * 1.9 + Vec3::Y * 0.42;
+                parts.glow.beam(from + off, to + off, 0.08, 0.04, Vec3::Y);
+            }
         }
     }
 }
@@ -474,7 +603,7 @@ fn relief(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f32
         // The big seams light the wall about them.
         if depth == 0 {
             let mid = w.at((line.0 .0 + line.0 .1) * 0.5, (line.1 .0 + line.1 .1) * 0.5, n + 3.0);
-            parts.lights.push((mid, 90.0));
+            parts.lights.push((mid, 90.0, 1.0));
         }
     }
     const STANDS: [f32; 4] = [0.0, 0.03, 0.06, 0.12];
