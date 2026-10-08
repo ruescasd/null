@@ -42,6 +42,8 @@ Command-line options, mostly for tuning and capturing reference frames:
     --set burst=N                             with --shot: N captures 3 frames apart (<path>_1.png, _2...)
     --opt bench                               once everything in view has loaded: average and worst frame time, entity count, costliest render passes
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
+    --opt chasm                               the chasm: a standalone place, two walls 300 m high and 60 m apart rising out
+                                              of the haze, bridges and a web of cables; you start on the rim
     --opt peace                               no swarm
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable

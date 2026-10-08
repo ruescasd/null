@@ -226,6 +226,7 @@ fn watch(
     let old = &world.0;
     if !args.opt("nosites")
         && !args.opt("lab")
+        && !args.opt("chasm")
     {
         let new = PlateWorld::new(old.size(), args.seed).with_sites(&library);
         if !old.same_ground(&new) {
@@ -436,7 +437,7 @@ fn stream_sites(
 ) {
     let plates = &world.0;
     let Some(library) = state.library.clone() else { return };
-    if args.opt("nosites") || args.opt("lab") {
+    if args.opt("nosites") || args.opt("lab") || args.opt("chasm") {
         return;
     }
     let now = time.elapsed_secs();

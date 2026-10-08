@@ -186,7 +186,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or([1200.0, 30.0, 900.0, -40.0, -6.0]);
+    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") { crate::chasm::start() } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
     let ground = world.ground_height(x, z);
     let fly = FlyCam {
         yaw: yaw.to_radians(),
@@ -230,7 +230,7 @@ fn setup(
     // make the scale read (drama over correctness): distant things sink
     // into darkness, faintly lit by day and glowing a little towards the
     // suns. `--set fog=0` turns it off.
-    let visibility = args.num("fog", 4500.0);
+    let visibility = haze(&args);
     if visibility > 0.0 {
         cam.insert(DistanceFog {
             color: Color::BLACK,
@@ -350,6 +350,12 @@ fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut sky: ResMu
     }
 }
 
+/// How far the haze lets you see (`--set fog`; nearer in the chasm, where
+/// it hides the far ends and the floor).
+fn haze(args: &Args) -> f32 {
+    args.num("fog", if args.opt("chasm") { 380.0 } else { 4500.0 })
+}
+
 /// The swarm's darkness (`--opt dark`; see `combat::gloom`): 0 clear, 1 all
 /// but blind.
 #[derive(Resource, Default)]
@@ -366,7 +372,7 @@ fn darken(args: Res<Args>, gloom: Res<Gloom>, camera: Single<(Option<&mut Distan
     sky.brightness = 900.0 * (1.0 - g) * (1.0 - g);
     exposure.ev100 = args.num("ev", 11.2) + args.num("gloom_dim", 2.5) * g;
     if let Some(mut fog) = fog {
-        let visibility = args.num("fog", 4500.0);
+        let visibility = haze(&args);
         let near = args.num("gloom_near", 4.0);
         // (Closing in fast at first: a little gloom already hides the far
         // distance, a quarter of it leaves about twenty metres.)

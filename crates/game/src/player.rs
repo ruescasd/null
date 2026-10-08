@@ -424,8 +424,10 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
 
 /// Runs between mouse look and the world wrap (see `camera.rs`).
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn walk(
     time: Res<Time>,
+    args: Res<Args>,
     keys: Res<ButtonInput<KeyCode>>,
     input: Res<MoveInput>,
     streamer: Res<Streamer>,
@@ -489,7 +491,9 @@ pub fn walk(
             return;
         }
         player.ready = true;
-        transform.translation.y = ground_height + EYE + 0.3;
+        // (In the chasm, on the rim of the wall, not the floor far below.)
+        let floor = if args.opt("chasm") { crate::chasm::rim(p.x, p.z).unwrap_or(ground_height) } else { ground_height };
+        transform.translation.y = floor + EYE + 0.3;
     }
 
     let (sin, cos) = fly.yaw.sin_cos();

@@ -2,12 +2,14 @@
 
 mod camera;
 mod capture;
+mod chasm;
 mod combat;
 mod figure;
 mod landmarks;
 mod look;
 mod player;
 mod rig;
+mod rope;
 mod structures;
 mod terrain;
 
@@ -117,6 +119,7 @@ fn main() {
             landmarks::LandmarksPlugin,
             player::PlayerPlugin,
             structures::StructuresPlugin,
+            chasm::ChasmPlugin,
         ))
         .run();
 }

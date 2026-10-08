@@ -47,8 +47,9 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         let args = app.world().resource::<Args>();
-        let world = if args.opt("lab") {
-            // The lab: flat plates, nothing else (see `structures.rs`).
+        let world = if args.opt("lab") || args.opt("chasm") {
+            // The lab: flat plates, nothing else (see `structures.rs`); the
+            // chasm stands on them (see `chasm.rs`).
             WorldGen(Arc::new(PlateWorld::lab(WORLD_SIZE, args.seed)))
         } else {
             // The sites in the structure library reshape the ground.
