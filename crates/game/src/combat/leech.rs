@@ -2,8 +2,9 @@
 //! cable into you and drink: a little health a second,
 //! for as long as it holds. It snaps when the bud is destroyed or you get far
 //! enough away, whipping back and hanging before it goes. The cable is
-//! black, and thin rings of pale light run up it from you to the bud as it
-//! drinks (so it shows in the dark); it shows you where the bud is.
+//! black, and short lengths of it light up pale and run up it from you to
+//! the bud as it drinks, like something drawn up through it (and so it shows
+//! in the dark); it shows you where the bud is.
 
 use bevy::{asset::RenderAssetUsages, camera::visibility::NoFrustumCulling, mesh::PrimitiveTopology, prelude::*};
 use worldgen::noise::hash01;
@@ -28,14 +29,14 @@ const SHOOT: f32 = 0.2;
 const SNAPPED: f32 = 1.2;
 const WIDTH: f32 = 0.025;
 const SHADE: f32 = 0.035;
-/// The rings: how bright (pale, not white), how many on the cable at once,
-/// how long each takes to run its length, how long and how wide (times the
-/// cable's width) each is.
+/// What it draws up: lit lengths of the cable, how bright (pale, not white),
+/// how many on the cable at once, how long each takes to run its length, how
+/// long each is, and how wide (times the cable's: just covering it).
 const RING_GLOW: f32 = 40.0;
 const RINGS: usize = 3;
 const RING_RUN: f32 = 0.9;
-const RING_LENGTH: f32 = 0.04;
-const RING_WIDTH: f32 = 2.2;
+const RING_LENGTH: f32 = 0.15;
+const RING_WIDTH: f32 = 1.08;
 
 #[derive(Component)]
 pub(super) struct Leech {
