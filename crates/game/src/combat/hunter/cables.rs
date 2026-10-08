@@ -386,7 +386,8 @@ pub(in crate::combat) fn tubes<'a>(mesh: &mut Mesh, strands: impl IntoIterator<I
             for k in 0..SIDES as u32 {
                 let (a, b) = (base + i * SIDES as u32 + k, base + i * SIDES as u32 + (k + 1) % SIDES as u32);
                 let (c, d) = (a + SIDES as u32, b + SIDES as u32);
-                indices.extend_from_slice(&[a, c, b, b, c, d]);
+                // (Wound to face outwards: seen from outside.)
+                indices.extend_from_slice(&[a, b, c, b, d, c]);
             }
         }
     }

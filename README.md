@@ -52,7 +52,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               you about once in 90 s, never beyond 30 m)
     --opt leech                               a bud waiting within 14 m (seen or not) may shoot a black cable
                                               into you and drink (1 health a second, short pale lengths of it running up)
-                                              until it is destroyed or you get 18 m away
+                                              until it is destroyed or you get 15 m away
     --opt hair                                strands hanging from each bud, swinging and trailing
     --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
                                               open, gloom=0..1 holds the darkness; with --opt peace)

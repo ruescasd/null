@@ -21,7 +21,7 @@ use crate::{Args, camera::FlyCam, player::Player, terrain::WorldGen};
 const REACH: f32 = 14.0;
 const EVERY: f32 = 1.5;
 const AT_ONCE: usize = 3;
-const BREAKS: f32 = 18.0;
+const BREAKS: f32 = 15.0;
 /// Health a second each one drinks.
 const DRAIN: f32 = 1.0;
 /// Seconds a cable takes to shoot across, and to hang once snapped.
