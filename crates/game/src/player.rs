@@ -492,7 +492,7 @@ pub fn walk(
         }
         player.ready = true;
         // (In the chasm, on the rim of the wall, not the floor far below.)
-        let floor = if args.opt("chasm") { crate::chasm::rim(p.x, p.z).unwrap_or(ground_height) } else { ground_height };
+        let floor = if args.opt("chasm") { crate::chasm::rim(args.seed, p.x, p.z).unwrap_or(ground_height) } else { ground_height };
         transform.translation.y = floor + EYE + 0.3;
     }
 

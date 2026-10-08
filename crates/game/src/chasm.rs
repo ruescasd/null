@@ -6,7 +6,10 @@
 //! You start on the rim of one wall, looking across. The flat lab ground is
 //! the floor, far below, lost in the haze.
 //!
-//! The walls run along z, centred on `CENTRE`; everything here is in metres.
+//! The chasm runs along z, centred on `CENTRE`; each wall is a chain of
+//! straight faces at angles of their own (see `plan`), so the gap widens
+//! and narrows (20-130 m) and the whole snakes a little. Everything here is
+//! in metres.
 
 use avian3d::prelude::*;
 use bevy::{asset::RenderAssetUsages, mesh::{Indices, PrimitiveTopology}, prelude::*};
@@ -27,8 +30,7 @@ fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
 
 /// Where the chasm is (the default camera start in the world is nearby).
 pub const CENTRE: Vec3 = Vec3::new(1200.0, 0.0, 900.0);
-/// The gap between the walls, their height, and the segment's length.
-pub const WIDTH: f32 = 60.0;
+/// The walls' height, and the segment's length.
 pub const HEIGHT: f32 = 550.0;
 pub const LENGTH: f32 = 600.0;
 /// How far the walls' masses reach back from their faces (the plateau on
@@ -44,14 +46,72 @@ impl Plugin for ChasmPlugin {
 }
 
 /// The height of the walkable top at (x, z) if it is on one of the walls.
-pub fn rim(x: f32, z: f32) -> Option<f32> {
-    let (dx, dz) = ((x - CENTRE.x).abs(), (z - CENTRE.z).abs());
-    (dx > WIDTH * 0.5 && dx < WIDTH * 0.5 + BACK && dz < LENGTH * 0.5).then_some(HEIGHT)
+pub fn rim(seed: u32, x: f32, z: f32) -> Option<f32> {
+    if (z - CENTRE.z).abs() >= LENGTH * 0.5 {
+        return None;
+    }
+    let (near, far) = (face_x(&plan(-1.0, seed as i32), z), face_x(&plan(1.0, seed as i32 + 7919), z));
+    ((x < near && x > near - BACK * 0.9) || (x > far && x < far + BACK * 0.9)).then_some(HEIGHT)
 }
 
 /// Where you start: on the rim of the near wall, looking across.
-pub fn start() -> [f32; 5] {
-    [CENTRE.x - WIDTH * 0.5 - 6.0, HEIGHT + 1.7, CENTRE.z, -90.0, -14.0]
+pub fn start(seed: u32) -> [f32; 5] {
+    let x = face_x(&plan(-1.0, seed as i32), CENTRE.z);
+    [x - 6.0, HEIGHT + 1.7, CENTRE.z, -90.0, -14.0]
+}
+
+/// A stretch of a wall's plan: from `z.0` to `z.1` (absolute), its face
+/// running from x `x.0` to `x.1`; a shaft (a deep narrow slot) or a massif.
+#[derive(Clone, Copy)]
+struct Stretch {
+    z: (f32, f32),
+    x: (f32, f32),
+    shaft: bool,
+}
+
+/// A wall's plan, along the chasm: stretches 40-150 m long (shafts 4-10 m),
+/// each wall standing 10-65 m from a centre line that wanders a little, so
+/// the faces meet at angles, the gap widens and narrows and the walls are
+/// rarely parallel. `side` -1 for the near wall (low x), +1 for the far.
+fn plan(side: f32, seed: i32) -> Vec<Stretch> {
+    let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d2);
+    // The centre line wanders the same way for both walls.
+    let drift = |z: f32| 20.0 * (z * 0.012 + 1.3).sin() + 9.0 * (z * 0.031 + 0.4).sin();
+    let half = LENGTH * 0.5;
+    // (The joints go near, far, anywhere in turn, out of step between the
+    // walls, so the gap surely narrows and widens.)
+    let phase = if side < 0.0 { 0 } else { 1 };
+    let at = |z: f32, k: i32| {
+        let t = match (k + phase) % 3 {
+            0 => 0.25 * r(k, 9),
+            1 => 0.7 + 0.3 * r(k, 9),
+            _ => r(k, 9),
+        };
+        CENTRE.x + drift(z) + side * (10.0 + 55.0 * t)
+    };
+    let mut out = Vec::new();
+    let mut z = CENTRE.z - half;
+    let mut k = 0;
+    let mut x = at(z, 0);
+    while z < CENTRE.z + half {
+        // (No shaft where you start.)
+        let shaft = r(k, 0) < 0.18 && !(z - 12.0..z + 12.0).contains(&CENTRE.z);
+        let length = if shaft { 4.0 + 6.0 * r(k, 1) } else { 40.0 + 110.0 * r(k, 1) }.min(CENTRE.z + half - z);
+        let z1 = z + length;
+        let x1 = if shaft { x } else { at(z1, k + 1) };
+        out.push(Stretch { z: (z, z1), x: (x, x1), shaft });
+        z = z1;
+        x = x1;
+        k += 1;
+    }
+    out
+}
+
+/// Where a wall's face is (its x) at `z`, from its plan.
+fn face_x(plan: &[Stretch], z: f32) -> f32 {
+    plan.iter()
+        .find(|s| z >= s.z.0 && z <= s.z.1)
+        .map_or(CENTRE.x, |s| s.x.0 + (s.x.1 - s.x.0) * ((z - s.z.0) / (s.z.1 - s.z.0).max(1e-3)))
 }
 
 /// Triangles, flat-shaded, for one material.
@@ -72,17 +132,40 @@ impl Geometry {
         self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    /// An axis-aligned box from its centre and half-sizes.
-    fn cuboid(&mut self, centre: Vec3, half: Vec3) {
-        let c = centre;
-        let (x, y, z) = (half.x, half.y, half.z);
-        let p = |sx: f32, sy: f32, sz: f32| c + Vec3::new(sx * x, sy * y, sz * z);
-        self.quad([p(1., -1., -1.), p(1., 1., -1.), p(1., 1., 1.), p(1., -1., 1.)], Vec3::X);
-        self.quad([p(-1., -1., 1.), p(-1., 1., 1.), p(-1., 1., -1.), p(-1., -1., -1.)], Vec3::NEG_X);
-        self.quad([p(-1., 1., -1.), p(-1., 1., 1.), p(1., 1., 1.), p(1., 1., -1.)], Vec3::Y);
-        self.quad([p(-1., -1., 1.), p(-1., -1., -1.), p(1., -1., -1.), p(1., -1., 1.)], Vec3::NEG_Y);
-        self.quad([p(-1., -1., 1.), p(1., -1., 1.), p(1., 1., 1.), p(-1., 1., 1.)], Vec3::Z);
-        self.quad([p(1., -1., -1.), p(-1., -1., -1.), p(-1., 1., -1.), p(1., 1., -1.)], Vec3::NEG_Z);
+    /// A vertical prism over a triangle in plan (its points' heights
+    /// ignored), from height 0 to `h`.
+    fn prism(&mut self, tri: [Vec3; 3], h: f32) {
+        let flat = |p: Vec3| Vec3::new(p.x, 0.0, p.z);
+        let [mut a, b, mut c] = tri.map(flat);
+        // (Counter-clockwise seen from above.)
+        if (b - a).cross(c - a).y < 0.0 {
+            std::mem::swap(&mut a, &mut c);
+        }
+        let up = Vec3::Y * h;
+        let base = self.positions.len() as u32;
+        for p in [a + up, b + up, c + up] {
+            self.positions.push(p.to_array());
+            self.normals.push([0.0, 1.0, 0.0]);
+        }
+        self.indices.extend_from_slice(&[base, base + 1, base + 2]);
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            let n = (q - p).cross(Vec3::Y).normalize_or(Vec3::X);
+            self.quad([q, q + up, p + up, p], n);
+        }
+    }
+
+    /// A box from its centre and three half-axes (any orientation).
+    fn oriented(&mut self, c: Vec3, a: Vec3, b: Vec3, n: Vec3) {
+        // (Kept right-handed so the faces wind outwards.)
+        let a = if a.cross(b).dot(n) < 0.0 { -a } else { a };
+        let p = |sa: f32, sb: f32, sn: f32| c + a * sa + b * sb + n * sn;
+        let (na, nb, nn) = (a.normalize_or(Vec3::X), b.normalize_or(Vec3::Y), n.normalize_or(Vec3::Z));
+        self.quad([p(1., -1., -1.), p(1., 1., -1.), p(1., 1., 1.), p(1., -1., 1.)], na);
+        self.quad([p(-1., -1., 1.), p(-1., 1., 1.), p(-1., 1., -1.), p(-1., -1., -1.)], -na);
+        self.quad([p(-1., 1., -1.), p(-1., 1., 1.), p(1., 1., 1.), p(1., 1., -1.)], nb);
+        self.quad([p(-1., -1., 1.), p(-1., -1., -1.), p(1., -1., -1.), p(1., -1., 1.)], -nb);
+        self.quad([p(-1., -1., 1.), p(1., -1., 1.), p(1., 1., 1.), p(-1., 1., 1.)], nn);
+        self.quad([p(1., -1., -1.), p(-1., -1., -1.), p(-1., 1., -1.), p(1., 1., -1.)], -nn);
     }
 
     /// A box between two points (its long axis), `w` wide and `t` thick,
@@ -132,57 +215,65 @@ impl Geometry {
     }
 }
 
-/// One wall's frame: `side` -1 for the near (low x) wall, +1 for the far;
-/// `at(u, v, n)` is the point `u` along the chasm, `v` up and `n` out from
-/// the face into the gap, the face standing `offset` out from its nominal
-/// line (set back where negative).
+/// One face's frame: `at(u, v, n)` is the point `u` along the face from its
+/// start, `v` up and `n` out from it into the gap, the face standing
+/// `offset` out from its line (set back where negative).
 #[derive(Clone, Copy)]
 struct Wall {
-    side: f32,
+    origin: Vec3,
+    along: Vec3,
+    out: Vec3,
     offset: f32,
 }
 
 impl Wall {
     fn at(&self, u: f32, v: f32, n: f32) -> Vec3 {
-        CENTRE + Vec3::new(self.side * (WIDTH * 0.5 - n - self.offset), v, u)
+        self.origin + self.along * u + Vec3::Y * v + self.out * (n + self.offset)
     }
 
-    /// The same wall with its face standing `offset` out.
+    /// The same face standing `offset` out.
     fn moved(&self, offset: f32) -> Wall {
-        Wall { side: self.side, offset }
+        Wall { offset, ..*self }
     }
 
-    /// A box on the wall from (u0, v0) to (u1, v1), standing out from `n0`
+    /// A box on the face from (u0, v0) to (u1, v1), standing out from `n0`
     /// to `n1`.
     fn block(&self, g: &mut Geometry, u: (f32, f32), v: (f32, f32), n: (f32, f32)) {
         let centre = self.at((u.0 + u.1) * 0.5, (v.0 + v.1) * 0.5, (n.0 + n.1) * 0.5);
-        let half = Vec3::new((n.1 - n.0).abs() * 0.5, (v.1 - v.0).abs() * 0.5, (u.1 - u.0).abs() * 0.5);
-        g.cuboid(centre, half);
+        g.oriented(centre, self.along * ((u.1 - u.0).abs() * 0.5), Vec3::Y * ((v.1 - v.0).abs() * 0.5), self.out * ((n.1 - n.0).abs() * 0.5));
     }
 }
 
-/// A stretch of wall with its own face: set back or bulging, its upper part
-/// often overhanging the lower; or a shaft, a deep slot between masses.
+/// A stretch of wall with its own face (its `wall`, `len` long): set back
+/// or bulging, its upper part often overhanging the lower; or a shaft, a
+/// deep slot.
 struct Massif {
-    u: (f32, f32),
-    /// Where the upper part begins, and how far each part stands out.
+    wall: Wall,
+    len: f32,
+    z: (f32, f32),
     split: f32,
     low: f32,
     high: f32,
     shaft: bool,
 }
 
-/// How far the face stands out at `u`, height `v`.
-fn face(massifs: &[Massif], u: f32, v: f32) -> f32 {
-    massifs.iter().find(|m| u >= m.u.0 && u < m.u.1).map_or(0.0, |m| {
-        if m.shaft {
+impl Massif {
+    /// How far its face stands out at height `v`.
+    fn face(&self, v: f32) -> f32 {
+        if self.shaft {
             SHAFT_DEPTH
-        } else if v < m.split {
-            m.low
+        } else if v < self.split {
+            self.low
         } else {
-            m.high
+            self.high
         }
-    })
+    }
+}
+
+/// The massif at `z` on a wall, and how far along its face `z` is.
+fn locate(massifs: &[Massif], z: f32) -> Option<(&Massif, f32)> {
+    let m = massifs.iter().find(|m| z >= m.z.0 && z <= m.z.1)?;
+    Some((m, (z - m.z.0) / (m.z.1 - m.z.0).max(1e-3) * m.len))
 }
 
 /// How deep a shaft is cut into the wall.
@@ -212,6 +303,7 @@ struct Parts {
 /// `Wall`), and how deep it goes.
 #[derive(Clone, Copy)]
 struct Chamber {
+    side: f32,
     wall: Wall,
     u: (f32, f32),
     floor: f32,
@@ -233,8 +325,10 @@ fn build(
     }
     let seed = args.seed as i32;
     let mut parts = Parts::default();
-    let near = wall(&mut parts, Wall { side: -1.0, offset: 0.0 }, seed);
-    let far = wall(&mut parts, Wall { side: 1.0, offset: 0.0 }, seed + 7919);
+    // (`--opt chambers`: chambers cut into the walls, set aside for now.)
+    let chambers = args.opt("chambers");
+    let near = wall(&mut parts, -1.0, seed, chambers);
+    let far = wall(&mut parts, 1.0, seed + 7919, chambers);
     bridges(&mut parts, seed, &near, &far);
     crossings(&mut parts);
     web(&mut parts, seed, &near, &far);
@@ -272,18 +366,22 @@ fn build(
 /// the wall), or a colossal bare slab finely speckled; a few giant columns;
 /// heavy cables hanging down it. Returns its massifs (for what spans the
 /// gap).
-fn wall(parts: &mut Parts, nominal: Wall, seed: i32) -> Vec<Massif> {
+fn wall(parts: &mut Parts, side: f32, seed: i32, chambers: bool) -> Vec<Massif> {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c1);
-    let half = LENGTH * 0.5;
     let mut massifs = Vec::new();
-    let mut u = -half;
-    let mut m = 0;
-    while u < half {
-        // A shaft now and then (never where you start, at u = 0).
-        let shaft = r(m, 0) < 0.18 && !(u..u + 12.0).contains(&0.0);
-        let width = if shaft { 4.0 + 6.0 * r(m, 1) } else { 40.0 + 110.0 * r(m, 1) }.min(half - u);
-        let (u0, u1) = (u, u + width);
-        if shaft {
+    for (m, stretch) in plan(side, seed).into_iter().enumerate() {
+        let m = m as i32;
+        // The face's frame: along it, and out of it into the gap.
+        let (start, end) = (Vec3::new(stretch.x.0, 0.0, stretch.z.0), Vec3::new(stretch.x.1, 0.0, stretch.z.1));
+        let along = (end - start).normalize_or(Vec3::Z);
+        let mut out = Vec3::new(along.z, 0.0, -along.x);
+        if out.x * side > 0.0 {
+            out = -out;
+        }
+        let nominal = Wall { origin: start, along, out, offset: 0.0 };
+        let len = start.distance(end);
+        let (u0, u1) = (0.0, len);
+        if stretch.shaft {
             let w = nominal.moved(SHAFT_DEPTH);
             w.block(&mut parts.stone, (u0, u1), (0.0, HEIGHT), (-BACK, 0.0));
             // Black at the back, a strip of light running up it.
@@ -293,67 +391,76 @@ fn wall(parts: &mut Parts, nominal: Wall, seed: i32) -> Vec<Massif> {
             for k in 0..3 {
                 parts.lights.push((w.at(c, HEIGHT * (0.2 + 0.3 * k as f32), 3.0), 100.0, 1.0));
             }
-            massifs.push(Massif { u: (u0, u1), split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, shaft: true });
-        } else {
-            let split = HEIGHT * (0.3 + 0.5 * r(m, 2));
-            let low = -10.0 + 18.0 * r(m, 3);
-            // (The top part never set back far: you start on the rim.)
-            let high = (low + (r(m, 4) - 0.35) * 16.0).clamp(-4.0, 12.0);
-            for (part, (v0, v1, n)) in [(0.0, split, low), (split, HEIGHT, high)].into_iter().enumerate() {
-                let w = nominal.moved(n);
-                let k = seed + m * 31 + part as i32 * 7;
-                let p = m * 2 + part as i32;
-                // Now and then a chamber cut into it (where there is room).
-                let (cw, ch) = (15.0 + 45.0 * r(p, 20), 12.0 + 28.0 * r(p, 21));
-                if r(p, 22) < 0.45 && u1 - u0 > cw + 12.0 && v1 - v0 > ch + 30.0 {
-                    let cu0 = u0 + 6.0 + (u1 - u0 - cw - 12.0) * r(p, 23);
-                    let cv0 = v0 + 15.0 + (v1 - v0 - ch - 30.0) * r(p, 24);
-                    let c = Chamber { wall: w, u: (cu0, cu0 + cw), floor: cv0, ceiling: cv0 + ch, depth: 20.0 + 30.0 * r(p, 25) };
-                    chamber(parts, &c, (u0, u1), (v0, v1), k);
-                    parts.chambers.push(c);
-                    continue;
-                }
-                w.block(&mut parts.stone, (u0, u1), (v0, v1), (-BACK - n, 0.0));
-                if r(p, 5) < 0.2 {
-                    slab(parts, &w, (u0, u1), (v0, v1), k);
-                } else {
-                    strata(parts, &w, (u0, u1), (v0, v1), k);
-                }
-            }
-            // An overhang: a line of light along its edge, underneath.
-            if high > low + 1.0 {
-                let w = nominal.moved(high);
-                w.block(&mut parts.glow, (u0, u1), (split - 0.3, split - 0.1), (-0.6, -0.4));
-                parts.lights.push((w.at((u0 + u1) * 0.5, split - 3.0, 1.0), 90.0, 1.0));
-            }
-            massifs.push(Massif { u: (u0, u1), split, low, high, shaft: false });
+            massifs.push(Massif { wall: nominal, len, z: stretch.z, split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, shaft: true });
+            continue;
         }
-        u = u1;
-        m += 1;
+        let split = HEIGHT * (0.3 + 0.5 * r(m, 2));
+        let low = -10.0 + 18.0 * r(m, 3);
+        // (The top part never set back far: you start on the rim.)
+        let high = (low + (r(m, 4) - 0.35) * 16.0).clamp(-4.0, 12.0);
+        for (part, (v0, v1, n)) in [(0.0, split, low), (split, HEIGHT, high)].into_iter().enumerate() {
+            let w = nominal.moved(n);
+            let k = seed + m * 31 + part as i32 * 7;
+            let p = m * 2 + part as i32;
+            // (`--opt chambers`: now and then a chamber cut into it.)
+            let (cw, ch) = (15.0 + 45.0 * r(p, 20), 12.0 + 28.0 * r(p, 21));
+            if chambers && r(p, 22) < 0.45 && u1 - u0 > cw + 12.0 && v1 - v0 > ch + 30.0 {
+                let cu0 = u0 + 6.0 + (u1 - u0 - cw - 12.0) * r(p, 23);
+                let cv0 = v0 + 15.0 + (v1 - v0 - ch - 30.0) * r(p, 24);
+                let c = Chamber { side, wall: w, u: (cu0, cu0 + cw), floor: cv0, ceiling: cv0 + ch, depth: 20.0 + 30.0 * r(p, 25) };
+                chamber(parts, &c, (u0, u1), (v0, v1), k);
+                parts.chambers.push(c);
+                continue;
+            }
+            w.block(&mut parts.stone, (u0, u1), (v0, v1), (-BACK - n, 0.0));
+            if r(p, 5) < 0.2 {
+                slab(parts, &w, (u0, u1), (v0, v1), k);
+            } else {
+                strata(parts, &w, (u0, u1), (v0, v1), k);
+            }
+        }
+        // An overhang: a line of light along its edge, underneath.
+        if high > low + 1.0 {
+            let w = nominal.moved(high);
+            w.block(&mut parts.glow, (u0, u1), (split - 0.3, split - 0.1), (-0.6, -0.4));
+            parts.lights.push((w.at((u0 + u1) * 0.5, split - 3.0, 1.0), 90.0, 1.0));
+        }
+        massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, shaft: false });
     }
+    // Where faces meet at an angle, their masses part behind the corner (or
+    // overlap): the wedge between them filled (where they overlap, it lies
+    // inside them).
+    for pair in massifs.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let corner = b.wall.origin;
+        parts.stone.prism([corner, corner - a.wall.out * BACK, corner - b.wall.out * BACK], HEIGHT);
+    }
+    let half = LENGTH * 0.5;
     // Giant half-sunk columns, spanning much of the height, standing on
     // whatever face is there.
     for k in 0..5 {
-        let u = -half + LENGTH * (k as f32 + 0.3 + 0.4 * r(k, 40)) / 5.0;
+        let z = CENTRE.z - half + LENGTH * (k as f32 + 0.3 + 0.4 * r(k, 40)) / 5.0;
+        let Some((m, u)) = locate(&massifs, z) else { continue };
         let radius = 3.0 + 4.0 * r(k, 41);
         let (v0, v1) = (HEIGHT * 0.2 * r(k, 42), HEIGHT * (0.5 + 0.5 * r(k, 43)));
-        let n = face(&massifs, u, v0).max(face(&massifs, u, v1)) + radius * 0.4;
-        parts.stone.cylinder(nominal.at(u, v0, n), nominal.at(u, v1, n), radius, 14);
+        let n = m.face(v0).max(m.face(v1)) + radius * 0.4;
+        parts.stone.cylinder(m.wall.at(u, v0, n), m.wall.at(u, v1, n), radius, 14);
     }
     // Heavy cables hanging down the face in twisted pairs.
     for k in 0..14 {
-        let u = -half + LENGTH * r(k, 50);
+        let z = CENTRE.z - half + LENGTH * r(k, 50);
+        let Some((m, u)) = locate(&massifs, z) else { continue };
         let v0 = HEIGHT * (0.3 + 0.7 * r(k, 51));
         let drop = 40.0 + 200.0 * r(k, 52);
         let thick = 0.25 + 0.35 * r(k, 53);
-        let n = face(&massifs, u, v0).max(face(&massifs, u, v0 - drop)) + 1.5 + thick;
+        let n = m.face(v0).max(m.face(v0 - drop)) + 1.5 + thick;
         for strand in 0..2 {
             let phase = strand as f32 * std::f32::consts::PI;
             let points: Vec<Vec3> = (0..32)
                 .map(|i| {
                     let t = i as f32 / 31.0;
                     let a = phase + t * drop / 6.0;
-                    nominal.at(u + a.cos() * thick * 1.1, v0 - drop * t, n + a.sin() * thick * 1.1)
+                    m.wall.at(u + a.cos() * thick * 1.1, v0 - drop * t, n + a.sin() * thick * 1.1)
                 })
                 .collect();
             parts.cables.push((points, thick));
@@ -501,19 +608,18 @@ fn chamber(parts: &mut Parts, c: &Chamber, (u0, u1): (f32, f32), (v0, v1): (f32,
 /// heights: from floor to floor, sloping if they differ.
 fn crossings(parts: &mut Parts) {
     let chambers = parts.chambers.clone();
-    for a in chambers.iter().filter(|c| c.wall.side < 0.0) {
-        for b in chambers.iter().filter(|c| c.wall.side > 0.0) {
-            let (lo, hi) = (a.u.0.max(b.u.0), a.u.1.min(b.u.1));
-            if hi - lo < 6.0 || (a.floor - b.floor).abs() > 25.0 {
+    let mouth = |c: &Chamber| c.wall.at((c.u.0 + c.u.1) * 0.5, c.floor - 0.4, 0.0);
+    for a in chambers.iter().filter(|c| c.side < 0.0) {
+        for b in chambers.iter().filter(|c| c.side > 0.0) {
+            let (from, to) = (mouth(a), mouth(b));
+            if (from.z - to.z).abs() > 10.0 || (a.floor - b.floor).abs() > 25.0 {
                 continue;
             }
-            let u = (lo + hi) * 0.5;
-            let from = a.wall.at(u, a.floor - 0.4, 0.0);
-            let to = b.wall.at(u, b.floor - 0.4, 0.0);
             parts.stone.beam(from, to, 4.0, 0.8, Vec3::Y);
             // A lit line along each edge.
+            let across = (to - from).cross(Vec3::Y).normalize_or(Vec3::Z);
             for s in [-1.0, 1.0] {
-                let off = Vec3::Z * s * 1.9 + Vec3::Y * 0.42;
+                let off = across * s * 1.9 + Vec3::Y * 0.42;
                 parts.glow.beam(from + off, to + off, 0.08, 0.04, Vec3::Y);
             }
         }
@@ -726,19 +832,19 @@ fn louvres(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f3
 /// underneath.
 fn bridges(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c6);
-    let near = Wall { side: -1.0, offset: 0.0 };
-    let far = Wall { side: 1.0, offset: 0.0 };
     for k in 0..6 {
-        let u = -LENGTH * 0.4 + LENGTH * 0.8 * (k as f32 + r(k, 0) * 0.6) / 6.0;
+        let z = CENTRE.z - LENGTH * 0.4 + LENGTH * 0.8 * (k as f32 + r(k, 0) * 0.6) / 6.0;
         let v = HEIGHT * (0.2 + 0.75 * r(k, 1));
         let wide = 3.0 + 4.0 * r(k, 2);
         // Into each face, wherever it stands.
-        let a = near.at(u, v, face(near_m, u, v) - 1.0);
-        let b = far.at(u, v, face(far_m, u, v) - 1.0);
+        let (Some((nm, nu)), Some((fm, fu))) = (locate(near_m, z), locate(far_m, z)) else { continue };
+        let a = nm.wall.at(nu, v, nm.face(v) - 1.0);
+        let b = fm.wall.at(fu, v, fm.face(v) - 1.0);
+        let across = (b - a).cross(Vec3::Y).normalize_or(Vec3::Z);
         parts.stone.beam(a, b, wide, 0.8, Vec3::Y);
         // Deep beams under the deck's edges.
         for s in [-1.0, 1.0] {
-            let off = Vec3::Z * s * (wide * 0.5 - 0.3);
+            let off = across * s * (wide * 0.5 - 0.3);
             parts.stone.beam(a + off - Vec3::Y * 1.2, b + off - Vec3::Y * 1.2, 0.5, 1.6, Vec3::Y);
         }
         // Bracing: diagonals underneath, zigzag.
@@ -748,7 +854,7 @@ fn bridges(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
             let (p, q) = (a.lerp(b, t0), a.lerp(b, t1));
             let low = Vec3::Y * -4.5;
             let (from, to) = if i % 2 == 0 { (p - Vec3::Y * 1.6, q + low) } else { (p + low, q - Vec3::Y * 1.6) };
-            parts.stone.beam(from, to, 0.4, 0.4, Vec3::Z);
+            parts.stone.beam(from, to, 0.4, 0.4, across);
         }
     }
 }
@@ -756,16 +862,14 @@ fn bridges(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
 /// A web of taut cables across the void at every angle, wall to wall.
 fn web(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c7);
-    let near = Wall { side: -1.0, offset: 0.0 };
-    let far = Wall { side: 1.0, offset: 0.0 };
     for k in 0..90 {
-        let u0 = -LENGTH * 0.45 + LENGTH * 0.9 * r(k, 0);
-        let u1 = u0 + (r(k, 1) - 0.5) * 120.0;
+        let z0 = CENTRE.z - LENGTH * 0.45 + LENGTH * 0.9 * r(k, 0);
+        let z1 = (z0 + (r(k, 1) - 0.5) * 120.0).clamp(CENTRE.z - LENGTH * 0.5, CENTRE.z + LENGTH * 0.5);
         let v0 = HEIGHT * (0.1 + 0.85 * r(k, 2));
         let v1 = (v0 + (r(k, 3) - 0.5) * 140.0).clamp(10.0, HEIGHT - 5.0);
-        let u1 = u1.clamp(-LENGTH * 0.5, LENGTH * 0.5);
-        let a = near.at(u0, v0, face(near_m, u0, v0) + 0.5);
-        let b = far.at(u1, v1, face(far_m, u1, v1) + 0.5);
+        let (Some((nm, nu)), Some((fm, fu))) = (locate(near_m, z0), locate(far_m, z1)) else { continue };
+        let a = nm.wall.at(nu, v0, nm.face(v0) + 0.5);
+        let b = fm.wall.at(fu, v1, fm.face(v1) + 0.5);
         let thick = if r(k, 4) < 0.2 { 0.25 + 0.3 * r(k, 5) } else { 0.05 + 0.1 * r(k, 5) };
         // Taut: a little sag, more for the long ones.
         let sag = a.distance(b) * (0.01 + 0.03 * r(k, 6));
