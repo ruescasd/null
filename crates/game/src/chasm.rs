@@ -8,7 +8,7 @@
 //!
 //! The chasm runs along z, centred on `CENTRE`; each wall is a chain of
 //! straight faces at angles of their own (see `plan`), so the gap widens
-//! and narrows (20-130 m) and the whole snakes a little. Everything here is
+//! and narrows (30-230 m) and the whole snakes. Everything here is
 //! in metres.
 
 use avian3d::prelude::*;
@@ -32,7 +32,7 @@ fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
 pub const CENTRE: Vec3 = Vec3::new(1200.0, 0.0, 900.0);
 /// The walls' height, and the segment's length.
 pub const HEIGHT: f32 = 550.0;
-pub const LENGTH: f32 = 600.0;
+pub const LENGTH: f32 = 1000.0;
 /// How far the walls' masses reach back from their faces (the plateau on
 /// top).
 const BACK: f32 = 120.0;
@@ -69,14 +69,14 @@ struct Stretch {
     shaft: bool,
 }
 
-/// A wall's plan, along the chasm: stretches 40-150 m long (shafts 4-10 m),
-/// each wall standing 10-65 m from a centre line that wanders a little, so
+/// A wall's plan, along the chasm: stretches 70-260 m long (shafts 4-10 m),
+/// each wall standing 15-115 m from a centre line that wanders, so
 /// the faces meet at angles, the gap widens and narrows and the walls are
 /// rarely parallel. `side` -1 for the near wall (low x), +1 for the far.
 fn plan(side: f32, seed: i32) -> Vec<Stretch> {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d2);
     // The centre line wanders the same way for both walls.
-    let drift = |z: f32| 20.0 * (z * 0.012 + 1.3).sin() + 9.0 * (z * 0.031 + 0.4).sin();
+    let drift = |z: f32| 36.0 * (z * 0.0067 + 1.3).sin() + 16.0 * (z * 0.017 + 0.4).sin();
     let half = LENGTH * 0.5;
     // (The joints go near, far, anywhere in turn, out of step between the
     // walls, so the gap surely narrows and widens.)
@@ -87,7 +87,7 @@ fn plan(side: f32, seed: i32) -> Vec<Stretch> {
             1 => 0.7 + 0.3 * r(k, 9),
             _ => r(k, 9),
         };
-        CENTRE.x + drift(z) + side * (10.0 + 55.0 * t)
+        CENTRE.x + drift(z) + side * (15.0 + 100.0 * t)
     };
     let mut out = Vec::new();
     let mut z = CENTRE.z - half;
@@ -96,7 +96,7 @@ fn plan(side: f32, seed: i32) -> Vec<Stretch> {
     while z < CENTRE.z + half {
         // (No shaft where you start.)
         let shaft = r(k, 0) < 0.18 && !(z - 12.0..z + 12.0).contains(&CENTRE.z);
-        let length = if shaft { 4.0 + 6.0 * r(k, 1) } else { 40.0 + 110.0 * r(k, 1) }.min(CENTRE.z + half - z);
+        let length = if shaft { 4.0 + 6.0 * r(k, 1) } else { 70.0 + 190.0 * r(k, 1) }.min(CENTRE.z + half - z);
         let z1 = z + length;
         let x1 = if shaft { x } else { at(z1, k + 1) };
         out.push(Stretch { z: (z, z1), x: (x, x1), shaft });
@@ -438,8 +438,8 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, chambers: bool) -> Vec<Massif> 
     let half = LENGTH * 0.5;
     // Giant half-sunk columns, spanning much of the height, standing on
     // whatever face is there.
-    for k in 0..5 {
-        let z = CENTRE.z - half + LENGTH * (k as f32 + 0.3 + 0.4 * r(k, 40)) / 5.0;
+    for k in 0..8 {
+        let z = CENTRE.z - half + LENGTH * (k as f32 + 0.3 + 0.4 * r(k, 40)) / 8.0;
         let Some((m, u)) = locate(&massifs, z) else { continue };
         let radius = 3.0 + 4.0 * r(k, 41);
         let (v0, v1) = (HEIGHT * 0.2 * r(k, 42), HEIGHT * (0.5 + 0.5 * r(k, 43)));
@@ -447,7 +447,7 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, chambers: bool) -> Vec<Massif> 
         parts.stone.cylinder(m.wall.at(u, v0, n), m.wall.at(u, v1, n), radius, 14);
     }
     // Heavy cables hanging down the face in twisted pairs.
-    for k in 0..14 {
+    for k in 0..24 {
         let z = CENTRE.z - half + LENGTH * r(k, 50);
         let Some((m, u)) = locate(&massifs, z) else { continue };
         let v0 = HEIGHT * (0.3 + 0.7 * r(k, 51));
@@ -832,8 +832,8 @@ fn louvres(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f3
 /// underneath.
 fn bridges(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c6);
-    for k in 0..6 {
-        let z = CENTRE.z - LENGTH * 0.4 + LENGTH * 0.8 * (k as f32 + r(k, 0) * 0.6) / 6.0;
+    for k in 0..10 {
+        let z = CENTRE.z - LENGTH * 0.4 + LENGTH * 0.8 * (k as f32 + r(k, 0) * 0.6) / 10.0;
         let v = HEIGHT * (0.2 + 0.75 * r(k, 1));
         let wide = 3.0 + 4.0 * r(k, 2);
         // Into each face, wherever it stands.
@@ -862,9 +862,9 @@ fn bridges(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
 /// A web of taut cables across the void at every angle, wall to wall.
 fn web(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif]) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c7);
-    for k in 0..90 {
+    for k in 0..150 {
         let z0 = CENTRE.z - LENGTH * 0.45 + LENGTH * 0.9 * r(k, 0);
-        let z1 = (z0 + (r(k, 1) - 0.5) * 120.0).clamp(CENTRE.z - LENGTH * 0.5, CENTRE.z + LENGTH * 0.5);
+        let z1 = (z0 + (r(k, 1) - 0.5) * 200.0).clamp(CENTRE.z - LENGTH * 0.5, CENTRE.z + LENGTH * 0.5);
         let v0 = HEIGHT * (0.1 + 0.85 * r(k, 2));
         let v1 = (v0 + (r(k, 3) - 0.5) * 140.0).clamp(10.0, HEIGHT - 5.0);
         let (Some((nm, nu)), Some((fm, fu))) = (locate(near_m, z0), locate(far_m, z1)) else { continue };

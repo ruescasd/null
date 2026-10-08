@@ -353,7 +353,7 @@ fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut sky: ResMu
 /// How far the haze lets you see (`--set fog`; nearer in the chasm, where
 /// it hides the far ends and the floor).
 fn haze(args: &Args) -> f32 {
-    args.num("fog", if args.opt("chasm") { 380.0 } else { 4500.0 })
+    args.num("fog", if args.opt("chasm") { 600.0 } else { 4500.0 })
 }
 
 /// The swarm's darkness (`--opt dark`; see `combat::gloom`): 0 clear, 1 all
