@@ -6,7 +6,9 @@
 //   world so it streams past as you move. It tiles with the world's wrap
 //   period and fades out with distance before it can shimmer;
 // - light from pieces of geometry the mesh marks as lit (glowing etchings
-//   and seams).
+//   and seams);
+// - paving (an experiment): in some regions of the ground, a pattern of
+//   tiles with cut joints, a ruler underfoot and something to stream past.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -33,6 +35,9 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> grain: vec4<f32>;
 // x: brightness of lit geometry.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> glow: vec4<f32>;
+// x: pattern (0 none, 1 checkerboard, 2 warped, 3 fractal), y: tile size
+// (m), z: contrast, w: share of the ground paved.
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> paving: vec4<f32>;
 
 fn hash(cell: vec2<i32>, period: i32) -> f32 {
     // Wrap the lattice so the pattern tiles with the world.
@@ -82,6 +87,108 @@ fn sample_grain(p: vec2<f32>, pixel: f32) -> Grain {
     return g;
 }
 
+// The paving region a point falls in (cells of a Voronoi pattern 512 m
+// apart, which fits the wrap period): whether it is paved, its centre, and a
+// number of its own.
+struct Region {
+    paved: bool,
+    centre: vec2<f32>,
+    id: f32,
+}
+
+fn region(p: vec2<f32>) -> Region {
+    let size = 512.0;
+    let period = i32(round(grain.y / size));
+    let base = vec2<i32>(floor(p / size));
+    var best = 1e9;
+    var r = Region(false, vec2<f32>(0.0), 0.0);
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let c = base + vec2<i32>(x, y);
+            let f = (vec2<f32>(c) + vec2<f32>(hash(c, period), hash(c + vec2(17, 31), period)) * 0.8 + 0.1) * size;
+            let d = distance(p, f);
+            if d < best {
+                best = d;
+                let id = hash(c + vec2(53, 7), period);
+                r = Region(id < paving.w, f, id);
+            }
+        }
+    }
+    return r;
+}
+
+// Distance (in tile units) to the nearest joint of a unit square tiling at
+// `q`, and the tile it is in.
+fn tile_edge(q: vec2<f32>) -> f32 {
+    let f = fract(q);
+    let e = min(f, 1.0 - f);
+    return min(e.x, e.y);
+}
+
+// The paving at `p` on a top surface: a tone (added to albedo, about -1..1)
+// and how much of a joint is there (0..1), antialiased with `pixel`.
+struct Paving {
+    tone: f32,
+    joint: f32,
+}
+
+fn pave(p: vec2<f32>, pixel: f32) -> Paving {
+    var out = Paving(0.0, 0.0);
+    let r = region(p);
+    if !r.paved {
+        return out;
+    }
+    let tile = paving.y;
+    // Turned by the region's own angle.
+    let a = r.id * 6.2831;
+    let rot = mat2x2<f32>(cos(a), sin(a), -sin(a), cos(a));
+    var z = rot * (p - r.centre);
+    let joint_w = 0.025; // in tile units: 5 cm on a 2 m tile
+    let mode = i32(round(paving.x));
+    if mode == 2 {
+        // Warped: z + a sin(z / L), a conformal map, so every tile stays
+        // square while the lines bend over distance.
+        let l = 150.0;
+        let k = 0.2;
+        let w = z / l;
+        let s = vec2<f32>(sin(w.x) * cosh(w.y), cos(w.x) * sinh(w.y));
+        z = z + s * (k * l);
+    }
+    if mode == 1 || mode == 2 {
+        let q = z / tile;
+        let i = vec2<i32>(floor(q));
+        let checker = f32((i.x + i.y) & 1) * 2.0 - 1.0;
+        let aa = max(pixel / tile, 1e-4);
+        out.tone = checker;
+        out.joint = 1.0 - smoothstep(joint_w - aa, joint_w + aa, tile_edge(q));
+        // Joints thinner than a pixel fade rather than shimmer.
+        out.joint *= saturate(joint_w / aa);
+    } else if mode == 3 {
+        // Fractal: tiles four times the tile size split again and again (in
+        // two each way), down to a quarter of it; each finished tile its own
+        // tone; the joints thinner the smaller the tiles.
+        var size = tile * 4.0;
+        var edge_m = 1e9;
+        var tone = 0.0;
+        let period = 1 << 20;
+        for (var level = 0; level < 6; level++) {
+            let q = z / size;
+            let i = vec2<i32>(floor(q));
+            let w = 0.06 * pow(size / (tile * 4.0), 0.35);
+            edge_m = min(edge_m, tile_edge(q) * size - w);
+            let h = hash(i + vec2(level * 1013, level * 7919), period);
+            tone = hash(i + vec2(level * 331 + 5, 91), period) * 2.0 - 1.0;
+            if h > 0.7 || size < tile * 0.5 {
+                break;
+            }
+            size *= 0.5;
+        }
+        out.tone = tone;
+        out.joint = 1.0 - smoothstep(-pixel, pixel, edge_m);
+    }
+    return out;
+}
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
@@ -118,6 +225,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         pbr_input.material.base_color.rgb * max(1.0 + grain.x * 2.0 * g.mottle, 0.0),
         1.0,
     );
+
+    // Paving, on top surfaces in paved regions.
+    if paving.x > 0.5 && n.y > 0.85 {
+        let pv = pave(p.xz, pixel);
+        let c = pbr_input.material.base_color.rgb * (1.0 + pv.tone * paving.z) * (1.0 - 0.55 * pv.joint);
+        pbr_input.material.base_color = vec4<f32>(c, 1.0);
+    }
 
     // Lit pieces of geometry (glowing etchings and seams).
     if lit > 0.0 {

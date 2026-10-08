@@ -130,6 +130,11 @@ pub struct TerrainExtension {
     /// x: brightness of lit geometry (glowing etchings and seams).
     #[uniform(102)]
     pub glow: Vec4,
+    /// Paving on some of the ground (`--set paving=N`, an experiment): x the
+    /// pattern (0 none, 1 checkerboard, 2 warped checkerboard, 3 fractal),
+    /// y the tile size (m), z the contrast, w the share of the ground paved.
+    #[uniform(103)]
+    pub paving: Vec4,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -208,7 +213,7 @@ fn setup_material(
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // Albedo comes from vertex colours; the material only sets the surface response.
-    let make = |glow: f32, grain: f32, relief: f32| ExtendedMaterial {
+    let make = |glow: f32, grain: f32, relief: f32, paving: f32| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
@@ -223,12 +228,13 @@ fn setup_material(
                 Vec4::new(grain, world.size(), relief, 0.0)
             },
             glow: Vec4::new(glow, 0.0, 0.0, 0.0),
+            paving: Vec4::new(paving, args.num("tile", 2.0), args.num("paving_contrast", 0.12), args.num("paved", 0.45)),
         },
     };
     // The ground has grain; structures are plain, so their geometry reads.
     // `glow` is the brightness of lit geometry.
-    let ground = make(0.0, args.num("grain", 0.2), args.num("relief", 2.5));
-    let structures = make(args.num("glow", 3000.0), 0.0, 0.0);
+    let ground = make(0.0, args.num("grain", 0.2), args.num("relief", 2.5), args.num("paving", 0.0));
+    let structures = make(args.num("glow", 3000.0), 0.0, 0.0, 0.0);
     commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
     commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
 }
