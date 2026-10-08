@@ -35,8 +35,9 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> grain: vec4<f32>;
 // x: brightness of lit geometry.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> glow: vec4<f32>;
-// x: pattern (0 none, 1 checkerboard, 2 warped, 3 fractal), y: tile size
-// (m), z: contrast, w: share of the ground paved.
+// x: pattern (0 none, 1 checkerboard, 2 warped, 3 fractal, 4 warped
+// fractal; plus 100: whole, not broken at steps), y: tile size (m), z:
+// contrast, w: share of the ground paved.
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> paving: vec4<f32>;
 
 fn hash(cell: vec2<i32>, period: i32) -> f32 {
@@ -132,20 +133,29 @@ struct Paving {
     joint: f32,
 }
 
-fn pave(p: vec2<f32>, pixel: f32) -> Paving {
+fn pave(p: vec2<f32>, height: f32, pixel: f32) -> Paving {
     var out = Paving(0.0, 0.0);
     let r = region(p);
     if !r.paved {
         return out;
     }
     let tile = paving.y;
-    // Turned by the region's own angle.
-    let a = r.id * 6.2831;
+    let whole = paving.x > 99.5;
+    let mode = i32(round(paving.x)) % 100;
+    // Turned by the region's own angle; and, unless whole, each flat piece
+    // of ground at its own height its own turn and offset, so the pattern
+    // breaks at every step, a floor heaved apart.
+    var a = r.id * 6.2831;
+    var shift = vec2<f32>(0.0);
+    if !whole {
+        let level = vec2<i32>(i32(round(height * 4.0)), 977);
+        a += hash(level, 1 << 20) * 6.2831;
+        shift = vec2<f32>(hash(level + vec2(0, 13), 1 << 20), hash(level + vec2(0, 29), 1 << 20)) * tile * 8.0;
+    }
     let rot = mat2x2<f32>(cos(a), sin(a), -sin(a), cos(a));
-    var z = rot * (p - r.centre);
+    var z = rot * (p - r.centre) + shift;
     let joint_w = 0.025; // in tile units: 5 cm on a 2 m tile
-    let mode = i32(round(paving.x));
-    if mode == 2 {
+    if mode == 2 || mode == 4 {
         // Warped: z + a sin(z / L), a conformal map, so every tile stays
         // square while the lines bend over distance.
         let l = 150.0;
@@ -163,7 +173,7 @@ fn pave(p: vec2<f32>, pixel: f32) -> Paving {
         out.joint = 1.0 - smoothstep(joint_w - aa, joint_w + aa, tile_edge(q));
         // Joints thinner than a pixel fade rather than shimmer.
         out.joint *= saturate(joint_w / aa);
-    } else if mode == 3 {
+    } else if mode == 3 || mode == 4 {
         // Fractal: tiles four times the tile size split again and again (in
         // two each way), down to a quarter of it; each finished tile its own
         // tone; the joints thinner the smaller the tiles.
@@ -228,7 +238,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // Paving, on top surfaces in paved regions.
     if paving.x > 0.5 && n.y > 0.85 {
-        let pv = pave(p.xz, pixel);
+        let pv = pave(p.xz, p.y, pixel);
         let c = pbr_input.material.base_color.rgb * (1.0 + pv.tone * paving.z) * (1.0 - 0.55 * pv.joint);
         pbr_input.material.base_color = vec4<f32>(c, 1.0);
     }

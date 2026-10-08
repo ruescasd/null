@@ -131,8 +131,9 @@ pub struct TerrainExtension {
     #[uniform(102)]
     pub glow: Vec4,
     /// Paving on some of the ground (`--set paving=N`, an experiment): x the
-    /// pattern (0 none, 1 checkerboard, 2 warped checkerboard, 3 fractal),
-    /// y the tile size (m), z the contrast, w the share of the ground paved.
+    /// pattern (0 none, 1 checkerboard, 2 warped checkerboard, 3 fractal, 4
+    /// warped fractal; plus 100 with `--set paving_whole=1`: not broken at
+    /// steps), y the tile size (m), z the contrast, w the share paved.
     #[uniform(103)]
     pub paving: Vec4,
 }
@@ -228,7 +229,7 @@ fn setup_material(
                 Vec4::new(grain, world.size(), relief, 0.0)
             },
             glow: Vec4::new(glow, 0.0, 0.0, 0.0),
-            paving: Vec4::new(paving, args.num("tile", 2.0), args.num("paving_contrast", 0.12), args.num("paved", 0.45)),
+            paving: Vec4::new(if paving > 0.0 { paving + 100.0 * args.num("paving_whole", 0.0) } else { 0.0 }, args.num("tile", 2.0), args.num("paving_contrast", 0.12), args.num("paved", 0.45)),
         },
     };
     // The ground has grain; structures are plain, so their geometry reads.

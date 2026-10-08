@@ -46,9 +46,10 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               of the haze, bridges and a web of cables; you start on the rim
     --opt classical                           with --opt chasm: routes in an austere classical manner (arcaded walkways,
                                               solid parapets, arched bridges and gateways), to compare
-    --set paving=1|2|3                        an experiment: paving on some of the ground (1 checkerboard, 2 warped
-                                              checkerboard, 3 fractal); --set tile=2 metres, paving_contrast=0.12,
-                                              paved=0.45 (share of the ground)
+    --set paving=1|2|3|4                      an experiment: paving on some of the ground (1 checkerboard, 2 warped
+                                              checkerboard, 3 fractal, 4 warped fractal), each flat piece of ground its own
+                                              turn of it (--set paving_whole=1: one unbroken pattern); --set tile=2
+                                              metres, paving_contrast=0.12, paved=0.45 (share of the ground)
     --opt peace                               no swarm
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
