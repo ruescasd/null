@@ -150,7 +150,10 @@ pub(super) fn grove(
         }
         commands.entity(bud).remove::<(Asleep, Waking)>();
         s.mode = Mode::Free;
-        s.velocity = Vec3::Y * 4.0;
+        // It leaps free: up, and a little to one side.
+        let a = hash01(bud.index_u32() as i32, 2, 0, 0x6f4) * std::f32::consts::TAU;
+        s.velocity = Vec3::new(a.cos() * 2.5, 9.0, a.sin() * 2.5);
+        s.leap = 0.9;
         gazed.startle();
         commands.spawn((
             AudioPlayer::new(assets.assemble.clone()),

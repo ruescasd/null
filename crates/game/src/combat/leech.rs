@@ -1,9 +1,9 @@
 //! Leeches (`--opt leech`): a bud waiting near you (seen or not) may shoot a
 //! cable into you and drink: a little health a second,
 //! for as long as it holds. It snaps when the bud is destroyed or you get far
-//! enough away, whipping back and hanging before it goes. The cable glows
-//! faintly, pulsing as it drinks (in the dark, only what is lit shows); turn
-//! round and it shows you where the bud is.
+//! enough away, whipping back and hanging before it goes. The cable is
+//! black, and glowing gulps run along it from you to the bud as it drinks
+//! (so it shows in the dark); it shows you where the bud is.
 
 use bevy::{asset::RenderAssetUsages, camera::visibility::NoFrustumCulling, mesh::PrimitiveTopology, prelude::*};
 use worldgen::noise::hash01;
@@ -17,8 +17,8 @@ use crate::{Args, camera::FlyCam, player::Player, terrain::WorldGen};
 /// How near a bud must be to latch on, how often a waiting one does (about
 /// once in this many seconds), how many at once, and how far away its cable
 /// snaps.
-const REACH: f32 = 6.0;
-const EVERY: f32 = 4.0;
+const REACH: f32 = 10.0;
+const EVERY: f32 = 1.5;
 const AT_ONCE: usize = 3;
 const BREAKS: f32 = 12.0;
 /// Health a second each one drinks.
@@ -28,9 +28,12 @@ const SHOOT: f32 = 0.2;
 const SNAPPED: f32 = 1.2;
 const WIDTH: f32 = 0.025;
 const SHADE: f32 = 0.035;
-/// Its glow, between and at the peak of each pulse, and pulses a second.
-const GLOW: (f32, f32) = (15.0, 90.0);
-const PULSE: f32 = 1.6;
+/// The gulps: how bright, how many a second, how long each takes to run
+/// its length, and how much of the cable each covers.
+const GULP_GLOW: f32 = 140.0;
+const GULPS: f32 = 2.0;
+const GULP_RUN: f32 = 0.45;
+const GULP_SPAN: f32 = 0.2;
 
 #[derive(Component)]
 pub(super) struct Leech {
@@ -41,8 +44,24 @@ pub(super) struct Leech {
     points: Vec<Vec3>,
     previous: Vec<Vec3>,
     mesh: Handle<Mesh>,
-    /// Its own, to pulse.
-    material: Handle<StandardMaterial>,
+    /// The gulp running along it (a short glowing piece of it).
+    gulp: Entity,
+    gulp_mesh: Handle<Mesh>,
+}
+
+/// The piece of a cable (points from the bud to you) a gulp covers at `age`,
+/// or the whole cable's first two points when between gulps (hidden).
+fn gulp(points: &[Vec3], age: f32) -> Option<&[Vec3]> {
+    let n = points.len();
+    let t = (age * GULPS).fract() / GULPS / GULP_RUN;
+    if t >= 1.0 || n < 3 {
+        return None;
+    }
+    // From your end (the last point) towards the bud.
+    let head = 1.0 - t;
+    let a = ((head - GULP_SPAN).max(0.0) * (n - 1) as f32) as usize;
+    let b = ((head * (n - 1) as f32).ceil() as usize).clamp(a + 1, n - 1);
+    Some(&points[a..=b])
 }
 
 /// Where a cable goes into you: your chest, a little below the eye.
@@ -58,6 +77,8 @@ pub(super) fn leech(
     world: Res<WorldGen>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials_shared: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
+    mut visibility: Query<&mut Visibility>,
     player: Single<(&Transform, &mut Player), With<FlyCam>>,
     swarm: Query<(Entity, &Transform, &Swarmer), Without<FlyCam>>,
     mut leeches: Query<(Entity, &mut Leech)>,
@@ -66,6 +87,15 @@ pub(super) fn leech(
         return;
     }
     let dt = time.delta_secs().clamp(0.001, 1.0 / 30.0);
+    // Black, matte; the gulps glow, not hazed.
+    let (black, glow) = materials_shared
+        .get_or_insert_with(|| {
+            (
+                materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.8, reflectance: 0.15, ..default() }),
+                materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(GULP_GLOW), fog_enabled: false, ..default() }),
+            )
+        })
+        .clone();
     let (eye, mut p) = player.into_inner();
     let into = chest(eye);
 
@@ -89,19 +119,16 @@ pub(super) fn leech(
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
             tubes(&mut mesh, [(&points[..], (WIDTH, WIDTH * 0.6), SHADE)]);
             let mesh = meshes.add(mesh);
-            // (Not hazed: it shows in the dark.)
-            let material = materials.add(StandardMaterial {
-                base_color: Color::WHITE,
-                perceptual_roughness: 0.8,
-                reflectance: 0.15,
-                emissive: LinearRgba::gray(GLOW.0),
-                fog_enabled: false,
-                ..default()
-            });
+            let mut gulp_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+            tubes(&mut gulp_mesh, [(&points[..2], (WIDTH * 1.4, WIDTH * 1.4), 1.0)]);
+            let gulp_mesh = meshes.add(gulp_mesh);
+            let gulp = commands
+                .spawn((Mesh3d(gulp_mesh.clone()), MeshMaterial3d(glow.clone()), Transform::IDENTITY, Visibility::Hidden, NoFrustumCulling, bevy::light::NotShadowCaster))
+                .id();
             commands.spawn((
-                Leech { bud, age: 0.0, snapped: None, length: 0.1, points, previous, mesh: mesh.clone(), material: material.clone() },
+                Leech { bud, age: 0.0, snapped: None, length: 0.1, points, previous, mesh: mesh.clone(), gulp, gulp_mesh },
                 Mesh3d(mesh),
-                MeshMaterial3d(material),
+                MeshMaterial3d(black.clone()),
                 Transform::IDENTITY,
                 Visibility::default(),
                 NoFrustumCulling,
@@ -125,6 +152,7 @@ pub(super) fn leech(
         if let Some(s) = l.snapped.as_mut() {
             *s += dt;
             if *s > SNAPPED {
+                commands.entity(l.gulp).despawn();
                 commands.entity(entity).despawn();
                 continue;
             }
@@ -141,17 +169,21 @@ pub(super) fn leech(
                 p.health -= DRAIN * dt;
             }
         }
-        // Pulsing while it drinks; dying away once snapped.
-        let pulse = (0.5 + 0.5 * (l.age * PULSE * std::f32::consts::TAU).sin()).powi(3);
-        let glow = (GLOW.0 + (GLOW.1 - GLOW.0) * pulse) * l.snapped.map_or(1.0, |s| (1.0 - s / SNAPPED).max(0.0));
-        if let Some(mut m) = materials.get_mut(&l.material) {
-            m.emissive = LinearRgba::gray(glow);
-        }
         let length = l.length.max(0.1);
-        let Leech { points, previous, mesh, .. } = &mut *l;
+        let drinking = l.snapped.is_none() && l.age >= SHOOT;
+        let age = l.age;
+        let Leech { points, previous, mesh, gulp: gulp_entity, gulp_mesh, .. } = &mut *l;
         rope(points, previous, start, end, length, &world, dt);
         if let Some(mut m) = meshes.get_mut(&*mesh) {
             tubes(&mut m, [(&points[..], (WIDTH, WIDTH * 0.6), SHADE)]);
+        }
+        // A gulp running up it while it drinks.
+        let piece = if drinking { gulp(points, age) } else { None };
+        if let Ok(mut v) = visibility.get_mut(*gulp_entity) {
+            *v = if piece.is_some() { Visibility::Inherited } else { Visibility::Hidden };
+        }
+        if let (Some(piece), Some(mut m)) = (piece, meshes.get_mut(&*gulp_mesh)) {
+            tubes(&mut m, [(piece, (WIDTH * 1.4, WIDTH * 1.4), 1.0)]);
         }
     }
 }

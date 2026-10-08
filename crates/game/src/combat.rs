@@ -203,6 +203,9 @@ struct Swarmer {
     /// How much of its darkness it casts, 0..1: it grows while it is still
     /// (waiting, or frozen under your gaze), and fades while it moves.
     dark: f32,
+    /// Seconds left of its leap on waking, flung up and away before it
+    /// stalks (or freezes under your gaze).
+    leap: f32,
 }
 
 /// A piece flying off something broken, or a spark.
@@ -550,7 +553,7 @@ fn swarm(
             let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
             let p = base + Vec3::new(r(0), 0.0, r(1)) * if grove { 14.0 } else { 8.0 };
             let mode = if grove { Mode::Dormant } else { Mode::Free };
-            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0 };
+            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0 };
             let root = if grove {
                 // Low on its roots, opening to the sky, leaning a little.
                 let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 0.55, p.z);
@@ -571,6 +574,14 @@ fn swarm(
             continue;
         }
         transform.scale = transform.scale.lerp(Vec3::ONE, (dt * 4.0).min(1.0));
+        if s.leap > 0.0 {
+            // Leaping free: flung, slowing, then it is its own.
+            s.leap -= dt;
+            s.velocity *= (-dt * 2.5).exp();
+            transform.translation += s.velocity * dt;
+            face(&mut transform, ptransform.translation, dt);
+            continue;
+        }
         stalk(&world, ptransform, &positions, &mut transform, &mut s, dt);
         // Still, its darkness creeps in; moving, it fades.
         s.dark = if s.velocity.length() < STILL { (s.dark + dt / DARK_IN).min(1.0) } else { (s.dark - dt / DARK_OUT).max(0.0) };
