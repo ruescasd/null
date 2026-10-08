@@ -154,6 +154,38 @@ impl Geometry {
         }
     }
 
+    /// A convex polygon face, wound to face away from `inside`.
+    fn face(&mut self, pts: &[Vec3], inside: Vec3) {
+        let mut n = (pts[1] - pts[0]).cross(pts[2] - pts[0]).normalize_or(Vec3::Y);
+        let centre = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+        let mut order: Vec<Vec3> = pts.to_vec();
+        if n.dot(centre - inside) < 0.0 {
+            n = -n;
+            order.reverse();
+        }
+        let base = self.positions.len() as u32;
+        for p in &order {
+            self.positions.push(p.to_array());
+            self.normals.push(n.to_array());
+        }
+        for i in 1..order.len() as u32 - 1 {
+            self.indices.extend_from_slice(&[base, base + i, base + i + 1]);
+        }
+    }
+
+    /// A convex polygon swept along `d`: a prism of any cross-section.
+    fn sweep(&mut self, section: &[Vec3], d: Vec3) {
+        let k = section.len();
+        let inside = section.iter().copied().sum::<Vec3>() / k as f32 + d * 0.5;
+        let far: Vec<Vec3> = section.iter().map(|&p| p + d).collect();
+        self.face(section, inside);
+        self.face(&far, inside);
+        for i in 0..k {
+            let j = (i + 1) % k;
+            self.face(&[section[i], section[j], far[j], far[i]], inside);
+        }
+    }
+
     /// A box from its centre and three half-axes (any orientation).
     fn oriented(&mut self, c: Vec3, a: Vec3, b: Vec3, n: Vec3) {
         // (Kept right-handed so the faces wind outwards.)
@@ -236,6 +268,13 @@ impl Wall {
         Wall { offset, ..*self }
     }
 
+    /// A prism along the face from `u.0` to `u.1` whose cross-section is the
+    /// convex polygon `section` of (v, n) points.
+    fn section(&self, g: &mut Geometry, u: (f32, f32), section: &[(f32, f32)]) {
+        let pts: Vec<Vec3> = section.iter().map(|&(v, n)| self.at(u.0, v, n)).collect();
+        g.sweep(&pts, self.along * (u.1 - u.0));
+    }
+
     /// A box on the face from (u0, v0) to (u1, v1), standing out from `n0`
     /// to `n1`.
     fn block(&self, g: &mut Geometry, u: (f32, f32), v: (f32, f32), n: (f32, f32)) {
@@ -254,6 +293,9 @@ struct Massif {
     split: f32,
     low: f32,
     high: f32,
+    /// How tall the sloped face is, below the split, that carries the face
+    /// from `low` out (or back) to `high`.
+    slope: f32,
     shaft: bool,
 }
 
@@ -262,8 +304,10 @@ impl Massif {
     fn face(&self, v: f32) -> f32 {
         if self.shaft {
             SHAFT_DEPTH
-        } else if v < self.split {
+        } else if v < self.split - self.slope {
             self.low
+        } else if v < self.split {
+            self.low + (self.high - self.low) * (v - (self.split - self.slope)) / self.slope.max(1e-3)
         } else {
             self.high
         }
@@ -296,6 +340,8 @@ struct Parts {
     lights: Vec<(Vec3, f32, f32)>,
     /// The chambers cut into the walls (for what joins them).
     chambers: Vec<Chamber>,
+    /// Where the prows' tops are (near their edges).
+    prows: Vec<Vec3>,
 }
 
 /// A chamber cut into a wall: which wall, where its mouth is along the
@@ -327,8 +373,8 @@ fn build(
     let mut parts = Parts::default();
     // (`--opt chambers`: chambers cut into the walls, set aside for now.)
     let chambers = args.opt("chambers");
-    let near = wall(&mut parts, -1.0, seed, chambers);
-    let far = wall(&mut parts, 1.0, seed + 7919, chambers);
+    let near = wall(&mut parts, -1.0, seed, &plan(1.0, seed + 7919), chambers);
+    let far = wall(&mut parts, 1.0, seed + 7919, &plan(-1.0, seed), chambers);
     bridges(&mut parts, seed, &near, &far);
     crossings(&mut parts);
     web(&mut parts, seed, &near, &far);
@@ -366,9 +412,10 @@ fn build(
 /// the wall), or a colossal bare slab finely speckled; a few giant columns;
 /// heavy cables hanging down it. Returns its massifs (for what spans the
 /// gap).
-fn wall(parts: &mut Parts, side: f32, seed: i32, chambers: bool) -> Vec<Massif> {
+fn wall(parts: &mut Parts, side: f32, seed: i32, other: &[Stretch], chambers: bool) -> Vec<Massif> {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c1);
     let mut massifs = Vec::new();
+    let mut prows = 0;
     for (m, stretch) in plan(side, seed).into_iter().enumerate() {
         let m = m as i32;
         // The face's frame: along it, and out of it into the gap.
@@ -391,14 +438,33 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, chambers: bool) -> Vec<Massif> 
             for k in 0..3 {
                 parts.lights.push((w.at(c, HEIGHT * (0.2 + 0.3 * k as f32), 3.0), 100.0, 1.0));
             }
-            massifs.push(Massif { wall: nominal, len, z: stretch.z, split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, shaft: true });
+            massifs.push(Massif { wall: nominal, len, z: stretch.z, split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, slope: 0.0, shaft: true });
             continue;
         }
         let split = HEIGHT * (0.3 + 0.5 * r(m, 2));
         let low = -10.0 + 18.0 * r(m, 3);
-        // (The top part never set back far: you start on the rim.)
-        let high = (low + (r(m, 4) - 0.35) * 16.0).clamp(-4.0, 12.0);
-        for (part, (v0, v1, n)) in [(0.0, split, low), (split, HEIGHT, high)].into_iter().enumerate() {
+        // How much room there is: half the gap here, less a margin, so the
+        // walls never close below about 50 m.
+        let zmid = (stretch.z.0 + stretch.z.1) * 0.5;
+        let room = ((face_x(other, zmid) - (stretch.x.0 + stretch.x.1) * 0.5).abs() * 0.5 - 25.0).max(0.0);
+        // The upper part leans out over the chasm (mostly) or stands back,
+        // a sloped face carrying it there. (Never set back far: you start
+        // on the rim.)
+        let delta = if r(m, 4) < 0.65 { 8.0 + 27.0 * r(m, 6) } else { -(4.0 + 10.0 * r(m, 6)) };
+        let high = (low + delta).clamp(-4.0, low + room.max(2.0));
+        let slope = ((high - low).abs() * (0.5 + 1.5 * r(m, 7))).min(split - 30.0).max(0.0);
+        // The sloped face: an underside leaning out over the chasm, or a
+        // battered stretch standing back; a rib now and then across it.
+        if slope > 1.0 {
+            let (a, b) = (split - slope, split);
+            nominal.section(&mut parts.stone, (u0, u1), &[(a, -BACK), (a, low), (b, high), (b, -BACK)]);
+            let ribs = (len / (6.0 + 10.0 * r(m, 8))).floor() as i32;
+            for i in 1..ribs {
+                let u = u0 + (u1 - u0) * i as f32 / ribs as f32;
+                nominal.section(&mut parts.stone, (u - 0.6, u + 0.6), &[(a, low), (a, low + 1.2), (b, high + 1.2), (b, high)]);
+            }
+        }
+        for (part, (v0, v1, n)) in [(0.0, split - slope, low), (split, HEIGHT, high)].into_iter().enumerate() {
             let w = nominal.moved(n);
             let k = seed + m * 31 + part as i32 * 7;
             let p = m * 2 + part as i32;
@@ -425,7 +491,26 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, chambers: bool) -> Vec<Massif> 
             w.block(&mut parts.glow, (u0, u1), (split - 0.3, split - 0.1), (-0.6, -0.4));
             parts.lights.push((w.at((u0 + u1) * 0.5, split - 3.0, 1.0), 90.0, 1.0));
         }
-        massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, shaft: false });
+        // A prow now and then: a slab jutting out over the void, a flat top
+        // to stand on at its edge, its underside sloping back to the wall, a
+        // lit edge.
+        if prows < 3 && r(m, 10) < 0.45 && room > 14.0 && len > 40.0 {
+            prows += 1;
+            let v = HEIGHT * (0.25 + 0.6 * r(m, 11));
+            let base = if v < split - slope { low } else { high };
+            let reach = (12.0 + 18.0 * r(m, 12)).min(room);
+            let width = (20.0 + 40.0 * r(m, 13)).min(len - 10.0);
+            let c = u0 + 5.0 + (len - 10.0 - width) * r(m, 14);
+            let (pu0, pu1) = (c, c + width);
+            let thick = reach * (0.5 + 0.4 * r(m, 15));
+            nominal.section(&mut parts.stone, (pu0, pu1), &[(v - thick, base - 2.0), (v, base - 2.0), (v, base + reach), (v - 2.0, base + reach)]);
+            // A low lip along its edge, and a line of light under it.
+            nominal.block(&mut parts.stone, (pu0, pu1), (v, v + 0.5), (base + reach - 0.5, base + reach));
+            nominal.block(&mut parts.glow, (pu0, pu1), (v - 2.1, v - 1.9), (base + reach - 0.1, base + reach + 0.05));
+            parts.lights.push((nominal.at((pu0 + pu1) * 0.5, v - 12.0, base + reach - 3.0), 80.0, 0.35));
+            parts.prows.push(nominal.at((pu0 + pu1) * 0.5, v, base + reach - 3.0));
+        }
+        massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, slope, shaft: false });
     }
     // Where faces meet at an angle, their masses part behind the corner (or
     // overlap): the wedge between them filled (where they overlap, it lies
