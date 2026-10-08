@@ -376,6 +376,9 @@ struct Parts {
     /// Where on the face being built routes run (walkways, stairs), as (u0,
     /// u1, v0, v1) in its frame: relief keeps flush there, so they have room.
     clear: Vec<(f32, f32, f32, f32)>,
+    /// `--opt classical`: routes in an austere classical manner (arcades,
+    /// solid parapets, arched bridges, gateways), to compare.
+    classical: bool,
 }
 
 impl Parts {
@@ -411,7 +414,7 @@ fn build(
         return;
     }
     let seed = args.seed as i32;
-    let mut parts = Parts::default();
+    let mut parts = Parts { classical: args.opt("classical"), ..default() };
     // (`--opt chambers`: chambers cut into the walls, set aside for now.)
     let chambers = args.opt("chambers");
     // (The routes are planned first: the walls keep clear where they run.)
@@ -1220,12 +1223,20 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
         // Joined to the last face's at the corner.
         if let Some((li, lo, lr, lopen)) = last {
             parts.stone.plate(&[li, lo, at(us, vs, n0), at(us, vs, n1)], vs - DECK, vs);
-            if !lopen && !open(us) {
+            if !lopen && !open(us) && !parts.classical {
                 parts.stone.beam(lr, at(us, vs + RAIL, n1 - 0.15), 0.1, 0.1, Vec3::Y);
             }
         }
-        // The railing: a rail on posts, open at the gaps.
-        for (a, b) in runs((us, ue), &gaps) {
+        // Classical: an arcade along the outer edge, a roof over the
+        // walkway; otherwise a railing on posts. Open at the gaps.
+        if parts.classical {
+            loggia(parts, &m.wall, (us, ue), &v_at, (n0, n1), &gaps);
+            if let Some((li, lo, _, _)) = last {
+                let top = vs + ARCADE + 0.8;
+                parts.stone.plate(&[li, lo, at(us, vs, n0), at(us, vs, n1)], top - 0.8, top);
+            }
+        }
+        for (a, b) in runs((us, ue), &gaps).into_iter().filter(|_| !parts.classical) {
             parts.stone.beam(at(a, v_at(a) + RAIL, n1 - 0.15), at(b, v_at(b) + RAIL, n1 - 0.15), 0.1, 0.1, Vec3::Y);
             let posts = ((b - a) / 3.0).floor().max(1.0) as i32;
             for i in 0..=posts {
@@ -1256,14 +1267,22 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
             let thick = reach * (0.5 + 0.4 * r(k, 4));
             m.wall.section(&mut parts.stone, (pu0, pu1), &[(v - thick, n0), (v, n0), (v, n1 + reach), (v - 2.0, n1 + reach)]);
             let edge = n1 + reach - 0.15;
-            parts.stone.beam(at(pu0, v + RAIL, edge), at(pu1, v + RAIL, edge), 0.1, 0.1, Vec3::Y);
-            for u in [pu0, pu1] {
-                parts.stone.beam(at(u, v + RAIL, n1), at(u, v + RAIL, edge), 0.1, 0.1, Vec3::Y);
-            }
-            let posts = ((pu1 - pu0) / 3.0).floor().max(1.0) as i32;
-            for i in 0..=posts {
-                let u = pu0 + (pu1 - pu0) * i as f32 / posts as f32;
-                parts.stone.beam(at(u, v, edge), at(u, v + RAIL, edge), 0.1, 0.1, m.wall.along);
+            if parts.classical {
+                // Solid parapet walls round it.
+                m.wall.block(&mut parts.stone, (pu0, pu1), (v, v + 1.0), (edge - 0.2, edge + 0.15));
+                for u in [pu0, pu1] {
+                    m.wall.block(&mut parts.stone, (u - 0.2, u + 0.2), (v, v + 1.0), (n1, edge));
+                }
+            } else {
+                parts.stone.beam(at(pu0, v + RAIL, edge), at(pu1, v + RAIL, edge), 0.1, 0.1, Vec3::Y);
+                for u in [pu0, pu1] {
+                    parts.stone.beam(at(u, v + RAIL, n1), at(u, v + RAIL, edge), 0.1, 0.1, Vec3::Y);
+                }
+                let posts = ((pu1 - pu0) / 3.0).floor().max(1.0) as i32;
+                for i in 0..=posts {
+                    let u = pu0 + (pu1 - pu0) * i as f32 / posts as f32;
+                    parts.stone.beam(at(u, v, edge), at(u, v + RAIL, edge), 0.1, 0.1, m.wall.along);
+                }
             }
             parts.glow.beam(at(pu0, v - 2.1, edge), at(pu1, v - 2.1, edge), 0.15, 0.05, Vec3::Y);
             parts.lights.push((at((pu0 + pu1) * 0.5, v - 12.0, n1 + reach * 0.5), 80.0, 0.35));
@@ -1317,6 +1336,11 @@ fn stair(parts: &mut Parts, massifs: &[Massif], z: (f32, f32), top: f32, lower: 
             let rise_to = v + riser * (i + 1) as f32;
             m.wall.block(&mut parts.stone, (s0.min(s1), s0.max(s1)), (rise_to - 0.6, rise_to), (na, nb));
         }
+        // Classical: a solid parapet wall along the outer lane's flights.
+        if parts.classical && f % 2 == 1 {
+            let e = lanes[1] + LANE * 0.5 - 0.15;
+            parts.stone.beam(m.wall.at(u, v + 0.5, e), m.wall.at(to, v + step + 0.5, e), 0.3, 1.0, Vec3::Y);
+        }
         u = to;
         v += step;
         // A landing across both lanes at the turn, out beyond the flight's
@@ -1325,6 +1349,11 @@ fn stair(parts: &mut Parts, massifs: &[Massif], z: (f32, f32), top: f32, lower: 
         let out = if to > other(to) { 3.0 } else { -3.0 };
         let (a, b) = (u.min(u + out), u.max(u + out));
         m.wall.block(&mut parts.stone, (a, b), (v - 0.5, v), (back, lanes[1] + LANE * 0.5));
+    }
+    // Classical: a solid wall between the two lanes, the flights' spine.
+    if parts.classical {
+        let c = (lanes[0] + lanes[1]) * 0.5;
+        m.wall.block(&mut parts.stone, (ua.min(ub), ua.max(ub)), (bottom, top + 1.0), (c - 0.12, c + 0.12));
     }
     true
 }
@@ -1335,6 +1364,10 @@ fn span(parts: &mut Parts, a: Vec3, b: Vec3, width: f32) {
     let along = (b - a).normalize_or(Vec3::X);
     let across = along.cross(Vec3::Y).normalize_or(Vec3::Z);
     parts.stone.beam(a - Vec3::Y * DECK * 0.5, b - Vec3::Y * DECK * 0.5, width, DECK, Vec3::Y);
+    if parts.classical {
+        viaduct(parts, a, b, width);
+        return;
+    }
     for s in [-1.0, 1.0] {
         let off = across * s * (width * 0.5 - 0.15);
         parts.stone.beam(a + off + Vec3::Y * RAIL, b + off + Vec3::Y * RAIL, 0.1, 0.1, Vec3::Y);
@@ -1344,6 +1377,107 @@ fn span(parts: &mut Parts, a: Vec3, b: Vec3, width: f32) {
             parts.stone.beam(p, p + Vec3::Y * RAIL, 0.1, 0.1, along);
         }
         parts.glow.beam(a + off - Vec3::Y * (DECK + 0.05), b + off - Vec3::Y * (DECK + 0.05), 0.15, 0.05, Vec3::Y);
+    }
+}
+
+/// How tall a classical walkway's arcade is, to the underside of its roof.
+const ARCADE: f32 = 7.6;
+
+/// An arched opening in a solid wall on a face: piers at both ends from `v0`
+/// up to `vt`, the opening between them round-arched from the springing
+/// `vs`, filled solid above the arch to `vt`; a ring standing a little proud
+/// round the arch. `n`: the wall's depth range.
+#[allow(clippy::too_many_arguments)]
+fn arch(g: &mut Geometry, w: &Wall, (u0, u1): (f32, f32), v0: f32, vs: f32, vt: f32, (n0, n1): (f32, f32), pier: f32) {
+    w.block(g, (u0, u0 + pier), (v0, vt), (n0, n1));
+    w.block(g, (u1 - pier, u1), (v0, vt), (n0, n1));
+    let (ua, ub) = (u0 + pier, u1 - pier);
+    let r = (ub - ua) * 0.5;
+    let c = (ua + ub) * 0.5;
+    const SEGS: usize = 10;
+    let arc = |i: usize| {
+        let a = std::f32::consts::PI * (1.0 - i as f32 / SEGS as f32);
+        (c + a.cos() * r, vs + a.sin() * r)
+    };
+    let top = vt.max(vs + r + 0.3);
+    let depth = w.out * (n1 - n0);
+    for i in 0..SEGS {
+        let ((ux, vx), (uy, vy)) = (arc(i), arc(i + 1));
+        // Solid above this stretch of the arch, up to the top.
+        let quad = [w.at(ux, vx, n0), w.at(uy, vy, n0), w.at(uy, top, n0), w.at(ux, top, n0)];
+        g.sweep(&quad, depth);
+        // The ring, proud of the wall on its outer side.
+        let k = 0.18 / r.max(0.5);
+        let (px, py) = ((ux - c) * k, (vx - vs) * k);
+        let (qx, qy) = ((uy - c) * k, (vy - vs) * k);
+        g.beam(w.at(ux + px, vx + py, (n0 + n1) * 0.5), w.at(uy + qx, vy + qy, (n0 + n1) * 0.5), 0.35, n1 - n0 + 0.24, w.out);
+    }
+}
+
+/// A walkway's arcade (classical): piers along its outer edge, round arches
+/// between them, solid above up to a roof over the whole walkway; a low
+/// parapet wall between the piers (open at the gaps); a light inside now
+/// and then.
+fn loggia(parts: &mut Parts, w: &Wall, (us, ue): (f32, f32), v_at: &dyn Fn(f32) -> f32, (n0, n1): (f32, f32), gaps: &[(f32, f32)]) {
+    let bays = ((ue - us) / 5.6).round().max(1.0) as i32;
+    let bay = (ue - us) / bays as f32;
+    let (p0, p1) = (n1 - 0.9, n1);
+    for i in 0..bays {
+        let (b0, b1) = (us + bay * i as f32, us + bay * (i + 1) as f32);
+        let v = v_at((b0 + b1) * 0.5);
+        let pier = 0.9f32.min(bay * 0.25);
+        let r = (bay - 2.0 * pier) * 0.5;
+        arch(&mut parts.stone, w, (b0, b1), v, v + ARCADE - r - 0.6, v + ARCADE, (p0, p1), pier);
+        if !gaps.iter().any(|&(a, b)| (b0 + b1) * 0.5 >= a && (b0 + b1) * 0.5 <= b) {
+            w.block(&mut parts.stone, (b0 + pier, b1 - pier), (v, v + 1.0), (n1 - 0.6, n1 - 0.25));
+        }
+        if i % 5 == 2 {
+            parts.lights.push((w.at((b0 + b1) * 0.5, v + ARCADE - 1.5, (n0 + n1) * 0.5), 25.0, 0.12));
+        }
+    }
+    // The roof, over the whole walkway.
+    let (va, vb) = (v_at(us), v_at(ue));
+    parts.stone.beam(w.at(us, va + ARCADE + 0.4, (n0 + n1) * 0.5), w.at(ue, vb + ARCADE + 0.4, (n0 + n1) * 0.5), n1 - n0, 0.8, Vec3::Y);
+}
+
+/// A classical bridge: solid parapets, an arch beneath springing low at
+/// both ends and rising to the deck, piers between arch and deck, and an
+/// arched gateway at each end.
+fn viaduct(parts: &mut Parts, a: Vec3, b: Vec3, width: f32) {
+    let along = (b - a).normalize_or(Vec3::X);
+    let across = along.cross(Vec3::Y).normalize_or(Vec3::Z);
+    let span = a.distance(b);
+    for s in [-1.0, 1.0] {
+        let off = across * s * (width * 0.5 - 0.2);
+        parts.stone.beam(a + off + Vec3::Y * 0.5, b + off + Vec3::Y * 0.5, 0.35, 1.0, Vec3::Y);
+        parts.glow.beam(a + off - Vec3::Y * (DECK + 0.05), b + off - Vec3::Y * (DECK + 0.05), 0.15, 0.05, Vec3::Y);
+    }
+    // The arch below: low at the ends, just under the deck in the middle.
+    let low = (span * 0.16).clamp(6.0, 30.0);
+    let below = |t: f32| DECK + 0.6 + (low - DECK - 0.6) * (2.0 * t - 1.0).powi(2);
+    let n = 20;
+    for i in 0..n {
+        let (t0, t1) = (i as f32 / n as f32, (i + 1) as f32 / n as f32);
+        let (p, q) = (a.lerp(b, t0) - Vec3::Y * below(t0), a.lerp(b, t1) - Vec3::Y * below(t1));
+        parts.stone.beam(p, q, width * 0.8, 1.2, Vec3::Y);
+    }
+    // Piers from the arch up to the deck.
+    let piers = (span / 5.0).floor() as i32;
+    for i in 1..piers {
+        let t = i as f32 / piers as f32;
+        let p = a.lerp(b, t);
+        let h = below(t) - DECK;
+        if h > 1.2 {
+            parts.stone.beam(p - Vec3::Y * below(t), p - Vec3::Y * DECK, width * 0.8, 0.6, along);
+        }
+    }
+    // A gateway at each end: an arch across the deck.
+    for (end, dir) in [(a, along), (b, -along)] {
+        let pier = 0.9;
+        let gate = Wall { origin: Vec3::new(0.0, 0.0, 0.0) + (end + dir * 1.0 - across * (width * 0.5 + pier)) * Vec3::new(1.0, 0.0, 1.0), along: across, out: dir, offset: 0.0 };
+        let v = end.y;
+        let r = width * 0.5;
+        arch(&mut parts.stone, &gate, (0.0, width + 2.0 * pier), v, v + 3.6, v + 3.6 + r + 1.2, (-0.5, 0.5), pier);
     }
 }
 
