@@ -1272,10 +1272,13 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
     }
 }
 
-/// A broad zigzag stair against the wall, its flights running back and
-/// forth between `z.0` and `z.1`, from height `top` down to the walkway
-/// `lower` (its deck must reach under it). `rim`: the top landing reaches
-/// back onto the rim. False if it does not fit there.
+/// A broad switchback stair against the wall: flights of steps running
+/// back and forth between `z.0` and `z.1` in two lanes side by side (so each
+/// flight has the one before it beside it, not under it), a landing across
+/// both lanes at every turn; from the walkway `lower` (its deck must reach
+/// under it) up to height `top`, the last flight ending at `z.0` (the end
+/// nearest the walkway above). `rim`: the top landing reaches back onto the
+/// rim. False if it does not fit there.
 fn stair(parts: &mut Parts, massifs: &[Massif], z: (f32, f32), top: f32, lower: &Walkway, rim: bool) -> bool {
     let (Some((m, ua)), Some((mb, ub))) = (locate(massifs, z.0), locate(massifs, z.1)) else { return false };
     // (Within one face.)
@@ -1287,23 +1290,41 @@ fn stair(parts: &mut Parts, massifs: &[Massif], z: (f32, f32), top: f32, lower: 
     if !(6.0..=220.0).contains(&rise) {
         return false;
     }
-    // Clear of the face all the way down, and landing on the lower deck.
+    // The lanes, clear of the face all the way down, both on the lower deck.
+    const LANE: f32 = 3.5;
     let n = (bottom..=top).step_by_f32(4.0).map(|v| m.face(v)).fold(m.face(top), f32::max) + 2.5;
-    if n + 1.5 > inner(m, bottom) + lower.width {
+    let lanes = [n, n + LANE + 0.2];
+    if lanes[1] + LANE * 0.5 > inner(m, bottom) + lower.width {
         return false;
     }
     let flights = (rise / 6.0).ceil() as i32;
     let step = rise / flights as f32;
-    let (mut u, mut v) = (ua, bottom);
+    let steps = (step / 0.3).ceil().max(1.0) as i32;
+    let riser = step / steps as f32;
+    // (Started so that the last flight ends at `ua`.)
+    let start = if flights % 2 == 0 { ua } else { ub };
+    let other = |u: f32| if u == ua { ub } else { ua };
+    let (mut u, mut v) = (start, bottom);
     for f in 0..flights {
-        let to = if f % 2 == 0 { ub } else { ua };
-        parts.stone.beam(m.wall.at(u, v - 0.2, n), m.wall.at(to, v + step - 0.2, n), 3.5, 0.4, Vec3::Y);
+        let to = other(u);
+        let lane = lanes[(f % 2) as usize];
+        let (na, nb) = (lane - LANE * 0.5, lane + LANE * 0.5);
+        // The slab beneath, and the steps on it.
+        parts.stone.beam(m.wall.at(u, v - 0.7, lane), m.wall.at(to, v + step - 0.7, lane), LANE, 0.5, Vec3::Y);
+        for i in 0..steps {
+            let (t0, t1) = (i as f32 / steps as f32, (i + 1) as f32 / steps as f32);
+            let (s0, s1) = (u + (to - u) * t0, u + (to - u) * t1);
+            let rise_to = v + riser * (i + 1) as f32;
+            m.wall.block(&mut parts.stone, (s0.min(s1), s0.max(s1)), (rise_to - 0.6, rise_to), (na, nb));
+        }
         u = to;
         v += step;
-        // A landing at the turn.
-        let back = if rim && f == flights - 1 { m.face(top) - 1.5 } else { n - 2.0 };
-        let (a, b) = (u.min(u + if to == ub { 2.5 } else { -2.5 }), u.max(u + if to == ub { 2.5 } else { -2.5 }));
-        m.wall.block(&mut parts.stone, (a, b), (v - 0.4, v), (back, n + 2.0));
+        // A landing across both lanes at the turn, out beyond the flight's
+        // end.
+        let back = if rim && f == flights - 1 { m.face(top) - 1.5 } else { lanes[0] - LANE * 0.5 };
+        let out = if to > other(to) { 3.0 } else { -3.0 };
+        let (a, b) = (u.min(u + out), u.max(u + out));
+        m.wall.block(&mut parts.stone, (a, b), (v - 0.5, v), (back, lanes[1] + LANE * 0.5));
     }
     true
 }
