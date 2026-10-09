@@ -143,28 +143,6 @@ impl Geometry {
         self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    /// A vertical prism over a triangle in plan (its points' heights
-    /// ignored), from height 0 to `h`.
-    fn prism(&mut self, tri: [Vec3; 3], h: f32) {
-        let flat = |p: Vec3| Vec3::new(p.x, 0.0, p.z);
-        let [mut a, b, mut c] = tri.map(flat);
-        // (Counter-clockwise seen from above.)
-        if (b - a).cross(c - a).y < 0.0 {
-            std::mem::swap(&mut a, &mut c);
-        }
-        let up = Vec3::Y * h;
-        let base = self.positions.len() as u32;
-        for p in [a + up, b + up, c + up] {
-            self.positions.push(p.to_array());
-            self.normals.push([0.0, 1.0, 0.0]);
-        }
-        self.indices.extend_from_slice(&[base, base + 1, base + 2]);
-        for (p, q) in [(a, b), (b, c), (c, a)] {
-            let n = (q - p).cross(Vec3::Y).normalize_or(Vec3::X);
-            self.quad([q, q + up, p + up, p], n);
-        }
-    }
-
     /// A convex polygon face, wound to face away from `inside`.
     fn face(&mut self, pts: &[Vec3], inside: Vec3) {
         let mut n = (pts[1] - pts[0]).cross(pts[2] - pts[0]).normalize_or(Vec3::Y);
@@ -470,6 +448,10 @@ struct Parts {
     /// (walked on, not seen: real steps make you vault).
     steps: Geometry,
     ramps: Geometry,
+    /// (`--opt seams`: the walls' solids, and the space a walker needs over
+    /// each route, by what it is, to check one against the other.)
+    walls: Vec<Manifold>,
+    clearance: Vec<(String, Manifold)>,
     /// Where piers stand (one to a spot).
     piers: Vec<Vec3>,
     /// (`--opt seams`: which builder made the stone from which triangle on.)
@@ -545,7 +527,7 @@ fn build(
     let chambers = args.opt("chambers");
     // (The walls' shapes and the routes are planned first: the walls keep
     // clear where the routes run.)
-    let (near, far, routing) = layout(seed);
+    let (near, far, routing, solids) = layout(seed);
     let bottom = routing.ways.last().map_or(HEIGHT, |w| w.v0);
     info!(
         "the chasm: the way down: {} flights, {} tunnels, {} walkways, {} bridges, down to {bottom:.0} m; {:.1} km, {:.0} min at a walk",
@@ -556,14 +538,24 @@ fn build(
         routing.length / 1000.0,
         routing.length / 4.0 / 60.0
     );
-    wall(&mut parts, -1.0, seed, &near, &routing, chambers);
-    wall(&mut parts, 1.0, seed + 7919, &far, &routing, chambers);
+    wall(&mut parts, -1.0, seed, &near, &solids[0], &routing, chambers);
+    wall(&mut parts, 1.0, seed + 7919, &far, &solids[1], &routing, chambers);
     crossings(&mut parts);
     routes(&mut parts, seed, &routing, &near, &far);
     parts.mark("web");
     web(&mut parts, seed, &near, &far, &routing);
-    // `--opt seams`: where faces coincide (they flicker), logged.
+    // `--opt seams`: where faces coincide (they flicker), and where a route
+    // runs into a wall (no way on), logged.
     if args.opt("seams") {
+        let walls = Manifold::batch_union(&parts.walls);
+        let blocked: Vec<_> = parts.clearance.iter().filter_map(|(what, c)| {
+            let x = c.intersection(&walls);
+            (x.volume() > 0.05).then(|| (what, x.volume(), x.bounding_box()))
+        }).collect();
+        info!("the chasm: {} of {} routes' spaces run into a wall", blocked.len(), parts.clearance.len());
+        for (what, vol, bb) in blocked.iter().take(20) {
+            info!("the chasm: blocked: {what} ({vol:.1} m3, {bb:?})");
+        }
         let found = parts.stone.coincident();
         info!("the chasm: {} coinciding faces", found.len());
         let mut kinds: std::collections::BTreeMap<(&str, &str), (usize, Vec3)> = default();
@@ -659,19 +651,74 @@ fn shape(side: f32, seed: i32, other: &[Stretch]) -> Vec<Massif> {
     massifs
 }
 
-/// Both walls' shapes, and the routes planned on them.
-fn layout(seed: i32) -> (Vec<Massif>, Vec<Massif>, Routing) {
-    let near = shape(-1.0, seed, &plan(1.0, seed + 7919));
-    let far = shape(1.0, seed + 7919, &plan(-1.0, seed));
-    let routing = Routing::plan(seed, &near, &far);
-    (near, far, routing)
+/// A wall's mass as one solid, from its shape: each massif's (its lower
+/// part, its sloped stretch, its upper part; a shaft's slot), and between
+/// them what fills their corners: band by band in height (in each, both
+/// faces plain or evenly sloped), the hull of the one's end and the other's
+/// start, so the fill runs from face to face and never stands out of either.
+fn wall_solid(massifs: &[Massif]) -> Manifold {
+    let mut mass = Vec::new();
+    for ms in massifs {
+        let (w, len) = (&ms.wall, ms.len);
+        if ms.shaft {
+            mass.push(wbox(w, (0.0, len), (0.0, HEIGHT), (-BACK, SHAFT_DEPTH)));
+            continue;
+        }
+        let (a, b) = (ms.split - ms.slope, ms.split);
+        mass.push(wbox(w, (0.0, len), (0.0, a), (-BACK, ms.low)));
+        mass.push(wbox(w, (0.0, len), (b, HEIGHT), (-BACK, ms.high)));
+        if ms.slope > 1.0 {
+            let mut pts = Vec::new();
+            for u in [0.0, len] {
+                for (v, n) in [(a, -BACK), (a, ms.low), (b, ms.high), (b, -BACK)] {
+                    let p = w.at(u, v, n);
+                    pts.push([p.x as f64, p.y as f64, p.z as f64]);
+                }
+            }
+            mass.push(Manifold::hull_pts(&pts));
+        }
+    }
+    for pair in massifs.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let mut cuts = vec![0.0, HEIGHT];
+        for x in [a, b].into_iter().filter(|x| !x.shaft) {
+            cuts.extend([x.split - x.slope, x.split]);
+        }
+        cuts.retain(|v| (0.0..=HEIGHT).contains(v));
+        cuts.sort_by(f32::total_cmp);
+        cuts.dedup_by(|x, y| (*x - *y).abs() < 0.01);
+        for band in cuts.windows(2) {
+            let (v0, v1) = (band[0], band[1]);
+            let mut pts = Vec::new();
+            for (m, u) in [(a, a.len), (b, 0.0)] {
+                for (v, n) in [(v0, -BACK), (v0, m.face(v0 + 1e-3)), (v1, m.face(v1 - 1e-3)), (v1, -BACK)] {
+                    let p = m.wall.at(u, v, n);
+                    pts.push([p.x as f64, p.y as f64, p.z as f64]);
+                }
+            }
+            mass.push(Manifold::hull_pts(&pts));
+        }
+    }
+    Manifold::batch_union(&mass)
 }
 
-fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], routing: &Routing, chambers: bool) {
+/// Both walls' shapes and solids, and the routes planned on them (checked
+/// against the solids: nothing placed where a walker would run into rock).
+fn layout(seed: i32) -> (Vec<Massif>, Vec<Massif>, Routing, [Manifold; 2]) {
+    let near = shape(-1.0, seed, &plan(1.0, seed + 7919));
+    let far = shape(1.0, seed + 7919, &plan(-1.0, seed));
+    let solids = [wall_solid(&near), wall_solid(&far)];
+    let routing = Routing::plan(seed, &near, &far, &solids);
+    (near, far, routing, solids)
+}
+
+fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Manifold, routing: &Routing, chambers: bool) {
     parts.mark("wall");
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c1);
     let mut zones = routing.zones(side);
     zones.extend(routing.door_zones(side, massifs));
+    // (Its mass is its solid, less what is cut into it: tunnels, halls.)
+    let mut cuts: Vec<Manifold> = routing.tunnels.iter().filter(|t| t.side == side).map(|t| tunnel_cut(&massifs[t.m], t)).collect();
     for (m, ms) in massifs.iter().enumerate() {
         let m = m as i32;
         let (nominal, len) = (ms.wall, ms.len);
@@ -685,7 +732,6 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], routing: &R
             .collect();
         if ms.shaft {
             let w = nominal.moved(SHAFT_DEPTH);
-            w.block(&mut parts.stone, (u0, u1), (0.0, HEIGHT), (-BACK, 0.0));
             // Black at the back, a strip of light running up it.
             w.block(&mut parts.dark, (u0, u1), (0.0, HEIGHT), (0.0, 0.05));
             let c = (u0 + u1) * 0.5;
@@ -696,26 +742,10 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], routing: &R
             continue;
         }
         let (split, low, high, slope, room) = (ms.split, ms.low, ms.high, ms.slope, ms.room);
-        // (Where tunnels run through it, its mass is built as one solid, the
-        // tunnels taken out of it.)
-        let cuts: Vec<Manifold> = routing.tunnels.iter().filter(|t| t.side == side && t.m == m as usize).map(|t| tunnel_cut(ms, t)).collect();
-        let mut mass: Vec<Manifold> = Vec::new();
         // The sloped face: an underside leaning out over the chasm, or a
         // battered stretch standing back; a rib now and then across it.
         if slope > 1.0 {
             let (a, b) = (split - slope, split);
-            if cuts.is_empty() {
-                nominal.section(&mut parts.stone, (u0, u1), &[(a, -BACK), (a, low), (b, high), (b, -BACK)]);
-            } else {
-                let mut pts = Vec::new();
-                for u in [u0, u1] {
-                    for (v, n) in [(a, -BACK), (a, low), (b, high), (b, -BACK)] {
-                        let p = nominal.at(u, v, n);
-                        pts.push([p.x as f64, p.y as f64, p.z as f64]);
-                    }
-                }
-                mass.push(Manifold::hull_pts(&pts));
-            }
             let ribs = (len / (6.0 + 10.0 * r(m, 8))).floor() as i32;
             for i in 1..ribs {
                 let u = u0 + (u1 - u0) * i as f32 / ribs as f32;
@@ -731,6 +761,7 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], routing: &R
             if let Some(t) = site(parts, routing, side, m as usize, ms, (v0, v1), n, reach, k) {
                 parts.mark("hall");
                 hall(parts, &nominal, &t, (u0, u1), (v0, v1), k);
+                cuts.push(wbox(&nominal, t.u, (t.floor, t.ceiling), (t.back, t.face + 2.0)));
                 parts.mark("wall");
                 zones.push(Zone { z: (t.z.0 - 10.0, t.z.1 + 10.0), v: (t.floor - 25.0, t.ceiling + 10.0) });
                 parts.terraces.push(t);
@@ -746,19 +777,11 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], routing: &R
                 parts.chambers.push(c);
                 continue;
             }
-            if cuts.is_empty() {
-                w.block(&mut parts.stone, (u0, u1), (v0, v1), (-BACK - n, 0.0));
-            } else {
-                mass.push(wbox(&nominal, (u0, u1), (v0, v1), (-BACK, n)));
-            }
             if r(p, 5) < 0.2 {
                 slab(parts, &w, (u0, u1), (v0, v1), k);
             } else {
                 strata(parts, &w, (u0, u1), (v0, v1), k);
             }
-        }
-        if !mass.is_empty() {
-            parts.stone.solid(&Manifold::batch_union(&mass).difference(&Manifold::batch_union(&cuts)));
         }
         // An overhang: a line of light along its edge, underneath.
         if high > low + 1.0 {
@@ -768,14 +791,9 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], routing: &R
         }
     }
     parts.clear.clear();
-    // Where faces meet at an angle, their masses part behind the corner (or
-    // overlap): the wedge between them filled (where they overlap, it lies
-    // inside them).
-    for pair in massifs.windows(2) {
-        let (a, b) = (&pair[0], &pair[1]);
-        let corner = b.wall.origin;
-        parts.stone.prism([corner, corner - a.wall.out * BACK, corner - b.wall.out * BACK], HEIGHT);
-    }
+    let solid = solid.difference(&Manifold::batch_union(&cuts));
+    parts.stone.solid(&solid);
+    parts.walls.push(solid);
     let half = LENGTH * 0.5;
     // Giant half-sunk columns, spanning much of the height, standing on
     // whatever face is there.
@@ -974,8 +992,8 @@ fn site(parts: &Parts, routing: &Routing, side: f32, massif: usize, ms: &Massif,
     None
 }
 
-/// A massif part with a hall cut into it (its place): the mass round it;
-/// the face round it in strata; inside, an arcade along its open front, the back wall in relief either side of a dark
+/// A massif part with a hall cut into it (its place; the wall's solid has
+/// the hall taken out): the face round it in strata; inside, an arcade along its open front, the back wall in relief either side of a dark
 /// doorway in a stepped frame, a lit line along the front of the ceiling,
 /// a light within. (The walkway's part of it, gateways, steps and terrace,
 /// comes with the walkway.)
@@ -983,11 +1001,6 @@ fn hall(parts: &mut Parts, wall: &Wall, t: &Terrace, (u0, u1): (f32, f32), (v0, 
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d6);
     let (a, b) = t.u;
     let (f, top) = (t.floor, t.ceiling);
-    wall.block(&mut parts.stone, (u0, u1), (v0, f), (-BACK, t.face));
-    wall.block(&mut parts.stone, (u0, u1), (top, v1), (-BACK, t.face));
-    wall.block(&mut parts.stone, (u0, a), (f, top), (-BACK, t.face));
-    wall.block(&mut parts.stone, (b, u1), (f, top), (-BACK, t.face));
-    wall.block(&mut parts.stone, (a, b), (f, top), (-BACK, t.back));
     let w = wall.moved(t.face);
     strata(parts, &w, (u0, u1), (v0, f), seed);
     strata(parts, &w, (u0, u1), (top, v1), seed + 1);
@@ -1409,9 +1422,11 @@ fn plain(m: &Massif, v: (f32, f32)) -> bool {
 }
 
 impl Routing {
-    fn plan(seed: i32, near: &[Massif], far: &[Massif]) -> Routing {
+    fn plan(seed: i32, near: &[Massif], far: &[Massif], solids: &[Manifold; 2]) -> Routing {
         let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d3);
         let walls = |side: f32| if side < 0.0 { near } else { far };
+        // Whether a walker's space is clear of the wall's rock.
+        let open = |side: f32, space: &Manifold| space.intersection(&solids[if side < 0.0 { 0 } else { 1 }]).volume() <= 0.05;
         let (lo, hi) = (CENTRE.z - LENGTH * 0.5 + 10.0, CENTRE.z + LENGTH * 0.5 - 10.0);
         let to_z = |m: &Massif, u: f32| m.z.0 + u / m.len * (m.z.1 - m.z.0);
         // A point along the chasm put on its face's lattice (a whole metre
@@ -1460,7 +1475,12 @@ impl Routing {
             let w = Walkway { side, z: (a, b), v0: v, grade: 0.0, width };
             let depth = shelf_depth(width);
             let plain_all = (a..=b).step_by_f32(2.0).all(|z| locate(walls(side), z).is_some_and(|(m, _)| plain(m, (v - depth - 1.0, v + 3.5))));
-            (plain_all && v > 30.0 && free(taken, None, way_box(&w))).then_some(w)
+            // (Where it passes from one face to the next, they stand out
+            // within its width of each other, so there is a way on round the
+            // corner, not into the next face.)
+            let faces: Vec<f32> = (a..=b).step_by_f32(1.0).filter_map(|z| locate(walls(side), z).map(|(m, _)| inner(m, v))).collect();
+            let passable = faces.windows(2).all(|p| (p[1] - p[0]).abs() <= width - 1.5);
+            (plain_all && passable && v > 30.0 && free(taken, None, way_box(&w)) && open(side, &walk_space(&w, walls(side)))).then_some(w)
         };
         let mut ways: Vec<Walkway> = Vec::new();
         let mut flights: Vec<Flight> = Vec::new();
@@ -1544,7 +1564,8 @@ impl Routing {
                         continue;
                     }
                     let f = Flight { side, m: mi, u: (ua, ub), v: (v, vb), z: (to_z(m, ua), to_z(m, ub)), width };
-                    if !free(&taken, None, flight_box(&f)) {
+                    let n0 = inner(m, v);
+                    if !free(&taken, None, flight_box(&f)) || !open(side, &flight_space(m, f.u, f.v, (n0, n0 + width))) {
                         continue;
                     }
                     if let Some(w) = walkway_at(&taken, side, f.z.1, vb, try_dir, length, width) {
@@ -1576,7 +1597,13 @@ impl Routing {
                 if salt >= 300 {
                     break;
                 }
-                let Some((t, sp, nf, nb, (nt, ni), state)) = history.pop() else { break };
+                // (Nothing fits from the rim: start somewhere else along it.)
+                let Some((t, sp, nf, nb, (nt, ni), state)) = history.pop() else {
+                    salt += 1;
+                    z = snap(-1.0, CENTRE.z + (r(salt, 20) - 0.5) * 300.0).unwrap_or(CENTRE.z);
+                    dir = -dir;
+                    continue;
+                };
                 taken.truncate(t);
                 spans.truncate(sp);
                 flights.truncate(nf);
@@ -1706,9 +1733,13 @@ fn routes(parts: &mut Parts, seed: i32, routing: &Routing, near: &[Massif], far:
         for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
             solids.push(wbox(&m.wall, (u - w, u + w), (v - 0.3, v), (t.inside - w, inner(m, v) + 0.6)));
         }
-        let (steps, slope) = stair(m, (t.u.1, t.u.2), t.v, (t.inside - w, t.inside + w), None);
+        let (steps, slope, clear) = stair(m, (t.u.1, t.u.2), t.v, (t.inside - w + 0.2, t.inside + w), None);
         parts.steps.solid(&steps);
         parts.ramps.solid(&slope);
+        parts.clearance.push((format!("tunnel stair at {:.0} m", t.v.0), clear));
+        for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
+            parts.clearance.push((format!("tunnel door at {v:.0} m"), wbox(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (t.inside, inner(m, v) + 0.5))));
+        }
         parts.lights.push((m.wall.at((t.u.1 + t.u.2) * 0.5, (t.v.0 + t.v.1) * 0.5 + 2.5, t.inside), 12.0, 0.02));
         info!("the chasm: a tunnel from {:?} to {:?} (out {:?}, inside {:?})", m.wall.at(t.u.0, t.v.0, inner(m, t.v.0)), m.wall.at(t.u.3, t.v.1, inner(m, t.v.1)), m.wall.out, m.wall.at(t.u.1, t.v.0, t.inside));
     }
@@ -1717,7 +1748,8 @@ fn routes(parts: &mut Parts, seed: i32, routing: &Routing, near: &[Massif], far:
     for f in &routing.flights {
         let m = &massifs(f.side)[f.m];
         let n0 = inner(m, f.v.0);
-        let (steps, slope) = stair(m, f.u, f.v, (n0, n0 + f.width), Some(m.face(f.v.0) - 1.5));
+        let (steps, slope, clear) = stair(m, f.u, f.v, (n0, n0 + f.width), Some(m.face(f.v.0) - 1.5));
+        parts.clearance.push((format!("flight at {:.0} m", f.v.0), clear));
         info!("the chasm: a flight from {:?} to {:?} (out {:?})", m.wall.at(f.u.0, f.v.0, n0 + f.width), m.wall.at(f.u.1, f.v.1, n0 + f.width), m.wall.out);
         parts.steps.solid(&steps);
         parts.ramps.solid(&slope);
@@ -1781,6 +1813,49 @@ fn upright(m: &Manifold, w: &Walkway) -> Manifold {
     m.transform(&[1.0, 0.0, 0.0, 0.0, -g, -1.0, 0.0, 1.0, 0.0, 0.0, (w.v0 - w.grade * w.z.0) as f64, 0.0])
 }
 
+/// The faces a walkway passes: the massif, from where to where along it,
+/// its heights there, the deck's inner and outer edge.
+fn walkway_faces(w: &Walkway, massifs: &[Massif]) -> Vec<(usize, f32, f32, (f32, f32), f32, f32)> {
+    let mut faces = Vec::new();
+    for (k, m) in massifs.iter().enumerate() {
+        let (zs, ze) = (m.z.0.max(w.z.0), m.z.1.min(w.z.1));
+        if ze - zs < 0.5 {
+            continue;
+        }
+        let to_u = |z: f32| (z - m.z.0) / (m.z.1 - m.z.0).max(1e-3) * m.len;
+        let (vs, ve) = (w.v(zs), w.v(ze));
+        let n0 = inner(m, (vs + ve) * 0.5);
+        faces.push((k, to_u(zs), to_u(ze), (vs, ve), n0, n0 + w.width));
+    }
+    faces
+}
+
+/// The space a walker needs over a walkway: over what is walkable on it
+/// (from just out from the face to the edge, round its corners), 2.4 m up.
+fn walk_space(w: &Walkway, massifs: &[Massif]) -> Manifold {
+    let faces = walkway_faces(w, massifs);
+    let plan = |k: usize, u: f32, n: f32| {
+        let p = massifs[k].wall.at(u, 0.0, n);
+        Vec2::new(p.x, p.z)
+    };
+    let mut walk = Vec::new();
+    for (i, &(k, us, ue, _, n0, n1)) in faces.iter().enumerate() {
+        walk.push(region(&[plan(k, us, n1 - 0.1), plan(k, ue, n1 - 0.1), plan(k, ue, n0 + 0.6), plan(k, us, n0 + 0.6)]));
+        if let Some(&(k2, us2, _, _, n02, n12)) = faces.get(i + 1) {
+            walk.push(region(&[plan(k, ue, n1 - 0.1), plan(k, ue, n0 + 0.6), plan(k2, us2, n12 - 0.1), plan(k2, us2, n02 + 0.6)]));
+        }
+    }
+    upright(&raised(&CrossSection::batch_union(&walk), 0.1, 2.4), w)
+}
+
+/// The space a walker needs over a stair along a face (see `stair`): over
+/// its slope, 2.3 m up, from just out from its inner side to its edge.
+fn flight_space(m: &Massif, (ua, ub): (f32, f32), (va, vb): (f32, f32), n: (f32, f32)) -> Manifold {
+    let s = if m.wall.along.dot(Vec3::Y.cross(m.wall.out)) > 0.0 { 1.0 } else { -1.0 };
+    let over = CrossSection::from_polygons_with_fill_rule(&[vec![[ua as f64, (va + 0.1) as f64], [ub as f64, (vb + 0.1) as f64], [ub as f64, (vb + 2.4) as f64], [ua as f64, (va + 2.4) as f64]]], FillRule::NonZero);
+    placed(&across(&over, (n.0 + 0.7) * s, (n.1 - 0.1) * s), m.wall.origin, m.wall.along, m.wall.out * s)
+}
+
 /// A walkway, built as one solid from its plan. The plan: along each face
 /// it passes, a strip from its outer edge back into the wall; where two
 /// faces meet, the hull of their ends (a bevel at an outer corner; at an
@@ -1796,25 +1871,14 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d4);
     let depth = shelf_depth(w.width);
     let flat = |p: Vec3| Vec2::new(p.x, p.z);
-    // The faces it passes: the massif, from where to where along it, its
-    // heights there, the deck's inner and outer edge; and how far back the
-    // wall lies behind the edge, at most (the deck reaches that far in on
-    // every face).
-    let mut faces = Vec::new();
+    // The faces it passes; and how far back the wall lies behind the edge,
+    // at most (the deck reaches that far in on every face).
+    let faces = walkway_faces(w, massifs);
     let mut reach = w.width + 1.0;
-    for (k, m) in massifs.iter().enumerate() {
-        let (zs, ze) = (m.z.0.max(w.z.0), m.z.1.min(w.z.1));
-        if ze - zs < 0.5 {
-            continue;
-        }
-        let to_u = |z: f32| (z - m.z.0) / (m.z.1 - m.z.0).max(1e-3) * m.len;
-        let (us, ue) = (to_u(zs), to_u(ze));
-        let (vs, ve) = (w.v(zs), w.v(ze));
-        let n0 = inner(m, (vs + ve) * 0.5);
-        let n1 = n0 + w.width;
+    for &(k, _, _, (vs, ve), n0, n1) in &faces {
+        let m = &massifs[k];
         let back = (vs.min(ve) - depth..=vs.max(ve)).step_by_f32(2.0).map(|v| inner(m, v)).fold(n0, f32::min) - 1.0;
         reach = reach.max(n1 - back);
-        faces.push((k, us, ue, (vs, ve), n0, n1));
     }
     if faces.is_empty() {
         return Manifold::empty();
@@ -1853,6 +1917,7 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
         }
     }
     let deck = CrossSection::batch_union(&areas);
+    parts.clearance.push((format!("walkway at {:.0} m", w.v0), walk_space(w, massifs)));
     // Its places, cut out of the deck; the parapet's openings: the places,
     // where bridges join, and the walkway's two ends.
     let mut gaps: Vec<(usize, f32, f32)> = Vec::new();
@@ -2023,8 +2088,9 @@ fn placed(m: &Manifold, origin: Vec3, x: Vec3, z: Vec3) -> Manifold {
 /// wall's line (as wide as what it joins and as far out, so they meet end to
 /// end on the same line); nothing at its edges; beneath, a mass parallel to
 /// it, and (`back`) deepening back into the wall to there. Returned as what
-/// is seen, and the slope to walk on (from the one floor to the other).
-fn stair(m: &Massif, u: (f32, f32), v: (f32, f32), n: (f32, f32), back: Option<f32>) -> (Manifold, Manifold) {
+/// is seen, the slope to walk on (from the one floor to the other), and the
+/// space a walker needs over it.
+fn stair(m: &Massif, u: (f32, f32), v: (f32, f32), n: (f32, f32), back: Option<f32>) -> (Manifold, Manifold, Manifold) {
     let ((ua, ub), (va, vb)) = (u, v);
     // (Right-handed: across the face out, or in, whichever keeps it so.)
     let s = if m.wall.along.dot(Vec3::Y.cross(m.wall.out)) > 0.0 { 1.0 } else { -1.0 };
@@ -2041,7 +2107,7 @@ fn stair(m: &Massif, u: (f32, f32), v: (f32, f32), n: (f32, f32), back: Option<f
     }
     let slope = CrossSection::from_polygons_with_fill_rule(&[vec![[ua as f64, va as f64], [ub as f64, vb as f64], [ub as f64, (vb - 1.0) as f64], [ua as f64, (va - 1.0) as f64]]], FillRule::NonZero);
     let frame = |x: &Manifold| placed(x, m.wall.origin, m.wall.along, m.wall.out * s);
-    (frame(&Manifold::batch_union(&solid)), frame(&across(&slope, n.0 * s, n.1 * s)))
+    (frame(&Manifold::batch_union(&solid)), frame(&across(&slope, n.0 * s, n.1 * s)), flight_space(m, u, v, n))
 }
 
 /// A bar from `a` to `b` (its long axis), `w` wide and `t` thick, `up`
