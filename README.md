@@ -43,7 +43,8 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt bench                               once everything in view has loaded: average and worst frame time, entity count, costliest render passes
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt chasm                               the chasm: a standalone place, two walls 550 m high, 30-230 m apart and angled, rising out
-                                              of the haze, bridges and a web of cables; you start on the rim
+                                              of the haze, a web of cables; a way down from the rim where you start: bare flights
+                                              of stairs, down the walls and across the void, between walkways (--seed N for others)
     --opt seams                               with --opt chasm: log where faces coincide (they flicker), by what made them
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
