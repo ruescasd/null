@@ -44,8 +44,6 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt chasm                               the chasm: a standalone place, two walls 550 m high, 30-230 m apart and angled, rising out
                                               of the haze, bridges and a web of cables; you start on the rim
-    --opt classical                           with --opt chasm: routes in an austere classical manner (arcaded walkways,
-                                              solid parapets, arched bridges and gateways), to compare
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)
