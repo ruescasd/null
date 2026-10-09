@@ -1264,9 +1264,9 @@ impl Flight {
     }
 }
 
-/// How steep flights are (rise per metre run: about 30 to 40 degrees), and
+/// How steep flights are (rise per metre run: about 33 to 44 degrees), and
 /// the depth of the mass under a flight along a wall.
-const STEEP: (f32, f32) = (0.55, 0.8);
+const STEEP: (f32, f32) = (0.65, 0.95);
 const UNDER: f32 = 3.0;
 
 /// The routes, planned before anything is built (on the walls' shapes): a
@@ -1354,13 +1354,15 @@ impl Routing {
         let mut dir = if r(0, 0) < 0.5 { 1.0f32 } else { -1.0 };
         let mut on: Option<usize> = None;
         let mut last_across = true;
-        for i in 0..40 {
-            if v < 90.0 {
-                break;
-            }
+        // (Where it stood before each step, to go back to when no next step
+        // fits: then that step is taken back and tried another way.)
+        let mut history = Vec::new();
+        let mut salt = 0;
+        while v >= 90.0 && flights.len() < 40 {
+            let i = flights.len() as i32;
             let mut found: Option<(Flight, Walkway, Option<(Vec3, Vec3, f32)>)> = None;
             for t in 0..24 {
-                let k = i * 100 + t;
+                let k = i * 100 + t + salt * 7919;
                 let steep = STEEP.0 + (STEEP.1 - STEEP.0) * r(k, 2);
                 let length = 40.0 + 120.0 * r(k, 3);
                 let width = 6.0 + 6.0 * r(k, 4);
@@ -1385,7 +1387,7 @@ impl Routing {
                 };
                 if !across {
                     // Down along this wall, on from here.
-                    let drop = (25.0 + 85.0 * r(k, 6)).min(v - 60.0);
+                    let drop = (20.0 + 40.0 * r(k, 6)).min(v - 60.0);
                     if drop < 20.0 {
                         continue;
                     }
@@ -1400,8 +1402,9 @@ impl Routing {
                         continue;
                     }
                     let f = Flight { from: (side, za, v), to: (side, zb, v - drop), width: 3.5 + 1.5 * r(k, 7), ways: (on, ways.len()) };
-                    // (Clear of all but the walkway it leaves.)
-                    if !flight_boxes(&f).into_iter().all(|b| free(&taken, on, b)) {
+                    // (Clear of everything; where it sets out, of all but the
+                    // walkway it leaves.)
+                    if !flight_boxes(&f).into_iter().enumerate().all(|(j, b)| free(&taken, if j == 0 { on } else { None }, b)) {
                         continue;
                     }
                     if let Some(w) = landing(&taken, side, zb, v - drop, try_dir) {
@@ -1438,8 +1441,25 @@ impl Routing {
                     }
                 }
             }
-            let Some((f, w, span)) = found else { break };
-            if !f.across() {
+            let Some((f, w, span)) = found else {
+                if salt >= 40 {
+                    break;
+                }
+                let Some((t, sp, state)) = history.pop() else { break };
+                taken.truncate(t);
+                spans.truncate(sp);
+                ways.pop();
+                flights.pop();
+                (side, z, v, dir, on, last_across) = state;
+                salt += 1;
+                continue;
+            };
+            history.push((taken.len(), spans.len(), (side, z, v, dir, on, last_across)));
+            if f.across() {
+                for e in [f.from, f.to] {
+                    taken.push((None, (e.0, (e.1 - 8.0, e.1 + 8.0), (e.2 - 16.0, e.2 + 4.0))));
+                }
+            } else {
                 taken.extend(flight_boxes(&f).into_iter().map(|b| (None, b)));
             }
             taken.push((Some(ways.len()), way_box(&w)));
@@ -1746,7 +1766,7 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
     }
     let built = upright(&Manifold::batch_union(&solid), w);
     // A lit line along the edge.
-    let line = deck.offset(0.04, JoinType::Miter, 4.0, 0).difference(&deck).difference(&places);
+    let line = deck.offset(0.04, JoinType::Miter, 4.0, 0).difference(&deck).difference(&open);
     parts.glow.solid(&upright(&raised(&line, -1.0, -0.9), w));
     // (Its outline's corners on the edge side, logged: where it turns,
     // from and on, and which way is in, for close looks.)
@@ -1848,43 +1868,86 @@ fn place(parts: &mut Parts, wall: &Wall, t: &Terrace, v_at: &dyn Fn(f32) -> f32,
     }
 }
 
-/// A flight's side profile in (x, y): steps (risers of 0.28 m at most) from
-/// (x0, y0) down to (x1, y1), the first a riser below y0, the last at y1;
-/// beneath, a line parallel to them `under` below.
-fn steps_profile(x0: f32, y0: f32, x1: f32, y1: f32, under: f32) -> CrossSection {
-    let n = ((y0 - y1) / 0.28).ceil().max(1.0) as i32;
-    let (riser, tread) = ((y0 - y1) / n as f32, (x1 - x0) / n as f32);
-    let mut pts = Vec::new();
-    for i in 0..n {
-        let top = (y0 - riser * (i + 1) as f32) as f64;
-        pts.push([(x0 + tread * i as f32) as f64, top]);
-        pts.push([(x0 + tread * (i + 1) as f32) as f64, top]);
+/// A flight's treads in side view (x, y): from (x0, y0) down to (x1, y1)
+/// in runs of steps (risers of 0.28 m at most), a 4 m landing after every
+/// 20 m of drop (as many as leave the steps no steeper than 45 degrees);
+/// the first step a riser below y0, the last at y1.
+fn treads(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<[f64; 2]> {
+    let (drop, run) = (y0 - y1, x1 - x0);
+    let sign = run.signum();
+    let mut runs = (drop / 20.0).ceil().max(1.0) as i32;
+    while runs > 1 && run.abs() - (runs - 1) as f32 * 4.0 < drop {
+        runs -= 1;
     }
-    pts.push([x1 as f64, (y1 - under) as f64]);
-    pts.push([x0 as f64, (y0 - riser - under) as f64]);
+    let stairs = run.abs() - (runs - 1) as f32 * 4.0;
+    let (mut x, mut y) = (x0, y0);
+    let mut pts = Vec::new();
+    for k in 0..runs {
+        let (d, w) = (drop / runs as f32, stairs / runs as f32 * sign);
+        let n = (d / 0.28).ceil().max(1.0) as i32;
+        let (riser, tread) = (d / n as f32, w / n as f32);
+        for _ in 0..n {
+            y -= riser;
+            pts.push([x as f64, y as f64]);
+            x += tread;
+            pts.push([x as f64, y as f64]);
+        }
+        if k + 1 < runs {
+            x += 4.0 * sign;
+            pts.push([x as f64, y as f64]);
+        }
+    }
+    pts
+}
+
+/// A flight's mass in side view: under its treads (`top`), down to a line
+/// parallel to the flight `under` below.
+fn flight_mass(top: &[[f64; 2]], under: f32) -> CrossSection {
+    let (a, b) = (top[0], top[top.len() - 1]);
+    let mut pts = top.to_vec();
+    pts.push([b[0], b[1] - under as f64]);
+    pts.push([a[0], a[1] - under as f64]);
     CrossSection::from_polygons_with_fill_rule(&[pts], FillRule::NonZero)
 }
 
+/// A flight's steps as a folded plate in side view: its treads (`top`), and
+/// the same `t` below them.
+fn flight_plate(top: &[[f64; 2]], t: f32) -> CrossSection {
+    let mut pts = top.to_vec();
+    pts.extend(top.iter().rev().map(|p| [p[0], p[1] - t as f64]));
+    CrossSection::from_polygons_with_fill_rule(&[pts], FillRule::NonZero)
+}
+
+/// A section extruded across from `a` to `b` (either way round).
+fn across(s: &CrossSection, a: f32, b: f32) -> Manifold {
+    s.extrude((a - b).abs() as f64).translate(0.0, 0.0, a.min(b) as f64)
+}
+
 /// A solid built in a frame (x along `x`, y up, z along `z`) set in place
-/// at `origin`, kept right-handed (z flipped if need be: `flip`).
+/// at `origin` (the frame kept right-handed by whoever builds in it).
 fn placed(m: &Manifold, origin: Vec3, x: Vec3, z: Vec3) -> Manifold {
     m.transform(&[x.x as f64, x.y as f64, x.z as f64, 0.0, 1.0, 0.0, z.x as f64, z.y as f64, z.z as f64, origin.x as f64, origin.y as f64, origin.z as f64])
 }
 
-/// A bare flight down along a wall's face: steps from one end to the other,
-/// out from the face as far as it stands out anywhere over the flight's
-/// height (and headroom), nothing at its edge; beneath, a mass parallel to
-/// it, deepening back into the wall. One solid.
+/// A bare flight down along a wall's face, straight from one end to the
+/// other (a landing every 20 m of drop): its steps a folded plate standing
+/// out from the face as far as the face stands out anywhere over the
+/// flight's height (and headroom), nothing at their edge; beneath, a mass
+/// stopping short of the edge (so the steps overhang it, their sawtooth
+/// showing from the side and below), deepening back into the wall. One
+/// solid.
 fn along_flight(m: &Massif, f: &Flight) -> Manifold {
     let to_u = |z: f32| (z - m.z.0) / (m.z.1 - m.z.0).max(1e-3) * m.len;
     let (ua, ub, va, vb) = (to_u(f.from.1), to_u(f.to.1), f.from.2, f.to.2);
     let front = (vb - UNDER - 2.0..=va + 4.0).step_by_f32(2.0).map(|v| m.face(v)).fold(f32::MIN, f32::max);
     let back = (vb - UNDER - 6.0..=va).step_by_f32(2.0).map(|v| m.face(v)).fold(f32::MAX, f32::min) - 1.5;
-    let (n0, n1) = (back, front + f.width);
     // (Right-handed: across the face out, or in, whichever keeps it so.)
     let s = if m.wall.along.dot(Vec3::Y.cross(m.wall.out)) > 0.0 { 1.0 } else { -1.0 };
-    let (z0, z1) = ((n0 * s).min(n1 * s), (n0 * s).max(n1 * s));
-    let mut solid = vec![steps_profile(ua, va, ub, vb, UNDER).extrude((z1 - z0) as f64).translate(0.0, 0.0, z0 as f64)];
+    let top = treads(ua, va, ub, vb);
+    let mut solid = vec![
+        across(&flight_plate(&top, 0.5), (front - 1.0) * s, (front + f.width) * s),
+        across(&flight_mass(&top, UNDER), back * s, (front + f.width - 0.8) * s),
+    ];
     let mut pts = Vec::new();
     for (u, v) in [(ua, va), (ub, vb)] {
         for (y, n) in [(v - 1.0, back), (v - 1.0, front), (v - UNDER - 5.0, back)] {
@@ -1897,21 +1960,28 @@ fn along_flight(m: &Massif, f: &Flight) -> Manifold {
 }
 
 /// A bare flight across the void, from `a` to `b` (points on walkways'
-/// outer edges, at deck height): steps the whole way, nothing at their
-/// edges; beneath, a girder parallel to them (deeper the longer it is),
-/// running on back under each walkway, `reach` (a, b), into the walls. One
-/// solid.
+/// outer edges, at deck height): at each end a landing at the deck's
+/// height, square to the flight, reaching back onto the walkway (so the
+/// steps meet it square, whatever the angle); between them steps the whole
+/// way (a landing every 20 m of drop), a folded plate the full width,
+/// nothing at its edges; beneath, a spine half as wide (so the steps
+/// overhang it, their sawtooth showing), a tenth of the span deep, running
+/// on back under each walkway, `reach` (a, b), into the walls. One solid.
 fn across_flight(a: Vec3, b: Vec3, width: f32, reach: (f32, f32)) -> Manifold {
     let flat = Vec3::new(b.x - a.x, 0.0, b.z - a.z);
     let run = flat.length();
     let d = flat / run.max(1e-3);
     let depth = (run / 10.0).clamp(4.0, 14.0);
-    let mut solid = vec![steps_profile(0.0, a.y, run, b.y, depth).extrude(width as f64).translate(0.0, 0.0, (-width * 0.5) as f64)];
+    let land = width.max(3.0);
+    let mut top = vec![[-3.0, a.y as f64], [land as f64, a.y as f64]];
+    top.extend(treads(land, a.y, run - land, b.y));
+    top.push([(run + 3.0) as f64, b.y as f64]);
+    let mut solid = vec![across(&flight_plate(&top, 0.6), -width * 0.5, width * 0.5), across(&flight_mass(&top, depth), -width * 0.25, width * 0.25)];
     for (x0, x1, y) in [(-(reach.0 + 1.0), 0.5, a.y), (run - 0.5, run + reach.1 + 1.0, b.y)] {
         let mut pts = Vec::new();
         for x in [x0, x1] {
             for yy in [y - depth, y - EDGE - 0.1] {
-                for zz in [-width * 0.4, width * 0.4] {
+                for zz in [-width * 0.25, width * 0.25] {
                     pts.push([x as f64, yy as f64, zz as f64]);
                 }
             }
