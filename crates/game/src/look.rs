@@ -260,6 +260,7 @@ fn setup(
     ));
 
     let disc_mesh = meshes.add(Sphere::new(1.0).mesh().uv(32, 16));
+    let chasm = args.opt("chasm");
     for (i, orbit) in SUNS.iter().enumerate() {
         commands.spawn((
             Sun(i),
@@ -270,20 +271,22 @@ fn setup(
                 ..default()
             },
             // The dim sun's soft shadows get away with less resolution and range.
+            // (In the chasm the haze closes in at a few hundred metres: the
+            // shadows' resolution kept to that, so it goes on what is near.)
             if i == 0 {
                 CascadeShadowConfigBuilder {
                     num_cascades: 4,
                     minimum_distance: 0.1,
-                    first_cascade_far_bound: 40.0,
-                    maximum_distance: 3000.0,
+                    first_cascade_far_bound: if chasm { 20.0 } else { 40.0 },
+                    maximum_distance: if chasm { 700.0 } else { 3000.0 },
                     overlap_proportion: 0.2,
                 }
             } else {
                 CascadeShadowConfigBuilder {
                     num_cascades: 2,
                     minimum_distance: 0.1,
-                    first_cascade_far_bound: 120.0,
-                    maximum_distance: 1200.0,
+                    first_cascade_far_bound: if chasm { 50.0 } else { 120.0 },
+                    maximum_distance: if chasm { 500.0 } else { 1200.0 },
                     overlap_proportion: 0.2,
                 }
             }
