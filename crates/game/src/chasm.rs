@@ -339,10 +339,17 @@ impl Geometry {
                 }
             }
         }
-        // (Moller-Trumbore: whether segment a-b passes through triangle t.)
+        // (Moller-Trumbore: whether segment a-b passes through triangle t.
+        // Not through slivers with no area, which block nothing: in f32, far
+        // from the origin, their determinant is noise, not zero; a real skin
+        // has triangles with area.)
         let hit = |a: Vec3, b: Vec3, t: &[Vec3; 3]| {
             let d = b - a;
             let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+            let area = e1.cross(e2).length();
+            if area < 1e-3 * (e1.length() + e2.length()).max(1e-3) {
+                return None;
+            }
             let h = d.cross(e2);
             let det = e1.dot(h);
             if det.abs() < 1e-9 {
@@ -647,7 +654,7 @@ fn build(
     }
     for t in &routing.tunnels {
         let m = &walls_of(t.side)[t.m];
-        for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
+        for (u, v) in t.doors {
             parts.keep.extend(bounds(&wbox(&m.wall, (u - t.width, u + t.width), (v - 1.0, v + 4.0), (inner(m, v) - 1.0, inner(m, v) + 4.0)), 0.5));
         }
     }
@@ -767,7 +774,7 @@ fn shape(side: f32, seed: i32, other: &[Stretch]) -> Vec<Massif> {
         // a sloped face carrying it there. (Never set back far: you start
         // on the rim.)
         let delta = if r(m, 4) < 0.65 { 8.0 + 27.0 * r(m, 6) } else { -(4.0 + 10.0 * r(m, 6)) };
-        let high = (low + delta).clamp(-4.0, low + room.max(2.0));
+        let high = (low + delta).clamp(-4.0, (low + room.max(2.0)).max(-4.0));
         let slope = ((high - low).abs() * (0.5 + 1.5 * r(m, 7))).min(split - 30.0).max(0.0);
         massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, slope, room, shaft: false });
     }
@@ -810,11 +817,24 @@ fn wall_solid(massifs: &[Massif]) -> Manifold {
         cuts.retain(|v| (0.0..=HEIGHT).contains(v));
         cuts.sort_by(f32::total_cmp);
         cuts.dedup_by(|x, y| (*x - *y).abs() < 0.01);
+        // (Each band overlaps the massifs' ends, and the bands above and
+        // below it, by `E`, never in front of a face: pieces that only touch
+        // leave a skin of rock between them.)
+        const E: f32 = 0.05;
         for band in cuts.windows(2) {
             let (v0, v1) = (band[0], band[1]);
             let mut pts = Vec::new();
-            for (m, u) in [(a, a.len), (b, 0.0)] {
-                for (v, n) in [(v0, -BACK), (v0, m.face(v0 + 1e-3)), (v1, m.face(v1 - 1e-3)), (v1, -BACK)] {
+            for (m, u, inward) in [(a, a.len, -E), (b, 0.0, E)] {
+                let (f0, f1) = (m.face(v0 + 1e-3), m.face(v1 - 1e-3));
+                let (w0, w1) = ((v0 - E).max(0.0), (v1 + E).min(HEIGHT));
+                let mut at = vec![(u, v0, f0), (u, v1, f1), (u + inward, v0, f0 - E), (u + inward, v1, f1 - E)];
+                for (v, f) in [(w0, f0.min(m.face(w0))), (w1, f1.min(m.face(w1)))] {
+                    at.extend([(u, v, f - E), (u + inward, v, f - E)]);
+                }
+                for &(u, v, _) in &at.clone() {
+                    at.push((u, v, -BACK));
+                }
+                for (u, v, n) in at {
                     let p = m.wall.at(u, v, n);
                     pts.push([p.x as f64, p.y as f64, p.z as f64]);
                 }
@@ -1467,19 +1487,75 @@ struct Flight {
 }
 
 /// A way through a wall (massif `m` on wall `side`), all on the lattice: a
-/// door at the end of a walkway, `u.0` along the face at height `v.0`; a
-/// corridor straight in; a stair down inside the rock, parallel to the
-/// face (its centre line `inside` from the wall's line), from `u.1` to
-/// `u.2` and down to `v.1`; a corridor back out to a door at `u.3`, onto a
-/// walkway going on from there. `width` wide throughout.
-#[derive(Clone, Copy)]
+/// door (`doors.0`: where along the face, how high) and a corridor straight
+/// in; a stair down inside the rock in runs, parallel to the face, each
+/// along a lane `n` from the wall's line (one run; or, back and forth,
+/// alternate runs in two lanes, one deeper, with a landing across both at
+/// every turn); a corridor back out to a door (`doors.1`), onto a walkway
+/// going on from there. `width` wide throughout.
+#[derive(Clone)]
 struct Tunnel {
     side: f32,
     m: usize,
-    u: (f32, f32, f32, f32),
-    v: (f32, f32),
-    inside: f32,
+    doors: [(f32, f32); 2],
+    runs: Vec<Run>,
     width: f32,
+}
+
+/// A run of a tunnel's stair: from `u.0` at height `v.0` to `u.1` at `v.1`,
+/// along the lane `n`.
+#[derive(Clone, Copy)]
+struct Run {
+    u: (f32, f32),
+    v: (f32, f32),
+    n: f32,
+}
+
+impl Tunnel {
+    /// The two corridors: where along the face, how high, the lane they
+    /// reach.
+    fn corridors(&self) -> [(f32, f32, f32); 2] {
+        let (a, b) = (self.runs[0], self.runs[self.runs.len() - 1]);
+        [(self.doors[0].0, self.doors[0].1, a.n), (self.doors[1].0, self.doors[1].1, b.n)]
+    }
+
+    /// The landings at the turns: centred where along the face, how high,
+    /// across the lanes from `n.0` to `n.1`.
+    fn landings(&self) -> Vec<(f32, f32, (f32, f32))> {
+        let w = self.width * 0.5;
+        self.runs
+            .windows(2)
+            .map(|p| {
+                let d = (p[0].u.1 - p[0].u.0).signum();
+                (p[0].u.1 + d * w, p[0].v.1, (p[0].n.min(p[1].n) - w, p[0].n.max(p[1].n) + w))
+            })
+            .collect()
+    }
+
+    /// The line a walker follows through it, 1.2 m up.
+    fn path(&self, m: &Massif) -> Vec<Vec3> {
+        let p = |u: f32, v: f32, n: f32| m.wall.at(u, v + 1.2, n);
+        let [(ua, va, na), (ux, vx, nx)] = self.corridors();
+        let mut out = vec![p(ua, va, inner(m, va) + 0.3), p(ua, va, na)];
+        let landings = self.landings();
+        for (k, r) in self.runs.iter().enumerate() {
+            out.extend([p(r.u.0, r.v.0, r.n), p(r.u.1, r.v.1, r.n)]);
+            if let (Some(&(lu, lv, _)), Some(next)) = (landings.get(k), self.runs.get(k + 1)) {
+                out.extend([p(lu, lv, r.n), p(lu, lv, next.n)]);
+            }
+        }
+        out.extend([p(ux, vx, nx), p(ux, vx, inner(m, vx) + 0.3)]);
+        out
+    }
+
+    /// From where to where along the face it reaches, and from what height
+    /// to what (for what else may go there).
+    fn extent(&self) -> ((f32, f32), (f32, f32)) {
+        let w = self.width;
+        let us = self.runs.iter().flat_map(|r| [r.u.0, r.u.1]).chain([self.doors[0].0, self.doors[1].0]);
+        let (lo, hi) = us.fold((f32::MAX, f32::MIN), |(a, b), u| (a.min(u), b.max(u)));
+        ((lo - w, hi + w), (self.doors[1].1, self.doors[0].1))
+    }
 }
 
 /// A box in a face's frame, as a solid.
@@ -1497,30 +1573,34 @@ fn wbox(w: &Wall, u: (f32, f32), v: (f32, f32), n: (f32, f32)) -> Manifold {
 }
 
 /// What a tunnel takes out of the rock: the two corridors (from just out
-/// beyond the face, so their doors open in it) and the sloping way between
-/// them, each 3 m high above its floor (whose top the routes lay, 0.3 m
-/// above the cut).
+/// beyond the face, so their doors open in it), the sloping runs, the
+/// landings, each 3 m high above its floor (whose top the routes lay, 0.3 m
+/// above the cut). (Each run reaches on into what is at both its ends:
+/// pieces cut out together must overlap, not just touch, or a skin of rock
+/// is left between them.)
 fn tunnel_cut(m: &Massif, t: &Tunnel) -> Manifold {
     let (w, h) = (t.width * 0.5, 3.3);
-    let (ua, us, ue, ux) = t.u;
-    let (va, vb) = t.v;
-    // (The sloping way reaches back into both corridors: pieces cut out
-    // together must overlap, not just touch, or a skin of rock is left
-    // between them.)
-    let mut pts = Vec::new();
-    for (u, v) in [(ua, va), (us, va), (ue, vb), (ux, vb)] {
-        for y in [v - 0.3, v + h - 0.3] {
-            for n in [t.inside - w, t.inside + w] {
-                let p = m.wall.at(u, y, n);
-                pts.push([p.x as f64, p.y as f64, p.z as f64]);
+    let mut cut = Vec::new();
+    for (u, v, n) in t.corridors() {
+        cut.push(wbox(&m.wall, (u - w, u + w), (v - 0.3, v + h - 0.3), (n - w, m.face(v) + 2.0)));
+    }
+    for r in &t.runs {
+        let d = (r.u.1 - r.u.0).signum();
+        let mut pts = Vec::new();
+        for (u, v) in [(r.u.0 - d * w, r.v.0), (r.u.0, r.v.0), (r.u.1, r.v.1), (r.u.1 + d * w, r.v.1)] {
+            for y in [v - 0.3, v + h - 0.3] {
+                for n in [r.n - w, r.n + w] {
+                    let p = m.wall.at(u, y, n);
+                    pts.push([p.x as f64, p.y as f64, p.z as f64]);
+                }
             }
         }
+        cut.push(Manifold::hull_pts(&pts));
     }
-    Manifold::batch_union(&[
-        wbox(&m.wall, (ua - w, ua + w), (va - 0.3, va + h - 0.3), (t.inside - w, m.face(va) + 2.0)),
-        Manifold::hull_pts(&pts),
-        wbox(&m.wall, (ux - w, ux + w), (vb - 0.3, vb + h - 0.3), (t.inside - w, m.face(vb) + 2.0)),
-    ])
+    for (u, v, n) in t.landings() {
+        cut.push(wbox(&m.wall, (u - w - 0.3, u + w + 0.3), (v - 0.3, v + h - 0.3), n));
+    }
+    Manifold::batch_union(&cut)
 }
 
 /// The routes, planned before anything is built (on the walls' shapes), on
@@ -1593,7 +1673,7 @@ impl Routing {
         // (Exactly as long as they are: where a flight meets a walkway end
         // to end they touch, not overlap.)
         let way_box = |w: &Walkway| (w.side, w.z, (w.v0 - shelf_depth(w.width) - 1.0, w.v0 + 3.5));
-        let flight_box = |f: &Flight| (f.side, (f.z.0.min(f.z.1) + 0.2, f.z.0.max(f.z.1) - 0.2), (f.v.1 - 3.0, f.v.0 + 3.5));
+        let flight_box = |f: &Flight| (f.side, (f.z.0.min(f.z.1) + 0.2, f.z.0.max(f.z.1) - 0.2), (f.v.1 - 4.5, f.v.0 + 3.5));
         // Whether a line through the void keeps clear of both walls (with
         // headroom above, `depth` beneath) and of what else crosses.
         let clear = |spans: &[(Vec3, Vec3, f32)], a: Vec3, b: Vec3, depth: f32| {
@@ -1647,6 +1727,7 @@ impl Routing {
         let mut since = 0;
         let mut history = Vec::new();
         let mut salt = 0;
+        let mut stuck = 0;
         while v > 40.0 && flights.len() < 400 {
             let i = flights.len() as i32 + bridges.len() as i32 * 1000;
             enum Step {
@@ -1662,6 +1743,64 @@ impl Routing {
                 // last time, or where the way on is blocked); the only way
                 // to turn back.
                 let cross = on.is_some() && since >= 6 && r(k, 1) < 0.08 + 0.02 * (since as f32 - 6.0) + if t >= 12 { 0.5 } else { 0.0 };
+                // Where nothing else will do: through the wall, a stair back
+                // and forth inside the rock, down as far as it takes to a
+                // level where a walkway outside fits. (It can always go on
+                // down: the way down never ends against the wall.)
+                if on.is_some() && t >= 18 {
+                    let here = ways[on.unwrap()];
+                    let w = here.width.min(3.0);
+                    let zd = here.z.0 + w + (here.z.1 - here.z.0 - 2.0 * w) * r(k, 14);
+                    let Some((m, ud)) = locate(walls(side), zd) else { continue };
+                    let mi = walls(side).iter().position(|x| std::ptr::eq(x, m)).unwrap();
+                    if m.shaft || !plain(m, (v - 0.5, v + 3.5)) {
+                        continue;
+                    }
+                    let ua = ud.round();
+                    let d0 = if r(k, 13) < 0.5 { 1.0f32 } else { -1.0 };
+                    let n = 4 * (12 + (r(k, 15) * 10.0) as i32);
+                    let (run, drop) = (n as f32 * TREAD, n as f32 * RISER);
+                    // (The lanes deep enough behind the face anywhere down to
+                    // the bottom; the one deeper than the other.)
+                    let face = (35.0..=v + 4.0).step_by_f32(2.0).map(|x| m.face(x)).fold(f32::MAX, f32::min);
+                    let lanes = [face - 5.0 - w * 0.5, face - 5.0 - w * 1.5 - 1.5];
+                    let (lo, hi) = (w + 2.0, m.len - w - 2.0);
+                    let us = ua + d0 * w * 0.5;
+                    if [ua, us + d0 * (run + w)].iter().any(|u| *u < lo || *u > hi) || lanes[1] - w < -BACK + 6.0 {
+                        continue;
+                    }
+                    let mut runs = Vec::new();
+                    let (mut u, mut vv, mut d) = (us, v, d0);
+                    let mut exit = None;
+                    for i in 0..40 {
+                        let lane = lanes[i % 2];
+                        runs.push(Run { u: (u, u + d * run), v: (vv, vv - drop), n: lane });
+                        u += d * run;
+                        vv -= drop;
+                        if vv < 35.0 {
+                            break;
+                        }
+                        // Out here, if a walkway fits below the door.
+                        let ux = u + d * w * 0.5;
+                        if plain(m, (vv - 0.5, vv + 3.5))
+                            && let Some(start) = snap(side, to_z(m, ux - d * (w * 0.5 + 0.5)))
+                            && let Some(next) = walkway_at(&taken, side, start, vv, d, length.max(8.0), w)
+                        {
+                            exit = Some((ux, next));
+                            break;
+                        }
+                        d = -d;
+                    }
+                    let Some((ux, next)) = exit else { continue };
+                    let t = Tunnel { side, m: mi, doors: [(ua, v), (ux, runs[runs.len() - 1].v.1)], runs, width: w };
+                    let ((e0, e1), (v0, v1)) = t.extent();
+                    let zs = (to_z(m, e0) - 1.0, to_z(m, e1) + 1.0);
+                    if inside.iter().any(|b| b.0 == side && zs.0 < b.1.1 && zs.1 > b.1.0 && v0 - 1.0 < b.2.1 && v1 + 4.0 > b.2.0) {
+                        continue;
+                    }
+                    found = Some(Step::Through(t, next));
+                    break;
+                }
                 // Through the wall now and then (more often where the way
                 // down the face is blocked).
                 let through = on.is_some() && !cross && r(k, 9) < if t >= 6 { 0.6 } else { 0.12 };
@@ -1682,15 +1821,12 @@ impl Routing {
                     let ue = us + t_dir * n as f32 * TREAD;
                     let ux = ue + t_dir * w * 0.5;
                     let vb = v - n as f32 * RISER;
-                    // (Well in from the face's ends: behind a corner the next
-                    // massif's end crosses this one's rock up to its depth
-                    // times the tangent of the turn from the corner, and
-                    // there a skin of rock can be left between them.)
-                    if m.shaft || ux.min(ua) < w + 14.0 || ux.max(ua) > m.len - w - 14.0 || vb < 35.0 || !plain(m, (v - 0.5, v + 3.5)) {
+                    let face = (vb - 1.0..=v + 4.0).step_by_f32(1.0).map(|x| m.face(x)).fold(f32::MAX, f32::min);
+                    let lane = face - 5.0 - 5.0 * r(k, 11) - w * 0.5;
+                    if m.shaft || ux.min(ua) < w + 2.0 || ux.max(ua) > m.len - w - 2.0 || vb < 35.0 || !plain(m, (v - 0.5, v + 3.5)) {
                         continue;
                     }
-                    let face = (vb - 1.0..=v + 4.0).step_by_f32(1.0).map(|x| m.face(x)).fold(f32::MAX, f32::min);
-                    let t = Tunnel { side, m: mi, u: (ua, us, ue, ux), v: (v, vb), inside: face - 5.0 - 5.0 * r(k, 11) - w * 0.5, width: w };
+                    let t = Tunnel { side, m: mi, doors: [(ua, v), (ux, vb)], runs: vec![Run { u: (us, ue), v: (v, vb), n: lane }], width: w };
                     let zs = (to_z(m, ua.min(ux)) - 1.0, to_z(m, ua.max(ux)) + 1.0);
                     if inside.iter().any(|b| b.0 == side && zs.0 < b.1.1 && zs.1 > b.1.0 && vb - 1.0 < b.2.1 && v + 4.0 > b.2.0) {
                         continue;
@@ -1746,24 +1882,31 @@ impl Routing {
                 }
             }
             let Some(step) = found else {
+                stuck += 1;
                 if salt >= 2000 {
+                    info!("the chasm: the way down gives up at {v:.0} m (side {side}, z {z:.0}, walkway {:?})", on.map(|k| (ways[k].z, ways[k].width)));
                     break;
                 }
                 // (Nothing fits from the rim: start somewhere else along it.)
-                let Some((t, sp, nf, nb, (nt, ni), state)) = history.pop() else {
+                if history.is_empty() {
                     salt += 1;
                     z = snap(-1.0, CENTRE.z + (r(salt, 20) - 0.5) * 300.0).unwrap_or(CENTRE.z);
                     dir = -dir;
                     continue;
-                };
-                taken.truncate(t);
-                spans.truncate(sp);
-                flights.truncate(nf);
-                bridges.truncate(nb);
-                tunnels.truncate(nt);
-                inside.truncate(ni);
-                ways.pop();
-                (side, z, v, dir, width, on, since) = state;
+                }
+                // Back a step; stuck again and again, further back at once
+                // (where the way went wrong may be well behind).
+                for _ in 0..(1 + stuck / 6).min(history.len()) {
+                    let (t, sp, nf, nb, (nt, ni), state) = history.pop().unwrap();
+                    taken.truncate(t);
+                    spans.truncate(sp);
+                    flights.truncate(nf);
+                    bridges.truncate(nb);
+                    tunnels.truncate(nt);
+                    inside.truncate(ni);
+                    ways.pop();
+                    (side, z, v, dir, width, on, since) = state;
+                }
                 salt += 1;
                 // (Back at the rim: start from somewhere else along it.)
                 if history.is_empty() {
@@ -1773,6 +1916,7 @@ impl Routing {
                 continue;
             };
             history.push((taken.len(), spans.len(), flights.len(), bridges.len(), (tunnels.len(), inside.len()), (side, z, v, dir, width, on, since)));
+            stuck = stuck.saturating_sub(1);
             let w = match step {
                 Step::Down(f, w) => {
                     taken.push((None, flight_box(&f)));
@@ -1784,14 +1928,19 @@ impl Routing {
                 Step::Through(t, w) => {
                     let m = &walls(t.side)[t.m];
                     let to_z = |u: f32| m.z.0 + u / m.len * (m.z.1 - m.z.0);
-                    inside.push((t.side, (to_z(t.u.0.min(t.u.3)) - 1.0, to_z(t.u.0.max(t.u.3)) + 1.0), (t.v.1 - 1.0, t.v.0 + 4.0)));
-                    dir = (t.u.3 - t.u.0).signum();
+                    let ((e0, e1), (v0, v1)) = t.extent();
+                    inside.push((t.side, (to_z(e0) - 1.0, to_z(e1) + 1.0), (v0 - 1.0, v1 + 4.0)));
+                    let last = t.runs[t.runs.len() - 1];
+                    dir = (last.u.1 - last.u.0).signum();
                     tunnels.push(t);
                     width = w.width;
                     since += 1;
                     w
                 }
                 Step::Across(zb, w, span) => {
+                    for sd in [side, w.side] {
+                        taken.push((None, (sd, (zb - 6.0, zb + 6.0), (v - span.2 - 2.0, v + 3.5))));
+                    }
                     let (a, b) = (on.unwrap(), ways.len());
                     bridges.push(if side < 0.0 { (zb, a, b) } else { (zb, b, a) });
                     spans.push(span);
@@ -1812,7 +1961,7 @@ impl Routing {
         let length = ways.iter().map(|w| w.z.1 - w.z.0).sum::<f32>()
             + flights.iter().map(|f| Vec2::new(f.u.1 - f.u.0, f.v.1 - f.v.0).length()).sum::<f32>()
             + spans.iter().map(|s| s.0.distance(s.1)).sum::<f32>()
-            + tunnels.iter().map(|t| Vec2::new(t.u.2 - t.u.1, t.v.1 - t.v.0).length() + 2.0 * (t.inside.abs() + 5.0)).sum::<f32>();
+            + tunnels.iter().flat_map(|t| t.runs.iter().map(|r| Vec2::new(r.u.1 - r.u.0, r.v.1 - r.v.0).length() + 2.0 * t.width)).sum::<f32>();
         // Where you start: on the rim behind the first flight, looking along
         // it and down.
         let start = flights
@@ -1846,7 +1995,7 @@ impl Routing {
         for t in self.tunnels.iter().filter(|t| t.side == side) {
             let m = &walls[t.m];
             let to_z = |u: f32| m.z.0 + u / m.len * (m.z.1 - m.z.0);
-            for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
+            for (u, v) in t.doors {
                 out.push(Zone { z: (to_z(u - t.width), to_z(u + t.width)), v: (v - 1.0, v + 4.0) });
             }
         }
@@ -1887,31 +2036,6 @@ fn routes(parts: &mut Parts, routing: &Routing, near: &[Massif], far: &[Massif])
     for t in &routing.tunnels {
         let m = &massifs(t.side)[t.m];
         let w = t.width * 0.5;
-        for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
-            solids.push(wbox(&m.wall, (u - w, u + w), (v - 0.3, v), (t.inside - w, inner(m, v) + 0.6)));
-        }
-        let (steps, slope, clear) = stair(m, (t.u.1, t.u.2), t.v, (t.inside - w + 0.2, t.inside + w), None);
-        parts.steps.solid(&steps);
-        parts.ramps.solid(&slope);
-        parts.clearance.push((format!("tunnel stair at {:.0} m", t.v.0), clear));
-        let (ua, us, ue, ux) = t.u;
-        let p = |u: f32, v: f32, n: f32| m.wall.at(u, v + 1.2, n);
-        parts.paths.push((
-            format!("tunnel at {:.0} m", t.v.0),
-            vec![p(ua, t.v.0, inner(m, t.v.0) + 0.3), p(ua, t.v.0, t.inside), p(us, t.v.0, t.inside), p(ue, t.v.1, t.inside), p(ux, t.v.1, t.inside), p(ux, t.v.1, inner(m, t.v.1) + 0.3)],
-        ));
-        for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
-            parts.clearance.push((format!("tunnel door at {v:.0} m"), wbox(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (t.inside, inner(m, v) + 0.5))));
-        }
-        // Lit at both turns and along the way down; a faint line along the
-        // ceiling from door to door, so the way through can always be seen.
-        let run = (t.u.2 - t.u.1).abs();
-        let lamps = (run / 12.0).ceil().max(1.0) as i32;
-        for i in 0..=lamps {
-            let f = i as f32 / lamps as f32;
-            let (u, v) = (t.u.1 + (t.u.2 - t.u.1) * f, t.v.0 + (t.v.1 - t.v.0) * f);
-            parts.lights.push((m.wall.at(u, v + 2.6, t.inside), 10.0, 0.01));
-        }
         let line = |a: (f32, f32, f32), b: (f32, f32, f32)| {
             let mut pts = Vec::new();
             for (u, v, n) in [a, b] {
@@ -1923,12 +2047,44 @@ fn routes(parts: &mut Parts, routing: &Routing, near: &[Massif], far: &[Massif])
             Manifold::hull_pts(&pts)
         };
         let top = 3.0 - 0.31;
-        parts.dim.solid(&Manifold::batch_union(&[
-            line((t.u.0, t.v.0 + top, inner(m, t.v.0) + 0.3), (t.u.0, t.v.0 + top, t.inside)),
-            line((t.u.1, t.v.0 + top, t.inside), (t.u.2, t.v.1 + top, t.inside)),
-            line((t.u.3, t.v.1 + top, t.inside), (t.u.3, t.v.1 + top, inner(m, t.v.1) + 0.3)),
-        ]));
-        info!("the chasm: a tunnel from {:?} to {:?} (out {:?}, inside {:?})", m.wall.at(t.u.0, t.v.0, inner(m, t.v.0)), m.wall.at(t.u.3, t.v.1, inner(m, t.v.1)), m.wall.out, m.wall.at(t.u.1, t.v.0, t.inside));
+        let mut lines = Vec::new();
+        // The corridors: their floors, the space over them, a line along
+        // the ceiling.
+        for (u, v, n) in t.corridors() {
+            solids.push(wbox(&m.wall, (u - w, u + w), (v - 0.3, v), (n - w, inner(m, v) + 0.6)));
+            parts.clearance.push((format!("tunnel door at {v:.0} m"), wbox(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (n, inner(m, v) + 0.5))));
+            lines.push(line((u, v + top, inner(m, v) + 0.3), (u, v + top, n)));
+        }
+        // The runs: steps, the slope to walk on, the space over them; lit
+        // every 12 m and along the ceiling.
+        for r in &t.runs {
+            let (steps, slope, clear) = stair(m, r.u, r.v, (r.n - w + 0.2, r.n + w), None);
+            parts.steps.solid(&steps);
+            parts.ramps.solid(&slope);
+            parts.clearance.push((format!("tunnel stair at {:.0} m", r.v.0), clear));
+            lines.push(line((r.u.0, r.v.0 + top, r.n), (r.u.1, r.v.1 + top, r.n)));
+            let lamps = ((r.u.1 - r.u.0).abs() / 12.0).ceil().max(1.0) as i32;
+            for i in 0..=lamps {
+                let f = i as f32 / lamps as f32;
+                parts.lights.push((m.wall.at(r.u.0 + (r.u.1 - r.u.0) * f, r.v.0 + (r.v.1 - r.v.0) * f + 2.6, r.n), 10.0, 0.01));
+            }
+        }
+        // The landings: their floors, the space over them.
+        for (u, v, n) in t.landings() {
+            solids.push(wbox(&m.wall, (u - w - 0.3, u + w + 0.3), (v - 0.3, v), n));
+            parts.clearance.push((format!("tunnel landing at {v:.0} m"), wbox(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (n.0 + 0.2, n.1 - 0.2))));
+        }
+        parts.dim.solid(&Manifold::batch_union(&lines));
+        parts.paths.push((format!("tunnel at {:.0} m", t.doors[0].1), t.path(m)));
+        let [(ua, va, na), (ux, vx, _)] = t.corridors();
+        info!(
+            "the chasm: a tunnel from {:?} to {:?} (out {:?}, inside {:?}, {} runs)",
+            m.wall.at(ua, va, inner(m, va)),
+            m.wall.at(ux, vx, inner(m, vx)),
+            m.wall.out,
+            m.wall.at(t.runs[0].u.0, va, na),
+            t.runs.len()
+        );
     }
     parts.mark("routes");
     parts.stone.solid(&Manifold::batch_union(&solids));
