@@ -7,7 +7,7 @@
 //   period and fades out with distance before it can shimmer;
 // - light from pieces of geometry the mesh marks as lit (glowing etchings
 //   and seams);
-// - paving (an experiment): in some regions of the ground, a pattern of
+// - paving (off by default): in some regions of the ground, a pattern of
 //   tiles with cut joints, a ruler underfoot and something to stream past.
 
 #import bevy_pbr::{
@@ -35,8 +35,7 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> grain: vec4<f32>;
 // x: brightness of lit geometry.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> glow: vec4<f32>;
-// x: pattern (0 none, 1 checkerboard, 2 warped, 3 fractal, 4 warped
-// fractal; plus 100: whole, not broken at steps), y: tile size (m), z:
+// x: pattern (0 none, 1 checkerboard, 2 fractal), y: tile size (m), z:
 // contrast, w: share of the ground paved.
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> paving: vec4<f32>;
 
@@ -140,31 +139,16 @@ fn pave(p: vec2<f32>, height: f32, pixel: f32) -> Paving {
         return out;
     }
     let tile = paving.y;
-    let whole = paving.x > 99.5;
-    let mode = i32(round(paving.x)) % 100;
-    // Turned by the region's own angle; and, unless whole, each flat piece
-    // of ground at its own height its own turn and offset, so the pattern
-    // breaks at every step, a floor heaved apart.
-    var a = r.id * 6.2831;
-    var shift = vec2<f32>(0.0);
-    if !whole {
-        let level = vec2<i32>(i32(round(height * 4.0)), 977);
-        a += hash(level, 1 << 20) * 6.2831;
-        shift = vec2<f32>(hash(level + vec2(0, 13), 1 << 20), hash(level + vec2(0, 29), 1 << 20)) * tile * 8.0;
-    }
+    let mode = i32(round(paving.x));
+    // Each flat piece of ground at its own height its own turn and offset of
+    // the pattern, so it breaks at every step: laid plate by plate.
+    let level = vec2<i32>(i32(round(height * 4.0)), 977);
+    let a = (r.id + hash(level, 1 << 20)) * 6.2831;
+    let shift = vec2<f32>(hash(level + vec2(0, 13), 1 << 20), hash(level + vec2(0, 29), 1 << 20)) * tile * 8.0;
     let rot = mat2x2<f32>(cos(a), sin(a), -sin(a), cos(a));
-    var z = rot * (p - r.centre) + shift;
+    let z = rot * (p - r.centre) + shift;
     let joint_w = 0.025; // in tile units: 5 cm on a 2 m tile
-    if mode == 2 || mode == 4 {
-        // Warped: z + a sin(z / L), a conformal map, so every tile stays
-        // square while the lines bend over distance.
-        let l = 150.0;
-        let k = 0.2;
-        let w = z / l;
-        let s = vec2<f32>(sin(w.x) * cosh(w.y), cos(w.x) * sinh(w.y));
-        z = z + s * (k * l);
-    }
-    if mode == 1 || mode == 2 {
+    if mode == 1 {
         let q = z / tile;
         let i = vec2<i32>(floor(q));
         let checker = f32((i.x + i.y) & 1) * 2.0 - 1.0;
@@ -173,7 +157,7 @@ fn pave(p: vec2<f32>, height: f32, pixel: f32) -> Paving {
         out.joint = 1.0 - smoothstep(joint_w - aa, joint_w + aa, tile_edge(q));
         // Joints thinner than a pixel fade rather than shimmer.
         out.joint *= saturate(joint_w / aa);
-    } else if mode == 3 || mode == 4 {
+    } else if mode == 2 {
         // Fractal: tiles four times the tile size split again and again (in
         // two each way), down to a quarter of it; each finished tile its own
         // tone; the joints thinner the smaller the tiles.
