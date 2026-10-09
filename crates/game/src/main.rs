@@ -102,6 +102,11 @@ fn main() {
                 resolution: (1600, 900).into(),
                 position: bevy::window::WindowPosition::Centered(bevy::window::MonitorSelection::Primary),
                 present_mode: PresentMode::AutoNoVsync,
+                // (Unattended, it opens behind other windows without taking
+                // focus, so whoever is at the desk can work on; captures
+                // read what it renders, covered or not.)
+                focused: !unattended,
+                window_level: if unattended { bevy::window::WindowLevel::AlwaysOnBottom } else { default() },
                 ..default()
             }),
             ..default()
