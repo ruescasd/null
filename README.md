@@ -48,7 +48,10 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               the rock as galleries; doors into the walls and stairs down inside; bridges across;
                                               places, terraces with a hall behind a carved arcade (--seed N for others)
     --opt seams                               with --opt chasm: log where faces coincide (they flicker), by what made them, and
-                                              any route whose space runs into a wall or whose way a surface crosses
+                                              any route whose space runs into a wall or whose way a surface crosses,
+                                              and any hole where a flight meets a walkway
+    --opt walkbot                             with --opt chasm: walk the whole way down with the real movement, 8x as
+                                              fast as real time, and log wherever it gets stuck or falls
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)

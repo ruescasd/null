@@ -271,14 +271,16 @@ fn setup(
                 ..default()
             },
             // The dim sun's soft shadows get away with less resolution and range.
-            // (In the chasm the haze closes in at a few hundred metres: the
-            // shadows' resolution kept to that, so it goes on what is near.)
+            // (In the chasm, as far as anything in it can be seen from anywhere
+            // in it: shadows end at a distance along the view, so a wall just
+            // past their end would turn from shadowed to lit as the view
+            // turned.)
             if i == 0 {
                 CascadeShadowConfigBuilder {
                     num_cascades: 4,
                     minimum_distance: 0.1,
                     first_cascade_far_bound: if chasm { 20.0 } else { 40.0 },
-                    maximum_distance: if chasm { 700.0 } else { 3000.0 },
+                    maximum_distance: if chasm { 1300.0 } else { 3000.0 },
                     overlap_proportion: 0.2,
                 }
             } else {
@@ -286,7 +288,7 @@ fn setup(
                     num_cascades: 2,
                     minimum_distance: 0.1,
                     first_cascade_far_bound: if chasm { 50.0 } else { 120.0 },
-                    maximum_distance: if chasm { 500.0 } else { 1200.0 },
+                    maximum_distance: if chasm { 1300.0 } else { 1200.0 },
                     overlap_proportion: 0.2,
                 }
             }

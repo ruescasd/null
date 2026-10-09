@@ -1,7 +1,8 @@
 //! A scripted test pilot (`--opt bot`): drives the real movement code with
 //! synthetic input and logs telemetry, so movement can be checked without
 //! anyone at the keyboard. It stands, runs, strafe jumps at the optimal
-//! angle, coasts, and exits.
+//! angle, coasts, and exits. With `--opt walkbot` in the chasm, it walks
+//! the whole way down instead, and logs wherever it cannot go on.
 
 use bevy::prelude::*;
 
@@ -28,11 +29,21 @@ pub struct BotState {
     stair: Option<(Vec3, Vec2, f32, f32)>,
     stair_mantles: u32,
     stair_was_mantling: bool,
+    /// The walk down the chasm (`--opt walkbot`): the point it heads for,
+    /// how near it has got and since when, what went wrong, when it set off.
+    walk: usize,
+    walk_best: f32,
+    walk_since: f32,
+    walk_problems: u32,
+    walk_started: Option<f32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn drive(
     args: Res<Args>,
     time: Res<Time>,
+    mut clock: ResMut<Time<Virtual>>,
+    way: Option<Res<crate::chasm::Way>>,
     mut state: Local<BotState>,
     mut input: ResMut<MoveInput>,
     mut exit: MessageWriter<AppExit>,
@@ -40,6 +51,10 @@ pub fn drive(
     camera: Single<(&mut Transform, &mut FlyCam, &mut Player)>,
 ) {
     let (mut transform, mut fly, mut player) = camera.into_inner();
+    if args.opt("walkbot") {
+        walk(&time, &mut clock, way.as_deref(), &mut state, &mut input, &mut exit, &mut transform, &mut fly, &mut player);
+        return;
+    }
     if args.opt("stairbot") {
         stairs(&time, &mut state, &mut input, &mut exit, &world, &mut transform, &mut fly, &mut player);
         return;
@@ -295,6 +310,84 @@ fn stairs(
         state.stair_mantles
     );
     exit.write(AppExit::Success);
+}
+
+/// The walk down the chasm: the real movement, steered from point to point
+/// of the way (running, walking near a point), eight times as fast as real
+/// time. Where it gets no nearer to the next point for 4 s, or falls well
+/// below it, that is logged, and it is put on that point and goes on; at the
+/// bottom, a count.
+#[allow(clippy::too_many_arguments)]
+fn walk(
+    time: &Time,
+    clock: &mut Time<Virtual>,
+    way: Option<&crate::chasm::Way>,
+    state: &mut BotState,
+    input: &mut MoveInput,
+    exit: &mut MessageWriter<AppExit>,
+    transform: &mut Transform,
+    fly: &mut FlyCam,
+    player: &mut Player,
+) {
+    let Some(way) = way else {
+        info!("walkbot: no way down (--opt chasm)");
+        exit.write(AppExit::Success);
+        return;
+    };
+    if !player.ready {
+        return;
+    }
+    clock.set_relative_speed(8.0);
+    let now = time.elapsed_secs();
+    let started = *state.walk_started.get_or_insert_with(|| {
+        state.walk_best = f32::MAX;
+        state.walk_since = now;
+        now
+    });
+    *input = MoveInput::default();
+    let Some((target, what)) = way.0.get(state.walk) else {
+        info!("walkbot: at the bottom: {} points, {} problems, {:.0} s walking", way.0.len(), state.walk_problems, now - started);
+        exit.write(AppExit::Success);
+        return;
+    };
+    let p = transform.translation;
+    let feet = p.y - super::EYE;
+    let flat = Vec2::new(target.x - p.x, target.z - p.z);
+    let d = flat.length();
+    if d < 0.6 && (feet - target.y).abs() < 1.6 {
+        state.walk += 1;
+        state.walk_best = f32::MAX;
+        state.walk_since = now;
+        return;
+    }
+    if d < state.walk_best - 0.25 {
+        state.walk_best = d;
+        state.walk_since = now;
+    }
+    let below = state.walk.checked_sub(1).and_then(|i| way.0.get(i)).map_or(target.y, |q| q.0.y).min(target.y);
+    let fell = feet < below - 4.0;
+    if fell || now - state.walk_since > 4.0 {
+        info!(
+            "walkbot: {} before point {} ({what}) at {:?}: {:.1} m from it, feet {:+.1}",
+            if fell { "fell" } else { "stuck" },
+            state.walk,
+            p - Vec3::Y * super::EYE,
+            d,
+            feet - target.y
+        );
+        state.walk_problems += 1;
+        transform.translation = *target + Vec3::Y * (super::EYE + 0.05);
+        player.velocity = Vec3::ZERO;
+        state.walk += 1;
+        state.walk_best = f32::MAX;
+        state.walk_since = now;
+        return;
+    }
+    // Forward is (-sin yaw, -cos yaw) in x, z.
+    fly.yaw = (-flat.x).atan2(-flat.y);
+    fly.pitch = -0.3;
+    input.wish = Vec2::Y;
+    input.walk = d < 4.0;
 }
 
 /// A spot `run_up` metres in front of a ledge between `min` and `max` high,

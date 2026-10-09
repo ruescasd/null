@@ -41,7 +41,7 @@ impl Args {
 
     /// A measurement or capture, running with nobody playing.
     pub fn unattended(&self) -> bool {
-        self.opt("bench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("labshots")
+        self.opt("bench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("walkbot") || self.opt("labshots")
     }
 
     /// A tuning number, overridable with `--set name=value`.
