@@ -373,6 +373,8 @@ struct Parts {
     lights: Vec<(Vec3, f32, f32)>,
     /// The chambers cut into the walls (for what joins them).
     chambers: Vec<Chamber>,
+    /// The places on the walkways (halls with terraces).
+    terraces: Vec<Terrace>,
     /// Where on the face being built routes run (walkways, stairs), as (u0,
     /// u1, v0, v1) in its frame: relief keeps flush there, so they have room.
     clear: Vec<(f32, f32, f32, f32)>,
@@ -401,6 +403,26 @@ struct Chamber {
     depth: f32,
 }
 
+/// A place on a walkway: a low hall cut back into the wall, wider than
+/// tall, the walkway passing through it between gateways; its floor running
+/// on out past the face as a terrace with chamfered corners, looking along
+/// the chasm both ways and across. In its massif's frame: which walkway and
+/// massif, from `u.0` to `u.1` along the face (`z` along the chasm), the
+/// floor and the hall's ceiling, the face's `n`, how far back the hall goes
+/// (`back`) and how far out the terrace reaches (`front`).
+#[derive(Clone, Copy)]
+struct Terrace {
+    way: usize,
+    massif: usize,
+    u: (f32, f32),
+    z: (f32, f32),
+    floor: f32,
+    ceiling: f32,
+    face: f32,
+    back: f32,
+    front: f32,
+}
+
 /// How bright the chasm's own lights are (lumens; `--set chasm_light`).
 const LIGHT: f32 = 2.0e8;
 
@@ -419,8 +441,8 @@ fn build(
     let chambers = args.opt("chambers");
     // (The routes are planned first: the walls keep clear where they run.)
     let routing = Routing::plan(seed);
-    let near = wall(&mut parts, -1.0, seed, &plan(1.0, seed + 7919), &routing.zones(-1.0), chambers);
-    let far = wall(&mut parts, 1.0, seed + 7919, &plan(-1.0, seed), &routing.zones(1.0), chambers);
+    let near = wall(&mut parts, -1.0, seed, &plan(1.0, seed + 7919), &routing, chambers);
+    let far = wall(&mut parts, 1.0, seed + 7919, &plan(-1.0, seed), &routing, chambers);
     bridges(&mut parts, seed, &near, &far);
     crossings(&mut parts);
     routes(&mut parts, seed, &routing, &near, &far);
@@ -450,7 +472,13 @@ fn build(
     for &(at, range, k) in &parts.lights {
         commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
     }
-    info!("the chasm: built ({} lights)", parts.lights.len());
+    for t in &parts.terraces {
+        let m = if routing.ways[t.way].side < 0.0 { &near } else { &far };
+        let w = &m[t.massif].wall;
+        let c = (t.u.0 + t.u.1) * 0.5;
+        info!("the chasm: a place at {:?} (along {:?}, out {:?}, {:.0} m wide, back {:.0} m, out {:.0} m)", w.at(c, t.floor, t.face), w.along, w.out, t.u.1 - t.u.0, t.face - t.back, t.front - t.face);
+    }
+    info!("the chasm: built ({} lights, {} places)", parts.lights.len(), parts.terraces.len());
 }
 
 /// A wall: massifs along it, each with its own face (set back, bulging, its
@@ -459,8 +487,9 @@ fn build(
 /// the wall), or a colossal bare slab finely speckled; a few giant columns;
 /// heavy cables hanging down it. Returns its massifs (for what spans the
 /// gap).
-fn wall(parts: &mut Parts, side: f32, seed: i32, other: &[Stretch], zones: &[Zone], chambers: bool) -> Vec<Massif> {
+fn wall(parts: &mut Parts, side: f32, seed: i32, other: &[Stretch], routing: &Routing, chambers: bool) -> Vec<Massif> {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c1);
+    let mut zones = routing.zones(side);
     let mut massifs = Vec::new();
     for (m, stretch) in plan(side, seed).into_iter().enumerate() {
         let m = m as i32;
@@ -521,6 +550,14 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, other: &[Stretch], zones: &[Zon
             let w = nominal.moved(n);
             let k = seed + m * 31 + part as i32 * 7;
             let p = m * 2 + part as i32;
+            // A place on a walkway passing it, if one fits.
+            let reach = low + room - n;
+            if let Some(t) = site(parts, routing, side, m as usize, &stretch, len, (v0, v1), n, reach, k) {
+                hall(parts, &nominal, &t, (u0, u1), (v0, v1), k);
+                zones.push(Zone { side, z: (t.z.0 - 10.0, t.z.1 + 10.0), v: (t.floor - 25.0, t.ceiling + 10.0) });
+                parts.terraces.push(t);
+                continue;
+            }
             // (`--opt chambers`: now and then a chamber cut into it.)
             let (cw, ch) = (15.0 + 45.0 * r(p, 20), 12.0 + 28.0 * r(p, 21));
             if chambers && r(p, 22) < 0.45 && u1 - u0 > cw + 12.0 && v1 - v0 > ch + 30.0 {
@@ -563,7 +600,7 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, other: &[Stretch], zones: &[Zon
         let Some((m, u)) = locate(&massifs, z) else { continue };
         let radius = 3.0 + 4.0 * r(k, 41);
         let (v0, v1) = (HEIGHT * 0.2 * r(k, 42), HEIGHT * (0.5 + 0.5 * r(k, 43)));
-        if crosses(zones, (z - radius, z + radius), (v0, v1)) {
+        if crosses(&zones, (z - radius, z + radius), (v0, v1)) {
             continue;
         }
         let n = m.face(v0).max(m.face(v1)) + radius * 0.4;
@@ -576,7 +613,7 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, other: &[Stretch], zones: &[Zon
         let v0 = HEIGHT * (0.3 + 0.7 * r(k, 51));
         let drop = 40.0 + 200.0 * r(k, 52);
         let thick = 0.25 + 0.35 * r(k, 53);
-        if crosses(zones, (z - 2.0, z + 2.0), (v0 - drop, v0)) {
+        if crosses(&zones, (z - 2.0, z + 2.0), (v0 - drop, v0)) {
             continue;
         }
         let n = m.face(v0).max(m.face(v0 - drop)) + 1.5 + thick;
@@ -734,6 +771,98 @@ fn chamber(parts: &mut Parts, c: &Chamber, (u0, u1): (f32, f32), (v0, v1): (f32,
         let u = cu0 + (cu1 - cu0) * (i as f32 + 0.5) / lights as f32;
         parts.lights.push((w.at(u, f + (top - f) * 0.7, -c.depth * 0.5), 70.0, 0.25));
     }
+}
+
+/// Where a place fits on a massif part (from `v.0` to `v.1`, its face at
+/// `face`, free to reach `reach` beyond it): on a walkway passing it (now
+/// and then; one a walkway), long enough there, clear of its stairs and
+/// bridges, with the part's mass above and below it.
+#[allow(clippy::too_many_arguments)]
+fn site(parts: &Parts, routing: &Routing, side: f32, massif: usize, stretch: &Stretch, len: f32, (v0, v1): (f32, f32), face: f32, reach: f32, seed: i32) -> Option<Terrace> {
+    let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d5);
+    let span = (stretch.z.1 - stretch.z.0).max(1e-3);
+    let (to_u, to_z) = (|z: f32| (z - stretch.z.0) / span * len, |u: f32| stretch.z.0 + u / len * span);
+    for (k, w) in routing.ways.iter().enumerate().filter(|(_, w)| w.side == side) {
+        let i = k as i32;
+        if r(i, 0) > 0.7 || parts.terraces.iter().any(|t| t.way == k) {
+            continue;
+        }
+        let (us, ue) = (to_u(stretch.z.0.max(w.z.0)), to_u(stretch.z.1.min(w.z.1)));
+        let height = 10.0 + 5.0 * r(i, 1);
+        let width = (44.0 + 20.0 * r(i, 2)).max(height * 3.0);
+        if ue - us < width + 30.0 {
+            continue;
+        }
+        let a = us + 15.0 + (ue - us - 30.0 - width) * r(i, 3);
+        let (z0, z1) = (to_z(a), to_z(a + width));
+        let near = |z: f32| z > z0 - 20.0 && z < z1 + 20.0;
+        if routing.stairs.iter().any(|s| s.2 == k && (near(s.0.0) || near(s.0.1))) || routing.bridges.iter().any(|b| (b.1 == k || b.2 == k) && near(b.0)) {
+            continue;
+        }
+        // A step or few down into it from the walkway at either end.
+        let (ga, gb) = (w.v(z0), w.v(z1));
+        let floor = ga.min(gb) - 0.6;
+        let ceiling = floor + height.max(w.width * 0.5 + 8.0 + (ga - gb).abs());
+        if floor - 15.0 < v0 || ceiling + 15.0 > v1 {
+            continue;
+        }
+        let edge = face - 0.5 + w.width;
+        let extra = (8.0 + 12.0 * r(i, 4)).min(face + reach - edge);
+        if extra < 6.0 || width < 2.0 * extra + 10.0 {
+            continue;
+        }
+        return Some(Terrace { way: k, massif, u: (a, a + width), z: (z0, z1), floor, ceiling, face, back: face - 14.0 - 10.0 * r(i, 5), front: edge + extra });
+    }
+    None
+}
+
+/// A massif part with a hall cut into it (its place): the mass round it;
+/// the face round it in strata; inside, piers (or classical, an arcade)
+/// along its open front, the back wall in relief either side of a dark
+/// doorway in a stepped frame, a lit line along the front of the ceiling,
+/// a light within. (The walkway's part of it, gateways, steps and terrace,
+/// comes with the walkway.)
+fn hall(parts: &mut Parts, wall: &Wall, t: &Terrace, (u0, u1): (f32, f32), (v0, v1): (f32, f32), seed: i32) {
+    let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d6);
+    let (a, b) = t.u;
+    let (f, top) = (t.floor, t.ceiling);
+    wall.block(&mut parts.stone, (u0, u1), (v0, f), (-BACK, t.face));
+    wall.block(&mut parts.stone, (u0, u1), (top, v1), (-BACK, t.face));
+    wall.block(&mut parts.stone, (u0, a), (f, top), (-BACK, t.face));
+    wall.block(&mut parts.stone, (b, u1), (f, top), (-BACK, t.face));
+    wall.block(&mut parts.stone, (a, b), (f, top), (-BACK, t.back));
+    let w = wall.moved(t.face);
+    strata(parts, &w, (u0, u1), (v0, f), seed);
+    strata(parts, &w, (u0, u1), (top, v1), seed + 1);
+    relief(parts, &w, (u0, a), (f, top), 0.0, 1, 0.5, seed + 2);
+    relief(parts, &w, (b, u1), (f, top), 0.0, 1, 0.5, seed + 3);
+    // Along the open front: piers, or an arcade.
+    let bays = ((b - a) / (10.0 + 4.0 * r(0, 0))).round().max(2.0) as i32;
+    let bay = (b - a) / bays as f32;
+    for i in 0..bays {
+        let (b0, b1) = (a + bay * i as f32, a + bay * (i + 1) as f32);
+        if parts.classical {
+            let rad = (bay - 2.0) * 0.5;
+            arch(&mut parts.stone, wall, (b0, b1), f, top - rad - 0.8, top, (t.face - 1.5, t.face), 1.0);
+        } else if i > 0 {
+            wall.block(&mut parts.stone, (b0 - 1.0, b0 + 1.0), (f, top), (t.face - 2.2, t.face - 0.2));
+        }
+    }
+    wall.block(&mut parts.glow, (a, b), (top - 0.15, top), (t.face - 2.6, t.face - 2.4));
+    // The back wall: a dark doorway in a stepped frame, relief either side.
+    let inner = wall.moved(t.back);
+    let c = (a + b) * 0.5;
+    let (dw, dh) = (2.0 + r(0, 1), 6.0 + 3.0 * r(0, 2));
+    inner.block(&mut parts.dark, (c - dw, c + dw), (f, f + dh), (0.0, 0.05));
+    for s in 0..3 {
+        let (o, d) = (0.7 * s as f32, 0.3 + 0.35 * (3 - s) as f32);
+        inner.block(&mut parts.stone, (c - dw - o - 0.7, c - dw - o), (f, f + dh + o + 0.7), (0.0, d));
+        inner.block(&mut parts.stone, (c + dw + o, c + dw + o + 0.7), (f, f + dh + o + 0.7), (0.0, d));
+        inner.block(&mut parts.stone, (c - dw - o - 0.7, c + dw + o + 0.7), (f + dh + o, f + dh + o + 0.7), (0.0, d));
+    }
+    relief(parts, &inner, (a, c - dw - 3.0), (f, top), 0.0, 1, 0.4, seed + 4);
+    relief(parts, &inner, (c + dw + 3.0, b), (f, top), 0.0, 1, 0.4, seed + 5);
+    parts.lights.push((wall.at(c, top - 2.0, (t.back + t.face) * 0.5), 45.0, 0.15));
 }
 
 /// Bridges between chambers facing each other across the gap at similar
@@ -1144,7 +1273,8 @@ fn routes(parts: &mut Parts, seed: i32, routing: &Routing, near: &[Massif], far:
         // (The railing open where a bridge joins.)
         let openings: Vec<(f32, f32)> =
             routing.bridges.iter().filter(|b| b.1 == k || b.2 == k).map(|b| (b.0 - 3.0, b.0 + 3.0)).collect();
-        walkway(parts, w, massifs(w.side), seed.wrapping_add(k as i32 * 131), &openings);
+        let terraces: Vec<Terrace> = parts.terraces.iter().filter(|t| t.way == k).copied().collect();
+        walkway(parts, w, massifs(w.side), seed.wrapping_add(k as i32 * 131), &openings, &terraces);
     }
     // Stairs: the first that fits for each walkway (and the rim).
     let mut done: Vec<(usize, bool)> = Vec::new();
@@ -1187,8 +1317,9 @@ fn runs((a, b): (f32, f32), gaps: &[(f32, f32)]) -> Vec<(f32, f32)> {
 
 /// A walkway: along each face it passes, a deck standing out from the face,
 /// joined at the corners; a railing on posts along its outer edge, a line of
-/// light under it, brackets beneath and lights below; now and then a prow.
-fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openings: &[(f32, f32)]) {
+/// light under it, brackets beneath and lights below; now and then a prow;
+/// through its places (see `place`).
+fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openings: &[(f32, f32)], terraces: &[Terrace]) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d4);
     // The previous face's end: inner and outer edge (on top), railing top,
     // and whether the railing was open there.
@@ -1208,7 +1339,11 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
         // Where the railing is open: bridges, and a prow if there is one.
         let mut gaps: Vec<(f32, f32)> = openings.iter().map(|&(a, b)| (to_u(a), to_u(b))).collect();
         let k = k as i32;
-        let prow = (r(k, 0) < 0.3 && m.room > w.width + 12.0 && ue - us > 40.0 && !m.shaft).then(|| {
+        let terrace = terraces.iter().find(|t| t.massif == k as usize);
+        // (The deck makes way for a place: its floor.)
+        let through: Vec<(f32, f32)> = terrace.map(|t| t.u).into_iter().collect();
+        gaps.extend(&through);
+        let prow = (terrace.is_none() && r(k, 0) < 0.3 && m.room > w.width + 12.0 && ue - us > 40.0 && !m.shaft).then(|| {
             let reach = (10.0 + 15.0 * r(k, 1)).min(m.room - w.width);
             let width = (20.0 + 30.0 * r(k, 2)).min(ue - us - 10.0);
             let c = us + 5.0 + (ue - us - 10.0 - width) * r(k, 3);
@@ -1219,7 +1354,14 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
         }
         let open = |u: f32| gaps.iter().any(|&(a, b)| u >= a && u <= b);
         // The deck.
-        parts.stone.beam(at(us, vs - DECK * 0.5, (n0 + n1) * 0.5), at(ue, ve - DECK * 0.5, (n0 + n1) * 0.5), w.width, DECK, Vec3::Y);
+        for (a, b) in runs((us, ue), &through) {
+            parts.stone.beam(at(a, v_at(a) - DECK * 0.5, (n0 + n1) * 0.5), at(b, v_at(b) - DECK * 0.5, (n0 + n1) * 0.5), w.width, DECK, Vec3::Y);
+            // A line of light under the outer edge.
+            parts.glow.beam(at(a, v_at(a) - DECK - 0.05, n1 - 0.3), at(b, v_at(b) - DECK - 0.05, n1 - 0.3), 0.15, 0.05, Vec3::Y);
+        }
+        if let Some(t) = terrace {
+            place(parts, &m.wall, t, &v_at, (n0, n1));
+        }
         // Joined to the last face's at the corner.
         if let Some((li, lo, lr, lopen)) = last {
             parts.stone.plate(&[li, lo, at(us, vs, n0), at(us, vs, n1)], vs - DECK, vs);
@@ -1244,13 +1386,14 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
                 parts.stone.beam(at(u, v_at(u), n1 - 0.15), at(u, v_at(u) + RAIL, n1 - 0.15), 0.1, 0.1, m.wall.along);
             }
         }
-        // A line of light under the outer edge.
-        parts.glow.beam(at(us, vs - DECK - 0.05, n1 - 0.3), at(ue, ve - DECK - 0.05, n1 - 0.3), 0.15, 0.05, Vec3::Y);
         // Brackets beneath, back into the wall.
         let brackets = ((ue - us) / 18.0).floor() as i32;
         let depth = (w.width * 0.9).min(8.0);
         for i in 1..=brackets {
             let u = us + (ue - us) * i as f32 / (brackets + 1) as f32;
+            if through.iter().any(|&(a, b)| u > a - 1.0 && u < b + 1.0) {
+                continue;
+            }
             let v = v_at(u) - DECK;
             m.wall.section(&mut parts.stone, (u - 0.4, u + 0.4), &[(v, n0), (v, n1 - 0.6), (v - depth, n0)]);
         }
@@ -1288,6 +1431,70 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
             parts.lights.push((at((pu0 + pu1) * 0.5, v - 12.0, n1 + reach * 0.5), 80.0, 0.35));
         }
         last = Some((at(ue, ve, n0), at(ue, ve, n1), at(ue, ve + RAIL, n1 - 0.15), open(ue)));
+    }
+}
+
+/// A walkway's part of a place: a gateway across it at each end, steps
+/// down from it to the floor; the floor running on out past the face, its
+/// corners chamfered, stepped beneath, a railing (classical, a parapet)
+/// round its edge and a line of light under it, a light below.
+fn place(parts: &mut Parts, wall: &Wall, t: &Terrace, v_at: &dyn Fn(f32) -> f32, (n0, n1): (f32, f32)) {
+    let (a, b) = t.u;
+    let f = t.floor;
+    let at = |u: f32, v: f32, n: f32| wall.at(u, v, n);
+    // The floor out past the face, stepped beneath.
+    for s in 0..4 {
+        let front = t.front - 3.0 * s as f32;
+        if front < n1 - 0.5 {
+            break;
+        }
+        let e = front - n1;
+        let (y0, y1) = if s == 0 { (f - DECK, f) } else { (f - DECK - 1.6 * s as f32, f - DECK - 1.6 * (s - 1) as f32) };
+        let pts = [at(a, 0.0, n0), at(b, 0.0, n0), at(b, 0.0, n1), at(b - e, 0.0, front), at(a + e, 0.0, front), at(a, 0.0, n1)];
+        parts.stone.plate(&pts, y0, y1);
+    }
+    // Round its edge.
+    let e = t.front - n1;
+    let edge = [(a + 0.25, n1), (a + e + 0.1, t.front - 0.2), (b - e - 0.1, t.front - 0.2), (b - 0.25, n1)];
+    for pair in edge.windows(2) {
+        let ((ua, na), (ub, nb)) = (pair[0], pair[1]);
+        let (p, q) = (at(ua, f, na), at(ub, f, nb));
+        if parts.classical {
+            parts.stone.beam(p + Vec3::Y * 0.5, q + Vec3::Y * 0.5, 0.35, 1.0, Vec3::Y);
+        } else {
+            parts.stone.beam(p + Vec3::Y * RAIL, q + Vec3::Y * RAIL, 0.1, 0.1, Vec3::Y);
+            let posts = (p.distance(q) / 3.0).floor().max(1.0) as i32;
+            for i in 0..=posts {
+                let x = p.lerp(q, i as f32 / posts as f32);
+                parts.stone.beam(x, x + Vec3::Y * RAIL, 0.1, 0.1, (q - p).normalize_or(Vec3::X));
+            }
+        }
+        parts.glow.beam(p - Vec3::Y * (DECK + 0.05), q - Vec3::Y * (DECK + 0.05), 0.15, 0.05, Vec3::Y);
+    }
+    parts.lights.push((at((a + b) * 0.5, f - 12.0, (n1 + t.front) * 0.5), 80.0, 0.35));
+    // At each end, a gateway across the walkway, and steps down inside.
+    for (u, dir) in [(a, 1.0f32), (b, -1.0)] {
+        let gv = v_at(u);
+        let origin = wall.origin + wall.along * if dir > 0.0 { u - 1.2 } else { u };
+        let gate = Wall { origin, along: wall.out, out: wall.along, offset: 0.0 };
+        let (o0, o1) = (t.face - 1.0, n1 + 1.0);
+        if parts.classical {
+            let rad = (o1 - o0 - 2.0) * 0.5;
+            arch(&mut parts.stone, &gate, (o0, o1), gv, gv + 4.0, gv + 4.0 + rad + 1.2, (0.0, 1.2), 1.0);
+        } else {
+            let h = gv + 5.0 + 0.25 * (n1 - n0);
+            gate.block(&mut parts.stone, (o0, t.face + 0.5), (gv, h + 1.6), (0.0, 1.2));
+            gate.block(&mut parts.stone, (n1 - 0.3, o1), (gv, h + 1.6), (0.0, 1.2));
+            gate.block(&mut parts.stone, (o0, o1), (h, h + 1.6), (0.0, 1.2));
+            gate.block(&mut parts.glow, (t.face + 0.5, n1 - 0.3), (h - 0.08, h), (0.5, 0.7));
+        }
+        let rise = gv - f;
+        let steps = (rise / 0.3).ceil() as i32;
+        for i in 0..steps - 1 {
+            let s = u + dir * 0.45 * i as f32;
+            let top = gv - rise * (i + 1) as f32 / steps as f32;
+            wall.block(&mut parts.stone, (s.min(s + dir * 0.45), s.max(s + dir * 0.45)), (f - 0.1, top), (n0, n1));
+        }
     }
 }
 
