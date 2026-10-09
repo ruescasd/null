@@ -1740,7 +1740,31 @@ fn routes(parts: &mut Parts, seed: i32, routing: &Routing, near: &[Massif], far:
         for (u, v) in [(t.u.0, t.v.0), (t.u.3, t.v.1)] {
             parts.clearance.push((format!("tunnel door at {v:.0} m"), wbox(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (t.inside, inner(m, v) + 0.5))));
         }
-        parts.lights.push((m.wall.at((t.u.1 + t.u.2) * 0.5, (t.v.0 + t.v.1) * 0.5 + 2.5, t.inside), 12.0, 0.02));
+        // Lit at both turns and along the way down; a faint line along the
+        // ceiling from door to door, so the way through can always be seen.
+        let run = (t.u.2 - t.u.1).abs();
+        let lamps = (run / 12.0).ceil().max(1.0) as i32;
+        for i in 0..=lamps {
+            let f = i as f32 / lamps as f32;
+            let (u, v) = (t.u.1 + (t.u.2 - t.u.1) * f, t.v.0 + (t.v.1 - t.v.0) * f);
+            parts.lights.push((m.wall.at(u, v + 2.6, t.inside), 10.0, 0.01));
+        }
+        let line = |a: (f32, f32, f32), b: (f32, f32, f32)| {
+            let mut pts = Vec::new();
+            for (u, v, n) in [a, b] {
+                for (dv, dn) in [(0.0, -0.08), (0.0, 0.08), (-0.06, -0.08), (-0.06, 0.08)] {
+                    let p = m.wall.at(u, v + dv, n + dn);
+                    pts.push([p.x as f64, p.y as f64, p.z as f64]);
+                }
+            }
+            Manifold::hull_pts(&pts)
+        };
+        let top = 3.0 - 0.31;
+        parts.dim.solid(&Manifold::batch_union(&[
+            line((t.u.0, t.v.0 + top, inner(m, t.v.0) + 0.3), (t.u.0, t.v.0 + top, t.inside)),
+            line((t.u.1, t.v.0 + top, t.inside), (t.u.2, t.v.1 + top, t.inside)),
+            line((t.u.3, t.v.1 + top, t.inside), (t.u.3, t.v.1 + top, inner(m, t.v.1) + 0.3)),
+        ]));
         info!("the chasm: a tunnel from {:?} to {:?} (out {:?}, inside {:?})", m.wall.at(t.u.0, t.v.0, inner(m, t.v.0)), m.wall.at(t.u.3, t.v.1, inner(m, t.v.1)), m.wall.out, m.wall.at(t.u.1, t.v.0, t.inside));
     }
     parts.mark("routes");
