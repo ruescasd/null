@@ -13,6 +13,7 @@
 
 use avian3d::prelude::*;
 use bevy::{asset::RenderAssetUsages, mesh::{Indices, PrimitiveTopology}, prelude::*};
+use manifold_csg::{CrossSection, Manifold, cross_section::JoinType};
 use worldgen::noise::hash01;
 
 use crate::{Args, rope::tubes};
@@ -326,6 +327,22 @@ impl Geometry {
             }
         }
         found
+    }
+
+    /// A solid from the boolean library, flat-shaded.
+    fn solid(&mut self, m: &Manifold) {
+        let (verts, props, tris) = m.to_mesh_f32();
+        let p = |i: u32| Vec3::new(verts[i as usize * props], verts[i as usize * props + 1], verts[i as usize * props + 2]);
+        for t in tris.chunks_exact(3) {
+            let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+            let n = (b - a).cross(c - a).normalize_or(Vec3::Y);
+            let base = self.positions.len() as u32;
+            for q in [a, b, c] {
+                self.positions.push(q.to_array());
+                self.normals.push(n.to_array());
+            }
+            self.indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }
     }
 
     fn mesh(self) -> Mesh {
@@ -1363,24 +1380,6 @@ fn routes(parts: &mut Parts, seed: i32, routing: &Routing, near: &[Massif], far:
     }
 }
 
-/// The stretches of `(a, b)` left once the `gaps` are taken out.
-fn runs((a, b): (f32, f32), gaps: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let mut out = vec![(a, b)];
-    for &(g0, g1) in gaps {
-        out = out
-            .into_iter()
-            .flat_map(|(x, y)| {
-                if g1 <= x || g0 >= y {
-                    vec![(x, y)]
-                } else {
-                    [(x, g0), (g1, y)].into_iter().filter(|(p, q)| q - p > 0.5).collect()
-                }
-            })
-            .collect();
-    }
-    out
-}
-
 /// A solid parapet wall along a walking edge, from `a` to `b` (points on the
 /// walking surface under the wall's middle): a pier at each end, the wall
 /// between them (so parapets meeting at a corner meet in a pier, never
@@ -1410,18 +1409,55 @@ fn shelf_depth(width: f32) -> f32 {
     (width * 0.9).clamp(5.0, 10.0)
 }
 
-/// A walkway: along each face it passes, a shelf of the wall, its top the
-/// deck and its underside sloping back into the face (below wherever the
-/// face lies there), joined at the corners; a parapet wall along its outer
-/// edge (open where a bridge or prow joins, a pier at each end of it), a
-/// line of light under the edge and lights below; now and then a prow;
-/// through its places (see `place`).
+/// A plan point (x, z) as a section's point (x, -z): so a section extruded
+/// upwards and stood up by `upright` keeps its faces wound outwards.
+fn sec(p: Vec2) -> [f64; 2] {
+    [p.x as f64, -p.y as f64]
+}
+
+/// The convex region in plan around `pts`.
+fn region(pts: &[Vec2]) -> CrossSection {
+    CrossSection::hull_polygons(&[pts.iter().map(|&p| sec(p)).collect()])
+}
+
+/// The convex solid around points given in plan and height above the deck.
+fn hull3(pts: &[(Vec2, f32)]) -> Manifold {
+    Manifold::hull_pts(&pts.iter().map(|&(p, h)| [p.x as f64, -p.y as f64, h as f64]).collect::<Vec<_>>())
+}
+
+/// A region in plan raised from `h0` to `h1` above the deck.
+fn raised(s: &CrossSection, h0: f32, h1: f32) -> Manifold {
+    s.extrude((h1 - h0) as f64).translate(0.0, 0.0, h0 as f64)
+}
+
+/// A solid built in a walkway's frame (plan, and height above its deck)
+/// set in place: the deck's plane is its slope along the chasm.
+fn upright(m: &Manifold, w: &Walkway) -> Manifold {
+    let g = w.grade as f64;
+    m.transform(&[1.0, 0.0, 0.0, 0.0, -g, -1.0, 0.0, 1.0, 0.0, 0.0, (w.v0 - w.grade * w.z.0) as f64, 0.0])
+}
+
+/// A walkway, built as one solid from its plan. The plan: along each face
+/// it passes, a strip from its outer edge back into the wall; where two
+/// faces meet, the hull of their ends (a bevel at an outer corner; at an
+/// inner one, inside the strips' overlap); out round its prows. Taken as one
+/// region, so however short a face or sharp a turn, the outline is simply
+/// that region's edge. On it: the deck (cut away for its places' floors),
+/// its underside sloping back into the wall (clipped to the plan); a parapet
+/// wall round the edge (the plan less the plan drawn in), open at the
+/// walkway's ends, its places and where bridges join, a pier ending it each
+/// side; a lit line along the edge; lights below. All of it in the deck's
+/// frame, united, then set on the walkway's slope.
 fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openings: &[(f32, f32)], terraces: &[Terrace]) {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d4);
     let depth = shelf_depth(w.width);
-    // The previous face's end: inner and outer edge (on top), the parapet's
-    // end, and whether it was open there.
-    let mut last: Option<(Vec3, Vec3, Vec3, bool)> = None;
+    let flat = |p: Vec3| Vec2::new(p.x, p.z);
+    // The faces it passes: the massif, from where to where along it, its
+    // heights there, the deck's inner and outer edge; and how far back the
+    // wall lies behind the edge, at most (the deck reaches that far in on
+    // every face).
+    let mut faces = Vec::new();
+    let mut reach = w.width + 1.0;
     for (k, m) in massifs.iter().enumerate() {
         let (zs, ze) = (m.z.0.max(w.z.0), m.z.1.min(w.z.1));
         if ze - zs < 0.5 {
@@ -1430,80 +1466,131 @@ fn walkway(parts: &mut Parts, w: &Walkway, massifs: &[Massif], seed: i32, openin
         let to_u = |z: f32| (z - m.z.0) / (m.z.1 - m.z.0).max(1e-3) * m.len;
         let (us, ue) = (to_u(zs), to_u(ze));
         let (vs, ve) = (w.v(zs), w.v(ze));
-        let v_at = |u: f32| vs + (ve - vs) * (u - us) / (ue - us).max(1e-3);
         let n0 = inner(m, (vs + ve) * 0.5);
         let n1 = n0 + w.width;
-        let at = |u: f32, v: f32, n: f32| m.wall.at(u, v, n);
-        // Where the parapet is open: bridges, a prow, a place.
-        let mut gaps: Vec<(f32, f32)> = openings.iter().map(|&(a, b)| (to_u(a), to_u(b))).collect();
-        let k = k as i32;
-        let terrace = terraces.iter().find(|t| t.massif == k as usize);
-        // (The shelf makes way for a place: its floor.)
-        let through: Vec<(f32, f32)> = terrace.map(|t| t.u).into_iter().collect();
-        gaps.extend(&through);
-        let prow = (terrace.is_none() && r(k, 0) < 0.3 && m.room > w.width + 12.0 && ue - us > 40.0 && !m.shaft).then(|| {
-            let reach = (10.0 + 15.0 * r(k, 1)).min(m.room - w.width);
-            let width = (20.0 + 30.0 * r(k, 2)).min(ue - us - 10.0);
-            let c = us + 5.0 + (ue - us - 10.0 - width) * r(k, 3);
-            (c, c + width, reach)
-        });
-        if let Some((pu0, pu1, _)) = prow {
-            gaps.push((pu0, pu1));
-        }
-        let open = |u: f32| gaps.iter().any(|&(a, b)| u >= a && u <= b);
-        // The shelf, back into the wall below wherever the face lies.
         let back = (vs.min(ve) - depth..=vs.max(ve)).step_by_f32(2.0).map(|v| inner(m, v)).fold(n0, f32::min) - 1.0;
-        for (a, b) in runs((us, ue), &through) {
-            let (va, vb) = (v_at(a), v_at(b));
-            let section = [at(a, va - depth, back), at(a, va, back), at(a, va, n1), at(a, va - EDGE, n1)];
-            parts.stone.sweep(&section, at(b, vb, 0.0) - at(a, va, 0.0));
-            // A line of light under the outer edge.
-            parts.glow.beam(at(a, va - EDGE - 0.05, n1 - 0.3), at(b, vb - EDGE - 0.05, n1 - 0.3), 0.15, 0.05, Vec3::Y);
+        reach = reach.max(n1 - back);
+        faces.push((k, us, ue, (vs, ve), n0, n1));
+    }
+    if faces.is_empty() {
+        return;
+    }
+    let plan = |k: usize, u: f32, n: f32| flat(massifs[k].wall.at(u, 0.0, n));
+    // A band across a face's strip, from `a` to `b` along it.
+    let across = |k: usize, a: f32, b: f32, n1: f32| region(&[plan(k, a, n1 + 2.0), plan(k, b, n1 + 2.0), plan(k, b, n1 - reach - 2.0), plan(k, a, n1 - reach - 2.0)]);
+    // The plan.
+    let mut areas = Vec::new();
+    let mut under = Vec::new();
+    let profile = |k: usize, u: f32, n1: f32| [(plan(k, u, n1), 0.0), (plan(k, u, n1), -EDGE), (plan(k, u, n1 - reach), 0.0), (plan(k, u, n1 - reach), -depth)];
+    let mut prows = Vec::new();
+    for (i, &(k, us, ue, _, _, n1)) in faces.iter().enumerate() {
+        let m = &massifs[k];
+        areas.push(region(&[plan(k, us, n1), plan(k, ue, n1), plan(k, ue, n1 - reach), plan(k, us, n1 - reach)]));
+        under.push(hull3(&[profile(k, us, n1), profile(k, ue, n1)].concat()));
+        if let Some(&(k2, us2, _, _, _, n12)) = faces.get(i + 1) {
+            areas.push(region(&[plan(k, ue, n1), plan(k, ue, n1 - reach), plan(k2, us2, n12), plan(k2, us2, n12 - reach)]));
+            under.push(hull3(&[profile(k, ue, n1), profile(k2, us2, n12)].concat()));
         }
-        if let Some(t) = terrace {
+        let kk = k as i32;
+        let place = terraces.iter().any(|t| t.massif == k);
+        if !place && r(kk, 0) < 0.3 && m.room > w.width + 12.0 && ue - us > 40.0 && !m.shaft {
+            let out = (10.0 + 15.0 * r(kk, 1)).min(m.room - w.width);
+            let width = (20.0 + 30.0 * r(kk, 2)).min(ue - us - 10.0);
+            let pu0 = us + 5.0 + (ue - us - 10.0 - width) * r(kk, 3);
+            let pu1 = pu0 + width;
+            areas.push(region(&[plan(k, pu0, n1 - 1.0), plan(k, pu1, n1 - 1.0), plan(k, pu1, n1 + out), plan(k, pu0, n1 + out)]));
+            let thick = out * (0.5 + 0.4 * r(kk, 4));
+            let mut pts = Vec::new();
+            for u in [pu0, pu1] {
+                pts.extend([(plan(k, u, n1 + out), 0.0), (plan(k, u, n1 + out), -EDGE), (plan(k, u, n1 - reach), 0.0), (plan(k, u, n1 - reach), -thick)]);
+            }
+            under.push(hull3(&pts));
+            prows.push((k, (pu0 + pu1) * 0.5, n1 + out * 0.5));
+        }
+    }
+    let deck = CrossSection::batch_union(&areas);
+    // Its places, cut out of the deck; the parapet's openings: the places,
+    // where bridges join, and the walkway's two ends.
+    let mut gaps: Vec<(usize, f32, f32)> = Vec::new();
+    for &(k, ..) in &faces {
+        gaps.extend(terraces.iter().filter(|t| t.massif == k).map(|t| (k, t.u.0, t.u.1)));
+    }
+    let n1_of = |k: usize| faces.iter().find(|f| f.0 == k).map_or(0.0, |f| f.5);
+    let cut = |list: &[(usize, f32, f32)]| CrossSection::batch_union(&list.iter().map(|&(k, a, b)| across(k, a, b, n1_of(k))).collect::<Vec<_>>());
+    let places = cut(&gaps);
+    let floor = deck.difference(&places);
+    for &(z0, z1) in openings {
+        let z = (z0 + z1) * 0.5;
+        if let Some(&(k, ..)) = faces.iter().find(|f| (massifs[f.0].z.0..=massifs[f.0].z.1).contains(&z)) {
+            let m = &massifs[k];
+            let to_u = |z: f32| (z - m.z.0) / (m.z.1 - m.z.0).max(1e-3) * m.len;
+            gaps.push((k, to_u(z0), to_u(z1)));
+        }
+    }
+    let ((k0, us0, ..), (k1, _, ue1, ..)) = (faces[0], faces[faces.len() - 1]);
+    gaps.push((k0, us0 - 3.0, us0 + 0.5));
+    gaps.push((k1, ue1 - 0.5, ue1 + 3.0));
+    let open = cut(&gaps);
+    let rim = deck.difference(&deck.offset(-0.4, JoinType::Miter, 4.0, 0)).difference(&open);
+    // The solid.
+    let mut solid = vec![raised(&floor, -EDGE, 0.0), raised(&rim, -0.05, PARAPET)];
+    solid.push(Manifold::batch_union(&under).intersection(&raised(&floor, -60.0, 0.0)));
+    // A pier each side of every opening, where it meets the edge.
+    for &(k, a, b) in &gaps {
+        let (_, us, ue, _, _, n1) = *faces.iter().find(|f| f.0 == k).unwrap();
+        for u in [a, b] {
+            if u > us + 0.1 && u < ue - 0.1 {
+                let mut pts = Vec::new();
+                for (du, n, h) in [(-0.35, n1 + 0.15, -0.2), (0.35, n1 + 0.15, -0.2), (-0.35, n1 - 0.55, -0.2), (0.35, n1 - 0.55, -0.2)] {
+                    pts.push((plan(k, u + du, n), h));
+                    pts.push((plan(k, u + du, n), PARAPET + 0.3));
+                }
+                solid.push(hull3(&pts));
+            }
+        }
+    }
+    parts.stone.solid(&upright(&Manifold::batch_union(&solid), w));
+    // A lit line along the edge.
+    let line = deck.offset(0.04, JoinType::Miter, 4.0, 0).difference(&deck).difference(&places);
+    parts.glow.solid(&upright(&raised(&line, -1.0, -0.9), w));
+    // (Its outline's corners on the edge side, logged: where it turns,
+    // from and on, and which way is in, for close looks.)
+    for poly in deck.to_polygons() {
+        let pts: Vec<Vec2> = poly.iter().map(|p| Vec2::new(p[0] as f32, -p[1] as f32)).collect();
+        for j in 0..pts.len() {
+            let (a, p, b) = (pts[(j + pts.len() - 1) % pts.len()], pts[j], pts[(j + 1) % pts.len()]);
+            let Some(&(k, ..)) = faces.iter().min_by(|f, g| {
+                let d = |f: &(usize, f32, f32, (f32, f32), f32, f32)| plan(f.0, (f.1 + f.2) * 0.5, f.5).distance(p);
+                d(f).total_cmp(&d(g))
+            }) else { continue };
+            let m = &massifs[k];
+            let n = (Vec3::new(p.x, 0.0, p.y) - m.wall.origin).dot(m.wall.out) - m.wall.offset;
+            if n < n1_of(k) - 1.5 {
+                continue;
+            }
+            let g = |v: Vec2| Vec3::new(v.x, 0.0, v.y);
+            let height = w.v(p.y);
+            info!("the chasm: a walkway corner at {:?} (from {:?}, on {:?}, in {:?})", Vec3::new(p.x, height, p.y), g((p - a).normalize_or_zero()), g((b - p).normalize_or_zero()), -m.wall.out);
+        }
+    }
+    for (k, u, n) in prows {
+        let c = plan(k, u, n);
+        parts.lights.push((Vec3::new(c.x, w.v(c.y) - 12.0, c.y), 80.0, 0.35));
+    }
+    // Per face: lights below, and its places.
+    for &(k, us, ue, (vs, ve), n0, n1) in &faces {
+        let m = &massifs[k];
+        let lights = ((ue - us) / 70.0).round() as i32;
+        for i in 0..lights {
+            let u = us + (ue - us) * (i as f32 + 0.5) / lights as f32;
+            parts.lights.push((m.wall.at(u, vs - depth - 4.0, (n0 + n1) * 0.5), 60.0, 0.35));
+        }
+        let v_at = |u: f32| vs + (ve - vs) * (u - us) / (ue - us).max(1e-3);
+        for t in terraces.iter().filter(|t| t.massif == k) {
             parts.mark("place");
             place(parts, &m.wall, t, &v_at, (n0, n1), depth);
             parts.mark("walkway");
         }
-        // Joined to the last face's at the corner.
-        if let Some((li, lo, lp, lopen)) = last {
-            info!("the chasm: a walkway corner at {:?} (along {:?}, out {:?})", at(us, vs, n1), m.wall.along, m.wall.out);
-            // (Its top a touch below the decks', and the parapet's join lower
-            // and narrower than the parapets, so no two faces coincide.)
-            parts.stone.plate(&[li, lo, at(us, vs, n0), at(us, vs, n1)], vs - depth, vs - 0.02);
-            if !lopen && !open(us) {
-                parapet(parts, lp, at(us, vs, n1 - 0.2));
-            }
-        }
-        // The parapet.
-        for (a, b) in runs((us, ue), &gaps) {
-            let (p, q) = (at(a, v_at(a), n1 - 0.2), at(b, v_at(b), n1 - 0.2));
-            parapet(parts, p, q);
-        }
-        // Lights below, now and then.
-        let lights = ((ue - us) / 70.0).round() as i32;
-        for i in 0..lights {
-            let u = us + (ue - us) * (i as f32 + 0.5) / lights as f32;
-            parts.lights.push((at(u, vs - depth - 4.0, (n0 + n1) * 0.5), 60.0, 0.35));
-        }
-        // The prow: a slab jutting from the walkway's edge over the void, a
-        // flat top, a parapet round it, its underside sloping back.
-        if let Some((pu0, pu1, reach)) = prow {
-            let v = v_at((pu0 + pu1) * 0.5);
-            let thick = reach * (0.5 + 0.4 * r(k, 4));
-            // (The slab from the walkway's edge out, its support running back
-            // beneath the shelf: no faces shared with the shelf's top.)
-            m.wall.section(&mut parts.stone, (pu0, pu1), &[(v - EDGE, n1), (v, n1), (v, n1 + reach), (v - EDGE, n1 + reach)]);
-            m.wall.section(&mut parts.stone, (pu0, pu1), &[(v - thick, back), (v - EDGE - 0.05, back), (v - EDGE - 0.05, n1 + reach), (v - EDGE - 0.6, n1 + reach)]);
-            let edge = n1 + reach - 0.2;
-            parapet(parts, at(pu0 + 0.2, v, edge), at(pu1 - 0.2, v, edge));
-            for u in [pu0 + 0.2, pu1 - 0.2] {
-                parapet(parts, at(u, v, n1 - 0.2), at(u, v, edge));
-            }
-            parts.glow.beam(at(pu0, v - EDGE - 0.05, edge), at(pu1, v - EDGE - 0.05, edge), 0.15, 0.05, Vec3::Y);
-            parts.lights.push((at((pu0 + pu1) * 0.5, v - 12.0, n1 + reach * 0.5), 80.0, 0.35));
-        }
-        last = Some((at(ue, ve, n0), at(ue, ve, n1), at(ue, ve, n1 - 0.2), open(ue)));
     }
 }
 

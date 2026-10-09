@@ -6,4 +6,7 @@ version.workspace = true
 [dependencies]
 worldgen.workspace = true
 bevy.workspace = true
+# Boolean operations on solids (manifold3d, built from source: needs CMake
+# and a C++ compiler).
+manifold-csg = "0.4.1"
 avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel"] }
