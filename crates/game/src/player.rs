@@ -19,7 +19,7 @@ use bevy::{
 
 use crate::{Args, camera::FlyCam, terrain::Streamer, terrain::WorldGen};
 
-pub use bot::drive as bot_drive;
+pub use bot::{BotLog, drive as bot_drive};
 use tether::Tether;
 
 mod bot;
@@ -78,6 +78,8 @@ const MANTLE_EXIT_SPEED: f32 = 6.0;
 const VIEW_SMOOTH: f32 = 0.05;
 /// How far sideways the player may be nudged past an edge they clipped.
 const SLIP: f32 = 0.24;
+/// How far the way on must be clear after a slip.
+const SLIP_CLEAR: f32 = 0.6;
 
 /// Inside a canal's pipe the player's feet ride the exact cylinder (this much
 /// smaller than the pipe, for the hull's half width) instead of colliding
@@ -137,19 +139,26 @@ pub struct Player {
 }
 
 fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
-    commands.entity(*camera).insert(Player {
-        velocity: Vec3::ZERO,
-        grounded: false,
-        ground_normal: Vec3::Y,
-        health: HEALTH_MAX,
-        tether: Tether::Idle,
-        mantle: None,
-        in_canal: false,
-        tether_blocked: 0.0,
-        tether_held: false,
-        view_offset: 0.0,
-        ready: false,
-    });
+    commands.entity(*camera).insert(Player::fresh());
+}
+
+impl Player {
+    /// A player just arrived: still, whole, not yet placed on the ground.
+    pub fn fresh() -> Player {
+        Player {
+            velocity: Vec3::ZERO,
+            grounded: false,
+            ground_normal: Vec3::Y,
+            health: HEALTH_MAX,
+            tether: Tether::Idle,
+            mantle: None,
+            in_canal: false,
+            tether_blocked: 0.0,
+            tether_held: false,
+            view_offset: 0.0,
+            ready: false,
+        }
+    }
 }
 
 /// The player's collision shape: an upright box that never rotates, like
@@ -199,17 +208,39 @@ struct Mover<'a, 'w, 's> {
 
 impl Mover<'_, '_, '_> {
     fn slide(&self, center: Vec3, velocity: Vec3, dt: f32) -> (Vec3, Vec3) {
-        let out = self.query.move_and_slide(
-            &self.shape,
-            center,
-            Quat::IDENTITY,
-            velocity,
-            Duration::from_secs_f32(dt),
-            &self.config,
-            &self.filter,
-            |_| MoveAndSlideHitResponse::Accept,
-        );
-        (out.position, out.projected_velocity)
+        let slide = |from: Vec3| {
+            let out = self.query.move_and_slide(
+                &self.shape,
+                from,
+                Quat::IDENTITY,
+                velocity,
+                Duration::from_secs_f32(dt),
+                &self.config,
+                &self.filter,
+                |_| MoveAndSlideHitResponse::Accept,
+            );
+            (out.position, out.projected_velocity)
+        };
+        let (moved, slid) = slide(center);
+        // (Sat right on a surface, no gap of skin between, every sweep
+        // reports it hit at no distance, however the velocity lies along it:
+        // the body goes nowhere, however fast it runs. That comes after
+        // dipping into a slope for a moment, put back right on it. Lifted off
+        // it by twice the skin first, it goes on. Only going along it: going
+        // into it, as into a wall, it is rightly stopped, and lifted off each
+        // time would shake against it.)
+        if (moved - center).length() < 1e-5
+            && (velocity * dt).length() > 1e-3
+            && let Some(hit) = self.query.cast_move(&self.shape, center, Quat::IDENTITY, velocity * dt, self.config.skin_width, &self.filter)
+            && hit.distance < 1e-4
+            && velocity.normalize().dot(hit.normal1).abs() < 0.5
+        {
+            let lifted = center + hit.normal1 * (self.config.skin_width * 2.0);
+            if self.fits(lifted) {
+                return slide(lifted);
+            }
+        }
+        (moved, slid)
     }
 
     /// Distance the hull can move along `movement` before touching
@@ -237,13 +268,18 @@ impl Mover<'_, '_, '_> {
         if best.2 >= wanted * 0.95 {
             return (moved, slid);
         }
+        // (Each only for a real gain: against a wall, every try gains
+        // nothing, and taking whichever gains a rounding error more shook
+        // the body from side to side and up and down.)
         if can_step && let Some((p, v)) = self.step_up(center, velocity, dt) {
-            if progress(p) > best.2 + 1e-3 {
+            if progress(p) > best.2 + wanted * 0.25 {
                 best = (p, v, progress(p));
             }
         }
-        if best.2 < wanted * 0.5 && let Some((p, v)) = self.slip(center, velocity, dt, dir) {
-            if progress(p) > best.2 + 1e-3 {
+        // (The slip gains nothing on at first: it slides aside, towards
+        // where the way on is clear, only as fast as the body goes.)
+        if best.2 < wanted * 0.5 && let Some((p, v)) = self.slip(center, velocity, dt, dir, wanted) {
+            if progress(p) >= best.2 - 1e-4 {
                 best = (p, v, progress(p));
             }
         }
@@ -277,22 +313,21 @@ impl Mover<'_, '_, '_> {
             .max_by(|a, b| a.y.total_cmp(&b.y))
     }
 
-    /// Corner correction: try the move again from up to `SLIP` to either side.
-    fn slip(&self, center: Vec3, velocity: Vec3, dt: f32, dir: Vec3) -> Option<(Vec3, Vec3)> {
+    /// Corner correction: towards the nearer side (up to `SLIP`) from which
+    /// the way on is clear, the move again from a little that way: no further
+    /// aside than the body goes on in a step (`wanted`), so it slides round
+    /// what it clipped rather than jumping past it.
+    fn slip(&self, center: Vec3, velocity: Vec3, dt: f32, dir: Vec3, wanted: f32) -> Option<(Vec3, Vec3)> {
         let side = Vec3::new(-dir.z, 0.0, dir.x);
-        let mut best: Option<(Vec3, Vec3, f32)> = None;
-        for offset in [SLIP * 0.5, -SLIP * 0.5, SLIP, -SLIP] {
-            let shift = side * offset;
-            if self.sweep(center, shift).is_some() {
-                continue;
-            }
-            let (p, v) = self.slide(center + shift, velocity, dt);
-            let progress = (p - center).dot(dir);
-            if best.is_none_or(|(_, _, b)| progress > b) {
-                best = Some((p, v, progress));
-            }
-        }
-        best.map(|(p, v, _)| (p, v))
+        // (Only past what was clipped: from there the way on is clear for a
+        // good stride. Beside a wall met at a slant, a shift away from it
+        // leaves a gap that only looks like a way on, until the wall again a
+        // few centimetres further: taken, the body shook to and from the
+        // wall.)
+        let offset = [SLIP * 0.5, -SLIP * 0.5, SLIP, -SLIP]
+            .into_iter()
+            .find(|&o| self.sweep(center, side * o).is_none() && self.sweep(center + side * o, dir * SLIP_CLEAR).is_none())?;
+        Some(self.slide(center + side * offset.signum() * offset.abs().min(wanted), velocity, dt))
     }
 
     /// Where the hull would end up mantling onto a ledge ahead along `dir`,
@@ -318,7 +353,20 @@ impl Mover<'_, '_, '_> {
         // ...and walkable ground to settle onto that is higher than a step.
         let (down, normal) = self.sweep(over, Vec3::NEG_Y * (rise + 0.1))?;
         let target = over - Vec3::Y * down;
-        (normal.y >= MIN_WALK_NORMAL && target.y - center.y > STEP_HEIGHT * 0.5).then_some(target)
+        if normal.y < MIN_WALK_NORMAL || target.y - center.y <= STEP_HEIGHT * 0.5 {
+            return None;
+        }
+        // (The climb moves the body without colliding: it must fit all the
+        // way, tested by overlap, not sweeps, which from inside rock see
+        // nothing; or a climb begun pressed to a wall went through it.)
+        let path = (0..=4).map(|i| center.lerp(raised, i as f32 / 4.0)).chain((1..=4).map(|i| raised.lerp(over, i as f32 / 4.0))).chain((1..=2).map(|i| over.lerp(target, i as f32 / 2.0)));
+        path.into_iter().all(|p| self.fits(p)).then_some(target)
+    }
+
+    /// Whether the hull, a hair smaller, is clear of everything at `center`.
+    fn fits(&self, center: Vec3) -> bool {
+        let shell = Collider::cuboid(HALF_WIDTH * 2.0 - 0.04, HEIGHT - 0.04, HALF_WIDTH * 2.0 - 0.04);
+        self.query.spatial_query.shape_intersections(&shell, center, Quat::IDENTITY, &self.filter).is_empty()
     }
 }
 
@@ -441,6 +489,11 @@ pub fn walk(
         fly.noclip = !fly.noclip;
         player.velocity = Vec3::ZERO;
         player.view_offset = 0.0;
+        // (Out of noclip, walking on from just where you are: not placed
+        // afresh on the ground, as at the start.)
+        if !fly.noclip {
+            player.ready = true;
+        }
     }
     // Fire, fly and release the tether (once per frame; the pull itself is
     // integrated with the movement steps below).

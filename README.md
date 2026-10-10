@@ -52,6 +52,15 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               and any hole where a flight meets a walkway
     --opt walkbot                             with --opt chasm: walk the whole way down with the real movement, 8x as
                                               fast as real time, and log wherever it gets stuck or falls
+    --opt wallbot                             with --opt chasm: walk into walls (a walkway's face, a tunnel's side and
+                                              end, a face at the bottom), straight on and at 10 and 35 degrees, and log
+                                              any shaking or jumping against them
+    --check static|walk|wall|all --seeds 1-50,851-1050 [--jobs n]
+                                              the chasm's checks over many seeds at once, nothing rendered, no window:
+                                              static (reaches the bottom; nothing in rock or in another route, no way
+                                              crossed, no hole where a flight meets a walkway; seconds a seed), walk
+                                              (the walkbot's way down, ~10 s a seed alone), wall (the wallbot's);
+                                              a line a seed, the failures, exit code 0 if all pass
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)

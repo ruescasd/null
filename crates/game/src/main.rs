@@ -3,6 +3,7 @@
 mod camera;
 mod capture;
 mod chasm;
+mod check;
 mod combat;
 mod figure;
 mod landmarks;
@@ -41,7 +42,7 @@ impl Args {
 
     /// A measurement or capture, running with nobody playing.
     pub fn unattended(&self) -> bool {
-        self.opt("bench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("walkbot") || self.opt("labshots")
+        self.opt("bench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("walkbot") || self.opt("wallbot") || self.opt("labshots")
     }
 
     /// A tuning number, overridable with `--set name=value`.
@@ -84,6 +85,11 @@ impl Args {
 }
 
 fn main() {
+    // `--check ...`: the chasm's checks over many seeds, nothing rendered.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--check") {
+        check::run(&argv);
+    }
     let args = Args::parse();
     // Measurements and captures run flat out even without focus (Bevy
     // otherwise slows an unfocused window to 60 fps).
