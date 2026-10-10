@@ -230,31 +230,54 @@ impl Geometry {
 
     /// Where two faces lie in the same plane, facing the same way, and
     /// overlap (they flicker as the depth test picks one or the other): the
-    /// middle of each overlapping pair.
-    fn coincident(&self) -> Vec<(usize, usize, Vec3)> {
+    /// middle of each overlapping pair. (`opposite`: facing opposite ways
+    /// instead; within one solid, a skin with nothing inside it.)
+    fn coincident(&self, opposite: bool) -> Vec<(usize, usize, Vec3)> {
         use std::collections::HashMap;
         let p = |i: u32| Vec3::from(self.positions[i as usize]);
         let tris: Vec<[Vec3; 3]> = self.indices.chunks_exact(3).map(|t| [p(t[0]), p(t[1]), p(t[2])]).collect();
-        // Grouped by plane (normal to about a degree, offset to 2 cm) and
-        // by a 16 m cell in that plane.
+        // Grouped by plane (normal to a few degrees, offset to 10 cm; near
+        // the edge of a group, in the next too, as a face and one on it can
+        // round apart) and by a 16 m cell in that plane; each pair then
+        // tested exactly.
         let mut groups: HashMap<(i32, i32, i32, i32, i32, i32), Vec<usize>> = HashMap::new();
+        let bins = |q: f32| {
+            let f = q.floor();
+            let mut out = vec![f as i32];
+            if q - f < 0.15 {
+                out.push(f as i32 - 1);
+            } else if q - f > 0.85 {
+                out.push(f as i32 + 1);
+            }
+            out
+        };
         for (k, t) in tris.iter().enumerate() {
             let n = (t[1] - t[0]).cross(t[2] - t[0]);
             if n.length() < 1e-4 {
                 continue;
             }
+            // (Facing either way, grouped by the plane alone.)
             let n = n.normalize();
+            let n = if (n.x, n.y, n.z) < (0.0, 0.0, 0.0) { -n } else { n };
             let (e1, e2) = n.any_orthonormal_pair();
             let c = (t[0] + t[1] + t[2]) / 3.0;
-            let key = (
-                (n.x * 60.0).round() as i32,
-                (n.y * 60.0).round() as i32,
-                (n.z * 60.0).round() as i32,
-                (n.dot(c) * 50.0).round() as i32,
-                (e1.dot(c) / 16.0).floor() as i32,
-                (e2.dot(c) / 16.0).floor() as i32,
-            );
-            groups.entry(key).or_default().push(k);
+            // (In every cell it covers: a big face and a small one on it can
+            // lie cells apart by their middles.)
+            let span = |e: Vec3| t.iter().map(|q| (e.dot(*q) / 16.0).floor() as i32).fold((i32::MAX, i32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+            let ((a0, a1), (b0, b1)) = (span(e1), span(e2));
+            for &x in &bins(n.x * 20.0) {
+                for &y in &bins(n.y * 20.0) {
+                    for &z in &bins(n.z * 20.0) {
+                        for &o in &bins(n.dot(c) * 10.0) {
+                            for a in a0..=a1 {
+                                for b in b0..=b1 {
+                                    groups.entry((x, y, z, o, a, b)).or_default().push(k);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         // Overlap of two triangles in their plane (separating axes), by more
         // than a sliver.
@@ -277,11 +300,15 @@ impl Geometry {
             true
         };
         let mut found = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for list in groups.values() {
             for (i, &x) in list.iter().enumerate() {
                 for &y in &list[i + 1..] {
                     // (The two halves of one quad share an edge, not area.)
-                    if overlap(&tris[x], &tris[y]) {
+                    let facing = |t: &[Vec3; 3]| (t[1] - t[0]).cross(t[2] - t[0]);
+                    let (fx, fy) = (facing(&tris[x]).normalize(), facing(&tris[y]).normalize());
+                    let same_plane = fx.dot(fy).abs() > 0.9998 && fx.dot(tris[y][0] - tris[x][0]).abs() < 0.02;
+                    if (fx.dot(fy) < 0.0) == opposite && same_plane && seen.insert((x.min(y), x.max(y))) && overlap(&tris[x], &tris[y]) {
                         found.push((x, y, (tris[x][0] + tris[x][1] + tris[x][2] + tris[y][0] + tris[y][1] + tris[y][2]) / 6.0));
                     }
                 }
@@ -726,19 +753,43 @@ impl Made {
             holes += 1;
             problems.push(format!("no floor: {what} at {:?}", pts[0] - Vec3::Y * 0.5));
         }
-        let coinciding = parts.stone.coincident().len();
+        let coinciding = parts.stone.coincident(false).len();
+        // (Skins: within the walls' mass or the routes' solid, faces back to
+        // back with nothing between, a sheet of rock no thicker than paper,
+        // there to walk into; no volume, so the spaces' test misses them.)
+        // (Where the two faces are of pieces pressed together, stone on both
+        // sides, they are a seam inside the stone, unseen; where there is
+        // air on both sides, a skin.)
+        let air = |p: Vec3, solid: &Manifold| {
+            let corners: Vec<[f64; 3]> = (0..8).map(|i| [0, 1, 2].map(|k| (p[k] + if i >> k & 1 == 1 { 0.005 } else { -0.005 }) as f64)).collect();
+            let cube = Manifold::hull_pts(&corners);
+            cube.intersection(solid).volume() < 1e-7
+        };
+        let mut skins = 0;
+        for (x, y, at) in parts.stone.coincident(true) {
+            let (a, b) = (parts.maker(x), parts.maker(y));
+            let t = [0, 1, 2].map(|i| Vec3::from(parts.stone.positions[parts.stone.indices[x * 3 + i] as usize]));
+            let n = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
+            let solid = if a == "wall mass" { &walls } else { &routes };
+            if a == b && (a == "wall mass" || a == "routes") && air(at + n * 0.03, solid) && air(at - n * 0.03, solid) {
+                skins += 1;
+                if skins <= 8 {
+                    problems.push(format!("a skin of rock ({a}) at {at:?}"));
+                }
+            }
+        }
         let down = self.bottom() < 50.0;
         if !down {
             problems.insert(0, format!("the way down stops at {:.0} m", self.bottom()));
         }
         let counts = format!(
-            "{blocked} of {} routes' spaces run into something, {} of {} ways crossed by a surface, {holes} of {} points where flights meet walkways with no floor; {coinciding} coinciding faces",
+            "{blocked} of {} routes' spaces run into something, {} of {} ways crossed by a surface, {holes} of {} points where flights meet walkways with no floor, {skins} skins of rock; {coinciding} coinciding faces",
             parts.clearance.len(),
             crossed.len(),
             parts.paths.len(),
             probes.len()
         );
-        Check { ok: down && blocked == 0 && crossed.is_empty() && holes == 0, summary: format!("{}; {counts}", self.summary()), problems }
+        Check { ok: down && blocked == 0 && crossed.is_empty() && holes == 0 && skins == 0, summary: format!("{}; {counts}", self.summary()), problems }
     }
 }
 
@@ -947,10 +998,11 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Man
     zones.extend(routing.door_zones(side, massifs));
 
     // (Its mass is its solid, less what is cut into it: tunnels, halls.)
-    let mut cuts: Vec<Manifold> = routing.tunnels.iter().filter(|t| t.side == side).map(|t| tunnel_cut(&massifs[t.m], t, 0.0)).collect();
-    cuts.extend(routing.ways.iter().filter(|w| w.side == side).filter_map(|w| way_cut(w, massifs)));
-    cuts.extend(routing.flights.iter().filter(|f| f.side == side).filter_map(|f| flight_cut(&massifs[f.m], f)));
-    cuts.extend(routing.places.iter().filter(|p| p.side == side).map(|p| place_cut(&massifs[p.m], p)));
+    // (Grown a little as they are cut: see `GROW`.)
+    let mut cuts: Vec<Manifold> = routing.tunnels.iter().filter(|t| t.side == side).map(|t| tunnel_cut(&massifs[t.m], t, GROW)).collect();
+    cuts.extend(routing.ways.iter().filter(|w| w.side == side).filter_map(|w| way_cut(w, massifs, GROW)));
+    cuts.extend(routing.flights.iter().filter(|f| f.side == side).filter_map(|f| flight_cut(&massifs[f.m], f)).map(|c| c.minkowski_sum(&grain(GROW))));
+    cuts.extend(routing.places.iter().filter(|p| p.side == side).map(|p| place_cut(&massifs[p.m], p, GROW)));
     parts.cuts = cuts
         .iter()
         .filter_map(|c| {
@@ -1332,8 +1384,9 @@ fn louvres(parts: &mut Parts, w: &Wall, (u0, u1): (f32, f32), (v0, v1): (f32, f3
 
 /// A walkway along a wall: which wall, from `z.0` to `z.1` along the
 /// chasm, its height at `z.0` and how it rises (grade, metres a metre),
-/// how wide, and how far it is set back into the rock (`recess`, whole
-/// metres: 0 built out from the face; more, carved into it, a gallery).
+/// how wide, and how far it is set back into the rock (`recess`: 0 built
+/// out from the face; carved into it, a gallery, all the way: its outer
+/// edge flush with the face, under the rock's edge over it).
 #[derive(Clone, Copy)]
 struct Walkway {
     side: f32,
@@ -1349,10 +1402,10 @@ impl Walkway {
         self.v0 + self.grade * (z - self.z.0)
     }
 
-    /// Whether it is a loggia: carved all the way back, wide enough for
-    /// piers along its open front (they carry the rock over it).
+    /// Whether it is a loggia: carved, wide enough for piers along its open
+    /// front (they carry the rock over it).
     fn loggia(&self) -> bool {
-        self.recess > 0.0 && self.recess >= self.width - 1.0 && self.width >= 3.0
+        self.recess > 0.0 && self.width >= 3.0
     }
 }
 
@@ -1374,7 +1427,7 @@ const GALLERY: f32 = 4.8;
 
 /// Where a deck `width` wide lies across a massif's face at height `v`,
 /// from its inner edge to its outer: out from the face; or `recess` further
-/// back, carved into the rock (at most to a sill half a metre out).
+/// back, carved into the rock.
 fn deck_n(m: &Massif, v: f32, width: f32, recess: f32) -> (f32, f32) {
     let n0 = inner(m, v) - recess;
     (n0, n0 + width)
@@ -1466,7 +1519,7 @@ fn prism(w: &Wall, outline: &[(f32, f32)], v: (f32, f32)) -> Manifold {
 
 /// What is carved out of the wall for a place: the hall, and the arcade's
 /// openings through its front (each a round arch, out past the face).
-fn place_cut(m: &Massif, p: &Place) -> Manifold {
+fn place_cut(m: &Massif, p: &Place, grow: f32) -> Manifold {
     let face = m.face(p.v);
     let mut cut = vec![wbox(&m.wall, p.hall, (p.v - 0.3, p.v + p.height), (p.back, p.front))];
     for (a, b, spring) in p.bays() {
@@ -1486,8 +1539,26 @@ fn place_cut(m: &Massif, p: &Place) -> Manifold {
         }
         cut.push(Manifold::hull_pts(&pts));
     }
+    // (Grown piece by piece: each is convex.)
+    if grow > 0.0 {
+        cut = cut.iter().map(|c| c.minkowski_sum(&grain(grow))).collect();
+    }
     Manifold::batch_union(&cut)
 }
+
+/// A small cube, `e` out each way: what a solid is grown by (its Minkowski
+/// sum; exact for a convex one).
+fn grain(e: f32) -> Manifold {
+    let corners: Vec<[f64; 3]> = (0..8).map(|i| [0, 1, 2].map(|k| if i >> k & 1 == 1 { e as f64 } else { -e as f64 })).collect();
+    Manifold::hull_pts(&corners)
+}
+
+/// How much what is cut into the walls is grown by, all round, as it is
+/// cut: where two cuts meet, or one ends where a massif does, they overlap
+/// rather than touch, which leaves a skin of rock between them, a sheet
+/// across the way. (By an amount nothing is laid out by: grown by 2 cm, one
+/// came to touch what stood 2 cm off.)
+const GROW: f32 = 0.013;
 
 /// The space a walker needs on a place: over its terrace (in from its
 /// edge), in its hall.
@@ -1975,11 +2046,11 @@ impl Routing {
             Some(m.wall.at(u, v, deck_n(m, v, width, recess).1 - 0.5))
         };
         // How far a stretch starting afresh (after a tunnel, a bridge) is
-        // set back into the rock: mostly built out; now and then carved,
-        // part way or all the way back (whole metres).
-        let pick = |k: i32, width: f32| {
-            if width >= 2.0 && r(k, 16) < 0.4 { (1.0 + ((width - 1.0) * r(k, 17)).floor()).min(width - 1.0) } else { 0.0 }
-        };
+        // set back into the rock: mostly built out; now and then carved, all
+        // the way back, flush with the face. (Part way, its floor ran on out
+        // past the rock's edge over it, and a loggia's piers stood out in
+        // front of it.)
+        let pick = |k: i32, width: f32| if width >= 2.0 && r(k, 16) < 0.4 { width - 0.5 } else { 0.0 };
         // What is taken along the walls: (side, z, v) boxes, with headroom,
         // each with the walkway it is (if one).
         type Taken = Vec<(Option<usize>, (f32, (f32, f32), (f32, f32)))>;
@@ -2055,7 +2126,7 @@ impl Routing {
                 return None;
             }
             let space = walk_space(&w, walls(side));
-            if !open(&space, way_cut(&w, walls(side)), side) {
+            if !open(&space, way_cut(&w, walls(side), 0.0), side) {
                 return None;
             }
             // (Clear of what is built: its deck out of their spaces, its
@@ -2242,7 +2313,7 @@ impl Routing {
                     };
                     let room = (side, p.z, (v - CORBEL - 2.0, v + height + 2.0));
                     let space = place_space(m, &p);
-                    if !free(&taken, on, room) || !apart(&inside, None, room) || !apart(&carved, on, room) || !open(&space, Some(place_cut(m, &p)), side) {
+                    if !free(&taken, on, room) || !apart(&inside, None, room) || !apart(&carved, on, room) || !open(&space, Some(place_cut(m, &p, 0.0)), side) {
                         continue;
                     }
                     if built.iter().any(|b| b.clashes(&place_solid(m, &p), &space)) {
@@ -2463,7 +2534,7 @@ impl Routing {
                     let m = &walls(p.side)[p.m];
                     taken.push((None, (p.side, p.z, (p.v - CORBEL - 2.0, p.v + p.height + 2.0))));
                     inside.push((None, (p.side, p.z, (p.v - 1.0, p.v + p.height + 1.0))));
-                    hollows.push(Hollow::new(None, place_cut(m, &p)));
+                    hollows.push(Hollow::new(None, place_cut(m, &p, 0.0)));
                     edges.push((m.wall.at(p.u.0, p.v, p.out), m.wall.at(p.u.1, p.v, p.out), CORBEL));
                     places.push(p);
                     taken.push((None, front(t.side, m, t.doors[1].0, t.doors[1].1, t.width)));
@@ -2499,7 +2570,7 @@ impl Routing {
             }
             if w.recess > 0.0 {
                 carved.push((Some(ways.len()), (w.side, (w.z.0 - 1.0, w.z.1 + 1.0), (w.v0 - 1.0, w.v0 + GALLERY + 1.0))));
-                hollows.extend(way_cut(&w, walls(w.side)).map(|c| Hollow::new(Some(ways.len()), c)));
+                hollows.extend(way_cut(&w, walls(w.side), 0.0).map(|c| Hollow::new(Some(ways.len()), c)));
             }
             recess = w.recess;
             side = w.side;
@@ -2914,7 +2985,7 @@ fn flight_space(m: &Massif, (ua, ub): (f32, f32), (va, vb): (f32, f32), n: (f32,
 /// edge out past the face, from under its deck to the opening's top; round
 /// a corner, the hull of the two ends; half a metre on past its ends (what
 /// goes on from there overlaps it, never just touches).
-fn way_cut(w: &Walkway, massifs: &[Massif]) -> Option<Manifold> {
+fn way_cut(w: &Walkway, massifs: &[Massif], grow: f32) -> Option<Manifold> {
     if w.recess <= 0.0 {
         return None;
     }
@@ -2933,7 +3004,9 @@ fn way_cut(w: &Walkway, massifs: &[Massif]) -> Option<Manifold> {
             areas.push(region(&[plan(k, ue, n0), plan(k, ue, out(k)), plan(k2, us2, n02), plan(k2, us2, out(k2))]));
         }
     }
-    Some(upright(&raised(&CrossSection::batch_union(&areas), -0.3, GALLERY), w))
+    let plan = CrossSection::batch_union(&areas);
+    let plan = if grow > 0.0 { plan.offset(grow as f64, JoinType::Miter, 2.0, 0) } else { plan };
+    Some(upright(&raised(&plan, -0.3 - grow, GALLERY + grow), w))
 }
 
 /// What is carved out of the wall for a flight set back into it (nothing
