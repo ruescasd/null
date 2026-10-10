@@ -157,38 +157,6 @@ impl Geometry {
         self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    /// A convex polygon face, wound to face away from `inside`.
-    fn face(&mut self, pts: &[Vec3], inside: Vec3) {
-        let mut n = (pts[1] - pts[0]).cross(pts[2] - pts[0]).normalize_or(Vec3::Y);
-        let centre = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
-        let mut order: Vec<Vec3> = pts.to_vec();
-        if n.dot(centre - inside) < 0.0 {
-            n = -n;
-            order.reverse();
-        }
-        let base = self.positions.len() as u32;
-        for p in &order {
-            self.positions.push(p.to_array());
-            self.normals.push(n.to_array());
-        }
-        for i in 1..order.len() as u32 - 1 {
-            self.indices.extend_from_slice(&[base, base + i, base + i + 1]);
-        }
-    }
-
-    /// A convex polygon swept along `d`: a prism of any cross-section.
-    fn sweep(&mut self, section: &[Vec3], d: Vec3) {
-        let k = section.len();
-        let inside = section.iter().copied().sum::<Vec3>() / k as f32 + d * 0.5;
-        let far: Vec<Vec3> = section.iter().map(|&p| p + d).collect();
-        self.face(section, inside);
-        self.face(&far, inside);
-        for i in 0..k {
-            let j = (i + 1) % k;
-            self.face(&[section[i], section[j], far[j], far[i]], inside);
-        }
-    }
-
     /// A box from its centre and three half-axes (any orientation).
     fn oriented(&mut self, c: Vec3, a: Vec3, b: Vec3, n: Vec3) {
         // (Kept right-handed so the faces wind outwards.)
@@ -465,13 +433,6 @@ impl Wall {
         Wall { offset, ..*self }
     }
 
-    /// A prism along the face from `u.0` to `u.1` whose cross-section is the
-    /// convex polygon `section` of (v, n) points.
-    fn section(&self, g: &mut Geometry, u: (f32, f32), section: &[(f32, f32)]) {
-        let pts: Vec<Vec3> = section.iter().map(|&(v, n)| self.at(u.0, v, n)).collect();
-        g.sweep(&pts, self.along * (u.1 - u.0));
-    }
-
     /// A box on the face from (u0, v0) to (u1, v1), standing out from `n0`
     /// to `n1`.
     fn block(&self, g: &mut Geometry, u: (f32, f32), v: (f32, f32), n: (f32, f32)) {
@@ -490,9 +451,6 @@ struct Massif {
     split: f32,
     low: f32,
     high: f32,
-    /// How tall the sloped face is, below the split, that carries the face
-    /// from `low` out (or back) to `high`.
-    slope: f32,
     /// How far it may reach out into the gap (half the gap here, less a
     /// margin).
     room: f32,
@@ -504,10 +462,8 @@ impl Massif {
     fn face(&self, v: f32) -> f32 {
         if self.shaft {
             SHAFT_DEPTH
-        } else if v < self.split - self.slope {
-            self.low
         } else if v < self.split {
-            self.low + (self.high - self.low) * (v - (self.split - self.slope)) / self.slope.max(1e-3)
+            self.low
         } else {
             self.high
         }
@@ -908,7 +864,7 @@ fn shape(side: f32, seed: i32, other: &[Stretch]) -> Vec<Massif> {
         let nominal = Wall { origin: start, along, out, offset: 0.0 };
         let len = start.distance(end);
         if stretch.shaft {
-            massifs.push(Massif { wall: nominal, len, z: stretch.z, split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, slope: 0.0, room: 0.0, shaft: true });
+            massifs.push(Massif { wall: nominal, len, z: stretch.z, split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, room: 0.0, shaft: true });
             continue;
         }
         // (Depths on a 2 m module, the split on 4 m; overhangs a square
@@ -927,17 +883,15 @@ fn shape(side: f32, seed: i32, other: &[Stretch]) -> Vec<Massif> {
         // on the rim.)
         let delta = if r(m, 4) < 0.65 { 8.0 + 27.0 * r(m, 6) } else { -(4.0 + 10.0 * r(m, 6)) };
         let high = depth((low + delta).clamp(-4.0, (low + room.max(2.0)).max(-4.0)));
-        let slope = 0.0;
-        massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, slope, room, shaft: false });
+        massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, room, shaft: false });
     }
     massifs
 }
 
 /// A wall's mass as one solid, from its shape: each massif's (its lower
-/// part, its sloped stretch, its upper part; a shaft's slot), and between
-/// them what fills their corners: band by band in height (in each, both
-/// faces plain or evenly sloped), the hull of the one's end and the other's
-/// start, so the fill runs from face to face and never stands out of either.
+/// part, its upper part standing out or back from it; a shaft's slot), and
+/// across each joint between them, band by band in height (each face plain
+/// in it), a box behind the face set further back, overlapping both.
 fn wall_solid(massifs: &[Massif]) -> Manifold {
     let mut mass = Vec::new();
     for ms in massifs {
@@ -946,12 +900,11 @@ fn wall_solid(massifs: &[Massif]) -> Manifold {
             mass.push(wbox(w, (0.0, len), (0.0, HEIGHT), (-BACK, SHAFT_DEPTH)));
             continue;
         }
-        // (One piece: its whole profile, lower part, sloped stretch and upper
-        // part, swept along the face, so there are no seams inside it: pieces
-        // that only touch leave a skin of rock between them, which a tunnel
-        // cut through would meet.)
-        let (a, b) = (ms.split - ms.slope, ms.split);
-        let profile = [[-BACK, 0.0], [ms.low, 0.0], [ms.low, a], [ms.high, b], [ms.high, HEIGHT], [-BACK, HEIGHT]].map(|[n, v]| [n as f64, v as f64]);
+        // (One piece: its whole profile, lower part and upper, swept along
+        // the face, so there are no seams inside it: pieces that only touch
+        // leave a skin of rock between them, which a tunnel cut through
+        // would meet.)
+        let profile = [[-BACK, 0.0], [ms.low, 0.0], [ms.low, ms.split], [ms.high, ms.split], [ms.high, HEIGHT], [-BACK, HEIGHT]].map(|[n, v]| [n as f64, v as f64]);
         // (Section in (n, v), swept along u, set with n out and v up; swept
         // along the face, or back along it from its far end, whichever keeps
         // the frame right-handed.)
@@ -963,48 +916,21 @@ fn wall_solid(massifs: &[Massif]) -> Manifold {
     for pair in massifs.windows(2) {
         let (a, b) = (&pair[0], &pair[1]);
         let mut cuts = vec![0.0, HEIGHT];
-        for x in [a, b].into_iter().filter(|x| !x.shaft) {
-            cuts.extend([x.split - x.slope, x.split]);
-        }
+        cuts.extend([a, b].into_iter().filter(|x| !x.shaft).map(|x| x.split));
         cuts.retain(|v| (0.0..=HEIGHT).contains(v));
         cuts.sort_by(f32::total_cmp);
         cuts.dedup_by(|x, y| (*x - *y).abs() < 0.01);
-        // (Each band overlaps the massifs' ends, and the bands above and
+        // (Each box overlaps the massifs' ends, and the boxes above and
         // below it, by `E`, never in front of a face: pieces that only touch
         // leave a skin of rock between them.)
         const E: f32 = 0.05;
-        // (Parallel faces, stepped: across the joint, behind the face set
-        // further back, a box; band by band, each face plain in it.)
-        if a.wall.along.dot(b.wall.along) > 0.9999 {
-            for band in cuts.windows(2) {
-                let (v0, v1) = (band[0], band[1]);
-                let mid = (v0 + v1) * 0.5;
-                // (Each face's depth from its own line: the other's in this
-                // one's terms.)
-                let front = a.face(mid).min(b.face(mid) + (b.wall.origin - a.wall.origin).dot(a.wall.out));
-                mass.push(wbox(&a.wall, (a.len - E, a.len + E), ((v0 - E).max(0.0), (v1 + E).min(HEIGHT)), (-BACK, front)));
-            }
-            continue;
-        }
         for band in cuts.windows(2) {
             let (v0, v1) = (band[0], band[1]);
-            let mut pts = Vec::new();
-            for (m, u, inward) in [(a, a.len, -E), (b, 0.0, E)] {
-                let (f0, f1) = (m.face(v0 + 1e-3), m.face(v1 - 1e-3));
-                let (w0, w1) = ((v0 - E).max(0.0), (v1 + E).min(HEIGHT));
-                let mut at = vec![(u, v0, f0), (u, v1, f1), (u + inward, v0, f0 - E), (u + inward, v1, f1 - E)];
-                for (v, f) in [(w0, f0.min(m.face(w0))), (w1, f1.min(m.face(w1)))] {
-                    at.extend([(u, v, f - E), (u + inward, v, f - E)]);
-                }
-                for &(u, v, _) in &at.clone() {
-                    at.push((u, v, -BACK));
-                }
-                for (u, v, n) in at {
-                    let p = m.wall.at(u, v, n);
-                    pts.push([p.x as f64, p.y as f64, p.z as f64]);
-                }
-            }
-            mass.push(Manifold::hull_pts(&pts));
+            let mid = (v0 + v1) * 0.5;
+            // (Each face's depth from its own line: the other's in this
+            // one's terms.)
+            let front = a.face(mid).min(b.face(mid) + (b.wall.origin - a.wall.origin).dot(a.wall.out));
+            mass.push(wbox(&a.wall, (a.len - E, a.len + E), ((v0 - E).max(0.0), (v1 + E).min(HEIGHT)), (-BACK, front)));
         }
     }
     Manifold::batch_union(&mass)
@@ -1063,22 +989,8 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Man
             }
             continue;
         }
-        let (split, low, high, slope) = (ms.split, ms.low, ms.high, ms.slope);
-        // The sloped face: an underside leaning out over the chasm, or a
-        // battered stretch standing back; a rib now and then across it.
-        if slope > 1.0 {
-            let (a, b) = (split - slope, split);
-            parts.mark("ribs");
-            parts.frame = Some(nominal.moved(low.max(high)));
-            let ribs = (len / (6.0 + 10.0 * r(m, 8))).floor() as i32;
-            for i in 1..ribs {
-                let u = u0 + (u1 - u0) * i as f32 / ribs as f32;
-                if !parts.blocked((u - 0.6, u + 0.6), (a, b)) {
-                    nominal.section(&mut parts.stone, (u - 0.6, u + 0.6), &[(a, low), (a, low + 1.2), (b, high + 1.2), (b, high)]);
-                }
-            }
-        }
-        for (part, (v0, v1, n)) in [(0.0, split - slope, low), (split, HEIGHT, high)].into_iter().enumerate() {
+        let (split, low, high) = (ms.split, ms.low, ms.high);
+        for (part, (v0, v1, n)) in [(0.0, split, low), (split, HEIGHT, high)].into_iter().enumerate() {
             let w = nominal.moved(n);
             let k = seed + m * 31 + part as i32 * 7;
             let p = m * 2 + part as i32;
@@ -2043,10 +1955,10 @@ fn segment_gap(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
 }
 
 /// Whether a massif's face is the same all the way from `v.0` to `v.1`
-/// (clear of its sloped stretch, with room), so what runs along it there
+/// (clear of the step at its split, with room), so what runs along it there
 /// can keep to one line.
 fn plain(m: &Massif, v: (f32, f32)) -> bool {
-    m.shaft || v.1 < m.split - m.slope - 1.0 || v.0 > m.split + 0.5
+    m.shaft || v.1 < m.split - 1.0 || v.0 > m.split + 0.5
 }
 
 impl Routing {
@@ -2150,11 +2062,11 @@ impl Routing {
             // corner, not into the next face; nor round a sharp turn: past 50
             // degrees, each face's deck runs into the other's rock, and the
             // corner between them no longer covers the way round.)
-            // (On the grid, never round a step: from one face to the next only
-            // where they are one line, measured in the world, each face's
-            // depth being from its own line. Round a step, the two decks
-            // only touched where they met.)
-            let passable = passes.windows(2).all(|p| (p[1].wall.at(0.0, v, inner(p[1], v)) - p[0].wall.at(p[0].len, v, inner(p[0], v))).dot(p[0].wall.out).abs() < 0.01 && p[0].wall.along.dot(p[1].wall.along) >= 0.64);
+            // (Never round a step: from one face to the next only where they
+            // are one line, measured in the world, each face's depth being
+            // from its own line. Round a step, the two decks only touched
+            // where they met.)
+            let passable = passes.windows(2).all(|p| (p[1].wall.at(0.0, v, inner(p[1], v)) - p[0].wall.at(p[0].len, v, inner(p[0], v))).dot(p[0].wall.out).abs() < 0.01);
             if !(plain_all && passable && v > 30.0 && free(taken, None, way_box(&w))) {
                 return None;
             }
@@ -2668,27 +2580,10 @@ impl Routing {
                     .map_or(0.0, |x| x.1)
             };
             let (a, b) = (at(from), at(to));
-            // (Round each corner by the end of the one face's deck and the
-            // start of the next's; or, where the two decks cross (faces
-            // standing out, angled towards each other), by where their
-            // middles cross: past it, the one deck's end is a pocket behind
-            // the other's.)
             let mut corners: Vec<(f32, Vec3)> = faces
                 .windows(2)
                 .enumerate()
-                .flat_map(|(i, p)| {
-                    let (a0, a1, b0, b1) = (mid(&p[0], p[0].1), mid(&p[0], p[0].2), mid(&p[1], p[1].1), mid(&p[1], p[1].2));
-                    let (da, db) = (Vec2::new(a1.x - a0.x, a1.z - a0.z), Vec2::new(b1.x - b0.x, b1.z - b0.z));
-                    let den = da.perp_dot(db);
-                    let ab = Vec2::new(b0.x - a0.x, b0.z - a0.z);
-                    let (s, t) = (ab.perp_dot(db) / den, ab.perp_dot(da) / den);
-                    let end = i as f32 * 1e4 + p[0].2 - p[0].1;
-                    if den.abs() > 1e-4 && (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
-                        vec![(end, a0.lerp(a1, s))]
-                    } else {
-                        vec![(end, a1), ((i + 1) as f32 * 1e4, b0)]
-                    }
-                })
+                .flat_map(|(i, p)| [(i as f32 * 1e4 + p[0].2 - p[0].1, mid(&p[0], p[0].2)), ((i + 1) as f32 * 1e4, mid(&p[1], p[1].1))])
                 .filter(|c| c.0 > a.min(b) && c.0 < a.max(b))
                 .collect();
             if b < a {
