@@ -1756,7 +1756,7 @@ fn h_tree(a: Vec2, b: Vec2, key: i32, half: impl Fn(u32) -> f32) -> Vec<(Vec2, V
 }
 
 /// How thick the plates on a hall's walls are: how deep their grooves.
-const PLATE: f32 = 0.25;
+const PLATE: f32 = 0.2;
 
 /// The plates on a hall's back wall and its two end walls (where they face
 /// the walker across it), in the slots cut for them: each a stone plate as
