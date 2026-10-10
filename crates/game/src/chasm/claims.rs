@@ -61,6 +61,10 @@ pub const ROCK: f32 = 1.0;
 pub struct Table {
     claims: Vec<(usize, Claim)>,
     cells: HashMap<IVec3, Vec<u32>>,
+    /// Pieces that keep rock round what they carve from all but the pieces
+    /// they join (a hall: a room in the rock, entered by its doors), each
+    /// with how many boxes the table held when it came.
+    solo: Vec<(usize, usize)>,
 }
 
 /// The cells a box covers (grown by `margin`).
@@ -74,7 +78,10 @@ impl Table {
     /// (`rock(lo, hi)`: how much of a box is rock) and every other piece's,
     /// but where it joins another (`friends`: each with its port), and, for
     /// what is carved, near those a step further along (`neighbours`).
-    pub fn misfit(&self, owner: usize, piece: &[Claim], friends: &[(usize, Claim)], neighbours: &[usize], rock: &dyn Fn(Vec3, Vec3) -> f32) -> Option<String> {
+    /// (`solo`: the piece keeps rock from all but the pieces it joins, as a
+    /// room in the rock does, its neighbours too; and neighbours that do
+    /// keep it from this one.)
+    pub fn misfit(&self, owner: usize, piece: &[Claim], friends: &[(usize, Claim)], neighbours: &[usize], solo: bool, rock: &dyn Fn(Vec3, Vec3) -> f32) -> Option<String> {
         let near = |c: &Claim, margin: f32, also: &[usize]| -> Vec<(usize, Claim)> {
             let mut ids: Vec<u32> = cells(c, margin).filter_map(|k| self.cells.get(&k)).flatten().copied().collect();
             ids.sort_unstable();
@@ -128,7 +135,7 @@ impl Table {
                     // between what pieces joined along the way do, anywhere:
                     // what one carves passing under another it joins is sound
                     // rock between, and hidden.)
-                    let joined: Vec<usize> = neighbours.iter().copied().chain(friends.iter().map(|f| f.0)).collect();
+                    let joined: Vec<usize> = neighbours.iter().copied().filter(|o| !solo && !self.solo.iter().any(|s| s.0 == *o)).chain(friends.iter().map(|f| f.0)).collect();
                     if let Some((o, k)) = near(c, ROCK, &joined).into_iter().find(|(_, k)| k.kind == Use::Cut && c.shared(k, ROCK) > SHARED) {
                         return Some(format!("cut {:?}..{:?} within {ROCK} m of piece {o}'s cut {:?}..{:?}", c.lo, c.hi, k.lo, k.hi));
                     }
@@ -149,6 +156,12 @@ impl Table {
         }
     }
 
+    /// Marks a piece as keeping rock from all but the pieces it joins (see
+    /// `misfit`).
+    pub fn solo(&mut self, owner: usize) {
+        self.solo.push((owner, self.claims.len()));
+    }
+
     /// How many boxes it holds (to take back to, see `truncate`).
     pub fn len(&self) -> usize {
         self.claims.len()
@@ -165,5 +178,6 @@ impl Table {
             }
         }
         self.claims.truncate(n);
+        self.solo.retain(|s| s.1 < n);
     }
 }

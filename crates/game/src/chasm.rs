@@ -1717,24 +1717,37 @@ impl Hall {
 
 /// A randomized H-tree in a rectangle (`a` to `b`, in a wall's plane):
 /// from a level trunk across its middle, each end branching square to it at
-/// 1/√2 its length, and so on down, but some branches cut off. Its segments,
-/// each with how deep in the tree it is. (`key` picks which are cut.)
-fn h_tree(a: Vec2, b: Vec2, key: i32) -> Vec<(Vec2, Vec2, u32)> {
+/// 1/√2 its length, and so on down (five levels), but some branches cut
+/// off. Its segments, each with how deep in the tree it is. (`key` picks
+/// which are cut; `half`, how wide a groove is each side of a segment, by
+/// depth: a branch whose groove would come within a hand's breadth of any
+/// but its parent's is cut off too, or a sliver of rock is left between.)
+fn h_tree(a: Vec2, b: Vec2, key: i32, half: impl Fn(u32) -> f32) -> Vec<(Vec2, Vec2, u32)> {
     // (The whole tree, branches on both sides, spans 1.75 times its trunk
     // across and 1.24 times it up: its trunk as long as fits.)
     let size = b - a;
     let trunk = (size.x / 1.75).min(size.y / 1.24);
-    let mut out = Vec::new();
-    let mut grow = vec![((a + b) * 0.5, trunk, true, 0u32, 1i32)];
-    while let Some((c, len, level, depth, id)) = grow.pop() {
-        let half = if level { Vec2::new(len * 0.5, 0.0) } else { Vec2::new(0.0, len * 0.5) };
-        let (p, q) = (c - half, c + half);
+    let mut out: Vec<(Vec2, Vec2, u32)> = Vec::new();
+    let groove = |p: Vec2, q: Vec2, depth: u32| (p.min(q) - half(depth), p.max(q) + half(depth));
+    let mut grow = vec![((a + b) * 0.5, trunk, true, 0u32, 1i32, usize::MAX)];
+    while let Some((c, len, level, depth, id, parent)) = grow.pop() {
+        let along = if level { Vec2::new(len * 0.5, 0.0) } else { Vec2::new(0.0, len * 0.5) };
+        let (p, q) = (c - along, c + along);
+        let (lo, hi) = groove(p, q, depth);
+        let crowded = out.iter().enumerate().filter(|(i, _)| *i != parent).any(|(_, &(p2, q2, d2))| {
+            let (lo2, hi2) = groove(p2, q2, d2);
+            (lo - 0.15).cmplt(hi2).all() && (hi + 0.15).cmpgt(lo2).all()
+        });
+        if crowded {
+            continue;
+        }
+        let me = out.len();
         out.push((p, q, depth));
-        if depth < 7 && len > 0.8 {
+        if depth < 5 && len > 0.8 {
             for (j, end) in [p, q].into_iter().enumerate() {
                 let branch = id * 2 + j as i32;
                 if depth == 0 || hash01(key, branch, depth as i32, 0x4a7) < 0.78 {
-                    grow.push((end, len / std::f32::consts::SQRT_2, !level, depth + 1, branch));
+                    grow.push((end, len / std::f32::consts::SQRT_2, !level, depth + 1, branch, me));
                 }
             }
         }
@@ -1742,47 +1755,58 @@ fn h_tree(a: Vec2, b: Vec2, key: i32) -> Vec<(Vec2, Vec2, u32)> {
     out
 }
 
-/// The H-trees cut into a hall's back wall and its two end walls (where they
-/// face the walker across it): each wall tiled with trees as tall as it,
-/// their grooves narrowing with depth in the tree, as deep as most of their
-/// width (cut a little out from the wall too, so they open in it).
-fn hall_incisions(m: &Massif, h: &Hall) -> Vec<Manifold> {
+/// How thick the plates on a hall's walls are: how deep their grooves.
+const PLATE: f32 = 0.25;
+
+/// The plates on a hall's back wall and its two end walls (where they face
+/// the walker across it), in the slots cut for them: each a stone plate as
+/// tall as the hall, a pattern of randomized H-trees cut through it (so its
+/// grooves are as deep as it is thick), the trees as tall as the wall, side
+/// by side. Drawn in the plate's plane and cut there, then given its depth:
+/// a surface on the hall's walls, never cut into the rock, so it cannot
+/// leave a sliver of it, however its pattern goes.
+fn hall_plates(m: &Massif, h: &Hall) -> Vec<Manifold> {
     let (a, b) = h.span();
     let key = (a * 10.0) as i32 + (h.v * 10.0) as i32 * 7919 + h.side as i32 * 104729;
-    // Each wall: its plane's two axes (along, up) in the face's frame, its
-    // rectangle, and the groove's depth across it, into the rock.
+    let rect = |x0: f32, x1: f32, y0: f32, y1: f32| CrossSection::from_polygons_with_fill_rule(&[vec![[x0 as f64, y0 as f64], [x1 as f64, y0 as f64], [x1 as f64, y1 as f64], [x0 as f64, y1 as f64]]], FillRule::NonZero);
+    // (Right-handed frames: as `stair` keeps its own.)
+    let s = if m.wall.along.dot(Vec3::Y.cross(m.wall.out)) > 0.0 { 1.0 } else { -1.0 };
+    let t = if m.wall.out.dot(Vec3::Y.cross(m.wall.along)) > 0.0 { 1.0 } else { -1.0 };
     let mut out = Vec::new();
-    let walls: [(&str, (f32, f32)); 3] = [("back", (a, b)), ("near end", (h.back, h.front)), ("far end", (h.back, h.front))];
-    for (k, (wall, (x0, x1))) in walls.into_iter().enumerate() {
+    // Each wall: its width (along it), and where its plate stands, given
+    // its pattern.
+    let walls: [(f32, f32); 3] = [(a, b), (h.back - PLATE, h.front), (h.back - PLATE, h.front)];
+    for (k, (x0, x1)) in walls.into_iter().enumerate() {
         let (y0, y1) = (h.v + 0.5, h.v + h.height - 0.5);
         let cells = (((x1 - x0) / ((y1 - y0) * std::f32::consts::SQRT_2)).round() as i32).max(1);
+        let half = |depth: u32| 0.15 * 0.85f32.powi(depth as i32);
+        let mut grooves = Vec::new();
         for c in 0..cells {
             let (c0, c1) = (x0 + (x1 - x0) * c as f32 / cells as f32, x0 + (x1 - x0) * (c + 1) as f32 / cells as f32);
-            for (p, q, depth) in h_tree(Vec2::new(c0 + 0.4, y0), Vec2::new(c1 - 0.4, y1), key + k as i32 * 31 + c * 977) {
-                let wide = (0.3 * 0.82f32.powi(depth as i32)).max(0.12);
-                let (deep, half) = (wide * 0.7, wide * 0.5);
-                let (lo, hi) = (p.min(q) - half, p.max(q) + half);
-                out.push(match wall {
-                    "back" => wbox(&m.wall, (lo.x, hi.x), (lo.y, hi.y), (h.back - deep, h.back + 0.05)),
-                    "near end" => wbox(&m.wall, (a - deep, a + 0.05), (lo.y, hi.y), (lo.x, hi.x)),
-                    _ => wbox(&m.wall, (b - 0.05, b + deep), (lo.y, hi.y), (lo.x, hi.x)),
-                });
+            for (p, q, depth) in h_tree(Vec2::new(c0 + 0.4, y0), Vec2::new(c1 - 0.4, y1), key + k as i32 * 31 + c * 977, half) {
+                let (lo, hi) = (p.min(q) - half(depth), p.max(q) + half(depth));
+                grooves.push(rect(lo.x, hi.x, lo.y, hi.y));
             }
         }
+        let plate = rect(x0, x1, h.v - 0.3, h.v + h.height).difference(&CrossSection::batch_union(&grooves));
+        out.push(match k {
+            0 => placed(&across(&plate, (h.back - PLATE) * s, h.back * s), m.wall.origin, m.wall.along, m.wall.out * s),
+            1 => placed(&across(&plate, (a - PLATE) * t, a * t), m.wall.origin, m.wall.out, m.wall.along * t),
+            _ => placed(&across(&plate, b * t, (b + PLATE) * t), m.wall.origin, m.wall.out, m.wall.along * t),
+        });
     }
     out
 }
 
 /// What is carved out of the wall for a hall: the hall less its pillars
-/// (left standing in the rock, carrying it), the H-trees cut into its walls,
-/// and the passages of its doors (from just into the hall to out past the
-/// face).
+/// (left standing in the rock, carrying it), with the slots for the plates
+/// on its back and end walls (see `hall_plates`), and the passages of its
+/// doors (from just into the hall to out past the face).
 fn hall_cut(m: &Massif, h: &Hall) -> Manifold {
-    let w = h.width * 0.5;
-    let hall = wbox(&m.wall, h.span(), (h.v - 0.3, h.v + h.height), (h.back, h.front));
+    let (w, (a, b)) = (h.width * 0.5, h.span());
+    let hall = wbox(&m.wall, (a - PLATE, b + PLATE), (h.v - 0.3, h.v + h.height), (h.back - PLATE, h.front));
     let pillars: Vec<Manifold> = h.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), (h.v - 1.0, h.v + h.height + 1.0), (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect();
     let mut cut = vec![hall.difference(&Manifold::batch_union(&pillars))];
-    cut.extend(hall_incisions(m, h));
     for u in [h.doors.0, h.doors.1] {
         cut.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0)));
     }
@@ -1801,10 +1825,16 @@ fn hall(parts: &mut Parts, m: &Massif, h: &Hall) -> Manifold {
         solid.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.1)));
         parts.lights.push((m.wall.at(u, h.v + 2.6, (h.front + inner_v) * 0.5), 10.0, 0.01));
     }
+    // (Dim: a lamp in every other bay, as a tunnel's.)
     let bays = ((b - a) / BAY).round() as i32;
     for i in (0..bays).step_by(2) {
-        parts.lights.push((m.wall.at(a + BAY * (i as f32 + 0.5), h.v + h.height - 1.0, h.aisle()), 25.0, 0.05));
+        parts.lights.push((m.wall.at(a + BAY * (i as f32 + 0.5), h.v + h.height - 1.0, h.aisle()), 20.0, 0.01));
     }
+    parts.mark("carving");
+    for plate in hall_plates(m, h) {
+        parts.stone.solid(&plate);
+    }
+    parts.mark("routes");
     for c in Routing::hall_claims(m, h).iter().filter(|c| c.kind == Use::Space) {
         let (lo, hi) = (c.lo, c.hi);
         let corners: Vec<[f64; 3]> = (0..8).map(|i| [0, 1, 2].map(|k| if i >> k & 1 == 1 { hi[k] as f64 } else { lo[k] as f64 })).collect();
@@ -2254,7 +2284,7 @@ impl Routing {
         // (`joins`: each with its port) and, for what is carved, near those
         // a step further along (`before`).
         let rockf = |lo: Vec3, hi: Vec3| rock(near, far, lo, hi);
-        let fits = |table: &Table, owner: usize, claims: &[Claim], joins: &[(usize, Claim)], before: &[usize]| table.misfit(owner, claims, joins, before, &rockf).is_none();
+        let fits = |table: &Table, owner: usize, claims: &[Claim], joins: &[(usize, Claim)], before: &[usize]| table.misfit(owner, claims, joins, before, false, &rockf).is_none();
         let (lo, hi) = (CENTRE.z - LENGTH * 0.5 + 10.0, CENTRE.z + LENGTH * 0.5 - 10.0);
         let to_z = |m: &Massif, u: f32| m.z.0 + u / m.len * (m.z.1 - m.z.0);
         // A point along the chasm put on its face's lattice (a whole metre
@@ -2543,16 +2573,20 @@ impl Routing {
                     let far = near + dir * BAY * bays as f32;
                     let front = (m.face(v) - 3.0).min(deck_n(m, v, here.width, here.recess).0 - 2.0);
                     let h = Hall { side, m: mi, u: (near.min(far), near.max(far)), v, front, back: front - BAY * deep as f32, height, doors: (ua, far - dir * BAY * 0.5), width: w };
-                    if m.shaft || h.u.0 < 3.0 || h.u.1 > m.len - 3.0 || h.back < -BACK + 6.0 || !plain(m, (v - 1.0, v + height + 2.0)) {
+                    // (Rock over it: its ceiling at the rim left a skin there.)
+                    if m.shaft || h.u.0 < 3.0 || h.u.1 > m.len - 3.0 || h.back < -BACK + 6.0 || v + height + 4.0 > HEIGHT || !plain(m, (v - 1.0, v + height + 2.0)) {
                         continue;
                     }
                     let hc = Self::hall_claims(m, &h);
                     let wd = w * 0.5 + 1.0;
-                    if !fits(&table, l1, &hc, &[(here_id.unwrap(), Self::port(m, h.doors.0, v, wd))], &before) {
+                    // (A room in the rock: rock round it from all but the
+                    // walkways at its doors.)
+                    if table.misfit(l1, &hc, &[(here_id.unwrap(), Self::port(m, h.doors.0, v, wd))], &[], true, &rockf).is_some() {
                         continue;
                     }
                     let Some(start) = snap(side, to_z(m, h.doors.1 - dir * (w * 0.5 + 0.5))) else { continue };
                     let mark = table.len();
+                    table.solo(l1);
                     table.add(l1, &hc);
                     let out = [(l1, Self::port(m, h.doors.1, v, wd))];
                     let here = [here_id.unwrap()];
@@ -2709,6 +2743,7 @@ impl Routing {
             let w = match step {
                 Step::Hall(h, w) => {
                     legs.push(Leg::Hall(halls.len(), ways.len()));
+                    table.solo(l1);
                     table.add(l1, &Self::hall_claims(&walls(h.side)[h.m], &h));
                     halls.push(h);
                     width = w.width;
@@ -3146,7 +3181,8 @@ impl Routing {
         let inner_v = inner(m, h.v);
         let mut out = vec![
             wclaim(&m.wall, (a, b), (h.v - 0.3, h.v), (h.back, h.front), Use::Solid),
-            wclaim(&m.wall, (a, b), (h.v - 0.3, h.v + h.height), (h.back, h.front), Use::Cut),
+            // (With the grooves cut into its walls.)
+            wclaim(&m.wall, (a - 0.3, b + 0.3), (h.v - 0.3, h.v + h.height), (h.back - 0.3, h.front), Use::Cut),
         ];
         // (Along the aisle, from door to door.)
         let (lo, hi) = (h.doors.0.min(h.doors.1), h.doors.0.max(h.doors.1));
@@ -3275,7 +3311,11 @@ impl Routing {
                     }
                     n
                 };
-                if let Some(why) = table.misfit(owner, &claims, &friends, &neighbours, &rock) {
+                let solo = what == "hall";
+                if solo {
+                    table.solo(owner);
+                }
+                if let Some(why) = table.misfit(owner, &claims, &friends, &neighbours, solo, &rock) {
                     out.push(format!("{what} {owner} (leg {i}): {why}"));
                 }
                 table.add(owner, &claims);
