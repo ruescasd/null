@@ -1715,14 +1715,74 @@ impl Hall {
     }
 }
 
+/// A randomized H-tree in a rectangle (`a` to `b`, in a wall's plane):
+/// from a level trunk across its middle, each end branching square to it at
+/// 1/√2 its length, and so on down, but some branches cut off. Its segments,
+/// each with how deep in the tree it is. (`key` picks which are cut.)
+fn h_tree(a: Vec2, b: Vec2, key: i32) -> Vec<(Vec2, Vec2, u32)> {
+    // (The whole tree, branches on both sides, spans 1.75 times its trunk
+    // across and 1.24 times it up: its trunk as long as fits.)
+    let size = b - a;
+    let trunk = (size.x / 1.75).min(size.y / 1.24);
+    let mut out = Vec::new();
+    let mut grow = vec![((a + b) * 0.5, trunk, true, 0u32, 1i32)];
+    while let Some((c, len, level, depth, id)) = grow.pop() {
+        let half = if level { Vec2::new(len * 0.5, 0.0) } else { Vec2::new(0.0, len * 0.5) };
+        let (p, q) = (c - half, c + half);
+        out.push((p, q, depth));
+        if depth < 7 && len > 0.8 {
+            for (j, end) in [p, q].into_iter().enumerate() {
+                let branch = id * 2 + j as i32;
+                if depth == 0 || hash01(key, branch, depth as i32, 0x4a7) < 0.78 {
+                    grow.push((end, len / std::f32::consts::SQRT_2, !level, depth + 1, branch));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The H-trees cut into a hall's back wall and its two end walls (where they
+/// face the walker across it): each wall tiled with trees as tall as it,
+/// their grooves narrowing with depth in the tree, as deep as most of their
+/// width (cut a little out from the wall too, so they open in it).
+fn hall_incisions(m: &Massif, h: &Hall) -> Vec<Manifold> {
+    let (a, b) = h.span();
+    let key = (a * 10.0) as i32 + (h.v * 10.0) as i32 * 7919 + h.side as i32 * 104729;
+    // Each wall: its plane's two axes (along, up) in the face's frame, its
+    // rectangle, and the groove's depth across it, into the rock.
+    let mut out = Vec::new();
+    let walls: [(&str, (f32, f32)); 3] = [("back", (a, b)), ("near end", (h.back, h.front)), ("far end", (h.back, h.front))];
+    for (k, (wall, (x0, x1))) in walls.into_iter().enumerate() {
+        let (y0, y1) = (h.v + 0.5, h.v + h.height - 0.5);
+        let cells = (((x1 - x0) / ((y1 - y0) * std::f32::consts::SQRT_2)).round() as i32).max(1);
+        for c in 0..cells {
+            let (c0, c1) = (x0 + (x1 - x0) * c as f32 / cells as f32, x0 + (x1 - x0) * (c + 1) as f32 / cells as f32);
+            for (p, q, depth) in h_tree(Vec2::new(c0 + 0.4, y0), Vec2::new(c1 - 0.4, y1), key + k as i32 * 31 + c * 977) {
+                let wide = (0.3 * 0.82f32.powi(depth as i32)).max(0.12);
+                let (deep, half) = (wide * 0.7, wide * 0.5);
+                let (lo, hi) = (p.min(q) - half, p.max(q) + half);
+                out.push(match wall {
+                    "back" => wbox(&m.wall, (lo.x, hi.x), (lo.y, hi.y), (h.back - deep, h.back + 0.05)),
+                    "near end" => wbox(&m.wall, (a - deep, a + 0.05), (lo.y, hi.y), (lo.x, hi.x)),
+                    _ => wbox(&m.wall, (b - 0.05, b + deep), (lo.y, hi.y), (lo.x, hi.x)),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// What is carved out of the wall for a hall: the hall less its pillars
-/// (left standing in the rock, carrying it), and the passages of its doors
-/// (from just into the hall to out past the face).
+/// (left standing in the rock, carrying it), the H-trees cut into its walls,
+/// and the passages of its doors (from just into the hall to out past the
+/// face).
 fn hall_cut(m: &Massif, h: &Hall) -> Manifold {
     let w = h.width * 0.5;
     let hall = wbox(&m.wall, h.span(), (h.v - 0.3, h.v + h.height), (h.back, h.front));
     let pillars: Vec<Manifold> = h.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), (h.v - 1.0, h.v + h.height + 1.0), (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect();
     let mut cut = vec![hall.difference(&Manifold::batch_union(&pillars))];
+    cut.extend(hall_incisions(m, h));
     for u in [h.doors.0, h.doors.1] {
         cut.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0)));
     }
