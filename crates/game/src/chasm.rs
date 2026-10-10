@@ -1670,31 +1670,38 @@ impl Place {
     }
 }
 
-/// A hall in the rock, a step of the way: broad and low, its ceiling on a
-/// grid of square pillars left in the rock; entered by a door at the end of
-/// a walkway, crossed along the aisle behind its front wall, left by a door
-/// at its far end onto a walkway going on. In its massif's frame: from `u.0`
-/// to `u.1` along the face, its floor's height, its front (behind the face by
-/// the rock its doors pass through) and its back, how high; its doors along
-/// the face (the way in, the way out); how wide they are.
+/// A room in the rock, the interior kit's shell (structure, checked): in a
+/// massif's frame, from `u.0` to `u.1` along the face, its floor's height
+/// and how high it is, its front (behind the face by the rock its doors pass
+/// through) and its back; held up by square pillars on a grid of `bay`
+/// metres (0: none), left standing in the rock. Slots in its back and end
+/// walls take plates (the surface, see `shell_plates`).
 #[derive(Clone, Copy)]
-struct Hall {
-    side: f32,
-    m: usize,
+struct Shell {
     u: (f32, f32),
     v: f32,
+    height: f32,
     front: f32,
     back: f32,
-    height: f32,
-    doors: (f32, f32),
+    bay: f32,
+}
+
+/// A door through a room's front wall out to the face: where along it, its
+/// floor's height, how wide.
+#[derive(Clone, Copy)]
+struct Door {
+    u: f32,
+    v: f32,
     width: f32,
 }
 
-/// The grid a hall's pillars stand on (m), and how thick they are.
-const BAY: f32 = 6.0;
+/// How thick a pillar is.
 const PILLAR: f32 = 2.0;
 
-impl Hall {
+/// How thick the plates on a room's walls are: how deep their grooves.
+const PLATE: f32 = 0.2;
+
+impl Shell {
     /// Along the face, from its one end to the other.
     fn span(&self) -> (f32, f32) {
         (self.u.0.min(self.u.1), self.u.0.max(self.u.1))
@@ -1702,17 +1709,63 @@ impl Hall {
 
     /// Where its pillars stand (along, out): on its grid, inside it.
     fn pillars(&self) -> Vec<(f32, f32)> {
+        if self.bay <= 0.0 {
+            return Vec::new();
+        }
         let (a, b) = self.span();
-        let along = ((b - a) / BAY).round() as i32;
-        let deep = ((self.front - self.back) / BAY).round() as i32;
-        (1..along).flat_map(|i| (1..deep).map(move |j| (a + BAY * i as f32, self.front - BAY * j as f32))).collect()
+        let along = ((b - a) / self.bay).round() as i32;
+        let deep = ((self.front - self.back) / self.bay).round() as i32;
+        (1..along).flat_map(|i| (1..deep).map(move |j| (a + self.bay * i as f32, self.front - self.bay * j as f32))).collect()
     }
 
-    /// The middle of the aisle behind its front wall, before the first
-    /// row of pillars.
-    fn aisle(&self) -> f32 {
-        self.front - (BAY - PILLAR * 0.5) * 0.5
+    /// Its pillars as boxes, from `v.0` to `v.1`.
+    fn pillar_boxes(&self, m: &Massif, v: (f32, f32)) -> Manifold {
+        Manifold::batch_union(&self.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), v, (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect::<Vec<_>>())
     }
+}
+
+/// What is carved out of the wall for a room: the room less its pillars,
+/// with the slots for its plates, and its doors' passages (from just into it
+/// to out past the face).
+fn shell_cut(m: &Massif, s: &Shell, doors: &[Door]) -> Manifold {
+    let (a, b) = s.span();
+    let room = wbox(&m.wall, (a - PLATE, b + PLATE), (s.v - 0.3, s.v + s.height), (s.back - PLATE, s.front));
+    let mut cut = vec![room.difference(&s.pillar_boxes(m, (s.v - 1.0, s.v + s.height + 1.0)))];
+    for d in doors {
+        let w = d.width * 0.5;
+        cut.push(wbox(&m.wall, (d.u - w, d.u + w), (d.v - 0.3, d.v + 3.0), (s.front - 0.5, m.face(d.v) + 2.0)));
+    }
+    Manifold::batch_union(&cut)
+}
+
+/// A room's floor (round its pillars) and its doors' floors, as one solid.
+fn shell_floor(m: &Massif, s: &Shell, doors: &[Door]) -> Manifold {
+    let (a, b) = s.span();
+    let mut solid = vec![wbox(&m.wall, (a, b), (s.v - 0.3, s.v), (s.back, s.front)).difference(&s.pillar_boxes(m, (s.v - 1.0, s.v + 1.0)))];
+    for d in doors {
+        let w = d.width * 0.5;
+        solid.push(wbox(&m.wall, (d.u - w, d.u + w), (d.v - 0.3, d.v), (s.front - 0.5, inner(m, d.v) + 0.1)));
+    }
+    Manifold::batch_union(&solid)
+}
+
+/// A room's boxes in the table (see `claims`): its floor, what is carved
+/// (with its plates' slots, to the bottom of their grooves), and each door's:
+/// its floor, the space through it, its passage, and before it kept clear.
+fn shell_claims(m: &Massif, s: &Shell, doors: &[Door]) -> Vec<Claim> {
+    let (a, b) = s.span();
+    let mut out = vec![
+        wclaim(&m.wall, (a, b), (s.v - 0.3, s.v), (s.back, s.front), Use::Solid),
+        wclaim(&m.wall, (a - 0.3, b + 0.3), (s.v - 0.3, s.v + s.height), (s.back - 0.3, s.front), Use::Cut),
+    ];
+    for d in doors {
+        let (w, inner_v) = (d.width * 0.5, inner(m, d.v));
+        out.push(wclaim(&m.wall, (d.u - w - 0.5, d.u + w + 0.5), (d.v + 0.05, d.v + 3.5), (inner_v + 0.6, inner_v + 3.0), Use::Keep));
+        out.push(wclaim(&m.wall, (d.u - w, d.u + w), (d.v - 0.3, d.v), (s.front - 0.5, inner_v + 0.1), Use::Solid));
+        out.push(wclaim(&m.wall, (d.u - w + 0.2, d.u + w - 0.2), (d.v + 0.1, d.v + 2.4), (s.front - 0.3, inner_v + 0.5), Use::Space));
+        out.push(wclaim(&m.wall, (d.u - w, d.u + w), (d.v - 0.3, d.v + 3.0), (s.front - 0.5, m.face(d.v) + 2.0), Use::Cut));
+    }
+    out
 }
 
 /// A randomized H-tree in a rectangle (`a` to `b`, in a wall's plane):
@@ -1721,7 +1774,7 @@ impl Hall {
 /// off. Its segments, each with how deep in the tree it is. (`key` picks
 /// which are cut; `half`, how wide a groove is each side of a segment, by
 /// depth: a branch whose groove would come within a hand's breadth of any
-/// but its parent's is cut off too, or a sliver of rock is left between.)
+/// but its parent's is cut off too.)
 fn h_tree(a: Vec2, b: Vec2, key: i32, half: impl Fn(u32) -> f32) -> Vec<(Vec2, Vec2, u32)> {
     // (The whole tree, branches on both sides, spans 1.75 times its trunk
     // across and 1.24 times it up: its trunk as long as fits.)
@@ -1755,29 +1808,26 @@ fn h_tree(a: Vec2, b: Vec2, key: i32, half: impl Fn(u32) -> f32) -> Vec<(Vec2, V
     out
 }
 
-/// How thick the plates on a hall's walls are: how deep their grooves.
-const PLATE: f32 = 0.2;
-
-/// The plates on a hall's back wall and its two end walls (where they face
-/// the walker across it), in the slots cut for them: each a stone plate as
-/// tall as the hall, a pattern of randomized H-trees cut through it (so its
-/// grooves are as deep as it is thick), the trees as tall as the wall, side
-/// by side. Drawn in the plate's plane and cut there, then given its depth:
-/// a surface on the hall's walls, never cut into the rock, so it cannot
-/// leave a sliver of it, however its pattern goes.
-fn hall_plates(m: &Massif, h: &Hall) -> Vec<Manifold> {
-    let (a, b) = h.span();
-    let key = (a * 10.0) as i32 + (h.v * 10.0) as i32 * 7919 + h.side as i32 * 104729;
+/// The plates on a room's back wall and its two end walls (the surface,
+/// never checked: they can change nothing that is walked or carved), in the
+/// slots cut for them: each a stone plate as tall as the room, a pattern of
+/// randomized H-trees cut through it (its grooves as deep as it is thick),
+/// the trees as tall as the wall, side by side. Drawn in the plate's plane
+/// and cut there, then given its depth: never cut into the rock, so it
+/// cannot leave a sliver of it, however its pattern goes. (`key`: which
+/// branches are cut.)
+fn shell_plates(m: &Massif, s: &Shell, key: i32) -> Vec<Manifold> {
+    let (a, b) = s.span();
     let rect = |x0: f32, x1: f32, y0: f32, y1: f32| CrossSection::from_polygons_with_fill_rule(&[vec![[x0 as f64, y0 as f64], [x1 as f64, y0 as f64], [x1 as f64, y1 as f64], [x0 as f64, y1 as f64]]], FillRule::NonZero);
     // (Right-handed frames: as `stair` keeps its own.)
-    let s = if m.wall.along.dot(Vec3::Y.cross(m.wall.out)) > 0.0 { 1.0 } else { -1.0 };
-    let t = if m.wall.out.dot(Vec3::Y.cross(m.wall.along)) > 0.0 { 1.0 } else { -1.0 };
+    let rs = if m.wall.along.dot(Vec3::Y.cross(m.wall.out)) > 0.0 { 1.0 } else { -1.0 };
+    let rt = if m.wall.out.dot(Vec3::Y.cross(m.wall.along)) > 0.0 { 1.0 } else { -1.0 };
     let mut out = Vec::new();
     // Each wall: its width (along it), and where its plate stands, given
     // its pattern.
-    let walls: [(f32, f32); 3] = [(a, b), (h.back - PLATE, h.front), (h.back - PLATE, h.front)];
+    let walls: [(f32, f32); 3] = [(a, b), (s.back - PLATE, s.front), (s.back - PLATE, s.front)];
     for (k, (x0, x1)) in walls.into_iter().enumerate() {
-        let (y0, y1) = (h.v + 0.5, h.v + h.height - 0.5);
+        let (y0, y1) = (s.v + 0.5, s.v + s.height - 0.5);
         let cells = (((x1 - x0) / ((y1 - y0) * std::f32::consts::SQRT_2)).round() as i32).max(1);
         let half = |depth: u32| 0.15 * 0.85f32.powi(depth as i32);
         let mut grooves = Vec::new();
@@ -1788,50 +1838,87 @@ fn hall_plates(m: &Massif, h: &Hall) -> Vec<Manifold> {
                 grooves.push(rect(lo.x, hi.x, lo.y, hi.y));
             }
         }
-        let plate = rect(x0, x1, h.v - 0.3, h.v + h.height).difference(&CrossSection::batch_union(&grooves));
+        let plate = rect(x0, x1, s.v - 0.3, s.v + s.height).difference(&CrossSection::batch_union(&grooves));
         out.push(match k {
-            0 => placed(&across(&plate, (h.back - PLATE) * s, h.back * s), m.wall.origin, m.wall.along, m.wall.out * s),
-            1 => placed(&across(&plate, (a - PLATE) * t, a * t), m.wall.origin, m.wall.out, m.wall.along * t),
-            _ => placed(&across(&plate, b * t, (b + PLATE) * t), m.wall.origin, m.wall.out, m.wall.along * t),
+            0 => placed(&across(&plate, (s.back - PLATE) * rs, s.back * rs), m.wall.origin, m.wall.along, m.wall.out * rs),
+            1 => placed(&across(&plate, (a - PLATE) * rt, a * rt), m.wall.origin, m.wall.out, m.wall.along * rt),
+            _ => placed(&across(&plate, b * rt, (b + PLATE) * rt), m.wall.origin, m.wall.out, m.wall.along * rt),
         });
     }
     out
 }
 
-/// What is carved out of the wall for a hall: the hall less its pillars
-/// (left standing in the rock, carrying it), with the slots for the plates
-/// on its back and end walls (see `hall_plates`), and the passages of its
-/// doors (from just into the hall to out past the face).
-fn hall_cut(m: &Massif, h: &Hall) -> Manifold {
-    let (w, (a, b)) = (h.width * 0.5, h.span());
-    let hall = wbox(&m.wall, (a - PLATE, b + PLATE), (h.v - 0.3, h.v + h.height), (h.back - PLATE, h.front));
-    let pillars: Vec<Manifold> = h.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), (h.v - 1.0, h.v + h.height + 1.0), (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect();
-    let mut cut = vec![hall.difference(&Manifold::batch_union(&pillars))];
-    for u in [h.doors.0, h.doors.1] {
-        cut.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0)));
-    }
-    Manifold::batch_union(&cut)
+/// A hall in the rock, a step of the way: a room broad and low (see
+/// `Shell`), its ceiling on a grid of square pillars; entered by a door at
+/// the end of a walkway, crossed along the aisle behind its front wall, left
+/// by a door at its far end onto a walkway going on. In its massif's frame:
+/// from `u.0` to `u.1` along the face, its floor's height, its front and its
+/// back, how high; its doors along the face (the way in, the way out); how
+/// wide they are.
+#[derive(Clone, Copy)]
+struct Hall {
+    side: f32,
+    m: usize,
+    u: (f32, f32),
+    v: f32,
+    front: f32,
+    back: f32,
+    height: f32,
+    doors: (f32, f32),
+    width: f32,
 }
 
-/// A hall's part of the routes: its floor (round its pillars) and its
-/// doors' floors, as one solid; a light in every other bay of its aisle
-/// and in each door; the way through it, and the space a walker needs.
+/// The grid a hall's pillars stand on (m).
+const BAY: f32 = 6.0;
+
+impl Hall {
+    /// Its room.
+    fn shell(&self) -> Shell {
+        Shell { u: self.u, v: self.v, height: self.height, front: self.front, back: self.back, bay: BAY }
+    }
+
+    /// Its doors.
+    fn door_list(&self) -> [Door; 2] {
+        [self.doors.0, self.doors.1].map(|u| Door { u, v: self.v, width: self.width })
+    }
+
+    /// Along the face, from its one end to the other.
+    fn span(&self) -> (f32, f32) {
+        self.shell().span()
+    }
+
+    /// The middle of the aisle behind its front wall, before the first
+    /// row of pillars.
+    fn aisle(&self) -> f32 {
+        self.front - (BAY - PILLAR * 0.5) * 0.5
+    }
+
+    /// Which branches of its plates' trees are cut (by where it is).
+    fn key(&self) -> i32 {
+        (self.span().0 * 10.0) as i32 + (self.v * 10.0) as i32 * 7919 + self.side as i32 * 104729
+    }
+}
+
+/// What is carved out of the wall for a hall (see `shell_cut`).
+fn hall_cut(m: &Massif, h: &Hall) -> Manifold {
+    shell_cut(m, &h.shell(), &h.door_list())
+}
+
+/// A hall's part of the routes: its floor and its doors' (as one solid); a
+/// lamp in every other bay of its aisle and in each door, dimmer than a
+/// tunnel's; its plates; the way through it, and the space a walker needs.
 fn hall(parts: &mut Parts, m: &Massif, h: &Hall) -> Manifold {
-    let (w, (a, b)) = (h.width * 0.5, h.span());
-    let pillars: Vec<Manifold> = h.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), (h.v - 1.0, h.v + 1.0), (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect();
-    let mut solid = vec![wbox(&m.wall, (a, b), (h.v - 0.3, h.v), (h.back, h.front)).difference(&Manifold::batch_union(&pillars))];
+    let (s, (a, b)) = (h.shell(), h.span());
     let inner_v = inner(m, h.v);
     for u in [h.doors.0, h.doors.1] {
-        solid.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.1)));
         parts.lights.push((m.wall.at(u, h.v + 2.6, (h.front + inner_v) * 0.5), 10.0, 0.004));
     }
-    // (Dim, dimmer than a tunnel: a lamp in every other bay.)
     let bays = ((b - a) / BAY).round() as i32;
     for i in (0..bays).step_by(2) {
         parts.lights.push((m.wall.at(a + BAY * (i as f32 + 0.5), h.v + h.height - 1.0, h.aisle()), 20.0, 0.004));
     }
     parts.mark("carving");
-    for plate in hall_plates(m, h) {
+    for plate in shell_plates(m, &s, h.key()) {
         parts.stone.solid(&plate);
     }
     parts.mark("routes");
@@ -1842,8 +1929,8 @@ fn hall(parts: &mut Parts, m: &Massif, h: &Hall) -> Manifold {
     }
     let at = |u: f32, n: f32| m.wall.at(u, h.v + 1.2, n);
     parts.paths.push((format!("hall at {:.0} m", h.v), vec![at(h.doors.0, inner_v + 1.0), at(h.doors.0, h.aisle()), at(h.doors.1, h.aisle()), at(h.doors.1, inner_v + 1.0)]));
-    info!("the chasm: a hall at {:?} ({:.0} by {:.0} m, {:.0} m high, {} pillars)", m.wall.at((a + b) * 0.5, h.v, h.front), b - a, h.front - h.back, h.height, h.pillars().len());
-    Manifold::batch_union(&solid)
+    info!("the chasm: a hall at {:?} ({:.0} by {:.0} m, {:.0} m high, {} pillars)", m.wall.at((a + b) * 0.5, h.v, h.front), b - a, h.front - h.back, h.height, s.pillars().len());
+    shell_floor(m, &s, &h.door_list())
 }
 
 /// A prism in a face's frame: a convex outline (along, out) from `v.0` up to
@@ -3177,22 +3264,11 @@ impl Routing {
     }
 
     fn hall_claims(m: &Massif, h: &Hall) -> Vec<Claim> {
-        let (w, (a, b)) = (h.width * 0.5, h.span());
-        let inner_v = inner(m, h.v);
-        let mut out = vec![
-            wclaim(&m.wall, (a, b), (h.v - 0.3, h.v), (h.back, h.front), Use::Solid),
-            // (With the grooves cut into its walls.)
-            wclaim(&m.wall, (a - 0.3, b + 0.3), (h.v - 0.3, h.v + h.height), (h.back - 0.3, h.front), Use::Cut),
-        ];
+        let mut out = shell_claims(m, &h.shell(), &h.door_list());
         // (Along the aisle, from door to door.)
+        let w = h.width * 0.5;
         let (lo, hi) = (h.doors.0.min(h.doors.1), h.doors.0.max(h.doors.1));
         out.push(wclaim(&m.wall, (lo - w + 0.2, hi + w - 0.2), (h.v + 0.1, h.v + 2.4), (h.front - BAY + PILLAR * 0.5 + 0.3, h.front - 0.3), Use::Space));
-        for u in [h.doors.0, h.doors.1] {
-            out.push(wclaim(&m.wall, (u - w - 0.5, u + w + 0.5), (h.v + 0.05, h.v + 3.5), (inner_v + 0.6, inner_v + 3.0), Use::Keep));
-            out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.1), Use::Solid));
-            out.push(wclaim(&m.wall, (u - w + 0.2, u + w - 0.2), (h.v + 0.1, h.v + 2.4), (h.front - 0.3, inner_v + 0.5), Use::Space));
-            out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0), Use::Cut));
-        }
         out
     }
 
