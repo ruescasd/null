@@ -23,6 +23,7 @@ use crate::{Args, rope::tubes};
 
 mod claims;
 use claims::{Claim, ROCK, Table, Use};
+pub mod rooms;
 
 /// A taut cable from `a` to `b`, sagging `sag` in the middle.
 fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
@@ -840,6 +841,13 @@ fn build(
     if !args.opt("chasm") {
         return;
     }
+    // `--opt rooms`: the room lab instead (see `rooms.rs`).
+    if args.opt("rooms") {
+        let mut parts = rooms::lab();
+        let colliders = parts.stone.collider().into_iter().collect();
+        show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders);
+        return;
+    }
     let mut made = if args.opt("junctions") {
         for line in catalogue().3 {
             info!("the junctions: {line}");
@@ -863,10 +871,16 @@ fn build(
             info!("the chasm: {p}");
         }
     }
-    for collider in made.colliders() {
+    let colliders = made.colliders();
+    show(&mut commands, &args, &mut meshes, &mut materials, &mut made.parts, colliders);
+}
+
+/// Puts what is built in the world: its colliders, its meshes by material,
+/// its lights.
+fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, parts: &mut Parts, colliders: Vec<Collider>) {
+    for collider in colliders {
         commands.spawn((RigidBody::Static, collider, Transform::IDENTITY));
     }
-    let parts = &mut made.parts;
     let stone = materials.add(StandardMaterial { base_color: Color::srgb(0.62, 0.62, 0.62), perceptual_roughness: 0.92, ..default() });
     let dark = materials.add(StandardMaterial { base_color: Color::srgb(0.02, 0.02, 0.02), perceptual_roughness: 0.9, ..default() });
     let glow = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(60.0), ..default() });

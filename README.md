@@ -59,6 +59,9 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               chasm: a straight chasm whose near wall is in 64 m slots, each a designed join of
                                               the way's pieces (flight, tunnel, switchback, place, bridge; built out or carved; under
                                               an overhang, by a step, across a joint), listed in the log as "the junctions: slot ..."
+    --opt rooms                               with --opt chasm: the room lab instead: rooms built on a grid of quarter-metre cells
+                                              (solid, empty, or a prism: part of a slope or of a quarter circle) by units (arch,
+                                              vault, column, stair, slope), meshed from the cells (no 3D booleans), on the ground
     --check static|walk|wall|all --seeds 1-50,851-1050 [--jobs n]
                                               the chasm's checks over many seeds at once, nothing rendered, no window:
                                               static (reaches the bottom; nothing in rock or in another route, no way
@@ -66,6 +69,7 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               (the walkbot's way down, ~10 s a seed alone), wall (the wallbot's);
                                               a line a seed, the failures, exit code 0 if all pass
     --check catalogue                         the static and walk checks on the junction catalogue
+    --check rooms                             the room lab's rooms: each surface closed (it encloses what its cells hold)
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)

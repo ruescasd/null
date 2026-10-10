@@ -28,6 +28,9 @@ use crate::terrain::{Streamer, WorldGen};
 /// Runs the checks the command line asks for; never returns.
 pub fn run(argv: &[String]) -> ! {
     let after = |flag: &str| argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).cloned();
+    if after("--check").as_deref() == Some("rooms") {
+        std::process::exit(if crate::chasm::rooms::check() { 0 } else { 1 });
+    }
     let catalogue = after("--check").as_deref() == Some("catalogue");
     let kinds: Vec<&str> = match after("--check").as_deref() {
         Some("all") => vec!["static", "walk", "wall"],
@@ -36,7 +39,7 @@ pub fn run(argv: &[String]) -> ! {
         Some("walk") => vec!["walk"],
         Some("wall") => vec!["wall"],
         other => {
-            eprintln!("--check {other:?}: expected static, walk, wall, all or catalogue");
+            eprintln!("--check {other:?}: expected static, walk, wall, all, catalogue or rooms");
             std::process::exit(2);
         }
     };
