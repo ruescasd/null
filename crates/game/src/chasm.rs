@@ -89,37 +89,48 @@ struct Stretch {
 /// rarely parallel. `side` -1 for the near wall (low x), +1 for the far.
 fn plan(side: f32, seed: i32) -> Vec<Stretch> {
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7d2);
-    // The centre line wanders the same way for both walls.
-    let drift = |z: f32| 36.0 * (z * 0.0067 + 1.3).sin() + 16.0 * (z * 0.017 + 0.4).sin();
+    // (A straight centre line: each stretch holds its distance from it all
+    // along, so one that wandered would bring the walls across each other.
+    // The chasm's larger shape is to come from a grid of its own.)
     let half = LENGTH * 0.5;
     // (The joints go near, far, anywhere in turn, out of step between the
     // walls, so the gap surely narrows and widens.)
     let phase = if side < 0.0 { 0 } else { 1 };
-    let at = |z: f32, k: i32| {
+    let at = |k: i32| {
         let t = match (k + phase) % 3 {
             0 => 0.25 * r(k, 9),
             1 => 0.7 + 0.3 * r(k, 9),
             _ => r(k, 9),
         };
-        CENTRE.x + drift(z) + side * (15.0 + 100.0 * t)
+        CENTRE.x + side * (15.0 + 100.0 * t)
     };
+    // (On the grid: each stretch's face straight along the chasm, a whole
+    // number of modules out, its ends on the modules; stretches meeting
+    // square, stepped by whole modules.)
+    let snap = |x: f32| (x / GRID).round() * GRID;
     let mut out = Vec::new();
-    let mut z = CENTRE.z - half;
+    let mut z = snap(CENTRE.z - half);
     let mut k = 0;
-    let mut x = at(z, 0);
-    while z < CENTRE.z + half {
+    let mut x = snap(at(0));
+    while z < CENTRE.z + half - GRID * 0.5 {
         // (No shaft where you start.)
         let shaft = r(k, 0) < 0.18 && !(z - 12.0..z + 12.0).contains(&CENTRE.z);
-        let length = if shaft { 4.0 + 6.0 * r(k, 1) } else { 70.0 + 190.0 * r(k, 1) }.min(CENTRE.z + half - z);
+        let length = snap(if shaft { 4.0 + 6.0 * r(k, 1) } else { 70.0 + 190.0 * r(k, 1) }).max(GRID).min(snap(CENTRE.z + half) - z);
         let z1 = z + length;
-        let x1 = if shaft { x } else { at(z1, k + 1) };
-        out.push(Stretch { z: (z, z1), x: (x, x1), shaft });
+        out.push(Stretch { z: (z, z1), x: (x, x), shaft });
+        // (The next a whole step out or back: never the same, so a joint
+        // is a step, never a seam in a plain face.)
+        let next = snap(at(k + 1));
+        x = if shaft || (r(k + 1, 0) < 0.18) { x } else if next == x { x + GRID * side } else { next };
         z = z1;
-        x = x1;
         k += 1;
     }
     out
 }
+
+/// The module the walls' plan is laid out on (m): faces a whole number of
+/// them out from the centre, their ends on them.
+const GRID: f32 = 4.0;
 
 /// Where a wall's face is (its x) at `z`, from its plan.
 fn face_x(plan: &[Stretch], z: f32) -> f32 {
@@ -900,18 +911,23 @@ fn shape(side: f32, seed: i32, other: &[Stretch]) -> Vec<Massif> {
             massifs.push(Massif { wall: nominal, len, z: stretch.z, split: HEIGHT, low: SHAFT_DEPTH, high: SHAFT_DEPTH, slope: 0.0, room: 0.0, shaft: true });
             continue;
         }
-        let split = HEIGHT * (0.3 + 0.5 * r(m, 2));
-        let low = -10.0 + 18.0 * r(m, 3);
+        // (Depths on a 2 m module, the split on 4 m; overhangs a square
+        // step, no slope.)
+        let depth = |x: f32| (x / 2.0).round() * 2.0;
+        let split = (HEIGHT * (0.3 + 0.5 * r(m, 2)) / 4.0).round() * 4.0;
+        let low = depth(-10.0 + 18.0 * r(m, 3));
         // How much room there is: half the gap here, less a margin, so the
         // walls never close below about 50 m.
-        let zmid = (stretch.z.0 + stretch.z.1) * 0.5;
-        let room = ((face_x(other, zmid) - (stretch.x.0 + stretch.x.1) * 0.5).abs() * 0.5 - 25.0).max(0.0);
+        // (The narrowest gap anywhere along it: the other wall steps in and
+        // out.)
+        let gap = other.iter().filter(|o| o.z.1 > stretch.z.0 && o.z.0 < stretch.z.1).map(|o| (o.x.0 - stretch.x.0).abs()).fold(f32::MAX, f32::min);
+        let room = (gap.min(1000.0) * 0.5 - 25.0).max(0.0);
         // The upper part leans out over the chasm (mostly) or stands back,
         // a sloped face carrying it there. (Never set back far: you start
         // on the rim.)
         let delta = if r(m, 4) < 0.65 { 8.0 + 27.0 * r(m, 6) } else { -(4.0 + 10.0 * r(m, 6)) };
-        let high = (low + delta).clamp(-4.0, (low + room.max(2.0)).max(-4.0));
-        let slope = ((high - low).abs() * (0.5 + 1.5 * r(m, 7))).min(split - 30.0).max(0.0);
+        let high = depth((low + delta).clamp(-4.0, (low + room.max(2.0)).max(-4.0)));
+        let slope = 0.0;
         massifs.push(Massif { wall: nominal, len, z: stretch.z, split, low, high, slope, room, shaft: false });
     }
     massifs
@@ -957,6 +973,19 @@ fn wall_solid(massifs: &[Massif]) -> Manifold {
         // below it, by `E`, never in front of a face: pieces that only touch
         // leave a skin of rock between them.)
         const E: f32 = 0.05;
+        // (Parallel faces, stepped: across the joint, behind the face set
+        // further back, a box; band by band, each face plain in it.)
+        if a.wall.along.dot(b.wall.along) > 0.9999 {
+            for band in cuts.windows(2) {
+                let (v0, v1) = (band[0], band[1]);
+                let mid = (v0 + v1) * 0.5;
+                // (Each face's depth from its own line: the other's in this
+                // one's terms.)
+                let front = a.face(mid).min(b.face(mid) + (b.wall.origin - a.wall.origin).dot(a.wall.out));
+                mass.push(wbox(&a.wall, (a.len - E, a.len + E), ((v0 - E).max(0.0), (v1 + E).min(HEIGHT)), (-BACK, front)));
+            }
+            continue;
+        }
         for band in cuts.windows(2) {
             let (v0, v1) = (band[0], band[1]);
             let mut pts = Vec::new();
@@ -2121,7 +2150,11 @@ impl Routing {
             // corner, not into the next face; nor round a sharp turn: past 50
             // degrees, each face's deck runs into the other's rock, and the
             // corner between them no longer covers the way round.)
-            let passable = passes.windows(2).all(|p| (inner(p[1], v) - inner(p[0], v)).abs() <= width - 1.5 && p[0].wall.along.dot(p[1].wall.along) >= 0.64);
+            // (On the grid, never round a step: from one face to the next only
+            // where they are one line, measured in the world, each face's
+            // depth being from its own line. Round a step, the two decks
+            // only touched where they met.)
+            let passable = passes.windows(2).all(|p| (p[1].wall.at(0.0, v, inner(p[1], v)) - p[0].wall.at(p[0].len, v, inner(p[0], v))).dot(p[0].wall.out).abs() < 0.01 && p[0].wall.along.dot(p[1].wall.along) >= 0.64);
             if !(plain_all && passable && v > 30.0 && free(taken, None, way_box(&w))) {
                 return None;
             }
