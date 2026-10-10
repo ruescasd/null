@@ -21,6 +21,9 @@ use worldgen::noise::hash01;
 
 use crate::{Args, rope::tubes};
 
+mod claims;
+use claims::{Claim, ROCK, Table, Use};
+
 /// A taut cable from `a` to `b`, sagging `sag` in the middle.
 fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
     let n = ((a.distance(b) / 1.5).ceil() as usize).clamp(8, 64);
@@ -721,6 +724,12 @@ impl Made {
             problems.push(format!("no floor: {what} at {:?}", pts[0] - Vec3::Y * 0.5));
         }
         let coinciding = parts.stone.coincident(false).len();
+        // (The occupancy table, being validated against the checks above:
+        // reported, not yet failing.)
+        let misfits = routing.misfits(&self.near, &self.far);
+        for m in misfits.iter().take(4) {
+            problems.push(format!("claims: {m}"));
+        }
         // (Skins: within the walls' mass or the routes' solid, faces back to
         // back with nothing between, a sheet of rock no thicker than paper,
         // there to walk into; no volume, so the spaces' test misses them.)
@@ -750,13 +759,14 @@ impl Made {
             problems.insert(0, format!("the way down stops at {:.0} m", self.bottom()));
         }
         let counts = format!(
-            "{blocked} of {} routes' spaces run into something, {} of {} ways crossed by a surface, {holes} of {} points where flights meet walkways with no floor, {skins} skins of rock; {coinciding} coinciding faces",
+            "{blocked} of {} routes' spaces run into something, {} of {} ways crossed by a surface, {holes} of {} points where flights meet walkways with no floor, {skins} skins of rock; {coinciding} coinciding faces; {} claim misfits",
             parts.clearance.len(),
             crossed.len(),
             parts.paths.len(),
-            probes.len()
+            probes.len(),
+            misfits.len()
         );
-        Check { ok: down && blocked == 0 && crossed.is_empty() && holes == 0 && skins == 0, summary: format!("{}; {counts}", self.summary()), problems }
+        Check { ok: down && blocked == 0 && crossed.is_empty() && holes == 0 && skins == 0 && misfits.is_empty(), summary: format!("{}; {counts}", self.summary()), problems }
     }
 }
 
@@ -1785,8 +1795,6 @@ impl TunnelParts {
     }
 }
 
-/// The rock kept between what is cut into the walls.
-const ROCK: f32 = 1.0;
 
 /// What is cut into the rock (a tunnel, a carved stretch, a place), with
 /// the walkway it belongs to (if one).
@@ -2727,6 +2735,254 @@ impl Routing {
 /// Routes: the walkways (open where a bridge joins), bridges across, united
 /// in one solid; the flights, bare, their steps to be seen and a slope
 /// beneath them to walk on.
+/// A box in a face's frame, for a use (see `claims`): on the grid, square to
+/// the world.
+fn wclaim(w: &Wall, u: (f32, f32), v: (f32, f32), n: (f32, f32), kind: Use) -> Claim {
+    Claim::new(w.at(u.0, v.0, n.0), w.at(u.1, v.1, n.1), kind)
+}
+
+/// How much of a box is rock: each massif's mass (its lower part and its
+/// upper, a shaft's slot), either wall's.
+fn rock(near: &[Massif], far: &[Massif], lo: Vec3, hi: Vec3) -> f32 {
+    let mut total = 0.0;
+    for m in near.iter().chain(far).filter(|m| m.z.0 < hi.z && m.z.1 > lo.z) {
+        let bands: &[(f32, f32, f32)] = &if m.shaft { vec![(0.0, HEIGHT, SHAFT_DEPTH)] } else { vec![(0.0, m.split, m.low), (m.split, HEIGHT, m.high)] };
+        for &(v0, v1, face) in bands {
+            let (a, b) = (m.wall.at(0.0, v0, -BACK), m.wall.at(m.len, v1, face));
+            let (ra, rb) = (a.min(b), a.max(b));
+            let d = (hi.min(rb) - lo.max(ra)).max(Vec3::ZERO);
+            total += d.x * d.y * d.z;
+        }
+    }
+    total
+}
+
+/// A stair's boxes, step by step (see `stair`): its mass under the treads
+/// (and back to `back`, if it reaches back into the wall), the space over
+/// its slope, and (`cut`, if carved: how far out past the face) what is
+/// carved for it, from under its steps to `open` over them.
+fn stair_claims(m: &Massif, u: (f32, f32), v: (f32, f32), n: (f32, f32), back: Option<f32>, cut: Option<(f32, f32)>) -> Vec<Claim> {
+    let ((ua, ub), (va, vb)) = (u, v);
+    let count = ((va - vb) / RISER).round().max(1.0) as i32;
+    let (riser, tread) = ((va - vb) / count as f32, (ub - ua) / count as f32);
+    let mut out = Vec::new();
+    for i in 0..count {
+        let (u0, u1) = (ua + tread * i as f32, ua + tread * (i + 1) as f32);
+        let (high, top) = (va - riser * i as f32, va - riser * (i + 1) as f32);
+        out.push(wclaim(&m.wall, (u0, u1), (top - 1.2 - riser, top), (n.0, n.1), Use::Solid));
+        if let Some(back) = back {
+            out.push(wclaim(&m.wall, (u0, u1), (top - 4.0, top - 1.0), (back, n.0 + 1.0), Use::Solid));
+        }
+        out.push(wclaim(&m.wall, (u0, u1), (top + 0.1, high + 2.4), (n.0 + 0.7, n.1 - 0.1), Use::Space));
+        if let Some((outer, open)) = cut {
+            out.push(wclaim(&m.wall, (u0, u1), (top - 0.3, high + open), (n.0, outer), Use::Cut));
+        }
+    }
+    out
+}
+
+/// What each piece of the way takes, as boxes (see `claims`).
+impl Routing {
+    fn walkway_claims(w: &Walkway, massifs: &[Massif]) -> Vec<Claim> {
+        let (depth, reach) = (shelf_depth(w.width), deck_reach(w, massifs));
+        let e = if w.loggia() { PIERS.2 + 0.1 } else { 0.1 };
+        let faces = walkway_faces(w, massifs);
+        let last = faces.len().saturating_sub(1);
+        let mut out = Vec::new();
+        for (i, &(k, us, ue, _, n0, n1)) in faces.iter().enumerate() {
+            let m = &massifs[k];
+            // (The underside slopes from the edge's thickness back to the
+            // shelf's depth: in four steps, each as deep as its back.)
+            for j in 0..4 {
+                let (a, b) = (n1 - reach * (j + 1) as f32 / 4.0, n1 - reach * j as f32 / 4.0);
+                out.push(wclaim(&m.wall, (us, ue), (w.v0 - (EDGE + (depth - EDGE) * (j + 1) as f32 / 4.0), w.v0), (a, b), Use::Solid));
+            }
+            out.push(wclaim(&m.wall, (us, ue), (w.v0 + 0.1, w.v0 + 2.4), (n0 + 0.6, n1 - e), Use::Space));
+            if w.recess > 0.0 {
+                let (a, b) = (if i == 0 { us - 0.5 } else { us }, if i == last { ue + 0.5 } else { ue });
+                out.push(wclaim(&m.wall, (a, b), (w.v0 - 0.3, w.v0 + GALLERY), (n0, m.face(w.v0) + 1.0), Use::Cut));
+            }
+        }
+        out
+    }
+
+    fn flight_claims(m: &Massif, f: &Flight) -> Vec<Claim> {
+        let (n0, n1) = deck_n(m, f.v.0, f.width, f.recess);
+        let back = (m.face(f.v.0) - 1.5).min(n0 - 1.0);
+        let mut out = stair_claims(m, f.u, f.v, (n0, n1), Some(back), (f.recess > 0.0).then_some((m.face(f.v.0) + 1.0, GALLERY)));
+        // (Carved: a little on past its ends, into the walkways'.)
+        if f.recess > 0.0 {
+            let d = (f.u.1 - f.u.0).signum() * 0.3;
+            for (u, v) in [(f.u.0, f.v.0), (f.u.1, f.v.1)] {
+                let a = if u == f.u.0 { u - d } else { u + d };
+                out.push(wclaim(&m.wall, (a.min(u), a.max(u)), (v - 0.3, v + GALLERY), (n0, m.face(f.v.0) + 1.0), Use::Cut));
+            }
+        }
+        out
+    }
+
+    fn tunnel_claims(m: &Massif, t: &Tunnel) -> Vec<Claim> {
+        let w = t.width * 0.5;
+        let mut out = Vec::new();
+        for (u, v, n) in t.corridors() {
+            // (Before the door, on the walkway it opens onto: its width and
+            // half a metre more each side, 3.5 m high, out across the deck.)
+            out.push(wclaim(&m.wall, (u - w - 0.5, u + w + 0.5), (v + 0.05, v + 3.5), (inner(m, v) + 0.6, inner(m, v) + 3.0), Use::Keep));
+            out.push(wclaim(&m.wall, (u - w, u + w), (v - 0.3, v), (n - w, inner(m, v) + 0.6), Use::Solid));
+            out.push(wclaim(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (n, inner(m, v) + 0.5), Use::Space));
+            out.push(wclaim(&m.wall, (u - w, u + w), (v - 0.3, v + 3.0), (n - w, m.face(v) + 2.0), Use::Cut));
+        }
+        for r in &t.runs {
+            out.extend(stair_claims(m, r.u, r.v, (r.n - w + 0.2, r.n + w), None, None));
+            // (Its cut a little wider than its steps: from the lane's one side
+            // to the other, from under its steps to 3 m over them; reaching
+            // on past its ends, level at its head.)
+            let count = ((r.v.0 - r.v.1) / RISER).round().max(1.0) as i32;
+            let (riser, tread) = ((r.v.0 - r.v.1) / count as f32, (r.u.1 - r.u.0) / count as f32);
+            for i in 0..count {
+                let (u0, u1) = (r.u.0 + tread * i as f32, r.u.0 + tread * (i + 1) as f32);
+                let (high, top) = (r.v.0 - riser * i as f32, r.v.0 - riser * (i + 1) as f32);
+                out.push(wclaim(&m.wall, (u0.min(u1), u0.max(u1)), (top - 0.3, high + 3.0), (r.n - w, r.n + w), Use::Cut));
+            }
+            let d = (r.u.1 - r.u.0).signum();
+            let head = (r.u.0 - d * w, r.u.0 + d * HEAD);
+            out.push(wclaim(&m.wall, (head.0.min(head.1), head.0.max(head.1)), (r.v.0 - 0.3, r.v.0 + 3.0), (r.n - w, r.n + w), Use::Cut));
+            let foot = (r.u.1 - d * 0.3, r.u.1 + d * w);
+            out.push(wclaim(&m.wall, (foot.0.min(foot.1), foot.0.max(foot.1)), (r.v.1 - 0.3, r.v.1 + 3.0), (r.n - w, r.n + w), Use::Cut));
+            let h = (r.u.0, r.u.0 + d * (HEAD - 0.6));
+            out.push(wclaim(&m.wall, (h.0.min(h.1), h.0.max(h.1)), (r.v.0 + 0.1, r.v.0 + 2.0), (r.n - w + 0.3, r.n + w - 0.3), Use::Space));
+        }
+        for (u, v, n) in t.landings() {
+            out.push(wclaim(&m.wall, (u - w - 0.3, u + w + 0.3), (v - 0.3, v), n, Use::Solid));
+            out.push(wclaim(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (n.0 + 0.2, n.1 - 0.2), Use::Space));
+            out.push(wclaim(&m.wall, (u - w - 0.3, u + w + 0.3), (v - 0.3, v + 3.0), n, Use::Cut));
+        }
+        out
+    }
+
+    fn place_claims(m: &Massif, p: &Place) -> Vec<Claim> {
+        let face = m.face(p.v);
+        let reach = p.out - face;
+        let span = |o: &[(f32, f32)]| o.iter().fold((f32::MAX, f32::MIN), |(a, b), q| (a.min(q.0), b.max(q.0)));
+        let mut out = Vec::new();
+        let slab = p.outline(m, 0.0, p.out, p.back - 0.5);
+        out.push(wclaim(&m.wall, span(&slab), (p.v - 1.2, p.v), (p.back - 0.5, p.out), Use::Solid));
+        for k in 1..4 {
+            let o = p.out - reach * k as f32 / 4.0;
+            out.push(wclaim(&m.wall, span(&p.outline(m, k as f32, o, face - 3.0)), (p.v - 1.2 * (k + 1) as f32, p.v - 1.2 * k as f32 + 0.05), (face - 3.0, o), Use::Solid));
+        }
+        out.push(wclaim(&m.wall, span(&p.outline(m, 0.3, p.out - 0.3, face + 0.2)), (p.v + 0.1, p.v + 2.4), (face + 0.2, p.out - 0.3), Use::Space));
+        out.push(wclaim(&m.wall, (p.hall.0 + 0.3, p.hall.1 - 0.3), (p.v + 0.1, p.v + 2.4), (p.back + 0.3, p.front - 0.3), Use::Space));
+        out.push(wclaim(&m.wall, p.hall, (p.v - 0.3, p.v + p.height), (p.back, p.front), Use::Cut));
+        for (a, b, spring) in p.bays() {
+            out.push(wclaim(&m.wall, (a, b), (p.v - 0.3, spring + (b - a) * 0.5), (p.front - 0.5, face + 1.0), Use::Cut));
+        }
+        out
+    }
+
+    /// A bridge from `a` to `b` (on the walkways' edges, at deck height),
+    /// reaching back under them by `reach` (see `span_solid`).
+    fn bridge_claims(a: Vec3, b: Vec3, reach: (f32, f32)) -> Vec<Claim> {
+        let along = (b - a).normalize_or(Vec3::X);
+        let side = Vec3::new(-along.z, 0.0, along.x) * 1.5;
+        let depth = (a.distance(b) / 18.0).clamp(3.0, 7.0);
+        let low = (depth - EDGE) * 0.5 + EDGE;
+        let mut out = vec![Claim::new(a - side - Vec3::Y * depth, b + side, Use::Solid)];
+        for (end, dir, r) in [(a, -along, reach.0), (b, along, reach.1)] {
+            let (c, h) = (end - Vec3::Y * low, (depth - EDGE) * 0.5);
+            out.push(Claim::new(c - side - Vec3::Y * h, c + dir * (r + 1.0) + side + Vec3::Y * h, Use::Solid));
+        }
+        let wide = Vec3::new(-along.z, 0.0, along.x) * 1.3;
+        out.push(Claim::new(a + along * 0.6 + Vec3::Y * 0.1 - wide, b - along * 0.6 + Vec3::Y * 2.4 + wide, Use::Space));
+        out
+    }
+
+    /// The box round where two pieces join on a face at `u` along it,
+    /// height `v`: as far back as either reaches into the rock (a deck's
+    /// underside, a stair's mass), out past a deck, up over a gallery's
+    /// opening and the rock kept round it, a few metres along.
+    fn port(m: &Massif, u: f32, v: f32, along: f32) -> Claim {
+        wclaim(&m.wall, (u - along, u + along), (v - 9.0, v + GALLERY + ROCK + 1.0), (-BACK, m.face(v) + 10.0), Use::Keep)
+    }
+
+    /// The way down's boxes, piece by piece, in order, each tested against
+    /// the rock and what came before it but where it joins another: where
+    /// they do not fit.
+    fn misfits(&self, near: &[Massif], far: &[Massif]) -> Vec<String> {
+        let walls = |side: f32| if side < 0.0 { near } else { far };
+        let rock = |lo: Vec3, hi: Vec3| rock(near, far, lo, hi);
+        let ways = self.ways.len();
+        let mut table = Table::default();
+        let mut out = Vec::new();
+        for (i, leg) in self.legs.iter().enumerate() {
+            let (a, b) = (ways + 2 * i, ways + 2 * i + 1);
+            // Each piece of the leg, and where it joins: the walkway before
+            // (`i - 1`), the walkway after (`i`), the other piece of the leg.
+            let mut pieces: Vec<(usize, &str, Vec<Claim>, Vec<(usize, Claim)>)> = Vec::new();
+            match *leg {
+                Leg::Down(f, _) => {
+                    let f = &self.flights[f];
+                    let m = &walls(f.side)[f.m];
+                    pieces.push((a, "flight", Self::flight_claims(m, f), vec![(i.wrapping_sub(1), Self::port(m, f.u.0, f.v.0, 2.0)), (i, Self::port(m, f.u.1, f.v.1, 2.0))]));
+                }
+                Leg::Through(t, _) => {
+                    let t = &self.tunnels[t];
+                    let m = &walls(t.side)[t.m];
+                    let w = t.width * 0.5 + 1.0;
+                    pieces.push((a, "tunnel", Self::tunnel_claims(m, t), vec![(i.wrapping_sub(1), Self::port(m, t.doors[0].0, t.doors[0].1, w)), (i, Self::port(m, t.doors[1].0, t.doors[1].1, w))]));
+                }
+                Leg::Place(p, t, _) => {
+                    let (p, t) = (&self.places[p], &self.tunnels[t]);
+                    let m = &walls(p.side)[p.m];
+                    let w = t.width * 0.5 + 1.0;
+                    // (The place and its tunnel join through the hall: the
+                    // tunnel's corridor runs in from its back.)
+                    let hall = wclaim(&m.wall, (p.hall.0 - w, p.hall.1 + w), (p.v - 8.0, p.v + p.height + 1.0), (-BACK, p.out + 1.0), Use::Keep);
+                    pieces.push((a, "place", Self::place_claims(m, p), vec![(i.wrapping_sub(1), Self::port(m, p.join, p.v, 2.0)), (b, hall)]));
+                    pieces.push((b, "tunnel", Self::tunnel_claims(m, t), vec![(a, hall), (i, Self::port(m, t.doors[1].0, t.doors[1].1, w))]));
+                }
+                Leg::Across(k, _) => {
+                    // (From the walkway before to the one after; its ends
+                    // reach back under their decks as far as they are wide,
+                    // as built.)
+                    let s = self.spans[k];
+                    let reach = (self.ways[i - 1].width, self.ways[i].width);
+                    let r = reach.0.max(reach.1);
+                    let end = |p: Vec3| Claim::new(p - Vec3::new(r + 3.0, 9.0, 3.0), p + Vec3::new(r + 3.0, 4.0, 3.0), Use::Keep);
+                    pieces.push((a, "bridge", Self::bridge_claims(s.0, s.1, reach), vec![(i.wrapping_sub(1), end(s.0)), (i, end(s.1))]));
+                }
+            }
+            // (The walkway after joins this leg's pieces, at their ports.)
+            let w = &self.ways[i];
+            let joins: Vec<(usize, Claim)> = pieces.iter().flat_map(|(o, _, _, f)| f.iter().filter(|(x, _)| *x == i).map(move |(_, port)| (*o, *port))).collect();
+            pieces.push((i, "walkway", Self::walkway_claims(w, walls(w.side)), joins));
+            for (owner, what, claims, friends) in pieces {
+                // (Two along the way, walkway and leg by turns, they are
+                // neighbours: they may carve close.)
+                let leg = |j: usize| [ways + 2 * j, ways + 2 * j + 1];
+                let neighbours = if owner < ways {
+                    let mut n = vec![i + 1];
+                    if i > 0 {
+                        n.push(i - 1);
+                    }
+                    n
+                } else {
+                    let mut n = leg(i + 1).to_vec();
+                    if i > 0 {
+                        n.extend(leg(i - 1));
+                    }
+                    n
+                };
+                if let Some(why) = table.misfit(owner, &claims, &friends, &neighbours, &rock) {
+                    out.push(format!("{what} {owner} (leg {i}): {why}"));
+                }
+                table.add(owner, &claims);
+            }
+        }
+        out
+    }
+}
+
 fn routes(parts: &mut Parts, routing: &Routing, near: &[Massif], far: &[Massif]) {
     let massifs = |side: f32| if side < 0.0 { near } else { far };
     let ways = &routing.ways;
@@ -2966,12 +3222,7 @@ fn deck(w: &Walkway, massifs: &[Massif]) -> Option<(CrossSection, f32, Manifold)
     if faces.is_empty() {
         return None;
     }
-    let mut reach = w.width + 1.0;
-    for &(k, _, _, (vs, ve), n0, n1) in &faces {
-        let m = &massifs[k];
-        let back = (vs.min(ve) - depth..=vs.max(ve)).step_by_f32(2.0).map(|v| inner(m, v)).fold(n0, f32::min) - 1.0;
-        reach = reach.max(n1 - back);
-    }
+    let reach = deck_reach(w, massifs);
     let plan = |k: usize, u: f32, n: f32| {
         let p = massifs[k].wall.at(u, 0.0, n);
         Vec2::new(p.x, p.z)
@@ -2990,6 +3241,19 @@ fn deck(w: &Walkway, massifs: &[Massif]) -> Option<(CrossSection, f32, Manifold)
     let plan = CrossSection::batch_union(&areas);
     let solid = upright(&Manifold::batch_union(&[raised(&plan, -EDGE, 0.0), Manifold::batch_union(&under).intersection(&raised(&plan, -60.0, 0.0))]), w);
     Some((plan, reach, solid))
+}
+
+/// How far a walkway's deck reaches back from its outer edge: as far as the
+/// wall lies behind it, at most, on every face it passes.
+fn deck_reach(w: &Walkway, massifs: &[Massif]) -> f32 {
+    let depth = shelf_depth(w.width);
+    let mut reach = w.width + 1.0;
+    for &(k, _, _, (vs, ve), n0, n1) in &walkway_faces(w, massifs) {
+        let m = &massifs[k];
+        let back = (vs.min(ve) - depth..=vs.max(ve)).step_by_f32(2.0).map(|v| inner(m, v)).fold(n0, f32::min) - 1.0;
+        reach = reach.max(n1 - back);
+    }
+    reach
 }
 
 /// A walkway, built as one solid from its plan. The plan: along each face
