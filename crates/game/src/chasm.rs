@@ -1738,7 +1738,7 @@ fn hall(parts: &mut Parts, m: &Massif, h: &Hall) -> Manifold {
     let mut solid = vec![wbox(&m.wall, (a, b), (h.v - 0.3, h.v), (h.back, h.front)).difference(&Manifold::batch_union(&pillars))];
     let inner_v = inner(m, h.v);
     for u in [h.doors.0, h.doors.1] {
-        solid.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.6)));
+        solid.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.1)));
         parts.lights.push((m.wall.at(u, h.v + 2.6, (h.front + inner_v) * 0.5), 10.0, 0.01));
     }
     let bays = ((b - a) / BAY).round() as i32;
@@ -2043,7 +2043,7 @@ fn tunnel_parts(m: &Massif, t: &Tunnel) -> TunnelParts {
     let w = t.width * 0.5;
     let mut out = TunnelParts { floors: Vec::new(), runs: Vec::new(), spaces: Vec::new() };
     for (u, v, n) in t.corridors() {
-        out.floors.push(wbox(&m.wall, (u - w, u + w), (v - 0.3, v), (n - w, inner(m, v) + 0.6)));
+        out.floors.push(wbox(&m.wall, (u - w, u + w), (v - 0.3, v), (n - w, inner(m, v) + 0.1)));
         out.spaces.push((format!("tunnel door at {v:.0} m"), wbox(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (n, inner(m, v) + 0.5))));
     }
     for r in &t.runs {
@@ -2983,9 +2983,8 @@ impl Routing {
         let (depth, reach) = (shelf_depth(w.width), deck_reach(w, massifs));
         let e = if w.loggia() { PIERS.2 + 0.1 } else { 0.1 };
         let faces = walkway_faces(w, massifs);
-        let last = faces.len().saturating_sub(1);
         let mut out = Vec::new();
-        for (i, &(k, us, ue, _, n0, n1)) in faces.iter().enumerate() {
+        for &(k, us, ue, _, n0, n1) in &faces {
             let m = &massifs[k];
             // (The underside slopes from the edge's thickness back to the
             // shelf's depth: in four steps, each as deep as its back.)
@@ -2997,8 +2996,7 @@ impl Routing {
             // (Headroom over it: no other route's stone low over it.)
             out.push(wclaim(&m.wall, (us, ue), (w.v0 + 2.4, w.v0 + above(w.recess)), (n0, n1), Use::Keep));
             if w.recess > 0.0 {
-                let (a, b) = (if i == 0 { us - 0.5 } else { us }, if i == last { ue + 0.5 } else { ue });
-                out.push(wclaim(&m.wall, (a, b), (w.v0 - 0.3, w.v0 + GALLERY), (n0, m.face(w.v0) + 1.0), Use::Cut));
+                out.push(wclaim(&m.wall, (us, ue), (w.v0 - 0.3, w.v0 + GALLERY), (n0, m.face(w.v0) + 1.0), Use::Cut));
             }
         }
         out
@@ -3029,7 +3027,7 @@ impl Routing {
             // (Before the door, on the walkway it opens onto: its width and
             // half a metre more each side, 3.5 m high, out across the deck.)
             out.push(wclaim(&m.wall, (u - w - 0.5, u + w + 0.5), (v + 0.05, v + 3.5), (inner(m, v) + 0.6, inner(m, v) + 3.0), Use::Keep));
-            out.push(wclaim(&m.wall, (u - w, u + w), (v - 0.3, v), (n - w, inner(m, v) + 0.6), Use::Solid));
+            out.push(wclaim(&m.wall, (u - w, u + w), (v - 0.3, v), (n - w, inner(m, v) + 0.1), Use::Solid));
             out.push(wclaim(&m.wall, (u - w + 0.2, u + w - 0.2), (v + 0.1, v + 2.4), (n, inner(m, v) + 0.5), Use::Space));
             out.push(wclaim(&m.wall, (u - w, u + w), (v - 0.3, v + 3.0), (n - w, m.face(v) + 2.0), Use::Cut));
         }
@@ -3095,7 +3093,7 @@ impl Routing {
         out.push(wclaim(&m.wall, (lo - w + 0.2, hi + w - 0.2), (h.v + 0.1, h.v + 2.4), (h.front - BAY + PILLAR * 0.5 + 0.3, h.front - 0.3), Use::Space));
         for u in [h.doors.0, h.doors.1] {
             out.push(wclaim(&m.wall, (u - w - 0.5, u + w + 0.5), (h.v + 0.05, h.v + 3.5), (inner_v + 0.6, inner_v + 3.0), Use::Keep));
-            out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.6), Use::Solid));
+            out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.1), Use::Solid));
             out.push(wclaim(&m.wall, (u - w + 0.2, u + w - 0.2), (h.v + 0.1, h.v + 2.4), (h.front - 0.3, inner_v + 0.5), Use::Space));
             out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0), Use::Cut));
         }
@@ -3423,8 +3421,9 @@ fn flight_space(m: &Massif, (ua, ub): (f32, f32), (va, vb): (f32, f32), n: (f32,
 /// What is carved out of the wall for a walkway set back into it (nothing
 /// for one built out): along each face it passes, from the deck's inner
 /// edge out past the face, from under its deck to the opening's top; round
-/// a corner, the hull of the two ends; half a metre on past its ends (what
-/// goes on from there overlaps it, never just touches).
+/// a corner, the hull of the two ends; ending where its deck ends (carved
+/// past it, with no floor over it, a trench lay against the slot's end
+/// wall; what goes on from an end reaches into it, never just touches).
 fn way_cut(w: &Walkway, massifs: &[Massif]) -> Option<Manifold> {
     if w.recess <= 0.0 {
         return None;
@@ -3435,11 +3434,9 @@ fn way_cut(w: &Walkway, massifs: &[Massif]) -> Option<Manifold> {
         Vec2::new(p.x, p.z)
     };
     let out = |k: usize| massifs[k].face(w.v0) + 1.0;
-    let last = faces.len().saturating_sub(1);
     let mut areas = Vec::new();
     for (i, &(k, us, ue, _, n0, _)) in faces.iter().enumerate() {
-        let (a, b) = (if i == 0 { us - 0.5 } else { us }, if i == last { ue + 0.5 } else { ue });
-        areas.push(region(&[plan(k, a, n0), plan(k, b, n0), plan(k, b, out(k)), plan(k, a, out(k))]));
+        areas.push(region(&[plan(k, us, n0), plan(k, ue, n0), plan(k, ue, out(k)), plan(k, us, out(k))]));
         if let Some(&(k2, us2, _, _, n02, _)) = faces.get(i + 1) {
             areas.push(region(&[plan(k, ue, n0), plan(k, ue, out(k)), plan(k2, us2, n02), plan(k2, us2, out(k2))]));
         }
