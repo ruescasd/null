@@ -1717,7 +1717,7 @@ impl Hall {
 
 /// A randomized H-tree in a rectangle (`a` to `b`, in a wall's plane):
 /// from a level trunk across its middle, each end branching square to it at
-/// 1/√2 its length, and so on down (five levels), but some branches cut
+/// 1/√2 its length, and so on down (three levels), but some branches cut
 /// off. Its segments, each with how deep in the tree it is. (`key` picks
 /// which are cut; `half`, how wide a groove is each side of a segment, by
 /// depth: a branch whose groove would come within a hand's breadth of any
@@ -1743,7 +1743,7 @@ fn h_tree(a: Vec2, b: Vec2, key: i32, half: impl Fn(u32) -> f32) -> Vec<(Vec2, V
         }
         let me = out.len();
         out.push((p, q, depth));
-        if depth < 5 && len > 0.8 {
+        if depth < 2 && len > 0.8 {
             for (j, end) in [p, q].into_iter().enumerate() {
                 let branch = id * 2 + j as i32;
                 if depth == 0 || hash01(key, branch, depth as i32, 0x4a7) < 0.78 {
@@ -1823,12 +1823,12 @@ fn hall(parts: &mut Parts, m: &Massif, h: &Hall) -> Manifold {
     let inner_v = inner(m, h.v);
     for u in [h.doors.0, h.doors.1] {
         solid.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.1)));
-        parts.lights.push((m.wall.at(u, h.v + 2.6, (h.front + inner_v) * 0.5), 10.0, 0.01));
+        parts.lights.push((m.wall.at(u, h.v + 2.6, (h.front + inner_v) * 0.5), 10.0, 0.004));
     }
-    // (Dim: a lamp in every other bay, as a tunnel's.)
+    // (Dim, dimmer than a tunnel: a lamp in every other bay.)
     let bays = ((b - a) / BAY).round() as i32;
     for i in (0..bays).step_by(2) {
-        parts.lights.push((m.wall.at(a + BAY * (i as f32 + 0.5), h.v + h.height - 1.0, h.aisle()), 20.0, 0.01));
+        parts.lights.push((m.wall.at(a + BAY * (i as f32 + 0.5), h.v + h.height - 1.0, h.aisle()), 20.0, 0.004));
     }
     parts.mark("carving");
     for plate in hall_plates(m, h) {
