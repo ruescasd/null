@@ -638,6 +638,12 @@ fn made_from(seed: i32, near: Vec<Massif>, far: Vec<Massif>, routing: Routing, s
         let m = &walls_of(p.side)[p.m];
         parts.keep.extend(bounds(&place_space(m, p), 0.5));
     }
+    for h in &routing.halls {
+        let m = &walls_of(h.side)[h.m];
+        for u in [h.doors.0, h.doors.1] {
+            parts.keep.extend(bounds(&wbox(&m.wall, (u - h.width, u + h.width), (h.v - 1.0, h.v + 4.0), (inner(m, h.v) - 1.0, inner(m, h.v) + 4.0)), 0.5));
+        }
+    }
     for s in &routing.spans {
         let (lo, hi) = (s.0.min(s.1), s.0.max(s.1));
         parts.keep.push((lo - Vec3::new(4.0, s.2 + 1.0, 4.0), hi + Vec3::new(4.0, 4.0, 4.0)));
@@ -657,7 +663,7 @@ impl Made {
     fn summary(&self) -> String {
         let r = &self.routing;
         format!(
-            "the way down: {} flights ({} carved), {} tunnels, {} walkways ({} carved), {} bridges, {} places, down to {:.0} m; {:.1} km, {:.0} min at a walk",
+            "the way down: {} flights ({} carved), {} tunnels, {} walkways ({} carved), {} bridges, {} places, {} halls, down to {:.0} m; {:.1} km, {:.0} min at a walk",
             r.flights.len(),
             r.flights.iter().filter(|f| f.recess > 0.0).count(),
             r.tunnels.len(),
@@ -665,6 +671,7 @@ impl Made {
             r.ways.iter().filter(|w| w.recess > 0.0).count(),
             r.bridges.len(),
             r.places.len(),
+            r.halls.len(),
             self.bottom(),
             r.length / 1000.0,
             r.length / 4.0 / 60.0
@@ -999,7 +1006,7 @@ fn catalogue() -> (Vec<Massif>, Vec<Massif>, Routing, Vec<String>) {
         Massif { wall: Wall { origin, along: Vec3::Z, out: Vec3::new(-side, 0.0, 0.0), offset: 0.0 }, len: z.1 - z.0, z, split, low, high, room: 20.0, shaft: false }
     };
     let (mut near, mut far) = (Vec::new(), Vec::new());
-    let mut r = Routing { ways: Vec::new(), legs: Vec::new(), places: Vec::new(), flights: Vec::new(), tunnels: Vec::new(), bridges: Vec::new(), spans: Vec::new(), start: [0.0; 5], length: 0.0 };
+    let mut r = Routing { ways: Vec::new(), legs: Vec::new(), places: Vec::new(), halls: Vec::new(), flights: Vec::new(), tunnels: Vec::new(), bridges: Vec::new(), spans: Vec::new(), start: [0.0; 5], length: 0.0 };
     let mut legend = Vec::new();
     let way = |side: f32, z: (f32, f32), v0: f32, width: f32, recess: f32| Walkway { side, z, v0, grade: 0.0, width, recess };
     let carved = |width: f32, yes: bool| if yes { width - 0.5 } else { 0.0 };
@@ -1018,7 +1025,7 @@ fn catalogue() -> (Vec<Massif>, Vec<Massif>, Routing, Vec<String>) {
         r.flights.push(Flight { side: -1.0, m: mi, u: (u, u + 4.0), v: (v, vb), z: (z, z + 4.0), width, recess });
         r.ways.push(way(-1.0, (z + 4.0, z + 20.0), vb, width, recess));
     };
-    for slot in 0..13 {
+    for slot in 0..15 {
         let z0 = first + SLOT * slot as f32;
         far.push(massif(1.0, (z0, z0 + SLOT), 0.0, 0.0, HEIGHT, 0.0));
         let plain = |near: &mut Vec<Massif>| {
@@ -1123,6 +1130,23 @@ fn catalogue() -> (Vec<Massif>, Vec<Massif>, Routing, Vec<String>) {
                 flight(&mut r, &near, near.len() - 2, z0 + 18.0, 3.0, 0.0);
                 "a flight between walkways, the wall stepping out just past the walkway".into()
             }
+            13 | 14 => {
+                // (Entered at the walkway's end; four bays along, two deep.)
+                let yes = slot == 14;
+                let mi = plain(&mut near);
+                let m = &near[mi];
+                let (w, rec) = (3.0, carved(3.0, yes));
+                start(&mut r, way(-1.0, (z0 + 4.0, z0 + 20.0), v, w, rec));
+                let ua = 20.0 - (w * 0.5 + 1.0);
+                let near_end = ua - BAY * 0.5;
+                let far_end = near_end + BAY * 4.0;
+                let front = (m.face(v) - 3.0).min(deck_n(m, v, w, rec).0 - 2.0);
+                let h = Hall { side: -1.0, m: mi, u: (near_end, far_end), v, front, back: front - BAY * 2.0, height: 6.0, doors: (ua, far_end - BAY * 0.5), width: w };
+                r.legs.push(Leg::Hall(r.halls.len(), r.ways.len()));
+                r.halls.push(h);
+                r.ways.push(way(-1.0, (z0 + h.doors.1 - w * 0.5 - 0.5, z0 + far_end + 12.0), v, w, rec));
+                format!("a hall in the rock on a grid of pillars, entered from a walkway's end; {}", if yes { "carved" } else { "built out" })
+            }
             _ => {
                 // (Two massifs on one face line: their lines 2 m apart, their
                 // faces out from them by as much.)
@@ -1154,6 +1178,7 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Man
     cuts.extend(routing.ways.iter().filter(|w| w.side == side).filter_map(|w| way_cut(w, massifs)));
     cuts.extend(routing.flights.iter().filter(|f| f.side == side).filter_map(|f| flight_cut(&massifs[f.m], f)));
     cuts.extend(routing.places.iter().filter(|p| p.side == side).map(|p| place_cut(&massifs[p.m], p)));
+    cuts.extend(routing.halls.iter().filter(|h| h.side == side).map(|h| hall_cut(&massifs[h.m], h)));
     parts.cuts = cuts
         .iter()
         .filter_map(|c| {
@@ -1645,6 +1670,92 @@ impl Place {
     }
 }
 
+/// A hall in the rock, a step of the way: broad and low, its ceiling on a
+/// grid of square pillars left in the rock; entered by a door at the end of
+/// a walkway, crossed along the aisle behind its front wall, left by a door
+/// at its far end onto a walkway going on. In its massif's frame: from `u.0`
+/// to `u.1` along the face, its floor's height, its front (behind the face by
+/// the rock its doors pass through) and its back, how high; its doors along
+/// the face (the way in, the way out); how wide they are.
+#[derive(Clone, Copy)]
+struct Hall {
+    side: f32,
+    m: usize,
+    u: (f32, f32),
+    v: f32,
+    front: f32,
+    back: f32,
+    height: f32,
+    doors: (f32, f32),
+    width: f32,
+}
+
+/// The grid a hall's pillars stand on (m), and how thick they are.
+const BAY: f32 = 6.0;
+const PILLAR: f32 = 2.0;
+
+impl Hall {
+    /// Along the face, from its one end to the other.
+    fn span(&self) -> (f32, f32) {
+        (self.u.0.min(self.u.1), self.u.0.max(self.u.1))
+    }
+
+    /// Where its pillars stand (along, out): on its grid, inside it.
+    fn pillars(&self) -> Vec<(f32, f32)> {
+        let (a, b) = self.span();
+        let along = ((b - a) / BAY).round() as i32;
+        let deep = ((self.front - self.back) / BAY).round() as i32;
+        (1..along).flat_map(|i| (1..deep).map(move |j| (a + BAY * i as f32, self.front - BAY * j as f32))).collect()
+    }
+
+    /// The middle of the aisle behind its front wall, before the first
+    /// row of pillars.
+    fn aisle(&self) -> f32 {
+        self.front - (BAY - PILLAR * 0.5) * 0.5
+    }
+}
+
+/// What is carved out of the wall for a hall: the hall less its pillars
+/// (left standing in the rock, carrying it), and the passages of its doors
+/// (from just into the hall to out past the face).
+fn hall_cut(m: &Massif, h: &Hall) -> Manifold {
+    let w = h.width * 0.5;
+    let hall = wbox(&m.wall, h.span(), (h.v - 0.3, h.v + h.height), (h.back, h.front));
+    let pillars: Vec<Manifold> = h.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), (h.v - 1.0, h.v + h.height + 1.0), (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect();
+    let mut cut = vec![hall.difference(&Manifold::batch_union(&pillars))];
+    for u in [h.doors.0, h.doors.1] {
+        cut.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0)));
+    }
+    Manifold::batch_union(&cut)
+}
+
+/// A hall's part of the routes: its floor (round its pillars) and its
+/// doors' floors, as one solid; a light in every other bay of its aisle
+/// and in each door; the way through it, and the space a walker needs.
+fn hall(parts: &mut Parts, m: &Massif, h: &Hall) -> Manifold {
+    let (w, (a, b)) = (h.width * 0.5, h.span());
+    let pillars: Vec<Manifold> = h.pillars().iter().map(|&(u, n)| wbox(&m.wall, (u - PILLAR * 0.5, u + PILLAR * 0.5), (h.v - 1.0, h.v + 1.0), (n - PILLAR * 0.5, n + PILLAR * 0.5))).collect();
+    let mut solid = vec![wbox(&m.wall, (a, b), (h.v - 0.3, h.v), (h.back, h.front)).difference(&Manifold::batch_union(&pillars))];
+    let inner_v = inner(m, h.v);
+    for u in [h.doors.0, h.doors.1] {
+        solid.push(wbox(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.6)));
+        parts.lights.push((m.wall.at(u, h.v + 2.6, (h.front + inner_v) * 0.5), 10.0, 0.01));
+    }
+    let bays = ((b - a) / BAY).round() as i32;
+    for i in (0..bays).step_by(2) {
+        parts.lights.push((m.wall.at(a + BAY * (i as f32 + 0.5), h.v + h.height - 1.0, h.aisle()), 25.0, 0.05));
+    }
+    for c in Routing::hall_claims(m, h).iter().filter(|c| c.kind == Use::Space) {
+        let (lo, hi) = (c.lo, c.hi);
+        let corners: Vec<[f64; 3]> = (0..8).map(|i| [0, 1, 2].map(|k| if i >> k & 1 == 1 { hi[k] as f64 } else { lo[k] as f64 })).collect();
+        parts.clearance.push((format!("hall at {:.0} m", h.v), Manifold::hull_pts(&corners)));
+    }
+    let at = |u: f32, n: f32| m.wall.at(u, h.v + 1.2, n);
+    parts.paths.push((format!("hall at {:.0} m", h.v), vec![at(h.doors.0, inner_v + 1.0), at(h.doors.0, h.aisle()), at(h.doors.1, h.aisle()), at(h.doors.1, inner_v + 1.0)]));
+    info!("the chasm: a hall at {:?} ({:.0} by {:.0} m, {:.0} m high, {} pillars)", m.wall.at((a + b) * 0.5, h.v, h.front), b - a, h.front - h.back, h.height, h.pillars().len());
+    Manifold::batch_union(&solid)
+}
+
 /// A prism in a face's frame: a convex outline (along, out) from `v.0` up to
 /// `v.1`.
 fn prism(w: &Wall, outline: &[(f32, f32)], v: (f32, f32)) -> Manifold {
@@ -1974,6 +2085,7 @@ struct Routing {
     /// on.
     legs: Vec<Leg>,
     places: Vec<Place>,
+    halls: Vec<Hall>,
     flights: Vec<Flight>,
     tunnels: Vec<Tunnel>,
     /// Bridges: where along the chasm, and the walkways they join (near,
@@ -1994,6 +2106,7 @@ struct Routing {
 #[derive(Clone, Copy)]
 enum Leg {
     Start(usize),
+    Hall(usize, usize),
     Down(usize, usize),
     Through(usize, usize),
     Place(usize, usize, usize),
@@ -2208,6 +2321,7 @@ impl Routing {
         };
         let mut ways: Vec<Walkway> = Vec::new();
         let mut places: Vec<Place> = Vec::new();
+        let mut halls: Vec<Hall> = Vec::new();
         let mut legs: Vec<Leg> = Vec::new();
         // (Each place's terrace edge, for what crosses the gap to keep clear
         // of.)
@@ -2237,6 +2351,7 @@ impl Routing {
         while v > 40.0 && flights.len() < 400 {
             let i = flights.len() as i32 + bridges.len() as i32 * 1000;
             enum Step {
+                Hall(Hall, Walkway),
                 Down(Flight, Walkway),
                 Through(Tunnel, Walkway),
                 Place(Place, Tunnel, Walkway),
@@ -2348,6 +2463,45 @@ impl Routing {
                     t.entry = Some(p.back);
                     found = Some(Step::Place(p, t, next));
                     break;
+                }
+                // A hall in the rock now and then, entered at the end of the
+                // walkway, the way on along the face only through it: on its
+                // grid of bays, broad and low; behind the face by the rock
+                // its doors pass through (and behind a gallery by more).
+                if let Some(o) = on
+                    && t < 12
+                    && r(k, 40) < 0.12
+                    && halls.last().is_none_or(|h: &Hall| h.v - v > 40.0)
+                {
+                    let here = ways[o];
+                    let w = here.width.min(3.0);
+                    let Some((m, uj)) = locate(walls(side), z - dir * 0.01) else { continue };
+                    let mi = walls(side).iter().position(|x| std::ptr::eq(x, m)).unwrap();
+                    let (bays, deep, height) = (4 + (r(k, 41) * 3.0) as i32, 2 + (r(k, 42) * 2.0) as i32, (5.0 + 3.0 * r(k, 43)).round());
+                    let ua = uj.round() - dir * (w * 0.5 + 1.0);
+                    let near = ua - dir * BAY * 0.5;
+                    let far = near + dir * BAY * bays as f32;
+                    let front = (m.face(v) - 3.0).min(deck_n(m, v, here.width, here.recess).0 - 2.0);
+                    let h = Hall { side, m: mi, u: (near.min(far), near.max(far)), v, front, back: front - BAY * deep as f32, height, doors: (ua, far - dir * BAY * 0.5), width: w };
+                    if m.shaft || h.u.0 < 3.0 || h.u.1 > m.len - 3.0 || h.back < -BACK + 6.0 || !plain(m, (v - 1.0, v + height + 2.0)) {
+                        continue;
+                    }
+                    let hc = Self::hall_claims(m, &h);
+                    let wd = w * 0.5 + 1.0;
+                    if !fits(&table, l1, &hc, &[(here_id.unwrap(), Self::port(m, h.doors.0, v, wd))], &before) {
+                        continue;
+                    }
+                    let Some(start) = snap(side, to_z(m, h.doors.1 - dir * (w * 0.5 + 0.5))) else { continue };
+                    let mark = table.len();
+                    table.add(l1, &hc);
+                    let out = [(l1, Self::port(m, h.doors.1, v, wd))];
+                    let here = [here_id.unwrap()];
+                    let next = walkway_at(&table, wn, &out, &here, side, start, v, dir, length.max(8.0), w, pick(k, w)).or_else(|| walkway_at(&table, wn, &out, &here, side, start, v, dir, length.max(8.0), w, 0.0));
+                    table.truncate(mark);
+                    if let Some(next) = next {
+                        found = Some(Step::Hall(h, next));
+                        break;
+                    }
                 }
                 // Through the wall now and then (more often where the way
                 // down the face is blocked).
@@ -2469,7 +2623,8 @@ impl Routing {
                 // Back a step; stuck again and again, further back at once
                 // (where the way went wrong may be well behind).
                 for _ in 0..(1 + stuck / 6).min(history.len()) {
-                    let (nt, sp, nf, nb, (nn, np, nl), state) = history.pop().unwrap();
+                    let (nt, sp, nf, nb, (nn, np, nl, nh), state) = history.pop().unwrap();
+                    halls.truncate(nh);
                     table.truncate(nt);
                     spans.truncate(sp);
                     flights.truncate(nf);
@@ -2489,9 +2644,17 @@ impl Routing {
                 }
                 continue;
             };
-            history.push((table.len(), spans.len(), flights.len(), bridges.len(), (tunnels.len(), places.len(), legs.len()), (side, z, v, dir, width, recess, on, since)));
+            history.push((table.len(), spans.len(), flights.len(), bridges.len(), (tunnels.len(), places.len(), legs.len(), halls.len()), (side, z, v, dir, width, recess, on, since)));
             stuck = stuck.saturating_sub(1);
             let w = match step {
+                Step::Hall(h, w) => {
+                    legs.push(Leg::Hall(halls.len(), ways.len()));
+                    table.add(l1, &Self::hall_claims(&walls(h.side)[h.m], &h));
+                    halls.push(h);
+                    width = w.width;
+                    since += 1;
+                    w
+                }
                 Step::Down(f, w) => {
                     legs.push(Leg::Down(flights.len(), ways.len()));
                     table.add(l1, &Self::flight_claims(&walls(f.side)[f.m], &f));
@@ -2565,7 +2728,7 @@ impl Routing {
                 [eye.x, HEIGHT + 1.7, eye.z, (-look.x).atan2(-look.z).to_degrees(), look.y.atan2(Vec2::new(look.x, look.z).length()).to_degrees()]
             })
             .unwrap_or([face_x(&plan(-1.0, seed), CENTRE.z) - 5.0, HEIGHT + 1.7, CENTRE.z, -130.0, -38.0]);
-        Routing { ways, legs, places, flights, tunnels, bridges, spans, start, length }
+        Routing { ways, legs, places, halls, flights, tunnels, bridges, spans, start, length }
     }
 
     /// The way down as one line a walker follows, at foot height: from where
@@ -2633,6 +2796,20 @@ impl Routing {
                     let (m, u) = locate(walls(w.side), w.z.0 + 0.5).unwrap();
                     let (n0, n1) = deck_n(m, w.v0, w.width, w.recess);
                     out.push((m.wall.at(u, w.v0, (n0 + n1) * 0.5), format!("jump to the walkway at {:.0} m", w.v0)));
+                    on = Some(k);
+                }
+                Leg::Hall(i, k) => {
+                    let h = &self.halls[i];
+                    let m = &walls(h.side)[h.m];
+                    let at = |u: f32, n: f32| m.wall.at(u, h.v, n);
+                    if let Some(w) = on {
+                        let (n0, n1) = deck_n(m, h.v, self.ways[w].width, self.ways[w].recess);
+                        along(&mut out, w, at(h.doors.0, (n0 + n1) * 0.5), format!("before the door of the hall at {:.0} m", h.v));
+                    }
+                    out.push((at(h.doors.0, h.aisle()), format!("in the hall at {:.0} m", h.v)));
+                    out.push((at(h.doors.1, h.aisle()), format!("across the hall at {:.0} m", h.v)));
+                    let (n0, n1) = deck_n(m, h.v, self.ways[k].width, self.ways[k].recess);
+                    out.push((at(h.doors.1, (n0 + n1) * 0.5), format!("out of the hall at {:.0} m", h.v)));
                     on = Some(k);
                 }
                 Leg::Down(i, k) => {
@@ -2906,6 +3083,25 @@ impl Routing {
         out
     }
 
+    fn hall_claims(m: &Massif, h: &Hall) -> Vec<Claim> {
+        let (w, (a, b)) = (h.width * 0.5, h.span());
+        let inner_v = inner(m, h.v);
+        let mut out = vec![
+            wclaim(&m.wall, (a, b), (h.v - 0.3, h.v), (h.back, h.front), Use::Solid),
+            wclaim(&m.wall, (a, b), (h.v - 0.3, h.v + h.height), (h.back, h.front), Use::Cut),
+        ];
+        // (Along the aisle, from door to door.)
+        let (lo, hi) = (h.doors.0.min(h.doors.1), h.doors.0.max(h.doors.1));
+        out.push(wclaim(&m.wall, (lo - w + 0.2, hi + w - 0.2), (h.v + 0.1, h.v + 2.4), (h.front - BAY + PILLAR * 0.5 + 0.3, h.front - 0.3), Use::Space));
+        for u in [h.doors.0, h.doors.1] {
+            out.push(wclaim(&m.wall, (u - w - 0.5, u + w + 0.5), (h.v + 0.05, h.v + 3.5), (inner_v + 0.6, inner_v + 3.0), Use::Keep));
+            out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v), (h.front - 0.5, inner_v + 0.6), Use::Solid));
+            out.push(wclaim(&m.wall, (u - w + 0.2, u + w - 0.2), (h.v + 0.1, h.v + 2.4), (h.front - 0.3, inner_v + 0.5), Use::Space));
+            out.push(wclaim(&m.wall, (u - w, u + w), (h.v - 0.3, h.v + 3.0), (h.front - 0.5, m.face(h.v) + 2.0), Use::Cut));
+        }
+        out
+    }
+
     /// A bridge from `a` to `b` (on the walkways' edges, at deck height),
     /// reaching back under them by `reach` (see `span_solid`).
     fn bridge_claims(a: Vec3, b: Vec3, reach: (f32, f32)) -> Vec<Claim> {
@@ -2963,6 +3159,12 @@ impl Routing {
             let mut pieces: Vec<(usize, &str, Vec<Claim>, Vec<(usize, Claim)>)> = Vec::new();
             match *leg {
                 Leg::Start(_) => {}
+                Leg::Hall(h, _) => {
+                    let h = &self.halls[h];
+                    let m = &walls(h.side)[h.m];
+                    let w = h.width * 0.5 + 1.0;
+                    pieces.push((a, "hall", Self::hall_claims(m, h), vec![(i.wrapping_sub(1), Self::port(m, h.doors.0, h.v, w)), (i, Self::port(m, h.doors.1, h.v, w))]));
+                }
                 Leg::Down(f, _) => {
                     let f = &self.flights[f];
                     let m = &walls(f.side)[f.m];
@@ -3043,6 +3245,15 @@ fn routes(parts: &mut Parts, routing: &Routing, near: &[Massif], far: &[Massif])
                 }
             }
         }
+        for h in routing.halls.iter().filter(|h| h.side == w.side && (h.v - w.v0).abs() < 0.05) {
+            let m = &massifs(h.side)[h.m];
+            for u in [h.doors.0, h.doors.1] {
+                let z = m.z.0 + u;
+                if z > w.z.0 - 2.0 && z < w.z.1 + 2.0 {
+                    openings.push((z - h.width * 0.5 - 0.5, z + h.width * 0.5 + 0.5));
+                }
+            }
+        }
         let built = walkway(parts, w, massifs(w.side), &openings);
         solids.push(built);
     }
@@ -3050,6 +3261,9 @@ fn routes(parts: &mut Parts, routing: &Routing, near: &[Massif], far: &[Massif])
         parts.mark("place");
         solids.push(place(parts, &massifs(p.side)[p.m], p));
         parts.mark("routes");
+    }
+    for h in &routing.halls {
+        solids.push(hall(parts, &massifs(h.side)[h.m], h));
     }
     for &(z, i, j) in &routing.bridges {
         let (a, b) = (&ways[i], &ways[j]);
