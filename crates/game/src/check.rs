@@ -1,7 +1,8 @@
 //! `--check static|walk|wall|all --seeds 1-50,251-450 [--jobs n]`: the
 //! chasm's checks over many seeds at once, with nothing rendered and no
 //! window, as fast as the machine allows; a line per seed, a summary, and
-//! the exit code (0 if all is well).
+//! the exit code (0 if all is well). `--check catalogue`: the static and
+//! walk checks on the junction catalogue (`--opt junctions`).
 //!
 //! - static: the way reaches the bottom, and nothing runs into rock or into
 //!   another route, crosses a route's way, or leaves a hole where a flight
@@ -27,17 +28,19 @@ use crate::terrain::{Streamer, WorldGen};
 /// Runs the checks the command line asks for; never returns.
 pub fn run(argv: &[String]) -> ! {
     let after = |flag: &str| argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).cloned();
+    let catalogue = after("--check").as_deref() == Some("catalogue");
     let kinds: Vec<&str> = match after("--check").as_deref() {
         Some("all") => vec!["static", "walk", "wall"],
+        Some("catalogue") => vec!["static", "walk"],
         Some("static") => vec!["static"],
         Some("walk") => vec!["walk"],
         Some("wall") => vec!["wall"],
         other => {
-            eprintln!("--check {other:?}: expected static, walk, wall or all");
+            eprintln!("--check {other:?}: expected static, walk, wall, all or catalogue");
             std::process::exit(2);
         }
     };
-    let seeds = seeds(&after("--seeds").unwrap_or_else(|| "1-50".into()));
+    let seeds = if catalogue { vec![0] } else { seeds(&after("--seeds").unwrap_or_else(|| "1-50".into())) };
     let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
     let jobs = after("--jobs").and_then(|j| j.parse().ok()).unwrap_or((cores * 2 / 3).max(1));
     let work: VecDeque<(&'static str, u32)> = kinds
@@ -63,8 +66,8 @@ pub fn run(argv: &[String]) -> ! {
                 let Some((kind, seed)) = work.lock().unwrap().pop_front() else { break };
                 let t = Instant::now();
                 let found = std::panic::catch_unwind(|| match kind {
-                    "static" => static_check(seed),
-                    kind => walk_check(kind, seed),
+                    "static" => static_check(seed, catalogue),
+                    kind => walk_check(kind, seed, catalogue),
                 })
                 .unwrap_or_else(|_| (false, "panicked".into(), Vec::new()));
                 let _ = tx.send((kind, seed, found, t.elapsed()));
@@ -109,15 +112,15 @@ fn seeds(spec: &str) -> Vec<u32> {
         .collect()
 }
 
-fn static_check(seed: u32) -> (bool, String, Vec<String>) {
-    let found = crate::chasm::check(seed);
+fn static_check(seed: u32, catalogue: bool) -> (bool, String, Vec<String>) {
+    let found = crate::chasm::check(seed, catalogue);
     (found.ok, found.summary, found.problems)
 }
 
 /// Walks the chasm (or into its walls) with the real movement and the bot,
 /// in an app with nothing but the physics, the movement and the bot, its
 /// time stepped by hand 0.1 s at a time, as fast as it computes.
-fn walk_check(kind: &str, seed: u32) -> (bool, String, Vec<String>) {
+fn walk_check(kind: &str, seed: u32, catalogue: bool) -> (bool, String, Vec<String>) {
     let bot = if kind == "walk" { "walkbot" } else { "wallbot" };
     let args = Args {
         opts: vec!["chasm".into(), "peace".into(), bot.into(), "headless".into()],
@@ -153,10 +156,10 @@ fn walk_check(kind: &str, seed: u32) -> (bool, String, Vec<String>) {
             streamer
         })
         .add_systems(Update, (player::bot_drive, player::walk).chain());
-    crate::chasm::headless(&mut app, seed);
+    crate::chasm::headless(&mut app, seed, catalogue);
     // (The ground at the chasm's bottom: in the game, the terrain's.)
     app.world_mut().spawn((RigidBody::Static, Collider::cuboid(20_000.0, 1.0, 20_000.0), Transform::from_xyz(0.0, -0.5, 0.0)));
-    let [x, y, z, yaw, pitch] = crate::chasm::start(seed);
+    let [x, y, z, yaw, pitch] = crate::chasm::start(seed, catalogue);
     let fly = FlyCam { yaw: yaw.to_radians(), pitch: pitch.to_radians(), speed: 25.0, noclip: false };
     let rotation = fly.rotation();
     app.world_mut().spawn((Transform::from_xyz(x, y, z).with_rotation(rotation), fly, player::Player::fresh()));

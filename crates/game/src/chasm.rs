@@ -73,8 +73,8 @@ pub fn rim(seed: u32, x: f32, z: f32) -> Option<f32> {
 
 /// Where you start: on the rim of the near wall behind the first flight,
 /// looking along it and down.
-pub fn start(seed: u32) -> [f32; 5] {
-    layout(seed as i32).2.start
+pub fn start(seed: u32, junctions: bool) -> [f32; 5] {
+    if junctions { catalogue().2.start } else { layout(seed as i32).2.start }
 }
 
 /// A stretch of a wall's plan: from `z.0` to `z.1` (absolute), its face
@@ -589,15 +589,30 @@ pub struct Made {
     routing: Routing,
     near: Vec<Massif>,
     far: Vec<Massif>,
+    /// A way all the way down (not the junction catalogue's entries).
+    whole: bool,
 }
 
 /// Builds the chasm for a seed: nothing in the world yet (see `build`, and
 /// `--check`).
 fn make(seed: i32) -> Made {
-    let mut parts = Parts::default();
     // (The walls' shapes and the routes are planned first: the walls keep
     // clear where the routes run.)
     let (near, far, routing, solids) = layout(seed);
+    made_from(seed, near, far, routing, solids, true)
+}
+
+/// The junction catalogue (see `catalogue`) as built.
+fn junctions() -> Made {
+    let (near, far, routing, _) = catalogue();
+    let solids = [wall_solid(&near), wall_solid(&far)];
+    made_from(1, near, far, routing, solids, false)
+}
+
+/// Builds a chasm from its walls and its way (`whole`: a way all the way
+/// down, not the catalogue's entries).
+fn made_from(seed: i32, near: Vec<Massif>, far: Vec<Massif>, routing: Routing, solids: [Manifold; 2], whole: bool) -> Made {
+    let mut parts = Parts::default();
     // (What the walls' detail must keep clear of: every route's space.)
     let bounds = |m: &Manifold, pad: f32| {
         m.bounding_box().map(|b| {
@@ -632,7 +647,7 @@ fn make(seed: i32) -> Made {
     routes(&mut parts, &routing, &near, &far);
     parts.mark("web");
     web(&mut parts, seed, &near, &far, &routing);
-    Made { parts, routing, near, far }
+    Made { parts, routing, near, far, whole }
 }
 
 impl Made {
@@ -754,7 +769,7 @@ impl Made {
                 }
             }
         }
-        let down = self.bottom() < 50.0;
+        let down = !self.whole || self.bottom() < 50.0;
         if !down {
             problems.insert(0, format!("the way down stops at {:.0} m", self.bottom()));
         }
@@ -778,16 +793,17 @@ pub struct Check {
     pub problems: Vec<String>,
 }
 
-/// The checks for a seed (`--check static`).
-pub fn check(seed: u32) -> Check {
-    make(seed as i32).check()
+/// The checks for a seed (`--check static`), or for the junction catalogue
+/// (`--check catalogue`).
+pub fn check(seed: u32, catalogue: bool) -> Check {
+    if catalogue { junctions().check() } else { make(seed as i32).check() }
 }
 
 /// For walking it with nothing rendered (`--check walk`, `--check wall`):
 /// the chasm's colliders put in the world, and the way down and the walls to
 /// walk into.
-pub fn headless(app: &mut App, seed: u32) {
-    let made = make(seed as i32);
+pub fn headless(app: &mut App, seed: u32, catalogue: bool) {
+    let made = if catalogue { junctions() } else { make(seed as i32) };
     for collider in made.colliders() {
         app.world_mut().spawn((RigidBody::Static, collider, Transform::IDENTITY));
     }
@@ -804,7 +820,14 @@ fn build(
     if !args.opt("chasm") {
         return;
     }
-    let mut made = make(args.seed as i32);
+    let mut made = if args.opt("junctions") {
+        for line in catalogue().3 {
+            info!("the junctions: {line}");
+        }
+        junctions()
+    } else {
+        make(args.seed as i32)
+    };
     info!("the chasm: {}", made.summary());
     if args.opt("walkbot") {
         commands.insert_resource(Way(made.routing.route(&made.near, &made.far)));
@@ -954,6 +977,165 @@ fn layout(seed: i32) -> (Vec<Massif>, Vec<Massif>, Routing, [Manifold; 2]) {
     let solids = [wall_solid(&near), wall_solid(&far)];
     let routing = Routing::plan(seed, &near, &far);
     (near, far, routing, solids)
+}
+
+/// The junction catalogue (`--opt junctions`): a straight chasm 48 m wide,
+/// its near wall in slots, each a designed join of the way's pieces in a
+/// setting (built out or carved, under an overhang, by a step, across a
+/// joint), a short way through it: a walkway, the piece, a walkway on. Its
+/// walls, the way (each entry's first walkway a start), and what each slot
+/// shows.
+fn catalogue() -> (Vec<Massif>, Vec<Massif>, Routing, Vec<String>) {
+    const SLOT: f32 = 64.0;
+    const GAP: f32 = 48.0;
+    let v = level(300.0);
+    let first = CENTRE.z - LENGTH * 0.5;
+    // A massif on `side` from `z.0` to `z.1`: its line `shift` out into the
+    // gap, its face `low` out from it below `split`, `high` above.
+    let massif = |side: f32, z: (f32, f32), shift: f32, low: f32, split: f32, high: f32| {
+        let origin = Vec3::new(CENTRE.x + side * (GAP * 0.5 - shift), 0.0, z.0);
+        Massif { wall: Wall { origin, along: Vec3::Z, out: Vec3::new(-side, 0.0, 0.0), offset: 0.0 }, len: z.1 - z.0, z, split, low, high, room: 20.0, shaft: false }
+    };
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    let mut r = Routing { ways: Vec::new(), legs: Vec::new(), places: Vec::new(), flights: Vec::new(), tunnels: Vec::new(), bridges: Vec::new(), spans: Vec::new(), start: [0.0; 5], length: 0.0 };
+    let mut legend = Vec::new();
+    let way = |side: f32, z: (f32, f32), v0: f32, width: f32, recess: f32| Walkway { side, z, v0, grade: 0.0, width, recess };
+    let carved = |width: f32, yes: bool| if yes { width - 0.5 } else { 0.0 };
+    // (Each entry starts afresh on a walkway: the walker jumps there.)
+    let start = |r: &mut Routing, w: Walkway| {
+        r.legs.push(Leg::Start(r.ways.len()));
+        r.ways.push(w);
+    };
+    // A flight down from a walkway's end onto a walkway going on, on massif
+    // `mi`, from `z` along the chasm, `width` wide.
+    let flight = |r: &mut Routing, near: &[Massif], mi: usize, z: f32, width: f32, recess: f32| {
+        let m = &near[mi];
+        start(r, way(-1.0, (z - 16.0, z), v, width, recess));
+        let (u, vb) = (z - m.z.0, v - 16.0 * RISER);
+        r.legs.push(Leg::Down(r.flights.len(), r.ways.len()));
+        r.flights.push(Flight { side: -1.0, m: mi, u: (u, u + 4.0), v: (v, vb), z: (z, z + 4.0), width, recess });
+        r.ways.push(way(-1.0, (z + 4.0, z + 20.0), vb, width, recess));
+    };
+    for slot in 0..13 {
+        let z0 = first + SLOT * slot as f32;
+        far.push(massif(1.0, (z0, z0 + SLOT), 0.0, 0.0, HEIGHT, 0.0));
+        let plain = |near: &mut Vec<Massif>| {
+            near.push(massif(-1.0, (z0, z0 + SLOT), 0.0, 0.0, HEIGHT, 0.0));
+            near.len() - 1
+        };
+        let what = match slot {
+            0..=3 => {
+                let (width, yes) = [(3.0, false), (3.0, true), (2.0, false), (4.0, true)][slot];
+                let mi = plain(&mut near);
+                flight(&mut r, &near, mi, z0 + 20.0, width, carved(width, yes));
+                format!("a flight between walkways, {width:.0} m wide, {}", if yes { "carved" } else { "built out" })
+            }
+            4 | 5 => {
+                let yes = slot == 5;
+                let mi = plain(&mut near);
+                let m = &near[mi];
+                let (w, rec) = (3.0, carved(3.0, yes));
+                start(&mut r, way(-1.0, (z0 + 4.0, z0 + 20.0), v, w, rec));
+                // (A door in the walkway's middle; one run down, on the way
+                // it goes, 40 steps; out onto a walkway going on.)
+                let (ua, n) = (12.0, 40);
+                let (us, vb) = (ua + w * 0.5, v - n as f32 * RISER);
+                let ue = us + n as f32 * TREAD;
+                let ux = ue + w * 0.5;
+                let lane = m.face(v) - 5.0 - w * 0.5;
+                r.legs.push(Leg::Through(r.tunnels.len(), r.ways.len()));
+                r.tunnels.push(Tunnel { side: -1.0, m: mi, doors: [(ua, v), (ux, vb)], runs: vec![Run { u: (us, ue), v: (v, vb), n: lane }], width: w, entry: None });
+                r.ways.push(way(-1.0, (z0 + ux - w * 0.5 - 0.5, z0 + 40.0), vb, w, rec));
+                format!("a door into the rock, a stair down inside it, a door out; {}", if yes { "carved" } else { "built out" })
+            }
+            6 => {
+                let mi = plain(&mut near);
+                let m = &near[mi];
+                let w = 3.0;
+                start(&mut r, way(-1.0, (z0 + 4.0, z0 + 20.0), v, w, 0.0));
+                // (Back and forth: two runs of 48 steps, in two lanes, the
+                // second deeper; out where it began, below.)
+                let (ua, n) = (12.0, 48);
+                let (run, drop) = (n as f32 * TREAD, n as f32 * RISER);
+                let face = m.face(v) - 5.0;
+                let lanes = [face - w * 0.5, face - w * 1.5 - 1.5];
+                let us = ua + w * 0.5;
+                let runs = vec![Run { u: (us, us + run), v: (v, v - drop), n: lanes[0] }, Run { u: (us + run, us), v: (v - drop, v - 2.0 * drop), n: lanes[1] }];
+                let (ux, vb) = (us - w * 0.5, v - 2.0 * drop);
+                r.legs.push(Leg::Through(r.tunnels.len(), r.ways.len()));
+                r.tunnels.push(Tunnel { side: -1.0, m: mi, doors: [(ua, v), (ux, vb)], runs, width: w, entry: None });
+                r.ways.push(way(-1.0, (z0 + 2.0, z0 + ux + w * 0.5 + 0.5), vb, w, 0.0));
+                "a door into the rock, a stair back and forth inside it, a door out below".into()
+            }
+            7 => {
+                let mi = plain(&mut near);
+                let m = &near[mi];
+                let w = 3.0;
+                start(&mut r, way(-1.0, (z0 + 4.0, z0 + 20.0), v, w, 0.0));
+                let face = m.face(v);
+                let (u0, u1) = (20.0, 46.0);
+                let hall = (u0 + 3.0, u1 - 3.0);
+                let p = Place { side: -1.0, m: mi, u: (u0, u1), z: (z0 + u0 - 1.0, z0 + u1 + 1.0), join: u0, v, out: face + 10.0, hall, back: face - 14.0, front: face - 1.8, height: 7.0, bays: 3 };
+                // (Its stair from the door at the back of the hall, behind
+                // it, one run on along; out onto a walkway going on.)
+                let lane = (p.back - 3.0) - w * 0.5;
+                let (ua, n) = (p.door(), 48);
+                let us = ua + w * 0.5;
+                let (ue, vb) = (us + n as f32 * TREAD, v - n as f32 * RISER);
+                let ux = ue + w * 0.5;
+                r.legs.push(Leg::Place(r.places.len(), r.tunnels.len(), r.ways.len()));
+                r.places.push(p);
+                r.tunnels.push(Tunnel { side: -1.0, m: mi, doors: [(ua, v), (ux, vb)], runs: vec![Run { u: (us, ue), v: (v, vb), n: lane }], width: w, entry: Some(p.back) });
+                r.ways.push(way(-1.0, (z0 + ux - w * 0.5 - 0.5, z0 + SLOT - 4.0), vb, w, 0.0));
+                "a place: a terrace, a hall behind its arcade, a stair down from the door at its back".into()
+            }
+            8 | 9 => {
+                let yes = slot == 9;
+                plain(&mut near);
+                let (w, rec) = (3.0, carved(3.0, yes));
+                start(&mut r, way(-1.0, (z0 + 4.0, z0 + 20.0), v, w, rec));
+                let zb = z0 + 12.0;
+                let edge = |ms: &[Massif]| {
+                    let (m, u) = locate(ms, zb).unwrap();
+                    m.wall.at(u, v, deck_n(m, v, w, rec).1 - 0.5)
+                };
+                let (a, b) = (edge(&near), edge(&far));
+                let depth = (a.distance(b) / 18.0).clamp(2.5, 7.0);
+                let (from, to) = (r.ways.len() - 1, r.ways.len());
+                r.legs.push(Leg::Across(r.bridges.len(), to));
+                r.bridges.push((zb, from, to));
+                r.spans.push((a, b, depth));
+                r.ways.push(way(1.0, (z0 + 8.0, z0 + 24.0), v, w, rec));
+                format!("a bridge across to the far wall; {}", if yes { "carved" } else { "built out" })
+            }
+            10 => {
+                // (The face stepping out 6 m, 8 m over the walkway.)
+                near.push(massif(-1.0, (z0, z0 + SLOT), 0.0, 0.0, v + 8.0, 6.0));
+                flight(&mut r, &near, near.len() - 1, z0 + 20.0, 3.0, 0.0);
+                "a flight between walkways under an overhang".into()
+            }
+            11 => {
+                // (The wall stepping out 4 m just past the walkway's end.)
+                near.push(massif(-1.0, (z0, z0 + 40.0), 0.0, 0.0, HEIGHT, 0.0));
+                near.push(massif(-1.0, (z0 + 40.0, z0 + SLOT), 4.0, 0.0, HEIGHT, 0.0));
+                flight(&mut r, &near, near.len() - 2, z0 + 18.0, 3.0, 0.0);
+                "a flight between walkways, the wall stepping out just past the walkway".into()
+            }
+            _ => {
+                // (Two massifs on one face line: their lines 2 m apart, their
+                // faces out from them by as much.)
+                near.push(massif(-1.0, (z0, z0 + 30.0), 0.0, 0.0, HEIGHT, 0.0));
+                near.push(massif(-1.0, (z0 + 30.0, z0 + SLOT), -2.0, 2.0, HEIGHT, 2.0));
+                flight(&mut r, &near, near.len() - 1, z0 + 36.0, 3.0, 0.0);
+                "a walkway across a joint between two massifs on one face line".into()
+            }
+        };
+        legend.push(format!("slot {slot} (z {z0:.0}-{:.0}): {what}", z0 + SLOT));
+    }
+    // (Where you start: out in the gap before the first slot, looking along
+    // the near wall.)
+    r.start = [CENTRE.x - 4.0, v + 3.0, first - 6.0, 160.0, -8.0];
+    (near, far, r, legend)
 }
 
 fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Manifold, routing: &Routing) {
@@ -1798,9 +1980,11 @@ struct Routing {
 
 /// A step of the way down, by index into what the routing holds, and the
 /// walkway it comes out on: a flight; a tunnel; a place and its tunnel; a
-/// bridge (its span).
+/// bridge (its span); or (in the junction catalogue) a walkway where a way
+/// starts afresh.
 #[derive(Clone, Copy)]
 enum Leg {
+    Start(usize),
     Down(usize, usize),
     Through(usize, usize),
     Place(usize, usize, usize),
@@ -2435,6 +2619,13 @@ impl Routing {
         let mut on: Option<usize> = None;
         for leg in &self.legs {
             match *leg {
+                Leg::Start(k) => {
+                    let w = &self.ways[k];
+                    let (m, u) = locate(walls(w.side), w.z.0 + 0.5).unwrap();
+                    let (n0, n1) = deck_n(m, w.v0, w.width, w.recess);
+                    out.push((m.wall.at(u, w.v0, (n0 + n1) * 0.5), format!("jump to the walkway at {:.0} m", w.v0)));
+                    on = Some(k);
+                }
                 Leg::Down(i, k) => {
                     let f = &self.flights[i];
                     let m = &walls(f.side)[f.m];
@@ -2762,6 +2953,7 @@ impl Routing {
             // (`i - 1`), the walkway after (`i`), the other piece of the leg.
             let mut pieces: Vec<(usize, &str, Vec<Claim>, Vec<(usize, Claim)>)> = Vec::new();
             match *leg {
+                Leg::Start(_) => {}
                 Leg::Down(f, _) => {
                     let f = &self.flights[f];
                     let m = &walls(f.side)[f.m];

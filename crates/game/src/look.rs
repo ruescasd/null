@@ -186,7 +186,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") { crate::chasm::start(args.seed) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
+    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
     let ground = world.ground_height(x, z);
     let fly = FlyCam {
         yaw: yaw.to_radians(),

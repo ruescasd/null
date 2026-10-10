@@ -55,12 +55,17 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt wallbot                             with --opt chasm: walk into walls (a walkway's face, a tunnel's side and
                                               end, a face at the bottom), straight on and at 10 and 35 degrees, and log
                                               any shaking or jumping against them
+    --opt junctions                           with --opt chasm (and --opt noclip): the junction catalogue instead of a generated
+                                              chasm: a straight chasm whose near wall is in 64 m slots, each a designed join of
+                                              the way's pieces (flight, tunnel, switchback, place, bridge; built out or carved; under
+                                              an overhang, by a step, across a joint), listed in the log as "the junctions: slot ..."
     --check static|walk|wall|all --seeds 1-50,851-1050 [--jobs n]
                                               the chasm's checks over many seeds at once, nothing rendered, no window:
                                               static (reaches the bottom; nothing in rock or in another route, no way
                                               crossed, no hole where a flight meets a walkway; seconds a seed), walk
                                               (the walkbot's way down, ~10 s a seed alone), wall (the wallbot's);
                                               a line a seed, the failures, exit code 0 if all pass
+    --check catalogue                         the static and walk checks on the junction catalogue
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)

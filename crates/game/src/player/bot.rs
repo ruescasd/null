@@ -385,6 +385,15 @@ fn walk(
         exit.write(AppExit::Success);
         return;
     };
+    // (A way starting afresh, in the junction catalogue: there at once.)
+    if what.starts_with("jump to") {
+        transform.translation = *target + Vec3::Y * (super::EYE + 0.05);
+        player.velocity = Vec3::ZERO;
+        state.walk += 1;
+        state.walk_best = f32::MAX;
+        state.walk_since = now;
+        return;
+    }
     let p = transform.translation;
     let feet = p.y - super::EYE;
     let flat = Vec2::new(target.x - p.x, target.z - p.z);
