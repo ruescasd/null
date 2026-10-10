@@ -642,11 +642,13 @@ fn made_from(seed: i32, near: Vec<Massif>, far: Vec<Massif>, routing: Routing, s
         let (lo, hi) = (s.0.min(s.1), s.0.max(s.1));
         parts.keep.push((lo - Vec3::new(4.0, s.2 + 1.0, 4.0), hi + Vec3::new(4.0, 4.0, 4.0)));
     }
-    wall(&mut parts, -1.0, seed, &near, &solids[0], &routing);
-    wall(&mut parts, 1.0, seed + 7919, &far, &solids[1], &routing);
+    wall(&mut parts, -1.0, seed, &near, &solids[0], &routing, !whole);
+    wall(&mut parts, 1.0, seed + 7919, &far, &solids[1], &routing, !whole);
     routes(&mut parts, &routing, &near, &far);
     parts.mark("web");
-    web(&mut parts, seed, &near, &far, &routing);
+    if whole {
+        web(&mut parts, seed, &near, &far, &routing);
+    }
     Made { parts, routing, near, far, whole }
 }
 
@@ -1138,7 +1140,10 @@ fn catalogue() -> (Vec<Massif>, Vec<Massif>, Routing, Vec<String>) {
     (near, far, r, legend)
 }
 
-fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Manifold, routing: &Routing) {
+/// A wall: its mass, less what is cut into it; and (but `bare`, as in the
+/// junction catalogue, where only how the pieces meet is to be seen) what is
+/// built on its faces, its columns, its cables.
+fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Manifold, routing: &Routing, bare: bool) {
     parts.mark("wall");
     let r = |a: i32, b: i32| hash01(seed, a, b, 0x7c1);
     let mut zones = routing.zones(side);
@@ -1157,7 +1162,7 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Man
             Some((Vec3::new(lo[0] as f32, lo[1] as f32, lo[2] as f32), Vec3::new(hi[0] as f32, hi[1] as f32, hi[2] as f32), c.clone()))
         })
         .collect();
-    for (m, ms) in massifs.iter().enumerate() {
+    for (m, ms) in massifs.iter().enumerate().filter(|_| !bare) {
         let m = m as i32;
         let (nominal, len) = (ms.wall, ms.len);
         let (u0, u1) = (0.0, len);
@@ -1206,6 +1211,10 @@ fn wall(parts: &mut Parts, side: f32, seed: i32, massifs: &[Massif], solid: &Man
     let solid = solid.difference(&Manifold::batch_union(&cuts));
     parts.stone.solid(&solid);
     parts.walls.push(solid);
+    if bare {
+        parts.cuts.clear();
+        return;
+    }
     let half = LENGTH * 0.5;
     parts.mark("columns");
     // Giant half-sunk columns, spanning much of the height, standing on
