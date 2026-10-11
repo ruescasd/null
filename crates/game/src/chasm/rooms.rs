@@ -750,8 +750,8 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, V
         if let Some((at, r)) = room.orb {
             orbs.push((room.grid.origin + at, r));
         }
-        for (points, thick) in &room.cables {
-            parts.cables.push((points.iter().map(|p| room.grid.origin + *p).collect(), *thick));
+        for (points, thick, shade) in &room.cables {
+            parts.strands.push((points.iter().map(|p| room.grid.origin + *p).collect(), *thick, *shade));
         }
         let grid = &room.grid;
         let before = parts.stone.indices.len() / 3;

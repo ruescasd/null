@@ -494,6 +494,9 @@ struct Parts {
     dim: Geometry,
     /// Cables: points, thickness.
     cables: Vec<(Vec<Vec3>, f32)>,
+    /// Woven strands (the beasts' cables, in the rooms): points, thickness,
+    /// shade (on the beasts' glossy white: most dark, a few pale).
+    strands: Vec<(Vec<Vec3>, f32, f32)>,
     /// Lights cast by the built-in light (the glowing strips light only
     /// themselves): where, how far they reach, and how bright (times the
     /// chasm's light).
@@ -941,6 +944,12 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
         let mut cable_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         tubes(&mut cable_mesh, parts.cables.iter().map(|(p, w)| (&p[..], (*w, *w), 0.05)));
         commands.spawn((Mesh3d(meshes.add(cable_mesh)), MeshMaterial3d(cable), Transform::IDENTITY));
+    }
+    if !parts.strands.is_empty() {
+        let woven = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.35, reflectance: 0.5, ..default() });
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        tubes(&mut mesh, parts.strands.iter().map(|(p, w, shade)| (&p[..], (*w, *w), *shade)));
+        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(woven), Transform::IDENTITY));
     }
     let power = args.num("chasm_light", LIGHT);
     for &(at, range, k) in &parts.lights {

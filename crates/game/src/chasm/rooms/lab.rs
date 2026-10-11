@@ -35,8 +35,8 @@ pub(super) struct Room {
     pub floor: f32,
     /// An orb hanging in it (see `orb.rs`): its centre and radius.
     pub orb: Option<(Vec3, f32)>,
-    /// Cables (points, thickness), in metres from its corner.
-    pub cables: Vec<(Vec<Vec3>, f32)>,
+    /// Woven strands (points, thickness, shade), in metres from its corner.
+    pub cables: Vec<(Vec<Vec3>, f32, f32)>,
 }
 
 /// Outer walls' thickness.
@@ -90,7 +90,7 @@ struct B {
     d: Detail,
     /// The walls' rhythms, laid last (see `rhythm`).
     rhythms: Vec<Rhythm>,
-    cables: Vec<(Vec<Vec3>, f32)>,
+    cables: Vec<(Vec<Vec3>, f32, f32)>,
 }
 
 /// A box room's walls' rhythm (see `B::rhythm`): its plan, from where to
@@ -167,7 +167,9 @@ impl B {
                 let rr = radius * (0.95 + 0.1 * h(3));
                 let p = c + Vec3::new(a0.cos() * rr, a, a0.sin() * rr);
                 let q = c + Vec3::new(a1.cos() * rr, b, a1.sin() * rr);
-                self.cables.push(((0..=12).map(|i| p.lerp(q, i as f32 / 12.0)).collect(), thick * (0.85 + 0.3 * h(4))));
+                // (Shaded as the beasts' waist: most dark, one in seven pale.)
+                let shade = if (k + layer as i32 * 3) % 7 == 3 { 0.55 } else { 0.05 + 0.06 * h(5) };
+                self.cables.push(((0..=12).map(|i| p.lerp(q, i as f32 / 12.0)).collect(), thick * (0.85 + 0.3 * h(4)), shade));
             }
         }
     }
