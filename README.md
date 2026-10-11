@@ -76,8 +76,8 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               for --seed (--set rooms=N of them, those whose doors are furthest apart in storeys
                                               first): a main floor at the lowest door, a gallery joining the doors at each higher
                                               level, one way down from it round the walls; you start standing inside the first
-                                              room's door (walk; --opt noclip between rooms). --set kind=0 Gallery I (a galleried hall),
-                                              1 a cascade where the doors allow (those places first), 2 Gallery II (its galleries
+                                              room's door (walk; --opt noclip between rooms). --set kind=0 Atrium I (an open hall, galleries round it),
+                                              1 a cascade where the doors allow (those places first), 2 Atrium II (its galleries
                                               round an open well, lamps hanging down it, an oculus, a basin); --set order=0 a giant order of
                                               columns, 1 in the larger halls only, 2 slimmer, 3 in tiers a storey each
     --check static|walk|wall|all --seeds 1-50,851-1050 [--jobs n]

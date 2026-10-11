@@ -42,22 +42,24 @@ impl Order {
     }
 }
 
-/// What a fitted room is (`--set kind=N`): 0 Gallery I, a galleried hall
-/// (its columns as `Order` says); 1 a cascade where its doors allow (see
-/// `cascade`), else Gallery I; 2 Gallery II, the same galleries and ways
-/// round its walls about an open well instead of columns, lamps hanging
-/// down it from an oculus, a basin at its foot. (Named as one kind and its
-/// variant, so they read as close: the user, review 87.)
+/// What a fitted room is (`--set kind=N`): 0 Atrium I, an open hall rising
+/// through its storeys, galleries round it at its doors (its columns as
+/// `Order` says); 1 a cascade where its doors allow (see `cascade`), else
+/// Atrium I; 2 Atrium II, the same galleries and ways round its walls about
+/// an open well instead of columns, lamps hanging down it from an oculus, a
+/// basin at its foot. (Named as one kind and its variant, so they read as
+/// close; atria, not galleries, which are long rooms or the walkways along
+/// a wall: the user.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
-    Gallery,
+    Atrium,
     Cascade,
-    GalleryWell,
+    AtriumWell,
 }
 
 impl Kind {
     pub fn of(n: u8) -> Kind {
-        [Kind::Gallery, Kind::Cascade, Kind::GalleryWell][(n as usize).min(2)]
+        [Kind::Atrium, Kind::Cascade, Kind::AtriumWell][(n as usize).min(2)]
     }
 }
 
@@ -417,7 +419,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
     b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
     let (ox, oz) = ((T + BAND + 1.0, sx - T - BAND - 1.0), (T + BAND + 1.0, sz - T - BAND - 1.0));
     let least = if order == Order::Large { 16.0 } else { 10.0 };
-    if kind == Kind::GalleryWell {
+    if kind == Kind::AtriumWell {
         tower(&mut b, spec, floor, ceiling);
     } else if !levels.is_empty() && ox.1 - ox.0 >= least && oz.1 - oz.0 >= least && ceiling - floor >= 10.0 {
         // (Where they stand: the giant order's grid, a tenth of the height
@@ -506,7 +508,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
     b.finish(floor)
 }
 
-/// Gallery II's well: an oculus in the roof over its middle, a chain of
+/// Atrium II's well: an oculus in the roof over its middle, a chain of
 /// lamps hanging down it, a basin with a fountain at its foot.
 fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
     let (sx, sz) = (spec.size.x, spec.size.y);
@@ -526,7 +528,7 @@ fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
         }
     }
     super::basin(b, (cx, cz), side, BAND, floor);
-    b.note(format!("Gallery II: an open well, an oculus, {} lamps hanging down it, a basin at its foot", n + 1));
+    b.note(format!("Atrium II: an open well, an oculus, {} lamps hanging down it, a basin at its foot", n + 1));
 }
 
 /// A level run or a flight of a cascade: from where to where along it
