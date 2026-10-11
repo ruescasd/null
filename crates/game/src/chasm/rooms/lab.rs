@@ -640,21 +640,21 @@ pub(super) fn well_court(seed: u32) -> Room {
 }
 
 /// A stepwell (an open-well stair round a court; the user's idea): a
-/// square court open to the sky, against each wall a broad band, a flight
-/// down along it and a landing at each corner, then on round the next
-/// wall, lap under lap, the flights' undersides stepped; at the bottom, in
-/// the open well, a round basin with a fountain on a pedestal. In at the
-/// top, onto the first landing.
+/// square court open to the sky, against each wall a flight down the whole
+/// of it from a landing at one corner to a landing at the next, its
+/// underside stepped; four flights, once round, so the last comes down
+/// under where you came in; at the bottom, in the open well, a round basin
+/// with a fountain on a pedestal. In at the top, onto the first landing.
 fn well(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     let f = 3.0;
-    let side = half([14.0, 18.0, 22.0][pick(10, 3)] * s);
+    let side = half([12.0, 14.0, 16.0][pick(10, 3)] * s);
     let band = [2.5, 3.0][pick(11, 2)];
-    let laps = 2 + alt % 2;
-    // (Along each wall between the corners: a level walk off the landing,
-    // then a flight down into the next corner, a quarter of a metre down
-    // every half metre along, twelve steps at most.)
+    let _ = alt;
+    let laps = 1;
+    // (Along each wall between the corners, the flight, a quarter of a
+    // metre down every half metre along.)
     let run = side - 2.0 * band;
-    let steps = ((run / 0.5) as i32).min(12);
+    let steps = (run / 0.5) as i32;
     let level = run - steps as f32 * 0.5;
     let drop = steps as f32 * 0.25;
     let depth = laps as f32 * 4.0 * drop;
@@ -662,7 +662,7 @@ fn well(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     let mut b = B::new(Vec3::new(side + 2.0 * T, top + 3.0, side + 2.0 * T), d);
     let (x0, z0) = (T, T);
     let (cx, cz) = (x0 + side * 0.5, z0 + side * 0.5);
-    b.note(format!("a stepwell: a court {side:.0} m square, open to the sky, {laps} laps of flights round its walls, {drop:.2} m down each, {depth:.0} m in all, to a basin with a fountain"));
+    b.note(format!("a stepwell: a court {side:.0} m square, open to the sky, a flight down each wall from corner landing to corner landing, {drop:.2} m down each, {depth:.0} m in all, to a basin with a fountain"));
     b.carve(Vec3::new(x0, f, z0), Vec3::new(x0 + side, top + 3.0, z0 + side));
     if d.bands {
         b.d.bands = true;
