@@ -143,12 +143,13 @@ impl B {
         self.solid(Vec3::new(x - r, y1 - cap, z - r), Vec3::new(x + r, y1 - if tall { 0.25 } else { 0.0 }, z + r));
     }
     /// A column like `column`, its base and capital stone, but its shaft
-    /// woven of cables (the beasts' weave): taut, straight, from deep in
-    /// the base to deep in the capital, in two layers wound against each
-    /// other, each strand turned a third of the way round from its foot to
-    /// its head, so together they draw in at the waist (a hyperboloid, as
-    /// taut cables between two rings do). The cables carry the load the
-    /// stone would have: the order holds, only its matter is wrong.
+    /// woven of cables (the beasts' weave): from deep in the base to deep
+    /// in the capital, winding round at the shaft's own radius (as the
+    /// beasts' waist strands wind round the body), in two layers wound
+    /// against each other a third of a turn, round a core. Its outline is
+    /// its neighbours' (straight cables between two rings would draw in at
+    /// the waist, an hourglass: too loud); only its surface is wrong. The
+    /// order holds, the cables carry the load.
     fn woven(&mut self, x: f32, z: f32, d: f32, (y0, y1): (f32, f32)) {
         let r = d * 0.5;
         let tall = y1 - y0 >= 3.0;
@@ -165,11 +166,13 @@ impl B {
                 let a0 = (k as f32 + h(1) * 0.4) / count as f32 * std::f32::consts::TAU;
                 let a1 = a0 + turn * std::f32::consts::TAU * (0.9 + 0.2 * h(2));
                 let rr = radius * (0.95 + 0.1 * h(3));
-                let p = c + Vec3::new(a0.cos() * rr, a, a0.sin() * rr);
-                let q = c + Vec3::new(a1.cos() * rr, b, a1.sin() * rr);
+                let at = |t: f32| {
+                    let angle = a0 + (a1 - a0) * t;
+                    c + Vec3::new(angle.cos() * rr, a + (b - a) * t, angle.sin() * rr)
+                };
                 // (Shaded as the beasts' waist: most dark, one in seven pale.)
                 let shade = if (k + layer as i32 * 3) % 7 == 3 { 0.55 } else { 0.05 + 0.06 * h(5) };
-                self.cables.push(((0..=12).map(|i| p.lerp(q, i as f32 / 12.0)).collect(), thick * (0.85 + 0.3 * h(4)), shade));
+                self.cables.push(((0..=32).map(|i| at(i as f32 / 32.0)).collect(), thick * (0.85 + 0.3 * h(4)), shade));
             }
         }
     }
