@@ -8,7 +8,7 @@
 //! (`nocontact`, `notaa`). While it is down the game sees no keys or
 //! clicks, and the mouse is free.
 //!
-//! `--opt console` starts with it down. Commands: `help`; `list` (every switch and number set); `NAME` (its
+//! `--opt console` starts with it down, listing what acts at once. Commands: `help`; `list` (every switch and number set); `NAME` (its
 //! value); `on NAME`, `off NAME`, `toggle NAME` (a switch); `set NAME
 //! VALUE`, `unset NAME` (a number); `clear`. Up brings back the last
 //! command.
@@ -62,11 +62,13 @@ const HEIGHT: f32 = 45.0;
 /// How many lines of what it has said it shows.
 const SHOWN: usize = 22;
 
-fn spawn(mut commands: Commands, args: Res<Args>, mut console: ResMut<Console>) {
-    // (`--opt console`: down from the start.)
+fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Console>) {
+    // (`--opt console`: down from the start, listing what acts at once.)
     if args.opt("console") {
         console.open = true;
         console.lines.push("console: help for the commands".into());
+        let said = run("list", args.bypass_change_detection());
+        console.lines.extend(said);
     }
     commands
         .spawn((
@@ -158,6 +160,23 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
     }
 }
 
+/// The switches that take effect as the game runs, and what each does.
+const SWITCHES: [(&str, &str); 3] = [
+    ("nolampshadows", "no shadows from lamps"),
+    ("nocontact", "no contact shadows (screen space)"),
+    ("notaa", "no temporal anti-aliasing (nor temporal shadow filtering)"),
+];
+
+/// The numbers that take effect as the game runs, what each does, and
+/// what it is unless set.
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 3] {
+    [
+        ("ev", "exposure (EV100; higher is darker)", 11.2),
+        ("fog", "how far the haze lets you see (m)", if args.opt("chasm") { 600.0 } else { 4500.0 }),
+        ("fog_glow", "the haze's glow towards the suns", 0.15),
+    ]
+}
+
 /// Runs a command on the switches, and what it says back.
 fn run(line: &str, args: &mut Args) -> Vec<String> {
     let words: Vec<&str> = line.split_whitespace().collect();
@@ -171,23 +190,38 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
     match words.as_slice() {
         [] => Vec::new(),
         ["help"] => vec![
-            "list                 every switch on and number set".into(),
+            "list                 the switches and numbers that act at once, then all else on or set".into(),
             "NAME                 its value".into(),
             "on NAME, off NAME, toggle NAME    a switch (--opt NAME)".into(),
             "set NAME VALUE, unset NAME        a number (--set NAME=VALUE)".into(),
             "clear                clears this".into(),
-            "Live: what is read each frame (nolampshadows, ev, fog, ...), and nocontact, notaa.".into(),
+            "Others act if read each frame; many only count at the start.".into(),
         ],
         ["list"] => {
-            let mut out = vec![format!("on: {}", if args.opts.is_empty() { "nothing".into() } else { args.opts.join(", ") })];
+            // (Those that take effect as the game runs, always; then
+            // anything else on or set, which may only have counted at the
+            // start.)
+            let mut out = vec!["live:".to_string()];
+            for (name, what) in SWITCHES {
+                out.push(format!("  {name}: {}    {what}", if args.opt(name) { "on" } else { "off" }));
+            }
+            for (name, what, default) in numbers(args) {
+                let v = args.num(name, default);
+                out.push(format!("  {name} = {v}{}    {what}", if v == default { " (default)" } else { "" }));
+            }
+            let others: Vec<String> = args.opts.iter().filter(|o| !SWITCHES.iter().any(|s| s.0 == o.as_str())).cloned().collect();
+            out.push(format!("on: {}", if others.is_empty() { "nothing else".into() } else { others.join(", ") }));
             let mut sets: Vec<String> = Vec::new();
             for (k, v) in args.sets.iter().rev() {
+                if numbers(args).iter().any(|n| n.0 == k) {
+                    continue;
+                }
                 if !sets.iter().any(|s| s.starts_with(&format!("{k} = "))) {
                     sets.push(format!("{k} = {v}"));
                 }
             }
             sets.reverse();
-            out.push(format!("set: {}", if sets.is_empty() { "nothing".into() } else { sets.join(", ") }));
+            out.push(format!("set: {}", if sets.is_empty() { "nothing else".into() } else { sets.join(", ") }));
             out
         }
         ["on", name] => {
