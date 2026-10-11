@@ -686,16 +686,15 @@ const LIFT: f32 = 40.0;
 /// What the lab shows: its batch of rooms, or one room alone (`--opt orb`:
 /// the shrine; `--opt woven`: a hall with a woven column; `--opt well`: a
 /// stepwell); or (`--opt fit`) rooms built to fit the doors of the places
-/// in the plan's network for the seed, their columns as `--set order=N`
-/// says (see `fit::Order`), what they are as `--set kind=N` says (see
-/// `fit::Kind`).
+/// in the plan's network for the seed, what they are as `--set kind=N`
+/// says (see `fit::Kind`).
 #[derive(Clone, Copy, PartialEq)]
 pub enum Show {
     Batch,
     Orb,
     Woven,
     Well,
-    Fit(u8, u8),
+    Fit(u8),
 }
 
 impl Show {
@@ -707,7 +706,7 @@ impl Show {
         } else if args.opt("well") {
             Show::Well
         } else if args.opt("fit") {
-            Show::Fit(args.num("order", 0.0) as u8, args.num("kind", 0.0) as u8)
+            Show::Fit(args.num("kind", 0.0) as u8)
         } else {
             Show::Batch
         }
@@ -716,9 +715,9 @@ impl Show {
 
 fn rooms(seed: u32, count: u32, show: Show) -> impl Iterator<Item = lab::Room> {
     let mut x = 0.0;
-    let mut specs = if matches!(show, Show::Fit(..)) { super::plan::network::specs(seed, if matches!(show, Show::Fit(_, 1)) { 100 } else { count as usize }) } else { Vec::new() };
+    let mut specs = if matches!(show, Show::Fit(..)) { super::plan::network::specs(seed, if matches!(show, Show::Fit(1)) { 100 } else { count as usize }) } else { Vec::new() };
     // (Cascades: the places whose doors allow one first.)
-    if matches!(show, Show::Fit(_, 1)) {
+    if matches!(show, Show::Fit(1)) {
         specs.sort_by_key(|s| lab::fit::cascade(s).is_none());
         specs.truncate(count as usize);
     }
@@ -733,7 +732,7 @@ fn rooms(seed: u32, count: u32, show: Show) -> impl Iterator<Item = lab::Room> {
             // (Seed 6's room is a hypostyle; with --seed, others.)
             Show::Woven => lab::woven_hall(seed * 6),
             Show::Well => lab::well_court(seed),
-            Show::Fit(order, kind) => lab::fit::fitted(&specs[i], lab::fit::Order::of(order), lab::fit::Kind::of(kind)),
+            Show::Fit(kind) => lab::fit::fitted(&specs[i], lab::fit::Kind::of(kind)),
             Show::Batch => lab::generate(seed + i as u32),
         };
         let width = room.grid.n[0] as f32 * CELL;

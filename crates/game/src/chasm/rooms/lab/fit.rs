@@ -23,28 +23,9 @@ pub(in crate::chasm) struct Spec {
     pub name: String,
 }
 
-/// How a fitted hall's columns go (`--set order=N`): 0 a giant order (a
-/// tenth of its height thick, five thicknesses apart), 1 the same in the
-/// larger halls only, 2 slimmer (a twelfth), 3 in tiers a storey high, each
-/// carrying an entablature joining it to its neighbours, the next tier
-/// standing on it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Order {
-    Giant,
-    Large,
-    Slim,
-    Tiers,
-}
-
-impl Order {
-    pub fn of(n: u8) -> Order {
-        [Order::Giant, Order::Large, Order::Slim, Order::Tiers][(n as usize).min(3)]
-    }
-}
-
 /// What a fitted room is (`--set kind=N`): 0 Atrium I, an open hall rising
-/// through its storeys, galleries round it at its doors (its columns as
-/// `Order` says); 1 a cascade where its doors allow (see `cascade`), else
+/// through its storeys, galleries round it at its doors, a slim giant order
+/// in its middle; 1 a cascade where its doors allow (see `cascade`), else
 /// Atrium I; 2 Atrium II, the same galleries and ways round its walls about
 /// an open well instead of columns, lamps hanging down it from an oculus, a
 /// basin at its foot. (Named as one kind and its variant, so they read as
@@ -67,8 +48,6 @@ impl Kind {
 /// reveals, 2 m: shorter, they overhung the landing's end).
 const LANDING: f32 = 2.5;
 
-/// A storey (m), as the network's.
-const STOREY: f32 = 6.0;
 
 /// The band along the walls the landings and flights take (m).
 const BAND: f32 = 2.5;
@@ -209,7 +188,7 @@ fn way_down(l: &Loop, p: f32, y: f32, floor: f32, dir: f32, taken: &[Piece]) -> 
 }
 
 /// The room for `spec`.
-pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
+pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     if kind == Kind::Cascade
         && let Some(room) = cascade(spec)
     {
@@ -236,7 +215,8 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
         b.door(axis, u - 1.0, 2.0, y, 2.5, n, T);
         if y <= floor + 0.01 {
             let p = l.of_door(wall, u);
-            taken.push((p - LANDING, p + LANDING, y));
+            // (A door on the floor keeps clear its reveals, 2 m either side.)
+            taken.push((p - 2.0, p + 2.0, y));
         }
     }
     // The higher doors, a level at a time, highest first: a gallery along
@@ -413,29 +393,21 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
         b.note(format!("{blocked} ways down BLOCK a door or another way"));
     }
     // Bands round the walls, coffers in the ceiling; in a hall wide and tall
-    // enough, columns in the middle, clear of the band the ways take and of
-    // the way in from any door on the floor, as `order` says (see `Order`).
+    // enough, a slim giant order in the middle (a twelfth of its height
+    // thick, set out as the orders' giant one, a tenth thick, five
+    // thicknesses apart: the user's pick of four, review 87), clear of the
+    // band the ways take and of the way in from any door on the floor.
     b.bands((T, sx - T), (T, sz - T), (floor, ceiling));
     b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
     let (ox, oz) = ((T + BAND + 1.0, sx - T - BAND - 1.0), (T + BAND + 1.0, sz - T - BAND - 1.0));
-    let least = if order == Order::Large { 16.0 } else { 10.0 };
     if kind == Kind::AtriumWell {
         tower(&mut b, spec, floor, ceiling);
-    } else if !levels.is_empty() && ox.1 - ox.0 >= least && oz.1 - oz.0 >= least && ceiling - floor >= 10.0 {
-        // (Where they stand: the giant order's grid, a tenth of the height
-        // thick, five thicknesses apart; or the tiers'.)
+    } else if !levels.is_empty() && ox.1 - ox.0 >= 10.0 && oz.1 - oz.0 >= 10.0 && ceiling - floor >= 10.0 {
         let giant = thickness(ceiling - floor, 10.0);
-        let tiers = if order == Order::Tiers { ((ceiling - floor) / STOREY).round().max(1.0) as i32 } else { 1 };
-        let tier = (ceiling - floor) / tiers as f32;
-        // (In tiers, closer: three quarters of a tier apart.)
-        let span = if tiers > 1 { half(tier * 0.75).max(3.0) } else { half(giant * 5.0).max(4.0) };
+        let span = half(giant * 5.0).max(4.0);
         let (nx, nz) = (((ox.1 - ox.0) / span).floor() as i32, ((oz.1 - oz.0) / span).floor() as i32);
-        let dd = match order {
-            Order::Slim => thickness(ceiling - floor, 12.0),
-            Order::Tiers => thickness(tier, 9.0),
-            _ => giant,
-        };
-        let mut posts = Vec::new();
+        let dd = thickness(ceiling - floor, 12.0);
+        let mut count = 0;
         for i in 0..=nx {
             for j in 0..=nz {
                 let (x, z) = (half(ox.0 + (ox.1 - ox.0) * i as f32 / nx.max(1) as f32), half(oz.0 + (oz.1 - oz.0) * j as f32 / nz.max(1) as f32));
@@ -449,36 +421,12 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
                     _ => z > sz - T - reach && (x - u).abs() < 3.0 + giant * 0.5,
                 });
                 if !in_the_way {
-                    posts.push((i, j, x, z));
+                    b.column(x, z, dd, (floor, ceiling));
+                    count += 1;
                 }
             }
         }
-        // (Two tiers or more: each its own columns, an entablature on them
-        // joining each to the next in its row and its file, the next tier
-        // standing on it.)
-        let beam = half(tier / 10.0).max(0.5);
-        for t in 0..tiers {
-            let (y0, y1) = (floor + tier * t as f32, floor + tier * (t + 1) as f32 - if tiers > 1 { beam } else { 0.0 });
-            for &(_, _, x, z) in &posts {
-                b.column(x, z, dd, (y0, y1));
-            }
-            if tiers > 1 && t + 1 < tiers {
-                let w = dd * 0.5 + 0.25;
-                for &(i, j, x, z) in &posts {
-                    for &(i2, j2, x2, z2) in &posts {
-                        if (i2, j2) == (i + 1, j) || (i2, j2) == (i, j + 1) {
-                            b.solid(Vec3::new(x.min(x2) - w, y1, z.min(z2) - w), Vec3::new(x.max(x2) + w, y1 + beam, z.max(z2) + w));
-                        }
-                    }
-                }
-            }
-        }
-        b.note(format!("{}, {} columns {dd:.1} m thick", match order {
-            Order::Giant => "a giant order".to_string(),
-            Order::Large => "a giant order (the larger halls only)".to_string(),
-            Order::Slim => "a slim giant order (a twelfth)".to_string(),
-            Order::Tiers => format!("an order in {tiers} tiers, an entablature on each"),
-        }, posts.len()));
+        b.note(format!("a slim giant order, {count} columns {dd:.1} m thick"));
     }
     let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
     light(&mut b, spec.size, floor, ceiling);
