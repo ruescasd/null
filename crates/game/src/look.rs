@@ -33,16 +33,19 @@ pub struct LookPlugin;
 impl Plugin for LookPlugin {
     fn build(&self, app: &mut App) {
         let args = app.world().resource::<Args>().clone();
+        // (The room lab: a still night with no fill, so a room shows by its
+        // own light alone.)
+        let rooms = args.opt("chasm") && args.opt("rooms");
         app.insert_resource(Sky {
-            time: args.time.unwrap_or(150.0),
+            time: args.time.unwrap_or(if rooms { 600.0 } else { 150.0 }),
             speed: 1.0,
-            paused: args.shot.is_some() || args.opt("labshots"),
+            paused: args.shot.is_some() || args.opt("labshots") || rooms,
             soft_shadows: !args.opt("hard"),
         })
         .insert_resource(Tuning {
             bounce: args.num("bounce", 2.0),
             fill: args.num("fill", 6000.0),
-            night_fill: args.num("night_fill", 2500.0),
+            night_fill: args.num("night_fill", if rooms { 0.0 } else { 2500.0 }),
             softness: [args.num("soft0", 1.0), args.num("soft1", 1.0)],
             fog_day: args.num("fog_day", 0.04),
             fog_night: args.num("fog_night", 0.01),
@@ -186,13 +189,13 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::START } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
+    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::start(args.seed) } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
     let ground = world.ground_height(x, z);
     let fly = FlyCam {
         yaw: yaw.to_radians(),
         pitch: pitch.to_radians(),
         speed: 25.0,
-        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots"),
+        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots") || args.opt("roomshots"),
     };
 
     let stars = star_cubemap(&mut images);
@@ -316,7 +319,7 @@ fn setup(
 
     commands.spawn((
         Hud,
-        if args.shot.is_some() || args.opt("labshots") { Visibility::Hidden } else { Visibility::Visible },
+        if args.shot.is_some() || args.opt("labshots") || args.opt("roomshots") { Visibility::Hidden } else { Visibility::Visible },
         Text::new(""),
         TextFont { font_size: FontSize::Px(14.0), ..default() },
         TextColor(Color::srgb(0.75, 0.75, 0.75)),

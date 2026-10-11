@@ -16,7 +16,7 @@ impl Plugin for CapturePlugin {
         app.init_resource::<AutoShot>()
             .init_resource::<Bench>()
             .init_resource::<Tour>()
-            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus));
+            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus, room_tour));
     }
 }
 
@@ -218,6 +218,50 @@ fn lab_focus(
     transform.rotation = fly.rotation();
     *done = true;
     info!("lab: looking at {focus}");
+}
+
+/// `--opt roomshots` in the room lab: each room's views in turn (see
+/// `chasm::rooms::RoomViews`), saved to `screenshots/rooms/`, then exits.
+fn room_tour(
+    mut commands: Commands,
+    args: Res<Args>,
+    views: Option<Res<crate::chasm::rooms::RoomViews>>,
+    mut step: Local<(usize, u32)>,
+    camera: Single<(&mut Transform, &mut crate::camera::FlyCam)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(views) = views else { return };
+    if !args.opt("roomshots") {
+        return;
+    }
+    let (i, frames) = &mut *step;
+    if *i >= views.0.len() {
+        // (Let the last screenshot reach the disk.)
+        *frames += 1;
+        if *frames > 30 {
+            exit.write(AppExit::Success);
+        }
+        return;
+    }
+    let (name, eye, at) = &views.0[*i];
+    if *frames == 0 {
+        let (mut transform, mut fly) = camera.into_inner();
+        let to = *at - *eye;
+        fly.yaw = (-to.x).atan2(-to.z);
+        fly.pitch = to.y.atan2(Vec2::new(to.x, to.z).length());
+        transform.translation = *eye;
+        transform.rotation = fly.rotation();
+    }
+    *frames += 1;
+    if *frames < 40 {
+        return;
+    }
+    let _ = std::fs::create_dir_all("screenshots/rooms");
+    let path = format!("screenshots/rooms/{name}.png");
+    info!("room tour: {path}");
+    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+    *frames = 0;
+    *i += 1;
 }
 
 fn manual_shot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {

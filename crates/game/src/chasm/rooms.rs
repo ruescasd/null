@@ -21,6 +21,8 @@ use manifold_csg::{CrossSection, cross_section::FillRule, triangulate_polygons};
 
 use super::{Geometry, Parts};
 
+mod lab;
+
 /// A cell's size (a power of two: its multiples are exact).
 pub(super) const CELL: f32 = 0.25;
 
@@ -620,113 +622,93 @@ impl Grid {
     }
 }
 
-/// Where the lab is: by the chasm's centre (the world wraps round).
+/// Where the lab is: by the chasm's centre (the world wraps round); its
+/// rooms' floors well up off the ground (out of its way).
 const LAB: Vec3 = Vec3::new(1200.0, 0.0, 900.0);
+const LIFT: f32 = 40.0;
 
-/// Where you start in the lab: before the first room's door, looking in.
-pub const START: [f32; 5] = [LAB.x + 8.0, 1.7, LAB.z - 10.0, 180.0, -2.0];
+/// The lab's rooms (`--set rooms=N`, from `--seed`), each its own recipe,
+/// side by side.
+fn rooms(seed: u32, count: u32) -> Vec<lab::Room> {
+    let mut x = 0.0;
+    (0..count)
+        .map(|i| {
+            let room = lab::generate(seed + i);
+            let width = room.grid.n[0] as f32 * CELL;
+            let origin = LAB + Vec3::new(x, LIFT - lab::FLOOR, 0.0);
+            x += width + 12.0;
+            lab::Room { grid: Grid { origin, ..room.grid }, ..room }
+        })
+        .collect()
+}
 
-/// The lab: rooms in a row on the ground, each built by hand from the units.
-pub(super) fn lab() -> Parts {
-    let (parts, report) = built();
+/// Where you start in the lab: at the first room's door, looking in.
+pub fn start(seed: u32) -> [f32; 5] {
+    let room = &rooms(seed, 1)[0];
+    let (eye, at) = (room.grid.origin + room.views[0].1, room.grid.origin + room.views[0].2);
+    let to = at - eye;
+    [eye.x, eye.y, eye.z, (-to.x).atan2(-to.z).to_degrees(), to.y.atan2(Vec2::new(to.x, to.z).length()).to_degrees()]
+}
+
+/// Where to see each room from, for the tour (`--opt roomshots`): a name
+/// (the room's seed and the view), the eye, the point looked at.
+#[derive(Resource, Default)]
+pub struct RoomViews(pub Vec<(String, Vec3, Vec3)>);
+
+/// The lab: its rooms built, and where to see them from.
+pub(super) fn lab(seed: u32, count: u32) -> (Parts, RoomViews) {
+    let (parts, report, views) = built(seed, count);
     for line in report {
         info!("rooms: {line}");
     }
-    parts
+    (parts, views)
 }
 
-/// `--check rooms`: each room's surface encloses what its cells hold (it is
-/// closed, and faces outwards).
+/// `--check rooms`: a hundred rooms' surfaces each enclose what their cells
+/// hold (each is closed, and faces outwards).
 pub fn check() -> bool {
-    let (_, report) = built();
     let mut ok = true;
-    for line in report {
-        ok &= !line.contains("OPEN");
-        eprintln!("rooms: {line}");
+    for seed in (1..=100).step_by(10) {
+        let (_, report, _) = built(seed, 10);
+        for line in report {
+            if line.contains("OPEN") {
+                ok = false;
+                eprintln!("rooms: {line}");
+            }
+        }
     }
+    eprintln!("rooms: {}", if ok { "100 rooms, all closed" } else { "PROBLEMS" });
     ok
 }
 
-/// The lab's rooms, and a line on each.
-fn built() -> (Parts, Vec<String>) {
+/// The lab's rooms, a line on each, and the views.
+fn built(seed: u32, count: u32) -> (Parts, Vec<String>, RoomViews) {
     let mut parts = Parts::default();
     let mut report = Vec::new();
-    let mut cache = Cache(HashMap::new());
-    // (Each grid's corner half a metre under the ground, its floor a cell
-    // above it.)
-    let floor = 0.75;
-    let rooms = [nave(&mut cache, floor), stair_hall(&mut cache, floor)];
-    let mut x = 0.0;
-    for (grid, lights) in rooms {
-        let grid = Grid { origin: LAB + Vec3::new(x, -0.5, 0.0), ..grid };
+    let mut views = RoomViews::default();
+    for (i, room) in rooms(seed, count).into_iter().enumerate() {
+        let grid = &room.grid;
         let before = parts.stone.indices.len() / 3;
         let (enclosed, solid) = grid.mesh(&mut parts.stone);
         let closed = (enclosed - solid).abs() < solid * 1e-5;
+        let name = format!("room{}", seed + i as u32);
         report.push(format!(
-            "the room at x {x:.0}: {solid:.2} m3 of cells, {enclosed:.2} m3 enclosed by its surface{}; {} triangles",
+            "{name} at x {:.0}: {}; {solid:.0} m3 of cells, {enclosed:.0} m3 enclosed{}; {} triangles",
+            grid.origin.x,
+            room.recipe.join("; "),
             if closed { "" } else { ": OPEN" },
             parts.stone.indices.len() / 3 - before
         ));
-        for (p, range, k) in lights {
+        for &(p, range, k) in &room.lights {
             parts.lights.push((grid.origin + p, range, k));
         }
-        x += grid.n[0] as f32 * CELL + 8.0;
-    }
-    (parts, report)
-}
-
-/// A nave under a barrel vault, an arcade to each side opening onto an
-/// aisle, an arched door in its front wall.
-fn nave(cache: &mut Cache, f: f32) -> (Grid, Vec<(Vec3, f32, f32)>) {
-    let mut g = Grid::solid(Vec3::ZERO, Vec3::new(16.0, 11.0, 24.0));
-    // The aisles and the nave, up to the arcades' lintels.
-    g.fill(Vec3::new(1.0, f, 1.0), Vec3::new(15.0, f + 5.0, 23.0), Filler::Empty);
-    // The arcades: walls a metre thick, an arch 3 m wide every 4 m.
-    for x in [4.0, 11.0] {
-        g.fill(Vec3::new(x, f, 1.0), Vec3::new(x + 1.0, f + 5.0, 23.0), Filler::Solid);
-        for k in 0..5 {
-            g.arch(0, 2.5 + 4.0 * k as f32, 3.0, f, 3.0, x, 1.0, cache);
+        for &(lo, hi) in &room.glow {
+            let (c, e) = (grid.origin + (lo + hi) * 0.5, (hi - lo) * 0.5);
+            parts.glow.oriented(c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
+        }
+        for (view, eye, at) in &room.views {
+            views.0.push((format!("{name}_{view}"), grid.origin + *eye, grid.origin + *at));
         }
     }
-    // The nave's vault: springing at 6 m, 6 m across.
-    g.vault(2, 5.0, 6.0, f, 6.0, 1.0, 22.0, cache);
-    // The door.
-    g.arch(2, 7.0, 2.0, f, 2.5, 0.0, 1.0, cache);
-    let mut lights = Vec::new();
-    for k in 0..5 {
-        let z = 3.0 + 4.5 * k as f32;
-        lights.push((Vec3::new(8.0, f + 5.0, z), 12.0, 0.0003));
-        lights.push((Vec3::new(2.5, f + 3.5, z), 6.0, 0.00005));
-        lights.push((Vec3::new(13.5, f + 3.5, z), 6.0, 0.00005));
-    }
-    (g, lights)
-}
-
-/// A hall with a gallery across its back on round columns, a stair up to it
-/// along one wall, a slope along the other, an arched niche under the
-/// gallery, an arched door.
-fn stair_hall(cache: &mut Cache, f: f32) -> (Grid, Vec<(Vec3, f32, f32)>) {
-    let mut g = Grid::solid(Vec3::ZERO, Vec3::new(14.0, 12.0, 16.0));
-    g.fill(Vec3::new(1.0, f, 1.0), Vec3::new(13.0, f + 10.0, 15.0), Filler::Empty);
-    // The gallery: a slab half a metre thick at 4 m, from z 10 back, with
-    // a parapet a metre high along its edge.
-    g.fill(Vec3::new(1.0, f + 3.5, 10.0), Vec3::new(13.0, f + 4.0, 15.0), Filler::Solid);
-    g.fill(Vec3::new(3.0, f + 4.0, 10.0), Vec3::new(13.0, f + 5.0, 10.25), Filler::Solid);
-    for x in [4.0, 7.5, 11.0] {
-        g.column(x, 10.5, 0.5, (f, f + 3.5), cache);
-    }
-    // The stair up to it, along the left wall: 16 steps of a quarter metre
-    // up and half a metre along.
-    g.stair(2, 1.0, 1.0, 2.0, f, 2.0, 16, 0.25, 0.5);
-    // A slope of 1 in 4 up the right wall, 2 m up onto a landing.
-    g.slope(2, 1.0, 11.0, 2.0, f, 1.5, (4, 1), 2.0, cache);
-    g.fill(Vec3::new(11.0, f, 9.5), Vec3::new(13.0, f + 2.0, 10.0), Filler::Solid);
-    // A niche under the gallery, in the back wall: arched, a metre deep.
-    g.arch(2, 6.5, 2.0, f, 1.5, 15.0, 0.75, cache);
-    // A high arched window in the right wall, onto the outside.
-    g.arch(0, 5.0, 2.0, f + 6.0, 2.0, 13.0, 1.0, cache);
-    // The door.
-    g.arch(2, 6.0, 2.0, f, 2.5, 0.0, 1.0, cache);
-    let lights = vec![(Vec3::new(7.0, f + 7.0, 6.0), 16.0, 0.0005), (Vec3::new(7.0, f + 2.5, 12.5), 6.0, 0.00005)];
-    (g, lights)
+    (parts, report, views)
 }

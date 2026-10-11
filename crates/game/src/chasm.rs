@@ -843,9 +843,10 @@ fn build(
     }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
     if args.opt("rooms") {
-        let mut parts = rooms::lab();
+        let (mut parts, views) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32);
+        commands.insert_resource(views);
         let colliders = parts.stone.collider().into_iter().collect();
-        show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders);
+        show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }
     let mut made = if args.opt("junctions") {
@@ -872,12 +873,12 @@ fn build(
         }
     }
     let colliders = made.colliders();
-    show(&mut commands, &args, &mut meshes, &mut materials, &mut made.parts, colliders);
+    show(&mut commands, &args, &mut meshes, &mut materials, &mut made.parts, colliders, false);
 }
 
 /// Puts what is built in the world: its colliders, its meshes by material,
-/// its lights.
-fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, parts: &mut Parts, colliders: Vec<Collider>) {
+/// its lights (casting shadows or not).
+fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, parts: &mut Parts, colliders: Vec<Collider>, shadows: bool) {
     for collider in colliders {
         commands.spawn((RigidBody::Static, collider, Transform::IDENTITY));
     }
@@ -902,7 +903,7 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
     commands.spawn((Mesh3d(meshes.add(cable_mesh)), MeshMaterial3d(cable), Transform::IDENTITY));
     let power = args.num("chasm_light", LIGHT);
     for &(at, range, k) in &parts.lights {
-        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
+        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: shadows, ..default() }, Transform::from_translation(at)));
     }
     info!("the chasm: built ({} lights)", parts.lights.len());
 }
