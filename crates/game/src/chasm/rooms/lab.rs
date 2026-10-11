@@ -18,6 +18,9 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use worldgen::noise::hash01;
 
+use manifold_csg::{CrossSection, Manifold};
+
+use super::super::{across, placed};
 use super::{CELL, Cache, Filler, Form, Grid, Turn};
 
 /// A room generated: its grid (its corner at the origin until placed), its
@@ -37,6 +40,8 @@ pub(super) struct Room {
     pub orb: Option<(Vec3, f32)>,
     /// Woven strands (points, thickness, shade), in metres from its corner.
     pub cables: Vec<(Vec<Vec3>, f32, f32)>,
+    /// Light screens: solids in metres from its corner (see `B::screen`).
+    pub screens: Vec<Manifold>,
 }
 
 /// Outer walls' thickness.
@@ -64,12 +69,21 @@ struct Detail {
     coffers: bool,
     bands: bool,
     pilasters: bool,
+    beams: bool,
+    screens: bool,
 }
 
 impl Detail {
     fn names(&self) -> String {
         let mut out = Vec::new();
-        for (on, name) in [(self.pilasters, "pilasters with niches between"), (self.coffers, "coffers"), (self.bands, "plinth and cornice bands"), (self.reveals, "stepped reveals")] {
+        for (on, name) in [
+            (self.pilasters, "pilasters with niches between"),
+            (self.screens, "light screens between pilasters on one wall"),
+            (self.beams, "beams"),
+            (self.coffers, "coffers"),
+            (self.bands, "plinth and cornice bands"),
+            (self.reveals, "stepped reveals"),
+        ] {
             if on {
                 out.push(name);
             }
@@ -91,6 +105,7 @@ struct B {
     /// The walls' rhythms, laid last (see `rhythm`).
     rhythms: Vec<Rhythm>,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
+    screens: Vec<Manifold>,
 }
 
 /// A box room's walls' rhythm (see `B::rhythm`): its plan, from where to
@@ -99,7 +114,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), cables: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), cables: Vec::new(), screens: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -226,6 +241,51 @@ impl B {
             }
         }
     }
+    /// Beams under a flat ceiling at `y` over (x0..x1, z0..z1): across its
+    /// shorter span, a bay apart along the longer (where the pilasters
+    /// stand, so they spring from them), as deep as a twelfth of the span,
+    /// as wide as a pilaster.
+    fn beams(&mut self, (x0, x1): (f32, f32), (z0, z1): (f32, f32), y: f32, bay: f32) {
+        if !self.d.beams {
+            return;
+        }
+        let across_x = x1 - x0 <= z1 - z0;
+        let (span, (a, b)) = if across_x { (x1 - x0, (z0, z1)) } else { (z1 - z0, (x0, x1)) };
+        let depth = half(span / 12.0).clamp(0.5, 1.5);
+        let w = half(bay * 0.15).clamp(0.5, 1.0);
+        let n = ((b - a) / bay).floor() as i32;
+        let start = half(((b - a) - n as f32 * bay) * 0.5);
+        for k in 0..=n {
+            let u = a + start + k as f32 * bay;
+            if u - w * 0.5 < a + 0.25 || u + w * 0.5 > b - 0.25 {
+                continue;
+            }
+            if across_x {
+                self.solid(Vec3::new(x0, y - depth, u - w * 0.5), Vec3::new(x1, y, u + w * 0.5));
+            } else {
+                self.solid(Vec3::new(u - w * 0.5, y - depth, z0), Vec3::new(u + w * 0.5, y, z1));
+            }
+        }
+    }
+    /// A light screen (Wright's word; a fretwork grille) in a `w` by `h`
+    /// opening whose lower corner is at `at` (in the wall's frame: along
+    /// it `u`, up, through it): thin bars in nested frames, bars across,
+    /// small squares where they meet, the same both sides of its middle;
+    /// a plate of stone 0.1 m thick in the middle of the wall (`n`, along
+    /// the wall's normal axis). Free of the grid: drawn in its plane and
+    /// given its thickness, as the halls' H-tree plates are.
+    fn screen(&mut self, along: usize, (u0, y0): (f32, f32), (w, h): (f32, f32), n: f32, seed: u32) {
+        let bars = fret(w, h, seed);
+        let rect = |b: &[f32; 4]| CrossSection::from_polygons(&[vec![[(u0 + b[0]) as f64, (y0 + b[1]) as f64], [(u0 + b[2]) as f64, (y0 + b[1]) as f64], [(u0 + b[2]) as f64, (y0 + b[3]) as f64], [(u0 + b[0]) as f64, (y0 + b[3]) as f64]]]);
+        let plate = CrossSection::batch_union(&bars.iter().map(rect).collect::<Vec<_>>());
+        // (In the wall's plane: along x, through z as it is; along z,
+        // turned, its thickness then along -x.)
+        self.screens.push(if along == 0 {
+            across(&plate, n - 0.05, n + 0.05)
+        } else {
+            placed(&across(&plate, -n - 0.05, -n + 0.05), Vec3::ZERO, Vec3::Z, -Vec3::X)
+        });
+    }
     /// Bands round the inside of a box room's walls where there is wall: a
     /// plinth at the foot, a cornice in two steps under the ceiling.
     fn bands(&mut self, (x0, x1): (f32, f32), (z0, z1): (f32, f32), (y0, y1): (f32, f32)) {
@@ -268,7 +328,10 @@ impl B {
         let mid = (y0 + y1) * 0.5;
         // Each wall: where along it, from where to where, which way is out
         // of the room, the face's position.
-        for (along, (a, b), out, face) in [(0usize, (x0, x1), -1.0, z0), (0, (x0, x1), 1.0, z1), (2, (z0, z1), -1.0, x0), (2, (z0, z1), 1.0, x1)] {
+        // (Light screens in place of niches along one wall: the first side
+        // wall with room for them.)
+        let mut screened = !self.d.screens;
+        for (along, (a, b), out, face) in [(2usize, (z0, z1), -1.0, x0), (2, (z0, z1), 1.0, x1), (0, (x0, x1), -1.0, z0), (0, (x0, x1), 1.0, z1)] {
             let n = ((b - a) / bay).floor() as i32;
             let start = phase.unwrap_or(half(((b - a) - n as f32 * bay) * 0.5));
             let at = |u: f32, n_: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n_) } else { Vec3::new(face + out * n_, y, u) };
@@ -282,7 +345,7 @@ impl B {
                 // before half way and under the cornice, if any.)
                 let ys: Vec<f32> = (0..=((y1 - y0) as i32)).map(|i| (y0 + 0.1 + i as f32).min(y1 - 0.1)).collect();
                 let behind = ys.iter().all(|&y| [-0.4, 0.0, 0.4].iter().all(|&du| self.is_solid(at(u + du * pw, 0.1, y))));
-                let clear = behind && [mid, y1 - 1.5].iter().all(|&y| self.is_empty(at(u, -0.6, y)));
+                let clear = behind && [mid, y1 - 1.75].iter().all(|&y| self.is_empty(at(u, -0.6, y)));
                 if clear {
                     posts.push(u);
                     let (lo, hi) = (at(u - pw * 0.5, -0.5, y0), at(u + pw * 0.5, 0.0, y1));
@@ -292,7 +355,11 @@ impl B {
             if !niches {
                 continue;
             }
-            for w in posts.windows(2) {
+            let screens_here = !screened && along == 2 && posts.len() >= 3;
+            if screens_here {
+                screened = true;
+            }
+            for (k, w) in posts.windows(2).enumerate() {
                 let (u0, u1) = (w[0] + pw * 0.5 + 0.75, w[1] - pw * 0.5 - 0.75);
                 let nw = ((u1 - u0) * 2.0).floor() / 2.0;
                 if nw < 1.5 || w[1] - w[0] > bay + 0.01 {
@@ -300,6 +367,25 @@ impl B {
                 }
                 let u0 = ((u0 + u1 - nw) * 0.5 * 4.0).round() / 4.0;
                 let sill = y0 + 0.75;
+                // (A screen where the wall behind gives straight onto the
+                // outside: it needs light behind it.)
+                if screens_here {
+                    let top = (sill + nw * 2.5).min(y1 - 2.0);
+                    let um = u0 + nw * 0.5;
+                    let probe = |d: f32| at(um, d + 0.1, (sill + top) * 0.5);
+                    let thick = (1..=12).map(|i| i as f32 * 0.25).find(|&d| !self.is_solid(probe(d))).filter(|&d| self.g.index((probe(d) / CELL).floor().as_ivec3().to_array()).is_none());
+                    if let (Some(t), true) = (thick, top - sill >= 2.0) {
+                        let (lo, hi) = (at(u0, 0.0, sill), at(u0 + nw, t + 0.25, top));
+                        self.carve(lo.min(hi), lo.max(hi));
+                        let n_mid = if along == 0 { at(um, t * 0.5, sill).z } else { at(um, t * 0.5, sill).x };
+                        self.screen(along, (u0, sill), (nw, top - sill), n_mid, k as u32 * 31 + (u0 * 4.0) as u32);
+                        let light = at(um, t + 2.0, (sill + top) * 0.5);
+                        let (p, q) = (at(u0 - 0.5, t + 3.0, sill - 0.5), at(u0 + nw + 0.5, t + 3.2, top + 0.5));
+                        let range = (x1 - x0).max(z1 - z0) + 6.0;
+                        self.beyond(light, (p.min(q), p.max(q)), range, strength(range) * 1.5);
+                        continue;
+                    }
+                }
                 let spring = half(((y1 - y0) * 0.5 - nw * 0.5).clamp(1.0, nw * 1.5));
                 let deep = (0..=4).all(|i| self.is_solid(at(u0 + nw * i as f32 / 4.0, 0.9, sill + 0.1)) && self.is_solid(at(u0 + nw * i as f32 / 4.0, 0.9, sill + spring + nw * 0.5)));
                 if deep && sill + spring + nw * 0.5 < y1 - 0.5 && self.is_empty(at((u0 + u1) * 0.5, -0.1, mid)) {
@@ -330,8 +416,70 @@ impl B {
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens }
     }
+}
+
+/// A light screen's pattern in a `w` by `h` opening, from its lower
+/// corner: its bars (x0, y0, x1, y1). A frame; inside it, on the left half
+/// (mirrored onto the right), regions split by bars across or up, or framed
+/// again within, small squares at the inner frames' corners, some left
+/// open; a bar up the middle or not.
+fn fret(w: f32, h: f32, seed: u32) -> Vec<[f32; 4]> {
+    const BAR: f32 = 0.06;
+    let mut out = vec![[0.0, 0.0, w, BAR], [0.0, h - BAR, w, h], [0.0, 0.0, BAR, h], [w - BAR, 0.0, w, h]];
+    let mut half_bars = Vec::new();
+    let mut k = 0u32;
+    fn split(r: &mut dyn FnMut() -> f32, (x0, y0, x1, y1): (f32, f32, f32, f32), depth: u32, out: &mut Vec<[f32; 4]>) {
+        let (w, h) = (x1 - x0, y1 - y0);
+        if depth == 0 || w < 0.3 || h < 0.3 {
+            return;
+        }
+        let f = [1.0 / 3.0, 0.5, 2.0 / 3.0, 0.382, 0.618][(r() * 5.0) as usize % 5];
+        match r() {
+            c if c < 0.32 && h > 0.6 => {
+                let y = y0 + h * f;
+                out.push([x0, y - BAR * 0.5, x1, y + BAR * 0.5]);
+                split(r, (x0, y0, x1, y), depth - 1, out);
+                split(r, (x0, y, x1, y1), depth - 1, out);
+            }
+            c if c < 0.55 && w > 0.6 => {
+                let x = x0 + w * f;
+                out.push([x - BAR * 0.5, y0, x + BAR * 0.5, y1]);
+                split(r, (x0, y0, x, y1), depth - 1, out);
+                split(r, (x, y0, x1, y1), depth - 1, out);
+            }
+            c if c < 0.85 => {
+                let m = (w.min(h) * 0.18).max(0.1);
+                let (a0, b0, a1, b1) = (x0 + m, y0 + m, x1 - m, y1 - m);
+                out.extend([[a0, b0, a1, b0 + BAR], [a0, b1 - BAR, a1, b1], [a0, b0, a0 + BAR, b1], [a1 - BAR, b0, a1, b1]]);
+                // (Small squares at its corners, Wright's.)
+                let s = (m * 0.6).min(0.14);
+                for (cx, cy) in [(a0, b0), (a1, b0), (a0, b1), (a1, b1)] {
+                    out.push([cx - s * 0.5, cy - s * 0.5, cx + s * 0.5, cy + s * 0.5]);
+                }
+                split(r, (a0 + BAR, b0 + BAR, a1 - BAR, b1 - BAR), depth - 1, out);
+            }
+            _ => {}
+        }
+    }
+    let mut r = || {
+        k += 1;
+        hash01(seed as i32, k as i32, 0, 0x5f1)
+    };
+    // (A tall screen: first a band across at its head.)
+    let head = h * 0.78;
+    half_bars.push([0.0, head - BAR * 0.5, w * 0.5, head + BAR * 0.5]);
+    split(&mut r, (BAR, BAR, w * 0.5, head), 4, &mut half_bars);
+    split(&mut r, (BAR, head, w * 0.5, h - BAR), 3, &mut half_bars);
+    for b in half_bars {
+        out.push(b);
+        out.push([w - b[2], b[1], w - b[0], b[3]]);
+    }
+    if r() < 0.5 {
+        out.push([w * 0.5 - BAR * 0.5, 0.0, w * 0.5 + BAR * 0.5, h]);
+    }
+    out
 }
 
 /// A light's strength for how far it has to reach.
@@ -356,14 +504,14 @@ pub(super) fn woven_hall(seed: u32) -> Room {
 fn generate_with(seed: u32, woven: bool) -> Room {
     let pick = move |k: i32, n: usize| ((hash01(seed as i32, k, 0, 0x52b) * n as f32) as usize).min(n - 1);
     let scale = [0.75, 1.0, 1.4][pick(1, 3)];
-    // (At least two layers of detail.)
-    let mut on = [0, 1, 2, 3].map(|k| pick(20 + k, 10) < 6);
-    let mut k = pick(30, 4);
+    // (At least two layers of detail; screens stand between pilasters.)
+    let mut on = [0, 1, 2, 3, 4, 5].map(|k| pick(20 + k, 10) < 5);
+    let mut k = pick(30, 6);
     while on.iter().filter(|o| **o).count() < 2 {
         on[k] = true;
-        k = (k + 1) % 4;
+        k = (k + 1) % 6;
     }
-    let detail = Detail { reveals: on[0], coffers: on[1], bands: on[2], pilasters: on[3] };
+    let detail = Detail { reveals: on[0], coffers: on[1], bands: on[2], pilasters: on[3] || on[5], beams: on[4], screens: on[5] };
     // (Each kind's main choice in turn, room by room of that kind: two of a
     // kind side by side differ in it.)
     let alt = ((seed + 5) / 6) as usize;
@@ -491,7 +639,7 @@ pub(super) fn shrine() -> Room {
     let f = 4.0;
     let rad = 11.0;
     let h = rad;
-    let d = Detail { reveals: true, coffers: false, bands: true, pilasters: true };
+    let d = Detail { reveals: true, coffers: false, bands: true, pilasters: true, beams: false, screens: false };
     let levels = 6;
     let (dr, dh) = (half(rad * 0.75 / levels as f32).max(0.5), half(rad * 0.8 / levels as f32).max(0.5));
     let above = levels as f32 * dh + 3.0;
@@ -571,6 +719,7 @@ fn crossing(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
         } else {
             b.carve(Vec3::new(a, f, dd), Vec3::new(c, f + h, e));
             b.coffers((a, c), (dd, e), f + h, half(w / 3.0).max(2.0));
+            b.beams((a, c), (dd, e), f + h, bay);
         }
     }
     // The crossing, and the tower over it.
@@ -645,6 +794,7 @@ fn overlook(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     b.note(format!("in high on a balcony over a hall {w:.0} by {l:.0} m, {depth:.1} m deep, {above:.1} m above; {mode}; light {light}"));
     b.carve(Vec3::new(x0, f, z0), Vec3::new(x1, e + above, z1));
     b.coffers((x0, x1), (z0, z1), e + above, half(w / 4.0).max(2.0));
+    b.beams((x0, x1), (z0, z1), e + above, half(w / 3.0).max(4.0));
     // The balcony, on a corbel (sloping, or stepping back down into the
     // wall); its parapet, open where the way goes on.
     b.solid(Vec3::new(x0, e - 0.75, z0), Vec3::new(x1, e, z0 + bd));
@@ -755,6 +905,7 @@ fn cascade(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     b.carve(Vec3::new(x0, f, z0), Vec3::new(x1, e + headroom, z0 + l));
     if flat {
         b.coffers((x0, x1), (z0, z0 + l), e + headroom, half(w / 4.0).max(2.0));
+        b.beams((x0, x1), (z0, z0 + l), e + headroom, tread);
     }
     // The landing at the door, then each terrace, solid beneath; under a
     // ceiling stepping down, solid above as well.
@@ -947,6 +1098,20 @@ fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail, woven: bool) -> Room {
             b.g.stair(2, 1.0, x0 + c0, c1 - c0, f, z0 + side - bay - 2.0, 4, 0.25, 0.5);
         }
         _ => {}
+    }
+    // Beams on the columns, along their lines both ways (but across the
+    // clearing), as wide as the columns, a tenth of a bay deep.
+    if d.beams {
+        let depth = half(bay / 10.0).max(0.5);
+        for i in 1..n {
+            let u = i as f32 * bay;
+            let through = u > c0 && u < c1;
+            let spans: Vec<(f32, f32)> = if through { vec![(0.0, c0), (c1, side)] } else { vec![(0.0, side)] };
+            for (p, q) in spans {
+                b.solid(Vec3::new(x0 + u - dd * 0.5, f + h - depth, z0 + p), Vec3::new(x0 + u + dd * 0.5, f + h, z0 + q));
+                b.solid(Vec3::new(x0 + p, f + h - depth, z0 + u - dd * 0.5), Vec3::new(x0 + q, f + h, z0 + u + dd * 0.5));
+            }
+        }
     }
     // Pilasters answering the columns, niches between; bands.
     b.rhythm((x0, x0 + side), (z0, z0 + side), (f, f + h), bay, Some(bay), true);

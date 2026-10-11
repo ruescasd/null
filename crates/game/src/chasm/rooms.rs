@@ -750,6 +750,10 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, V
         if let Some((at, r)) = room.orb {
             orbs.push((room.grid.origin + at, r));
         }
+        for m in &room.screens {
+            let o = room.grid.origin;
+            parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
+        }
         for (points, thick, shade) in &room.cables {
             parts.strands.push((points.iter().map(|p| room.grid.origin + *p).collect(), *thick, *shade));
         }
