@@ -281,22 +281,33 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
                 for w in cuts.windows(2) {
                     let (lo, hi) = l.band(w[0], w[1]);
                     b.solid(Vec3::new(lo.x, (top - SLAB).max(floor), lo.y), Vec3::new(hi.x, top, hi.y));
-                    // A parapet along its open edge (but where it is near
-                    // the floor); under the gallery, the slab stepped back
-                    // twice into the wall (but low down).
-                    if top > floor + 0.6
+                    // Along the gallery, a parapet on its open edge (but
+                    // where it is near the floor), and under it the slab
+                    // stepped back twice into the wall (but low down).
+                    // (The gallery's only: on a flight, a solid wall
+                    // following its steps up read as the flight made
+                    // thicker, not a parapet; and under a flight's corner
+                    // landing the stepped slab hung like a stray box.)
+                    let level = (top - y).abs() < 0.01;
+                    if level
+                        && top > floor + 0.6
                         && let Some((p, q)) = l.parapet(w[0], w[1])
                     {
                         b.solid(Vec3::new(p.x, top, p.y), Vec3::new(q.x, top + 1.0, q.y));
                     }
-                    // (Only the gallery's: under a flight's corner landing,
-                    // stepped back towards two walls at once, it hung
-                    // under the turn like a stray box.)
-                    let level = (top - y).abs() < 0.01;
                     if level && top - SLAB - 1.5 > floor + CLEAR {
-                        let k = l.wall((w[0] + w[1]) * 0.5);
+                        let mid = (w[0] + w[1]) * 0.5;
+                        let k = l.wall(mid);
+                        // (In a corner, stepped back towards the other wall
+                        // too, mitred: stepped towards its own alone, it ran
+                        // on past the corner.)
+                        let other = l.corners().iter().enumerate().find(|(_, c)| (mid - *c).abs() < BAND).map(|(i, c)| if mid < *c { i % 4 } else { (i + 3) % 4 });
                         for (i, by) in [0.75, 1.5].into_iter().enumerate() {
                             let (p, q) = l.toward_wall(k, (lo, hi), by);
+                            let (p, q) = match other {
+                                Some(o) => l.toward_wall(o, (p, q), by),
+                                None => (p, q),
+                            };
                             let y1 = top - SLAB - 0.75 * i as f32;
                             b.solid(Vec3::new(p.x, y1 - 0.75, p.y), Vec3::new(q.x, y1, q.y));
                         }
