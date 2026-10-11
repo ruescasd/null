@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use worldgen::noise::hash01;
 
 use super::{CELL, N, Plan, tree};
+use crate::chasm::rooms::Spec;
 
 /// A storey's height (m).
 const STOREY: f32 = 6.0;
@@ -129,6 +130,15 @@ impl Place {
         let down = (o.storeys.0 - self.storeys.1).max(self.storeys.0 - o.storeys.1).max(0) as f32 * STOREY;
         (across * across + down * down).sqrt()
     }
+}
+
+/// A door of a place: the cell of it a path comes in by, the way out of
+/// it from there (a unit step), and the storey.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Door {
+    pub cell: IVec2,
+    pub out: IVec2,
+    pub storey: i32,
 }
 
 /// A leg: its steps (from where it leaves), what they take, and where it
@@ -374,6 +384,20 @@ pub(super) struct Network {
     pub spine: Vec<usize>,
 }
 
+impl Network {
+    /// Each place's doors: where each path leaves it or comes into it.
+    pub(super) fn doors(&self) -> Vec<Vec<Door>> {
+        let mut doors = vec![Vec::new(); self.places.len()];
+        for (a, b, steps, _) in &self.paths {
+            let n = steps.len();
+            for (place, (inside, outside)) in [(*a, (steps[0], steps[1])), (*b, (steps[n - 1], steps[n - 2]))] {
+                doors[place].push(Door { cell: inside.at, out: outside.at - inside.at, storey: inside.storey });
+            }
+        }
+        doors
+    }
+}
+
 /// The paths through `plan`: the entrance on the rim beside the trunk's near
 /// end (place 0), places scattered through the rock to `DEPTH` (16-32 m
 /// across, 1-4 storeys, at least 120 m from each other, within 160 m of the
@@ -541,6 +565,43 @@ fn shortest(n: usize, paths: &[(usize, usize, Vec<Step>, bool)], lengths: &[f32]
     (dist, came)
 }
 
+/// The rooms the places of the seed's network must be (`--opt fit`): up to
+/// `count` of them, those whose doors are furthest apart in storeys first,
+/// then those with the most doors. A place's cells are 8 m across, its
+/// storeys 6 m high, its floor slab a metre under its lowest storey's
+/// floor; a door is in the middle of its cell's side.
+pub(in crate::chasm) fn specs(seed: u32, count: usize) -> Vec<Spec> {
+    let plan = tree(seed);
+    let net = network(&plan, seed);
+    let doors = net.doors();
+    let mut out: Vec<(i32, usize, Spec)> = Vec::new();
+    for (i, (p, ds)) in net.places.iter().zip(&doors).enumerate() {
+        if ds.is_empty() || i == 0 {
+            continue;
+        }
+        let size = p.size.as_vec2() * CELL;
+        let level = |s: i32| 1.0 + (p.storeys.1 - s) as f32 * STOREY;
+        let doors = ds
+            .iter()
+            .map(|d| {
+                let along = |c: i32, a: i32| (c - a) as f32 * CELL + CELL * 0.5;
+                let (wall, u) = match (d.out.x, d.out.y) {
+                    (-1, _) => (0, along(d.cell.y, p.at.y)),
+                    (1, _) => (1, along(d.cell.y, p.at.y)),
+                    (_, -1) => (2, along(d.cell.x, p.at.x)),
+                    _ => (3, along(d.cell.x, p.at.x)),
+                };
+                (wall, u, level(d.storey))
+            })
+            .collect();
+        let spread = ds.iter().map(|d| d.storey).max().unwrap() - ds.iter().map(|d| d.storey).min().unwrap();
+        let height = 1.0 + (p.storeys.1 - p.storeys.0 + 1) as f32 * STOREY;
+        out.push((spread, ds.len(), Spec { size, height, doors, name: format!("place {i} (storeys {}-{})", p.storeys.0, p.storeys.1) }));
+    }
+    out.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+    out.into_iter().take(count).map(|o| o.2).collect()
+}
+
 /// How far it is to walk along steps (m), all of it and inside the rock.
 fn walked(steps: &[Step]) -> (f32, f32) {
     steps.windows(2).fold((0.0, 0.0), |(all, inside), p| {
@@ -561,6 +622,8 @@ pub fn check() -> bool {
     let _ = std::fs::create_dir_all("screenshots/plan");
     let mut ok = true;
     let mut ends_all = [0usize; 6];
+    let mut spread_all = [0usize; 5];
+    let (mut touching, mut clashes, mut bad, mut all_places) = (0, 0, 0, 0);
     for seed in 1..=50 {
         let plan = tree(seed);
         let cells = Cells(&plan);
@@ -587,6 +650,23 @@ pub fn check() -> bool {
         }
         for &e in &ends {
             ends_all[e.min(5)] += 1;
+        }
+        // (What the places ask of rooms: how far apart in storeys their
+        // doors are, whether they touch the chasm, doors that clash (one
+        // cell and way at one storey), doors outside a place or its
+        // storeys.)
+        for (p, doors) in net.places.iter().zip(net.doors()) {
+            if doors.is_empty() {
+                continue;
+            }
+            let (lo, hi) = doors.iter().fold((i32::MAX, i32::MIN), |(lo, hi), d| (lo.min(d.storey), hi.max(d.storey)));
+            spread_all[((hi - lo) as usize).min(4)] += 1;
+            if p.cells().any(|c| cells.face(c).is_some()) {
+                touching += 1;
+            }
+            clashes += doors.iter().enumerate().filter(|(i, d)| doors[..*i].contains(d)).count();
+            bad += doors.iter().filter(|d| !p.contains(d.cell) || p.contains(d.cell + d.out) || d.out.abs().element_sum() != 1 || !(p.storeys.0..=p.storeys.1).contains(&d.storey)).count();
+            all_places += 1;
         }
         // (Faces within 12 cells across of a step of a path.)
         let near: HashSet<(i32, i32)> = net.paths.iter().flat_map(|p| p.2.iter().map(|s| (s.at.x / 6, s.at.y / 6))).collect();
@@ -624,6 +704,9 @@ pub fn check() -> bool {
             let _ = std::fs::write(format!("screenshots/plan/network_{seed}.txt"), text);
         }
     }
-    eprintln!("network: places by ends (0, 1, 2, 3, 4, 5+): {ends_all:?}{}", if ok { "" } else { "; FAILED: a seed reached fewer than 80% of its places" });
-    ok
+    eprintln!(
+        "network: places by ends (0, 1, 2, 3, 4, 5+): {ends_all:?}; by storeys between their doors (0, 1, 2, 3, 4+): {spread_all:?}; touching the chasm {touching} of {all_places}; doors clashing {clashes}; doors misplaced {bad}{}",
+        if ok { "" } else { "; FAILED: a seed reached fewer than 80% of its places" }
+    );
+    ok && bad == 0
 }

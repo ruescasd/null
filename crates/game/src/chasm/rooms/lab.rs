@@ -24,6 +24,8 @@ use manifold_csg::{CrossSection, Manifold};
 use super::super::{across, placed};
 use super::{CELL, Cache, Filler, Form, Grid, Turn};
 
+pub(super) mod fit;
+
 /// A room generated: its grid (its corner at the origin until placed), its
 /// lights (where, how far they reach, how bright, in metres from its
 /// corner), light standing for light thrown back, its glowing boxes (light

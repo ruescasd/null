@@ -71,6 +71,10 @@ Command-line options, mostly for tuning and capturing reference frames:
     --opt rooms                               with --opt chasm: the room lab instead: rooms built on a grid of quarter-metre cells
                                               (solid, empty, or a prism: part of a slope or of a quarter circle) by units (arch,
                                               vault, column, stair, slope), meshed from the cells (no 3D booleans), on the ground
+    --opt fit                                 with --opt rooms: rooms built to fit the doors of the places in the plan's network
+                                              for --seed (--set rooms=N of them, those whose doors are furthest apart in storeys
+                                              first): a main floor at the lowest door, a gallery joining the doors at each higher
+                                              level, one way down from it round the walls
     --check static|walk|wall|all --seeds 1-50,851-1050 [--jobs n]
                                               the chasm's checks over many seeds at once, nothing rendered, no window:
                                               static (reaches the bottom; nothing in rock or in another route, no way
