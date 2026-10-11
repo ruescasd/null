@@ -939,8 +939,17 @@ struct Shadowed;
 /// of memory.
 const SHADOWED: usize = 8;
 
-/// Shadows from the lights nearest the eye only.
-fn near_shadows(camera: Single<&Transform, With<crate::camera::FlyCam>>, mut lights: Query<(&Transform, &mut PointLight), With<Shadowed>>) {
+/// Shadows from the lights nearest the eye only (none with `--opt
+/// nolampshadows`).
+fn near_shadows(args: Res<Args>, camera: Single<&Transform, With<crate::camera::FlyCam>>, mut lights: Query<(&Transform, &mut PointLight), With<Shadowed>>) {
+    if args.opt("nolampshadows") {
+        for (_, mut light) in &mut lights {
+            if light.shadow_maps_enabled {
+                light.shadow_maps_enabled = false;
+            }
+        }
+        return;
+    }
     let eye = camera.translation;
     let mut far: Vec<f32> = lights.iter().map(|(t, _)| t.translation.distance_squared(eye)).collect();
     if far.is_empty() {
