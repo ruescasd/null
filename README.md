@@ -29,7 +29,7 @@ again. F1 toggles the help overlay.
 | Up / Down | time speed |
 | P | soft / hard shadows |
 | F12 | screenshot to `screenshots/` |
-| ~ (the key under Esc) | console: reads and sets the command line's switches as the game runs (`help`, `list`, `NAME`, `on`/`off`/`toggle NAME`, `set NAME VALUE`, `unset NAME`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
+| ~ (the key under Esc) | console: reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
 
 Command-line options, mostly for tuning and capturing reference frames:
 

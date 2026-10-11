@@ -8,11 +8,11 @@
 //! (`nocontact`, `notaa`). While it is down the game sees no keys or
 //! clicks, and the mouse is free.
 //!
-//! `--opt console` starts with it down, listing what acts at once. Commands: `help`; `list` (every switch and number set); `NAME` (its
-//! value); `on NAME`, `off NAME`, `toggle NAME` (a switch); `set NAME
-//! VALUE`, `unset NAME` (a number); `where` (the camera, as `--cam`);
-//! `clear`. Up brings back the last
-//! command.
+//! `--opt console` starts with it down, listing what acts at once. A
+//! setting is its name then its value: `NAME on`, `NAME off` (a switch),
+//! `NAME VALUE`, `NAME default` (a number), `NAME` alone its value. And
+//! `help`; `list` (what acts at once, then all else on or set); `where`
+//! (the camera, as `--cam`); `clear`. Up brings back the last command.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
@@ -183,23 +183,29 @@ fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 3] {
     ]
 }
 
-/// Runs a command on the switches, and what it says back.
+/// Runs a command on the switches, and what it says back. A setting is
+/// its name then its value, as it is written back: `fullbright on`,
+/// `fullbright off`, `ev 9`, `ev default`; its name alone, its value.
 fn run(line: &str, args: &mut Args) -> Vec<String> {
     let words: Vec<&str> = line.split_whitespace().collect();
+    // (A number known to act at once shows its default when not set.)
     let value = |args: &Args, name: &str| {
-        let mut out = format!("{name}: {}", if args.opt(name) { "on" } else { "off" });
-        if let Some((_, v)) = args.sets.iter().rev().find(|(k, _)| k == name) {
-            out = format!("{name} = {v}{}", if args.opt(name) { " (and on)" } else { "" });
+        if let Some((_, _, default)) = numbers(args).into_iter().find(|n| n.0 == name) {
+            let v = args.num(name, default);
+            return format!("{name} {v}{}", if v == default { " (default)" } else { "" });
         }
-        out
+        match args.sets.iter().rev().find(|(k, _)| k == name) {
+            Some((_, v)) => format!("{name} {v}"),
+            None => format!("{name} {}", if args.opt(name) { "on" } else { "off" }),
+        }
     };
     match words.as_slice() {
         [] => Vec::new(),
         ["help"] => vec![
-            "list                 the switches and numbers that act at once, then all else on or set".into(),
             "NAME                 its value".into(),
-            "on NAME, off NAME, toggle NAME    a switch (--opt NAME)".into(),
-            "set NAME VALUE, unset NAME        a number (--set NAME=VALUE)".into(),
+            "NAME on, NAME off    a switch (--opt NAME)".into(),
+            "NAME VALUE           a number (--set NAME=VALUE); NAME default, back to its default".into(),
+            "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
             "clear                clears this".into(),
             "Others act if read each frame; many only count at the start.".into(),
@@ -210,11 +216,10 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             // start.)
             let mut out = vec!["live:".to_string()];
             for (name, what) in SWITCHES {
-                out.push(format!("  {name}: {}    {what}", if args.opt(name) { "on" } else { "off" }));
+                out.push(format!("  {}    {what}", value(args, name)));
             }
-            for (name, what, default) in numbers(args) {
-                let v = args.num(name, default);
-                out.push(format!("  {name} = {v}{}    {what}", if v == default { " (default)" } else { "" }));
+            for (name, what, _) in numbers(args) {
+                out.push(format!("  {}    {what}", value(args, name)));
             }
             let others: Vec<String> = args.opts.iter().filter(|o| !SWITCHES.iter().any(|s| s.0 == o.as_str())).cloned().collect();
             out.push(format!("on: {}", if others.is_empty() { "nothing else".into() } else { others.join(", ") }));
@@ -223,44 +228,36 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
                 if numbers(args).iter().any(|n| n.0 == k) {
                     continue;
                 }
-                if !sets.iter().any(|s| s.starts_with(&format!("{k} = "))) {
-                    sets.push(format!("{k} = {v}"));
+                if !sets.iter().any(|s| s.starts_with(&format!("{k} "))) {
+                    sets.push(format!("{k} {v}"));
                 }
             }
             sets.reverse();
             out.push(format!("set: {}", if sets.is_empty() { "nothing else".into() } else { sets.join(", ") }));
             out
         }
-        ["on", name] => {
+        [name, "on"] => {
             if !args.opt(name) {
                 args.opts.push(name.to_string());
             }
             vec![value(args, name)]
         }
-        ["off", name] => {
+        [name, "off"] => {
             args.opts.retain(|o| o != name);
             vec![value(args, name)]
         }
-        ["toggle", name] => {
-            if args.opt(name) {
-                args.opts.retain(|o| o != name);
-            } else {
-                args.opts.push(name.to_string());
-            }
+        [name, "default"] => {
+            args.sets.retain(|(k, _)| k != name);
             vec![value(args, name)]
         }
-        ["set", name, v] => match v.parse::<f32>() {
+        [name, v] => match v.parse::<f32>() {
             Ok(v) => {
                 args.sets.retain(|(k, _)| k != name);
                 args.sets.push((name.to_string(), v));
                 vec![value(args, name)]
             }
-            Err(_) => vec![format!("not a number: {v}")],
+            Err(_) => vec![format!("{name}: on, off, a number or default, not {v}")],
         },
-        ["unset", name] => {
-            args.sets.retain(|(k, _)| k != name);
-            vec![value(args, name)]
-        }
         [name] => vec![value(args, name)],
         _ => vec![format!("not understood: {line} (help)")],
     }
