@@ -544,9 +544,13 @@ pub fn walk(
             return;
         }
         player.ready = true;
-        // (In the chasm, on the rim of the wall, not the floor far below.)
+        // (In the chasm, on the rim of the wall, not the floor far below; in
+        // the room lab, where it puts you, on a room's floor high above the
+        // ground.)
         let floor = if args.opt("chasm") && !args.opt("rooms") && !args.opt("plan") { crate::chasm::rim(args.seed, p.x, p.z).unwrap_or(ground_height) } else { ground_height };
-        transform.translation.y = floor + EYE + 0.3;
+        if !(args.opt("chasm") && args.opt("rooms")) {
+            transform.translation.y = floor + EYE + 0.3;
+        }
     }
 
     let (sin, cos) = fly.yaw.sin_cos();

@@ -23,6 +23,46 @@ pub(in crate::chasm) struct Spec {
     pub name: String,
 }
 
+/// How a fitted hall's columns go (`--set order=N`): 0 a giant order (a
+/// tenth of its height thick, five thicknesses apart), 1 the same in the
+/// larger halls only, 2 slimmer (a twelfth), 3 in tiers a storey high, each
+/// carrying an entablature joining it to its neighbours, the next tier
+/// standing on it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Order {
+    Giant,
+    Large,
+    Slim,
+    Tiers,
+}
+
+impl Order {
+    pub fn of(n: u8) -> Order {
+        [Order::Giant, Order::Large, Order::Slim, Order::Tiers][(n as usize).min(3)]
+    }
+}
+
+/// What a fitted room is (`--set kind=N`): 0 a galleried hall (its columns
+/// as `Order` says); 1 a cascade where its doors allow (see `cascade`),
+/// else a galleried hall; 2 a stair tower: the hall's ways round its walls
+/// about an open well, lamps hanging down it from an oculus, a basin at its
+/// foot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Hall,
+    Cascade,
+    Tower,
+}
+
+impl Kind {
+    pub fn of(n: u8) -> Kind {
+        [Kind::Hall, Kind::Cascade, Kind::Tower][(n as usize).min(2)]
+    }
+}
+
+/// A storey (m), as the network's.
+const STOREY: f32 = 6.0;
+
 /// The band along the walls the landings and flights take (m).
 const BAND: f32 = 2.5;
 /// A landing's or flight's slab; and the headroom over it.
@@ -160,7 +200,12 @@ fn way_down(l: &Loop, p: f32, y: f32, floor: f32, dir: f32, taken: &[Piece]) -> 
 }
 
 /// The room for `spec`.
-pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
+pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
+    if kind == Kind::Cascade
+        && let Some(room) = cascade(spec)
+    {
+        return room;
+    }
     let d = Detail { reveals: true, coffers: true, bands: true, ..Default::default() };
     let (sx, sz) = (spec.size.x, spec.size.y);
     let mut b = B::new(Vec3::new(sx, spec.height, sz), d);
@@ -266,34 +311,72 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
         b.note(format!("{blocked} ways down BLOCK a door or another way"));
     }
     // Bands round the walls, coffers in the ceiling; in a hall wide and tall
-    // enough, a giant order of columns in the middle, clear of the band the
-    // ways take (by the orders: a tenth of its height thick, five
-    // thicknesses apart).
+    // enough, columns in the middle, clear of the band the ways take and of
+    // the way in from any door on the floor, as `order` says (see `Order`).
     b.bands((T, sx - T), (T, sz - T), (floor, ceiling));
     b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
     let (ox, oz) = ((T + BAND + 1.0, sx - T - BAND - 1.0), (T + BAND + 1.0, sz - T - BAND - 1.0));
-    if !levels.is_empty() && ox.1 - ox.0 >= 10.0 && oz.1 - oz.0 >= 10.0 && ceiling - floor >= 10.0 {
-        let dd = thickness(ceiling - floor, 10.0);
-        let span = half(dd * 5.0).max(4.0);
+    let least = if order == Order::Large { 16.0 } else { 10.0 };
+    if kind == Kind::Tower {
+        tower(&mut b, spec, floor, ceiling);
+    } else if !levels.is_empty() && ox.1 - ox.0 >= least && oz.1 - oz.0 >= least && ceiling - floor >= 10.0 {
+        // (Where they stand: the giant order's grid, a tenth of the height
+        // thick, five thicknesses apart; or the tiers'.)
+        let giant = thickness(ceiling - floor, 10.0);
+        let tiers = if order == Order::Tiers { ((ceiling - floor) / STOREY).round().max(1.0) as i32 } else { 1 };
+        let tier = (ceiling - floor) / tiers as f32;
+        // (In tiers, closer: three quarters of a tier apart.)
+        let span = if tiers > 1 { half(tier * 0.75).max(3.0) } else { half(giant * 5.0).max(4.0) };
         let (nx, nz) = (((ox.1 - ox.0) / span).floor() as i32, ((oz.1 - oz.0) / span).floor() as i32);
+        let dd = match order {
+            Order::Slim => thickness(ceiling - floor, 12.0),
+            Order::Tiers => thickness(tier, 9.0),
+            _ => giant,
+        };
+        let mut posts = Vec::new();
         for i in 0..=nx {
             for j in 0..=nz {
                 let (x, z) = (half(ox.0 + (ox.1 - ox.0) * i as f32 / nx.max(1) as f32), half(oz.0 + (oz.1 - oz.0) * j as f32 / nz.max(1) as f32));
                 // (None in the way in from a door on the floor: 3 m either
                 // side of it, the band's width and 4 m more into the room.)
-                let reach = BAND + 4.0 + dd * 0.5;
+                let reach = BAND + 4.0 + giant * 0.5;
                 let in_the_way = spec.doors.iter().filter(|d| d.2 <= floor + 0.01).any(|&(wall, u, _)| match wall {
-                    0 => x < T + reach && (z - u).abs() < 3.0 + dd * 0.5,
-                    1 => x > sx - T - reach && (z - u).abs() < 3.0 + dd * 0.5,
-                    2 => z < T + reach && (x - u).abs() < 3.0 + dd * 0.5,
-                    _ => z > sz - T - reach && (x - u).abs() < 3.0 + dd * 0.5,
+                    0 => x < T + reach && (z - u).abs() < 3.0 + giant * 0.5,
+                    1 => x > sx - T - reach && (z - u).abs() < 3.0 + giant * 0.5,
+                    2 => z < T + reach && (x - u).abs() < 3.0 + giant * 0.5,
+                    _ => z > sz - T - reach && (x - u).abs() < 3.0 + giant * 0.5,
                 });
                 if !in_the_way {
-                    b.column(x, z, dd, (floor, ceiling));
+                    posts.push((i, j, x, z));
                 }
             }
         }
-        b.note(format!("a giant order, {} by {} columns {dd:.1} m thick", nx + 1, nz + 1));
+        // (Two tiers or more: each its own columns, an entablature on them
+        // joining each to the next in its row and its file, the next tier
+        // standing on it.)
+        let beam = half(tier / 10.0).max(0.5);
+        for t in 0..tiers {
+            let (y0, y1) = (floor + tier * t as f32, floor + tier * (t + 1) as f32 - if tiers > 1 { beam } else { 0.0 });
+            for &(_, _, x, z) in &posts {
+                b.column(x, z, dd, (y0, y1));
+            }
+            if tiers > 1 && t + 1 < tiers {
+                let w = dd * 0.5 + 0.25;
+                for &(i, j, x, z) in &posts {
+                    for &(i2, j2, x2, z2) in &posts {
+                        if (i2, j2) == (i + 1, j) || (i2, j2) == (i, j + 1) {
+                            b.solid(Vec3::new(x.min(x2) - w, y1, z.min(z2) - w), Vec3::new(x.max(x2) + w, y1 + beam, z.max(z2) + w));
+                        }
+                    }
+                }
+            }
+        }
+        b.note(format!("{}, {} columns {dd:.1} m thick", match order {
+            Order::Giant => "a giant order".to_string(),
+            Order::Large => "a giant order (the larger halls only)".to_string(),
+            Order::Slim => "a slim giant order (a twelfth)".to_string(),
+            Order::Tiers => format!("an order in {tiers} tiers, an entablature on each"),
+        }, posts.len()));
     }
     // Light: a lamp high in the middle, light back off the floor.
     let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
@@ -302,8 +385,8 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
     b.bounce(mid + Vec3::Y, reach);
     // Views: from high in a corner, across the whole of it; from inside each
     // door, looking across the room.
-    b.view("high", Vec3::new(sx * 0.5, ceiling - 1.5, T + BAND + 0.75), Vec3::new(sx * 0.5, floor + (ceiling - floor) * 0.3, sz - T - 2.0));
-    // (From inside the first door on the floor, up at the far side.)
+    // (From inside the first door on the floor, up at the far side: where
+    // you start.)
     if let Some(&(wall, u, _)) = spec.doors.iter().find(|d| d.2 <= floor + 0.01) {
         let (eye, far) = match wall {
             0 => (Vec3::new(T + 0.75, floor + 1.7, u), Vec3::new(sx - T - BAND, (floor + ceiling) * 0.55, sz - u)),
@@ -313,6 +396,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
         };
         b.view("floor", eye, far);
     }
+    b.view("high", Vec3::new(sx * 0.5, ceiling - 1.5, T + BAND + 0.75), Vec3::new(sx * 0.5, floor + (ceiling - floor) * 0.3, sz - T - 2.0));
     for (k, &(wall, u, y)) in spec.doors.iter().enumerate() {
         let eye = match wall {
             0 => Vec3::new(T + 1.0, y + 1.7, u),
@@ -323,4 +407,163 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
         b.view(["door1", "door2", "door3", "door4", "door5", "door6"][k.min(5)], eye, mid + Vec3::Y * ((y - floor) * 0.6 + 2.0));
     }
     b.finish(floor)
+}
+
+/// A stair tower's well: an oculus in the roof over its middle, a chain of
+/// lamps hanging down it, a basin with a fountain at its foot.
+fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
+    let (sx, sz) = (spec.size.x, spec.size.y);
+    let (cx, cz) = (sx * 0.5, sz * 0.5);
+    let side = sx.min(sz) - 2.0 * T;
+    b.carve(Vec3::new(cx - 2.0, ceiling - 0.5, cz - 2.0), Vec3::new(cx + 2.0, spec.height, cz + 2.0));
+    b.sky(Vec3::new(cx, spec.height, cz), 2.0, ceiling - floor + 10.0, strength(ceiling - floor + 10.0) * 4.0);
+    let (top, low) = (ceiling - 2.0, floor + 4.0);
+    let n = ((top - low) / 3.0).floor().max(1.0) as i32;
+    b.solid(Vec3::new(cx - 0.05, low, cz - 0.05), Vec3::new(cx + 0.05, ceiling, cz + 0.05));
+    for k in 0..=n {
+        let y = low + (top - low) * k as f32 / n as f32;
+        if k % 2 == 0 {
+            b.lamp(Vec3::new(cx, y, cz), side * 0.6 + 6.0, strength(side * 0.6 + 6.0) * 0.5);
+        } else {
+            b.glow.push((Vec3::new(cx - 0.15, y - 0.15, cz - 0.15), Vec3::new(cx + 0.15, y + 0.15, cz + 0.15)));
+        }
+    }
+    super::basin(b, (cx, cz), side, BAND, floor);
+    b.note(format!("a stair tower: an open well, an oculus, {} lamps hanging down it, a basin at its foot", n + 1));
+}
+
+/// A level run or a flight of a cascade: from where to where along it
+/// (from its high end), and how high its top is (a flight's at its start).
+enum Run {
+    Level(f32, f32, f32),
+    Flight(f32, f32, f32),
+}
+
+/// A cascade fitted to its doors, if they allow one: along x or z, one way
+/// or the other, the doors' sills only falling (doors at the high end, at
+/// the low end, or along the sides at the height of the terrace there).
+/// Its floor steps down in level terraces and full-width flights between
+/// them (a quarter metre every half metre, at most two metres a flight,
+/// terraces between 1.5 m deep at least), each door on a terrace 2.5 m deep
+/// either side of it at least;
+/// a flat coffered ceiling over it all, so it grows taller as it goes
+/// down; pilasters along its walls where they are clear. None if the doors
+/// rise somewhere along every way, there is no room for the flights, or
+/// they are all on one level.
+pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
+    let (sx, sz) = (spec.size.x, spec.size.y);
+    let ceiling = spec.height - SLAB;
+    // Each way: along x or z (`axis`), from which end; where each door is
+    // along it from the high end (end walls at 0 or the far end). The
+    // longest way the doors allow.
+    let mut best: Option<(usize, f32, f32, Vec<(f32, f32)>)> = None;
+    for axis in [0usize, 2] {
+        let len = if axis == 0 { sx - 2.0 * T } else { sz - 2.0 * T };
+        let (lo_wall, hi_wall) = if axis == 0 { (0, 1) } else { (2, 3) };
+        for dir in [1.0f32, -1.0] {
+            let along = |wall: usize, u: f32| -> f32 {
+                let t = if wall == lo_wall { 0.0 } else if wall == hi_wall { len } else { u - T };
+                if dir > 0.0 { t } else { len - t }
+            };
+            let mut anchors: Vec<(f32, f32)> = spec.doors.iter().map(|&(w, u, y)| (along(w, u), y)).collect();
+            anchors.sort_by(|a, b| a.0.total_cmp(&b.0).then(b.1.total_cmp(&a.1)));
+            let falls = anchors.windows(2).all(|p| p[1].1 <= p[0].1 + 0.01 && (p[1].0 - p[0].0 > 0.01 || (p[1].1 - p[0].1).abs() < 0.01));
+            if falls && best.as_ref().is_none_or(|b| len > b.2) {
+                best = Some((axis, dir, len, anchors));
+            }
+        }
+    }
+    let (axis, dir, len, anchors) = best?;
+    // (Doors all on one level: a hall, not a cascade.)
+    if anchors.iter().all(|a| (a.1 - anchors[0].1).abs() < 0.01) {
+        return None;
+    }
+    // The profile: level runs at each door (2.5 m either side), flights
+    // between, spread evenly with level terraces between them.
+    let mut runs = Vec::new();
+    let mut at = 0.0;
+    let mut y = anchors[0].1;
+    for (i, &(t, ya)) in anchors.iter().enumerate() {
+        if ya < y - 0.01 {
+            let room = t - 2.5 - at;
+            let drop = y - ya;
+            let k = (drop / 2.0).ceil().max(1.0);
+            let each = (drop / k / 0.25).round() * 0.25;
+            let run = each * 2.0;
+            let spare = room - k * run;
+            if spare < (k - 1.0) * 1.5 {
+                return None;
+            }
+            let gap = spare / (k + 1.0);
+            let mut p = at;
+            let mut top = y;
+            for _ in 0..k as i32 {
+                runs.push(Run::Level(p, p + gap, top));
+                p += gap;
+                runs.push(Run::Flight(p, p + run, top));
+                p += run;
+                top = (top - each).max(ya);
+            }
+            at = p;
+            y = ya;
+        }
+        let end = if i + 1 == anchors.len() { len } else { (t + 2.5).min(len) };
+        runs.push(Run::Level(at, end.max(at), y));
+        at = end.max(at);
+    }
+    let (top, bottom) = (anchors[0].1, anchors.last().unwrap().1);
+    let d = Detail { reveals: true, coffers: true, bands: true, pilasters: true, ..Default::default() };
+    let mut b = B::new(Vec3::new(sx, spec.height, sz), d);
+    b.carve(Vec3::new(T, bottom, T), Vec3::new(sx - T, ceiling, sz - T));
+    // (A box across the room from `t0` to `t1` along the way, up to `y`.)
+    let across = |b: &mut B, t0: f32, t1: f32, y: f32| {
+        if y <= bottom + 0.01 || t1 - t0 < 0.01 {
+            return;
+        }
+        let (a, c) = if dir > 0.0 { (T + t0, T + t1) } else { (T + len - t1, T + len - t0) };
+        if axis == 0 {
+            b.solid(Vec3::new(a, bottom, T), Vec3::new(c, y, sz - T));
+        } else {
+            b.solid(Vec3::new(T, bottom, a), Vec3::new(sx - T, y, c));
+        }
+    };
+    let mut flights = 0;
+    for r in &runs {
+        match *r {
+            Run::Level(t0, t1, y) => across(&mut b, t0, t1, y),
+            Run::Flight(t0, t1, y) => {
+                flights += 1;
+                let n = ((t1 - t0) / 0.5).round() as i32;
+                for i in 0..n {
+                    across(&mut b, t0 + i as f32 * 0.5, t0 + (i + 1) as f32 * 0.5, y - 0.25 * (i + 1) as f32);
+                }
+            }
+        }
+    }
+    for &(wall, u, y) in &spec.doors {
+        let (ax, n) = match wall {
+            0 => (0, 0.0),
+            1 => (0, sx - T),
+            2 => (2, 0.0),
+            _ => (2, sz - T),
+        };
+        b.door(ax, u - 1.0, 2.0, y, 2.5, n, T);
+    }
+    b.note(format!("{}: a cascade {sx:.0} by {sz:.0} m along {}, from {top:.0} m down to {bottom:.0} m in {flights} flights, full width; {} doors", spec.name, if axis == 0 { "x" } else { "z" }, spec.doors.len()));
+    b.bands((T, sx - T), (T, sz - T), (bottom, ceiling));
+    b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
+    b.rhythm((T, sx - T), (T, sz - T), (bottom, ceiling), half((ceiling - bottom) / 3.0).clamp(4.0, 8.0), None, false);
+    // Light: lamps high over the top and the bottom, light back off the
+    // floor at the bottom.
+    let point = |t: f32, y: f32| {
+        let p = if dir > 0.0 { T + t } else { T + len - t };
+        if axis == 0 { Vec3::new(p, y, sz * 0.5) } else { Vec3::new(sx * 0.5, y, p) }
+    };
+    let reach = sx.max(sz) + (ceiling - bottom);
+    b.lamp(point(len * 0.2, ceiling - 1.0), reach, strength(reach) * 1.5);
+    b.lamp(point(len * 0.8, ceiling - 1.0), reach, strength(reach) * 1.5);
+    b.bounce(point(len * 0.85, bottom + 1.0), reach);
+    b.view("floor", point(1.0, top + 1.7), point(len * 0.8, bottom + 1.0));
+    b.view("high", point(len - 1.0, bottom + 1.7), point(len * 0.2, top + 3.0));
+    Some(b.finish(bottom))
 }
