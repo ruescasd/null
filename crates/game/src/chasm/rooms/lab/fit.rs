@@ -42,21 +42,22 @@ impl Order {
     }
 }
 
-/// What a fitted room is (`--set kind=N`): 0 a galleried hall (its columns
-/// as `Order` says); 1 a cascade where its doors allow (see `cascade`),
-/// else a galleried hall; 2 a stair tower: the hall's ways round its walls
-/// about an open well, lamps hanging down it from an oculus, a basin at its
-/// foot.
+/// What a fitted room is (`--set kind=N`): 0 Gallery I, a galleried hall
+/// (its columns as `Order` says); 1 a cascade where its doors allow (see
+/// `cascade`), else Gallery I; 2 Gallery II, the same galleries and ways
+/// round its walls about an open well instead of columns, lamps hanging
+/// down it from an oculus, a basin at its foot. (Named as one kind and its
+/// variant, so they read as close: the user, review 87.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
-    Hall,
+    Gallery,
     Cascade,
-    Tower,
+    GalleryWell,
 }
 
 impl Kind {
     pub fn of(n: u8) -> Kind {
-        [Kind::Hall, Kind::Cascade, Kind::Tower][(n as usize).min(2)]
+        [Kind::Gallery, Kind::Cascade, Kind::GalleryWell][(n as usize).min(2)]
     }
 }
 
@@ -147,16 +148,18 @@ impl Loop {
         if b - a < 0.01 {
             return None;
         }
-        let band = self.band(a, b);
-        let edge = self.toward_wall(k, band, 0.0);
-        // (The strip a quarter metre wide at the band's open edge.)
-        let (lo, hi) = edge;
-        Some(match k {
+        Some(self.edge(k, self.band(a, b)))
+    }
+
+    /// The strip a quarter metre wide along the side of a box (in the
+    /// band) away from wall `k`.
+    fn edge(&self, k: usize, (lo, hi): (Vec2, Vec2)) -> (Vec2, Vec2) {
+        match k {
             0 => (Vec2::new(lo.x, hi.y - 0.25), hi),
             1 => (lo, Vec2::new(lo.x + 0.25, hi.y)),
             2 => (lo, Vec2::new(hi.x, lo.y + 0.25)),
             _ => (Vec2::new(hi.x - 0.25, lo.y), hi),
-        })
+        }
     }
 
     /// Whether `p` lies within a band's width of a corner (where the way
@@ -295,22 +298,60 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
                     {
                         b.solid(Vec3::new(p.x, top, p.y), Vec3::new(q.x, top + 1.0, q.y));
                     }
-                    if level && top - SLAB - 1.5 > floor + CLEAR {
-                        let mid = (w[0] + w[1]) * 0.5;
+                    // (In the corners, the square drawn once, below.)
+                    let mid = (w[0] + w[1]) * 0.5;
+                    if level && !l.by_corner(mid) && top - SLAB - 1.5 > floor + CLEAR {
                         let k = l.wall(mid);
-                        // (In a corner, stepped back towards the other wall
-                        // too, mitred: stepped towards its own alone, it ran
-                        // on past the corner.)
-                        let other = l.corners().iter().enumerate().find(|(_, c)| (mid - *c).abs() < BAND).map(|(i, c)| if mid < *c { i % 4 } else { (i + 3) % 4 });
                         for (i, by) in [0.75, 1.5].into_iter().enumerate() {
                             let (p, q) = l.toward_wall(k, (lo, hi), by);
-                            let (p, q) = match other {
-                                Some(o) => l.toward_wall(o, (p, q), by),
-                                None => (p, q),
-                            };
                             let y1 = top - SLAB - 0.75 * i as f32;
                             b.solid(Vec3::new(p.x, y1 - 0.75, p.y), Vec3::new(q.x, y1, q.y));
                         }
+                    }
+                }
+            }
+        }
+        // The corner squares the gallery takes: under each, the slab stepped
+        // back from the sides the gallery does not go on across (a turn, an
+        // L; an end, straight on to the wall; a landing alone, from both); a
+        // parapet along each side nothing goes on across, gallery or flight.
+        // (Each piece stepped back towards its own wall, the steps ran on
+        // past the turn under the flight going on, or cut a notch where the
+        // gallery ended; and a corner had no parapet.)
+        let len = l.len();
+        let covers = |q: &Piece, p: f32| [-len, 0.0, len].iter().any(|o| q.0 + o <= p && p <= q.1 + o);
+        let at_level = |p: f32| pieces.iter().any(|q| covers(q, p) && (q.2 - y).abs() < 0.01);
+        let goes_on = |p: f32| pieces.iter().any(|q| covers(q, p) && q.2 > y - 0.6);
+        let corners = l.corners();
+        for i in 1..=4 {
+            let c = corners[i];
+            if !(at_level(c - 0.25) || at_level((c + 0.25).rem_euclid(len))) {
+                continue;
+            }
+            let (wa, wb) = (i - 1, i % 4);
+            let square = l.band(c - BAND, c);
+            let (on_a, on_b) = (at_level(c - BAND - 0.25), at_level((c + BAND + 0.25).rem_euclid(len)));
+            if y - SLAB - 1.5 > floor + CLEAR {
+                for (k, by) in [0.75, 1.5].into_iter().enumerate() {
+                    let y1 = y - SLAB - 0.75 * k as f32;
+                    let boxes = match (on_a, on_b) {
+                        (true, true) => vec![l.toward_wall(wa, square, by), l.toward_wall(wb, square, by)],
+                        (true, false) => vec![l.toward_wall(wa, square, by)],
+                        (false, true) => vec![l.toward_wall(wb, square, by)],
+                        (false, false) => vec![l.toward_wall(wb, l.toward_wall(wa, square, by), by)],
+                    };
+                    for (p, q) in boxes {
+                        b.solid(Vec3::new(p.x, y1 - 0.75, p.y), Vec3::new(q.x, y1, q.y));
+                    }
+                }
+            }
+            if y > floor + 0.6 {
+                // (The side across which wall A's band goes on is the one
+                // away from wall B, and the other way round.)
+                for (open, from) in [(!goes_on(c - BAND - 0.25), wb), (!goes_on((c + BAND + 0.25).rem_euclid(len)), wa)] {
+                    if open {
+                        let (p, q) = l.edge(from, square);
+                        b.solid(Vec3::new(p.x, y, p.y), Vec3::new(q.x, y + 1.0, q.y));
                     }
                 }
             }
@@ -331,7 +372,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
     b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
     let (ox, oz) = ((T + BAND + 1.0, sx - T - BAND - 1.0), (T + BAND + 1.0, sz - T - BAND - 1.0));
     let least = if order == Order::Large { 16.0 } else { 10.0 };
-    if kind == Kind::Tower {
+    if kind == Kind::GalleryWell {
         tower(&mut b, spec, floor, ceiling);
     } else if !levels.is_empty() && ox.1 - ox.0 >= least && oz.1 - oz.0 >= least && ceiling - floor >= 10.0 {
         // (Where they stand: the giant order's grid, a tenth of the height
@@ -420,7 +461,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
     b.finish(floor)
 }
 
-/// A stair tower's well: an oculus in the roof over its middle, a chain of
+/// Gallery II's well: an oculus in the roof over its middle, a chain of
 /// lamps hanging down it, a basin with a fountain at its foot.
 fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
     let (sx, sz) = (spec.size.x, spec.size.y);
@@ -440,7 +481,7 @@ fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
         }
     }
     super::basin(b, (cx, cz), side, BAND, floor);
-    b.note(format!("a stair tower: an open well, an oculus, {} lamps hanging down it, a basin at its foot", n + 1));
+    b.note(format!("Gallery II: an open well, an oculus, {} lamps hanging down it, a basin at its foot", n + 1));
 }
 
 /// A level run or a flight of a cascade: from where to where along it
