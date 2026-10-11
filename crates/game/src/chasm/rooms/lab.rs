@@ -650,14 +650,8 @@ fn well(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     let side = half([12.0, 14.0, 16.0][pick(10, 3)] * s);
     let band = [2.5, 3.0][pick(11, 2)];
     let _ = alt;
-    let laps = 1;
-    // (Along each wall between the corners, the flight, a quarter of a
-    // metre down every half metre along.)
-    let run = side - 2.0 * band;
-    let steps = (run / 0.5) as i32;
-    let level = run - steps as f32 * 0.5;
-    let drop = steps as f32 * 0.25;
-    let depth = laps as f32 * 4.0 * drop;
+    let drop = flight_drop(side, band);
+    let depth = 4.0 * drop;
     let top = f + depth;
     let mut b = B::new(Vec3::new(side + 2.0 * T, top + 3.0, side + 2.0 * T), d);
     let (x0, z0) = (T, T);
@@ -668,8 +662,37 @@ fn well(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
         b.d.bands = true;
         b.bands((x0, x0 + side), (z0, z0 + side), (f, f + 2.0));
     }
-    // Round the walls: each side, the corner it starts from, the way
-    // along it, and the band's breadth across.
+    round_flights(&mut b, (x0, z0), side, band, top);
+    basin(&mut b, (cx, cz), side, band, f);
+    // Light: the sky over the well, and from the stone at the bottom.
+    b.sky(Vec3::new(cx, top + 3.0, cz), side * 0.4, depth + 20.0, strength(depth + 20.0) * 6.0);
+    b.bounce(Vec3::new(cx, f + 1.0, cz), side + depth * 0.5);
+    // In at the top, onto the first landing.
+    b.door(2, x0 + band * 0.5 - 1.0, 2.0, top, 2.5, 0.0, T);
+    b.view("entry", Vec3::new(x0 + band - 0.25, top + 1.7, z0 + band - 0.25), Vec3::new(cx + side * 0.3, f + depth * 0.35, cz + side * 0.3));
+    let r = half(((side - 2.0 * band) * 0.3).max(2.0));
+    b.view("bottom", Vec3::new(cx + r + 1.5, f + 1.7, cz - r - 1.0), Vec3::new(cx - side * 0.3, top - depth * 0.2, cz + side * 0.3));
+    b.finish(f)
+}
+
+/// How far down each of a stepwell's flights goes: a quarter of a metre
+/// every half metre along the wall between its corner landings.
+fn flight_drop(side: f32, band: f32) -> f32 {
+    ((side - 2.0 * band) / 0.5).floor() * 0.25
+}
+
+/// A stepwell's flights and landings (its court's corner at (x0, z0)):
+/// against each wall a band, a landing at a corner, the flight down along
+/// the wall to the next corner's landing, its underside stepped; round the
+/// four walls from the corner at (x0, z0), first along x, the last coming
+/// down under where it began. A low lamp over every landing but the first.
+/// Returns the landings (the middle of each, at its height, in order, the
+/// last the floor under the first) and the flights (where each starts and
+/// ends on its treads' line, mid-band, and half the band across).
+fn round_flights(b: &mut B, (x0, z0): (f32, f32), side: f32, band: f32, top: f32) -> (Vec<Vec3>, Vec<(Vec3, Vec3, Vec3)>) {
+    let steps = ((side - 2.0 * band) / 0.5) as i32;
+    let level = side - 2.0 * band - steps as f32 * 0.5;
+    let drop = flight_drop(side, band);
     let corner = |k: usize| match k % 4 {
         0 => Vec2::new(x0, z0),
         1 => Vec2::new(x0 + side - band, z0),
@@ -679,21 +702,23 @@ fn well(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     let ways = [Vec2::X, Vec2::Y, -Vec2::X, -Vec2::Y];
     let slab = 1.25;
     let mut y = top;
-    for k in 0..laps * 4 {
+    let (mut landings, mut flights) = (Vec::new(), Vec::new());
+    for k in 0..4 {
         // The landing at the corner, then the flight on from it.
         let c = corner(k);
+        let mid = c + Vec2::splat(band * 0.5);
+        landings.push(Vec3::new(mid.x, y, mid.y));
         b.solid(Vec3::new(c.x, y - slab, c.y), Vec3::new(c.x + band, y, c.y + band));
-        // (A lamp over every corner landing but the first, low.)
         if k > 0 {
-            b.lamp(Vec3::new(c.x + band * 0.5, y + 2.5, c.y + band * 0.5), side * 0.8, strength(side * 0.8) * 0.5);
+            b.lamp(Vec3::new(mid.x, y + 2.5, mid.y), side * 0.8, strength(side * 0.8) * 0.5);
         }
-        let way = ways[k % 4];
-        // (Where the flight starts: off the landing, along the wall.)
-        let start = c + Vec2::new(band, band) * 0.5 + way * band * 0.5;
+        let way = ways[k];
+        // (Across the band, from the wall in, between two points along it.)
         let span = |p: Vec2, q: Vec2| {
             let (lo, hi) = (p.min(q), p.max(q));
             if way.x != 0.0 { (Vec2::new(lo.x, c.y), Vec2::new(hi.x, c.y + band)) } else { (Vec2::new(c.x, lo.y), Vec2::new(c.x + band, hi.y)) }
         };
+        let start = mid + way * band * 0.5;
         if level > 0.0 {
             let (a, bb) = span(start, start + way * level);
             b.solid(Vec3::new(a.x, y - slab, a.y), Vec3::new(bb.x, y, bb.y));
@@ -701,34 +726,61 @@ fn well(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
         let start = start + way * level;
         for i in 0..steps {
             let along = start + way * (i as f32 * 0.5);
-            let next = along + way * 0.5;
-            let lo = along.min(next);
-            let hi = along.max(next);
-            // (Across the band: from the wall in.)
-            let (a, bb) = if way.x != 0.0 { (Vec2::new(lo.x, c.y), Vec2::new(hi.x, c.y + band)) } else { (Vec2::new(c.x, lo.y), Vec2::new(c.x + band, hi.y)) };
+            let (a, bb) = span(along, along + way * 0.5);
             let step_top = y - (i + 1) as f32 * 0.25;
             b.solid(Vec3::new(a.x, step_top - slab, a.y), Vec3::new(bb.x, step_top, bb.y));
         }
+        let end = start + way * (steps as f32 * 0.5);
+        let across = Vec2::new(way.y, way.x).abs() * band * 0.5;
+        flights.push((Vec3::new(start.x, y, start.y), Vec3::new(end.x, y - drop, end.y), Vec3::new(across.x, 0.0, across.y)));
         y -= drop;
     }
-    // The last landing, at the bottom.
-    let c = corner(0);
-    b.solid(Vec3::new(c.x, f, c.y), Vec3::new(c.x + band, y.max(f), c.y + band));
-    // The basin and its fountain in the open well: a round rim, a shallow
-    // pool, a pedestal in it with a basin on top.
+    let c = corner(0) + Vec2::splat(band * 0.5);
+    landings.push(Vec3::new(c.x, y, c.y));
+    (landings, flights)
+}
+
+/// A stepwell's basin and fountain in its open well (centred at (cx, cz),
+/// on the floor at `f`): a round rim, a shallow pool, a pedestal in it with
+/// a basin on top.
+fn basin(b: &mut B, (cx, cz): (f32, f32), side: f32, band: f32, f: f32) {
     let r = half(((side - 2.0 * band) * 0.3).max(2.0));
     b.ring(cx, cz, (0.0, r), (f - 0.5, f), false);
     b.ring(cx, cz, (r - 0.5, r), (f - 0.5, f + 0.75), true);
     b.column(cx, cz, 1.0, (f - 0.5, f + 2.0));
     b.ring(cx, cz, (0.0, 1.5), (f + 2.0, f + 2.5), true);
-    // Light: the sky over the well, and from the stone at the bottom.
-    b.sky(Vec3::new(cx, top + 3.0, cz), side * 0.4, depth + 20.0, strength(depth + 20.0) * 6.0);
-    b.bounce(Vec3::new(cx, f + 1.0, cz), side + depth * 0.5);
-    // In at the top, onto the first landing.
-    b.door(2, x0 + band * 0.5 - 1.0, 2.0, top, 2.5, 0.0, T);
-    b.view("entry", Vec3::new(x0 + band - 0.25, top + 1.7, z0 + band - 0.25), Vec3::new(cx + side * 0.3, f + depth * 0.35, cz + side * 0.3));
-    b.view("bottom", Vec3::new(cx + r + 1.5, f + 1.7, cz - r - 1.0), Vec3::new(cx - side * 0.3, top - depth * 0.2, cz + side * 0.3));
-    b.finish(f)
+}
+
+/// A stepwell's court for the chasm (see `chasm.rs`, `Well`): no walls of
+/// its own (the rock round it is its walls and its roof: its grid is cut
+/// out of the rock as one box and meshed without its outer faces), a floor
+/// three quarters of a metre thick, the flights round it, the basin; a
+/// lamp over each landing. In its own frame: x along the face, y up, z into
+/// the rock from its front: its floor's height, its height in all, its
+/// landings and flights (see `round_flights`), its lights.
+pub(in crate::chasm) struct Court {
+    pub grid: Grid,
+    pub floor: f32,
+    pub height: f32,
+    pub landings: Vec<Vec3>,
+    pub flights: Vec<(Vec3, Vec3, Vec3)>,
+    pub lights: Vec<(Vec3, f32, f32)>,
+    pub glow: Vec<(Vec3, Vec3)>,
+}
+
+/// A stepwell's court `side` square, its flights' band `band` broad.
+pub(in crate::chasm) fn court(side: f32, band: f32) -> Court {
+    let f = 0.75;
+    let top = f + 4.0 * flight_drop(side, band);
+    let height = top + 5.0;
+    let none = Detail { reveals: false, coffers: false, bands: false, pilasters: false, beams: false, screens: false };
+    let mut b = B::new(Vec3::new(side, height, side), none);
+    b.carve(Vec3::new(0.0, f, 0.0), Vec3::new(side, height, side));
+    let (landings, flights) = round_flights(&mut b, (0.0, 0.0), side, band, top);
+    basin(&mut b, (side * 0.5, side * 0.5), side, band, f);
+    b.lamp(Vec3::new(band * 0.5, top + 2.5, band * 0.5), side * 0.8, strength(side * 0.8) * 0.5);
+    b.lamp(Vec3::new(side * 0.5, top + 3.5, side * 0.5), side + top, strength(side + top));
+    Court { grid: b.g, floor: f, height, landings, flights, lights: b.lights, glow: b.glow }
 }
 
 /// A shrine (`--opt orb`): a rotunda, a colonnade in a ring inside it on a

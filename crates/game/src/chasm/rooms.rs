@@ -22,6 +22,7 @@ use manifold_csg::{CrossSection, cross_section::FillRule, triangulate_polygons};
 use super::{Geometry, Parts};
 
 mod lab;
+pub(super) use lab::{Court, court};
 pub(super) mod orb;
 
 /// A cell's size (a power of two: its multiples are exact).
@@ -320,6 +321,17 @@ impl Grid {
     /// The room's surface, into `g`. Returns the volume it encloses and the
     /// volume of its cells' solid (they agree when it is closed).
     pub(super) fn mesh(&self, g: &mut Geometry) -> (f64, f64) {
+        self.mesh_with(g, false)
+    }
+
+    /// The same without its outer faces, for a room cut out of the rock as
+    /// one box (its grid's): the rock's faces are its own there (see
+    /// `court`).
+    pub(super) fn mesh_seamed(&self, g: &mut Geometry) {
+        self.mesh_with(g, true);
+    }
+
+    fn mesh_with(&self, g: &mut Geometry, seamed: bool) -> (f64, f64) {
         let mut cache = Cache(HashMap::new());
         let start = g.indices.len();
         // Whole faces between solid and empty, by plane (axis, where,
@@ -342,6 +354,9 @@ impl Grid {
                     for d in 0..3 {
                         let mut next = c;
                         next[d] += 1;
+                        if seamed && (self.index(c).is_none() || self.index(next).is_none()) {
+                            continue;
+                        }
                         let there = self.get(next);
                         let (u, v) = ((d + 1) % 3, (d + 2) % 3);
                         match (here, there) {
