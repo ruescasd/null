@@ -488,7 +488,7 @@ pub(super) fn shrine() -> Room {
     b.view("beneath", Vec3::new(cx + 4.0, f + 1.0, cz - 3.0), at + Vec3::Y * 1.0);
     b.view("dome", Vec3::new(cx - 8.5, f + 1.7, cz + 2.0), Vec3::new(cx + 2.0, f + h + 3.0, cz - 1.0));
     let mut room = b.finish(f);
-    room.orb = Some((at, 2.5));
+    room.orb = Some((at, 2.0));
     room
 }
 
