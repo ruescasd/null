@@ -61,6 +61,10 @@ impl Kind {
     }
 }
 
+/// How far a door's landing reaches either side of its middle (past its
+/// reveals, 2 m: shorter, they overhung the landing's end).
+const LANDING: f32 = 2.5;
+
 /// A storey (m), as the network's.
 const STOREY: f32 = 6.0;
 
@@ -185,8 +189,8 @@ fn overlap(a: &Piece, b: &Piece, len: f32) -> bool {
 fn way_down(l: &Loop, p: f32, y: f32, floor: f32, dir: f32, taken: &[Piece]) -> (Vec<Piece>, usize) {
     let len = l.len();
     let wrap = |p: f32| p.rem_euclid(len);
-    let mut pieces = vec![(p - 1.5, p + 1.5, y)];
-    let (mut at, mut top) = (p + dir * 1.5, y);
+    let mut pieces = vec![(p - LANDING, p + LANDING, y)];
+    let (mut at, mut top) = (p + dir * LANDING, y);
     let mut gone = 0.0;
     while top > floor + 0.01 && gone < len {
         let next = at + dir * 0.5;
@@ -230,7 +234,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
         b.door(axis, u - 1.0, 2.0, y, 2.5, n, T);
         if y <= floor + 0.01 {
             let p = l.of_door(wall, u);
-            taken.push((p - 1.5, p + 1.5, y));
+            taken.push((p - LANDING, p + LANDING, y));
         }
     }
     // The higher doors, a level at a time, highest first: a gallery along
@@ -250,9 +254,25 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
         let widest = (0..ps.len()).max_by(|&a, &b| gaps[a].total_cmp(&gaps[b])).unwrap();
         let start = ps[(widest + 1) % ps.len()];
         let end = start + (l.len() - gaps[widest]);
-        let gallery: Piece = (start - 1.5, end + 1.5, y);
         let ((mut pieces, near), dir) = [(end, 1.0), (start, -1.0)]
             .map(|(p, dir)| {
+                // (Its free end, away from the way down, part way into a
+                // corner's square: on to fill the square, which is then
+                // drawn as one; ended within it, the square's stepped slab
+                // and parapet stood where the gallery was not.)
+                let (mut g0, mut g1) = (start - LANDING, end + LANDING);
+                for c in l.corners() {
+                    for o in [-l.len(), 0.0, l.len()] {
+                        let c = c + o;
+                        if dir > 0.0 && g0 > c + 0.01 && g0 < c + BAND {
+                            g0 = c;
+                        }
+                        if dir < 0.0 && g1 < c - 0.01 && g1 > c - BAND {
+                            g1 = c;
+                        }
+                    }
+                }
+                let gallery: Piece = (g0, g1, y);
                 let (mut way, near) = way_down(&l, p, y, floor, dir, &taken);
                 way[0] = gallery;
                 let near = if taken.iter().any(|t| overlap(&gallery, t, l.len()) && (y - t.2).abs() < SLAB + CLEAR) { near.saturating_add(1) } else { near };
@@ -264,6 +284,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
         if near > 0 {
             blocked += 1;
         }
+        let free_end = if dir > 0.0 { pieces[0].0 } else { pieces[0].1 };
         // (A gallery round past the loop's end, in two.)
         if pieces[0].1 > l.len() {
             let g = pieces[0];
@@ -271,6 +292,26 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
             pieces.push((0.0, g.1 - l.len(), y));
         }
         let p = if dir > 0.0 { end } else { start };
+        // (The gallery's free end, away from the way down: under it the
+        // slab steps back from the end too, and a parapet runs across it;
+        // in a corner, the square sees to it.)
+        let free = free_end.rem_euclid(l.len());
+        let clear_of_end = |(a, c): (f32, f32), by: f32| -> (f32, f32) {
+            let (f0, f1) = if dir > 0.0 { (free, free + by) } else { (free - by, free) };
+            let (mut a, mut c) = (a, c);
+            for o in [-l.len(), 0.0, l.len()] {
+                let (f0, f1) = (f0 + o, f1 + o);
+                if a < f1 && c > f0 {
+                    if dir > 0.0 { a = a.max(f1) } else { c = c.min(f0) }
+                }
+            }
+            (a, c)
+        };
+        if !l.by_corner(free) && y > floor + 0.6 {
+            let (a, c) = if dir > 0.0 { (free, free + 0.25) } else { (free - 0.25, free) };
+            let (lo, hi) = l.band(a.rem_euclid(l.len()), a.rem_euclid(l.len()) + (c - a));
+            b.solid(Vec3::new(lo.x, y, lo.y), Vec3::new(hi.x, y + 1.0, hi.y));
+        }
         for &(a, c, top) in &pieces {
             for (a, c) in [(a, c), (a - l.len(), c - l.len()), (a + l.len(), c + l.len())] {
                 let (a, c) = (a.max(0.0), c.min(l.len()));
@@ -303,7 +344,11 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
                     if level && !l.by_corner(mid) && top - SLAB - 1.5 > floor + CLEAR {
                         let k = l.wall(mid);
                         for (i, by) in [0.75, 1.5].into_iter().enumerate() {
-                            let (p, q) = l.toward_wall(k, (lo, hi), by);
+                            let (a, c) = clear_of_end((w[0], w[1]), by);
+                            if c - a < 0.01 {
+                                continue;
+                            }
+                            let (p, q) = l.toward_wall(k, l.band(a, c), by);
                             let y1 = top - SLAB - 0.75 * i as f32;
                             b.solid(Vec3::new(p.x, y1 - 0.75, p.y), Vec3::new(q.x, y1, q.y));
                         }
