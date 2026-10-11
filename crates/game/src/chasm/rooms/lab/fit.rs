@@ -49,6 +49,10 @@ impl Kind {
 const LANDING: f32 = 2.5;
 
 
+/// How far a flight's slope stands clear of its steps' edges (the steps
+/// are solid too: a slope through their edges, the body caught on them).
+const LIFT: f32 = 0.05;
+
 /// The band along the walls the landings and flights take (m).
 const BAND: f32 = 2.5;
 /// A landing's or flight's slab; and the headroom over it.
@@ -95,6 +99,18 @@ impl Loop {
             (Vec2::new(s.x - T - (p1 - w - d), s.y - T - BAND), Vec2::new(s.x - T - (p0 - w - d), s.y - T))
         } else {
             (Vec2::new(T, s.y - T - (p1 - 2.0 * w - d)), Vec2::new(T + BAND, s.y - T - (p0 - 2.0 * w - d)))
+        }
+    }
+
+    /// The line across the band at `p` along wall `k`: its ends at the wall
+    /// and at the open edge.
+    fn cross(&self, k: usize, p: f32) -> (Vec2, Vec2) {
+        let (w, d, s) = (self.w, self.d, self.size);
+        match k {
+            0 => (Vec2::new(T + p, T), Vec2::new(T + p, T + BAND)),
+            1 => (Vec2::new(s.x - T, T + p - w), Vec2::new(s.x - T - BAND, T + p - w)),
+            2 => (Vec2::new(s.x - T - (p - w - d), s.y - T), Vec2::new(s.x - T - (p - w - d), s.y - T - BAND)),
+            _ => (Vec2::new(T, s.y - T - (p - 2.0 * w - d)), Vec2::new(T + BAND, s.y - T - (p - 2.0 * w - d))),
         }
     }
 
@@ -227,6 +243,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     levels.sort_by(|a, b| b.total_cmp(a));
     levels.dedup();
     let mut blocked = 0;
+    let mut slopes = Vec::new();
     for &y in &levels {
         let mut ps: Vec<f32> = spec.doors.iter().filter(|d| d.2 == y).map(|d| l.of_door(d.0, d.1)).collect();
         ps.sort_by(f32::total_cmp);
@@ -383,6 +400,44 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
                 }
             }
         }
+        // Slopes over the way down's flights: each straight run of steps
+        // (between the corners, where it is level), from the edge of the
+        // step above its first to the end of its last, through every
+        // step's edge, half a metre thick.
+        let mut run: Vec<Piece> = Vec::new();
+        let ends: Vec<Option<Piece>> = pieces[1..].iter().map(|q| Some(*q)).chain([None]).collect();
+        for q in ends {
+            let stepping = q.is_some_and(|q| !l.by_corner(((q.0 + q.1) * 0.5).rem_euclid(l.len())) && run.last().is_none_or(|r| (r.2 - q.2 - 0.25).abs() < 0.01));
+            if stepping {
+                run.push(q.unwrap());
+                continue;
+            }
+            if run.len() >= 2 {
+                let (first, last) = (run[0], run[run.len() - 1]);
+                // (Lifted clear of the steps' edges, which are solid here:
+                // on them, the body still caught; its foot run on to meet
+                // the floor.)
+                let (hi, lo) = if dir > 0.0 { (first.0, last.1 + LIFT * 2.0) } else { (first.1, last.0 - LIFT * 2.0) };
+                let shift = (((hi + lo) * 0.5) / l.len()).floor() * l.len();
+                let (hi, lo) = (hi - shift, lo - shift);
+                let k = l.wall((hi + lo) * 0.5);
+                let ((a, b), (c, e)) = (l.cross(k, hi), l.cross(k, lo));
+                let (y0, y1) = (first.2 + 0.25 + LIFT, last.2 - LIFT);
+                let mut corners = Vec::new();
+                for (p, y) in [(a, y0), (b, y0), (c, y1), (e, y1)] {
+                    corners.push(Vec3::new(p.x, y, p.y));
+                    corners.push(Vec3::new(p.x, y - 0.5, p.y));
+                }
+                slopes.push(corners);
+            }
+            run.clear();
+            if let Some(q) = q
+                && !l.by_corner(((q.0 + q.1) * 0.5).rem_euclid(l.len()))
+                && q.2 < y - 0.01
+            {
+                run.push(q);
+            }
+        }
         taken.extend(pieces.iter().copied());
         b.note(format!("{} at {y:.0} m up, a gallery {:.0} m along, the way down {} round{}", if ps.len() > 1 { format!("{} doors", ps.len()) } else { "a door".into() }, end - start + 3.0, if dir > 0.0 { "one way" } else { "the other way" }, if near > 0 { ", BLOCKING" } else { "" }));
         let (lo, hi) = l.band(p.clamp(0.0, l.len() - 0.5), (p + 0.5).min(l.len()));
@@ -456,6 +511,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     }
     let mut room = b.finish(floor);
     room.pool = pool;
+    room.slopes = slopes;
     room
 }
 
@@ -582,6 +638,7 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
         }
     };
     let mut flights = 0;
+    let mut slopes = Vec::new();
     for r in &runs {
         match *r {
             Run::Level(t0, t1, y) => across(&mut b, t0, t1, y),
@@ -591,6 +648,20 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
                 for i in 0..n {
                     across(&mut b, t0 + i as f32 * 0.5, t0 + (i + 1) as f32 * 0.5, y - 0.25 * (i + 1) as f32);
                 }
+                // (Its slope, wall to wall, just clear of its steps' edges.)
+                let at = |t: f32, y: f32, side: f32| {
+                    let p = if dir > 0.0 { T + t } else { T + len - t };
+                    if axis == 0 { Vec3::new(p, y, side) } else { Vec3::new(side, y, p) }
+                };
+                let far = if axis == 0 { sz - T } else { sx - T };
+                let mut corners = Vec::new();
+                for (t, yy) in [(t0, y + LIFT), (t1 + LIFT * 2.0, y - 0.25 * n as f32 - LIFT)] {
+                    for side in [T, far] {
+                        corners.push(at(t, yy, side));
+                        corners.push(at(t, yy - 0.5, side));
+                    }
+                }
+                slopes.push(corners);
             }
         }
     }
@@ -614,7 +685,9 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
     light(&mut b, spec.size, bottom, ceiling);
     b.view("floor", point(1.0, top + 1.7), point(len * 0.8, bottom + 1.0));
     b.view("high", point(len - 1.0, bottom + 1.7), point(len * 0.2, top + 3.0));
-    Some(b.finish(bottom))
+    let mut room = b.finish(bottom);
+    room.slopes = slopes;
+    Some(room)
 }
 
 /// A fitted room's light (its own alone: the lab is at night): a lamp high

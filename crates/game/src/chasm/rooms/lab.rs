@@ -48,6 +48,9 @@ pub(super) struct Room {
     /// A pool of ichor in it (see `pool.rs`): its surface's middle and
     /// radius.
     pub pool: Option<(Vec3, f32)>,
+    /// Slopes over its flights, walked on, not seen (real steps make you
+    /// stop at each riser): each its corners, for a convex collider.
+    pub slopes: Vec<Vec<Vec3>>,
 }
 
 /// Outer walls' thickness.
@@ -422,7 +425,7 @@ impl B {
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new() }
     }
 }
 

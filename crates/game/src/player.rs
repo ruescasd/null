@@ -665,9 +665,20 @@ pub fn walk(
         player.velocity = velocity;
         if was_grounded && !tethered {
             // Walking: rise no faster than the ground slopes. Catching the
-            // corner of a step must not throw the player upwards.
-            let n = player.ground_normal;
-            let follow = -(player.velocity.x * n.x + player.velocity.z * n.z) / n.y.max(0.1);
+            // corner of a step must not throw the player upwards. But onto a
+            // slope (walkable ground just ahead, in the way it goes), as
+            // fast as that slopes: held to the flat ground behind, the slide
+            // up the slope's foot was thrown away and the body crept up it,
+            // slowed from 10 m/s to 2 at every flight's foot.
+            let rise = |n: Vec3| -(player.velocity.x * n.x + player.velocity.z * n.z) / n.y.max(0.1);
+            let mut follow = rise(player.ground_normal);
+            let flat = Vec3::new(player.velocity.x, 0.0, player.velocity.z);
+            if flat.length() > 0.1
+                && let Some((_, n)) = mover.sweep(center, flat.normalize() * 0.15)
+                && n.y >= MIN_WALK_NORMAL
+            {
+                follow = follow.max(rise(n));
+            }
             player.velocity.y = player.velocity.y.min(follow.max(0.0));
         }
         if was_grounded && player.grounded && rose > 0.05 {

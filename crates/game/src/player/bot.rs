@@ -2,7 +2,10 @@
 //! synthetic input and logs telemetry, so movement can be checked without
 //! anyone at the keyboard. It stands, runs, strafe jumps at the optimal
 //! angle, coasts, and exits. With `--opt walkbot` in the chasm, it walks
-//! the whole way down instead, and logs wherever it cannot go on.
+//! the whole way down instead, and logs wherever it cannot go on. With
+//! `--opt pushbot`, it holds forward from where `--cam` puts it for
+//! `--set push_secs` seconds (5), logging where it is and how fast ten
+//! times a second: to see how it goes up a flight, straight or at an angle.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -82,6 +85,10 @@ pub fn drive(
         // (With nothing rendered, time is stepped by hand: no speeding up.)
         let real_dt = if args.opt("headless") { 0.0 } else { real.delta_secs() };
         walk(&time, &mut clock, real_dt, way.as_deref(), &mut log, &mut state, &mut input, &mut exit, &mut transform, &mut fly, &mut player);
+        return;
+    }
+    if args.opt("pushbot") {
+        push(&time, &args, &mut log, &mut state, &mut input, &mut exit, &transform, &player);
         return;
     }
     if args.opt("stairbot") {
@@ -564,4 +571,25 @@ fn find_ledge(world: &WorldGen, around: Vec3, min: f32, max: f32, run_up: f32) -
         }
     }
     None
+}
+
+/// `--opt pushbot`: forward, held, from where it starts; where it is and how
+/// fast, ten times a second; then exits.
+#[allow(clippy::too_many_arguments)]
+fn push(time: &Time, args: &Args, log: &mut Option<ResMut<BotLog>>, state: &mut BotState, input: &mut MoveInput, exit: &mut MessageWriter<AppExit>, transform: &Transform, player: &Player) {
+    if !player.ready {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let t = now - *state.started.get_or_insert(now);
+    *input = MoveInput { wish: Vec2::Y, ..default() };
+    if t - state.last_log >= args.num("push_log", 0.1) || t == 0.0 {
+        state.last_log = t;
+        let p = transform.translation;
+        let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
+        say(log, format!("push {t:.2} {:.3} {:.3} {:.3} {speed:.2} {:.2}", p.x, p.y, p.z, player.velocity.y));
+    }
+    if t > args.num("push_secs", 5.0) {
+        exit.write(AppExit::Success);
+    }
 }

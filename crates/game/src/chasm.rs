@@ -901,7 +901,9 @@ fn build(
         for (at, r) in orbs {
             rooms::orb::spawn(&mut commands, &mut meshes, &mut materials, at, r);
         }
-        let colliders = parts.stone.collider().into_iter().collect();
+        // (The rooms' flights walked on their slopes, each its own convex
+        // collider, as the chasm's.)
+        let colliders = parts.stone.collider().into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }

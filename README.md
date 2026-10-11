@@ -80,6 +80,9 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               1 a cascade where the doors allow (those places first), 2 Atrium II (its galleries
                                               round an open well, lamps hanging down it, an oculus, a basin of
                                               bubbling ichor: an experiment, see chasm/rooms/pool.rs)
+    --opt pushbot                             holds forward from where --cam puts you for --set push_secs (5) seconds, logging
+                                              where you are and how fast (--set push_log, 0.1 s): how a flight climbs, straight
+                                              or at an angle
     --check static|walk|wall|all --seeds 1-50,851-1050 [--jobs n]
                                               the chasm's checks over many seeds at once, nothing rendered, no window:
                                               static (reaches the bottom; nothing in rock or in another route, no way
