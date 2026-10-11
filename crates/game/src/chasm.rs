@@ -49,7 +49,7 @@ pub struct ChasmPlugin;
 
 impl Plugin for ChasmPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, build).add_systems(Update, near_shadows);
+        app.add_systems(Startup, build).add_systems(Update, (near_shadows, rooms::orb::animate));
     }
 }
 
@@ -846,8 +846,11 @@ fn build(
     }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
     if args.opt("rooms") {
-        let (mut parts, views) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32);
+        let (mut parts, views, orbs) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, args.opt("orb"));
         commands.insert_resource(views);
+        for (at, r) in orbs {
+            rooms::orb::spawn(&mut commands, &mut meshes, &mut materials, at, r);
+        }
         let colliders = parts.stone.collider().into_iter().collect();
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;

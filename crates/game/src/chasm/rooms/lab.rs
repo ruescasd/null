@@ -33,6 +33,8 @@ pub(super) struct Room {
     pub recipe: Vec<String>,
     pub views: Vec<(&'static str, Vec3, Vec3)>,
     pub floor: f32,
+    /// An orb hanging in it (see `orb.rs`): its centre and radius.
+    pub orb: Option<(Vec3, f32)>,
 }
 
 /// Outer walls' thickness.
@@ -291,7 +293,7 @@ impl B {
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None }
     }
 }
 
@@ -428,6 +430,66 @@ fn rotunda(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     b.view("entry", eye, Vec3::new(cx, f + h * 0.5, cz + rad));
     b.view("up", Vec3::new(cx + rad * 0.5, f + 1.7, cz + rad * 0.5), Vec3::new(cx - rad * 0.3, (f + h + top_y) * 0.5, cz - rad * 0.3));
     b.finish(f)
+}
+
+/// A shrine (`--opt orb`): a rotunda, a colonnade in a ring inside it on a
+/// stepped base carrying a ring of stone, a dark round pit in the middle
+/// stepping down into a shaft, and hanging over the pit in the colonnade's
+/// ring, the orb. Its only light is the orb's (and a little sky through
+/// the oculus).
+pub(super) fn shrine() -> Room {
+    let f = 4.0;
+    let rad = 11.0;
+    let h = rad;
+    let d = Detail { reveals: true, coffers: false, bands: true, pilasters: true };
+    let levels = 6;
+    let (dr, dh) = (half(rad * 0.75 / levels as f32).max(0.5), half(rad * 0.8 / levels as f32).max(0.5));
+    let above = levels as f32 * dh + 3.0;
+    let side = 2.0 * (rad + T);
+    let mut b = B::new(Vec3::new(side, f + h + above + 1.5, side), d);
+    let (cx, cz) = (T + rad, T + rad);
+    b.note("a shrine: a rotunda 22 m across, a ring of twelve columns inside it, a dark pit in the middle, the orb hanging over it");
+    b.ring(cx, cz, (0.0, rad), (f, f + h), false);
+    b.round_bands((cx, cz), rad, (f, f + h));
+    let w = 4.0;
+    let spring = half(h * 0.45);
+    b.arch(2, cx - w * 0.5, w, f + 0.5, spring, cz + rad, 1.0);
+    b.arch(0, cz - w * 0.5, w, f + 0.5, spring, cx + rad, 1.0);
+    b.arch(0, cz - w * 0.5, w, f + 0.5, spring, cx - rad - 1.0, 1.0);
+    for k in 1..=levels {
+        let y = f + h + (k - 1) as f32 * dh;
+        b.ring(cx, cz, (0.0, rad - k as f32 * dr), (y, y + dh), false);
+    }
+    let oc = (rad - (levels + 1) as f32 * dr).max(1.0);
+    b.ring(cx, cz, (0.0, oc), (f + h + levels as f32 * dh, f + h + above + 1.5), false);
+    b.sky(Vec3::new(cx, f + h + above + 1.5, cz), oc + 1.0, h + above + 12.0, strength(h + above + 12.0));
+    // The colonnade on its stepped base, the ring of stone it carries.
+    let (rc, hc, dd) = (7.0, 7.0, 1.0);
+    b.ring(cx, cz, (rc - 2.0, rc + 2.0), (f, f + 0.25), true);
+    b.ring(cx, cz, (rc - 1.5, rc + 1.5), (f + 0.25, f + 0.5), true);
+    let n = 12;
+    for k in 0..n {
+        let a = (k as f32 + 0.5) / n as f32 * std::f32::consts::TAU;
+        let (x, z) = (((cx + a.cos() * rc) * 4.0).round() / 4.0, ((cz + a.sin() * rc) * 4.0).round() / 4.0);
+        b.column(x, z, dd, (f + 0.5, f + 0.5 + hc));
+    }
+    let top = f + 0.5 + hc;
+    b.ring(cx, cz, (rc - 1.0, rc + 1.0), (top, top + 1.0), true);
+    b.ring(cx, cz, (rc - 1.25, rc + 1.25), (top + 1.0, top + 1.25), true);
+    // The pit: three steps down, then a shaft into the dark.
+    let rp = 4.5;
+    for i in 0..3 {
+        b.ring(cx, cz, (0.0, rp - i as f32), (f - (i + 1) as f32 * 0.5, f - i as f32 * 0.5), false);
+    }
+    b.ring(cx, cz, (0.0, rp - 3.0), (0.5, f - 1.5), false);
+    b.door(2, cx - 1.25, 2.5, f, 3.0, 0.0, T + 0.5);
+    let at = Vec3::new(cx, f + 6.5, cz);
+    b.view("entry", Vec3::new(cx, f + 1.7, T + 0.5), at);
+    b.view("beneath", Vec3::new(cx + 4.0, f + 1.0, cz - 3.0), at + Vec3::Y * 1.0);
+    b.view("dome", Vec3::new(cx - 8.5, f + 1.7, cz + 2.0), Vec3::new(cx + 2.0, f + h + 3.0, cz - 1.0));
+    let mut room = b.finish(f);
+    room.orb = Some((at, 2.5));
+    room
 }
 
 /// Two halls crossing, each arm vaulted along its own way (the vault

@@ -758,7 +758,7 @@ fn skull() -> Mesh {
 
 /// A flat-shaded convex mesh from corner points and faces (polygons of
 /// indices); each face is turned to point away from the shape's centre.
-fn faceted(points: &[[f32; 3]], faces: &[&[usize]]) -> Mesh {
+pub(crate) fn faceted(points: &[[f32; 3]], faces: &[&[usize]]) -> Mesh {
     let center = points.iter().map(|&p| Vec3::from(p)).sum::<Vec3>() / points.len() as f32;
     let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
     for face in faces {
