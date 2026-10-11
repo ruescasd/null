@@ -35,6 +35,8 @@ pub(super) struct Room {
     pub floor: f32,
     /// An orb hanging in it (see `orb.rs`): its centre and radius.
     pub orb: Option<(Vec3, f32)>,
+    /// Cables (points, thickness), in metres from its corner.
+    pub cables: Vec<(Vec<Vec3>, f32)>,
 }
 
 /// Outer walls' thickness.
@@ -88,6 +90,7 @@ struct B {
     d: Detail,
     /// The walls' rhythms, laid last (see `rhythm`).
     rhythms: Vec<Rhythm>,
+    cables: Vec<(Vec<Vec3>, f32)>,
 }
 
 /// A box room's walls' rhythm (see `B::rhythm`): its plan, from where to
@@ -96,7 +99,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), cables: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -138,6 +141,35 @@ impl B {
         }
         self.g.column(x, z, r, (y0 + base, y1 - cap), &mut self.c);
         self.solid(Vec3::new(x - r, y1 - cap, z - r), Vec3::new(x + r, y1 - if tall { 0.25 } else { 0.0 }, z + r));
+    }
+    /// A column like `column`, its base and capital stone, but its shaft
+    /// woven of cables (the beasts' weave): taut, straight, from deep in
+    /// the base to deep in the capital, in two layers wound against each
+    /// other, each strand turned a third of the way round from its foot to
+    /// its head, so together they draw in at the waist (a hyperboloid, as
+    /// taut cables between two rings do). The cables carry the load the
+    /// stone would have: the order holds, only its matter is wrong.
+    fn woven(&mut self, x: f32, z: f32, d: f32, (y0, y1): (f32, f32)) {
+        let r = d * 0.5;
+        let tall = y1 - y0 >= 3.0;
+        if tall {
+            self.solid(Vec3::new(x - r - 0.25, y0, z - r - 0.25), Vec3::new(x + r + 0.25, y0 + 0.5, z + r + 0.25));
+            self.solid(Vec3::new(x - r - 0.25, y1 - 0.25, z - r - 0.25), Vec3::new(x + r + 0.25, y1, z + r + 0.25));
+        }
+        self.solid(Vec3::new(x - r, y1 - 0.5, z - r), Vec3::new(x + r, y1 - 0.25, z + r));
+        let (a, b) = (y0 + 0.25, y1 - 0.4);
+        let c = Vec3::new(x, 0.0, z);
+        for (layer, (count, radius, turn, thick)) in [(18, r * 0.92, 0.33, 0.045), (18, r * 0.8, -0.33, 0.05), (7, r * 0.35, 0.08, 0.06)].into_iter().enumerate() {
+            for k in 0..count {
+                let h = |j: i32| hash01(k, j, layer as i32, 0x3a7);
+                let a0 = (k as f32 + h(1) * 0.4) / count as f32 * std::f32::consts::TAU;
+                let a1 = a0 + turn * std::f32::consts::TAU * (0.9 + 0.2 * h(2));
+                let rr = radius * (0.95 + 0.1 * h(3));
+                let p = c + Vec3::new(a0.cos() * rr, a, a0.sin() * rr);
+                let q = c + Vec3::new(a1.cos() * rr, b, a1.sin() * rr);
+                self.cables.push(((0..=12).map(|i| p.lerp(q, i as f32 / 12.0)).collect(), thick * (0.85 + 0.3 * h(4))));
+            }
+        }
     }
     /// A lamp: a light and the small glowing box it is.
     fn lamp(&mut self, at: Vec3, range: f32, k: f32) {
@@ -293,7 +325,7 @@ impl B {
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables }
     }
 }
 
@@ -307,6 +339,16 @@ type Pick<'a> = &'a dyn Fn(i32, usize) -> usize;
 /// The room for a seed: its kind by the seed (each kind in turn), the rest
 /// drawn.
 pub(super) fn generate(seed: u32) -> Room {
+    generate_with(seed, false)
+}
+
+/// `--opt woven`: a great hypostyle like the lab's, one of its columns
+/// woven of cables (see `B::woven`).
+pub(super) fn woven_hall(seed: u32) -> Room {
+    generate_with(seed, true)
+}
+
+fn generate_with(seed: u32, woven: bool) -> Room {
     let pick = move |k: i32, n: usize| ((hash01(seed as i32, k, 0, 0x52b) * n as f32) as usize).min(n - 1);
     let scale = [0.75, 1.0, 1.4][pick(1, 3)];
     // (At least two layers of detail.)
@@ -320,13 +362,16 @@ pub(super) fn generate(seed: u32) -> Room {
     // (Each kind's main choice in turn, room by room of that kind: two of a
     // kind side by side differ in it.)
     let alt = ((seed + 5) / 6) as usize;
+    if woven {
+        return hypostyle(&pick, alt, scale, detail, true);
+    }
     match (seed + 5) % 6 {
         0 => rotunda(&pick, alt, scale, detail),
         1 => crossing(&pick, alt, scale, detail),
         2 => overlook(&pick, alt, scale, detail),
         3 => cascade(&pick, alt, scale, detail),
         4 => ring(&pick, alt, scale, detail),
-        _ => hypostyle(&pick, alt, scale, detail),
+        _ => hypostyle(&pick, alt, scale, detail, false),
     }
 }
 
@@ -861,7 +906,7 @@ fn ring(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
 /// five or six thicknesses apart), on plinths, with capitals; a clearing in
 /// its middle under a lantern; the clearing sunk, or a dais across the far
 /// side; pilasters on the walls answering the columns.
-fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
+fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail, woven: bool) -> Room {
     let f = 4.0;
     let h = half([6.0, 8.0, 10.0][pick(12, 3)] * s.max(0.9));
     let dd = thickness(h, [9.0, 10.0][pick(16, 2)]);
@@ -901,7 +946,9 @@ fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     // Pilasters answering the columns, niches between; bands.
     b.rhythm((x0, x0 + side), (z0, z0 + side), (f, f + h), bay, Some(bay), true);
     b.bands((x0, x0 + side), (z0, z0 + side), (f, f + h));
-    // Columns at every crossing of the bays but in the clearing.
+    // Columns at every crossing of the bays but in the clearing; with
+    // `woven`, one of them (off the axis, the second row in) of cables.
+    let odd = (n / 2 - 1, 2);
     for i in 1..n {
         for j in 1..n {
             let (x, z) = (i as f32 * bay, j as f32 * bay);
@@ -909,8 +956,17 @@ fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
                 continue;
             }
             let base = if floor == "a dais across the far side" && z > side - bay { f + 1.0 } else { f };
-            b.column(x0 + x, z0 + z, dd, (base, f + h));
+            if woven && (i, j) == odd {
+                b.woven(x0 + x, z0 + z, dd, (base, f + h));
+            } else {
+                b.column(x0 + x, z0 + z, dd, (base, f + h));
+            }
         }
+    }
+    if woven {
+        let (x, z) = (x0 + odd.0 as f32 * bay, z0 + odd.1 as f32 * bay);
+        b.note("one column woven of cables");
+        b.view("woven", Vec3::new(x + bay * 0.6, f + 1.7, z - bay * 0.9), Vec3::new(x, f + h * 0.45, z));
     }
     b.lamp(Vec3::new(cx, f + h + lantern - 1.0, z0 + mid), h + lantern + side * 0.5, strength(h + lantern + side * 0.5) * 3.0);
     b.door(2, cx - 1.0, 2.0, f, 2.5, 0.0, T);

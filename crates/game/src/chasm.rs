@@ -846,7 +846,7 @@ fn build(
     }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
     if args.opt("rooms") {
-        let (mut parts, views, orbs) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, args.opt("orb"));
+        let (mut parts, views, orbs) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
         commands.insert_resource(views);
         for (at, r) in orbs {
             rooms::orb::spawn(&mut commands, &mut meshes, &mut materials, at, r);

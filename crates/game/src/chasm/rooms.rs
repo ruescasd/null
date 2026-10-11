@@ -663,10 +663,36 @@ const LIFT: f32 = 40.0;
 
 /// The lab's rooms (`--set rooms=N`, from `--seed`), each its own recipe,
 /// side by side.
-fn rooms(seed: u32, count: u32, orb: bool) -> impl Iterator<Item = lab::Room> {
+/// What the lab shows: its batch of rooms, or one room alone (`--opt orb`:
+/// the shrine; `--opt woven`: a hall with a woven column).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Show {
+    Batch,
+    Orb,
+    Woven,
+}
+
+impl Show {
+    pub fn of(args: &crate::Args) -> Show {
+        if args.opt("orb") {
+            Show::Orb
+        } else if args.opt("woven") {
+            Show::Woven
+        } else {
+            Show::Batch
+        }
+    }
+}
+
+fn rooms(seed: u32, count: u32, show: Show) -> impl Iterator<Item = lab::Room> {
     let mut x = 0.0;
-    (0..if orb { 1 } else { count }).map(move |i| {
-        let room = if orb { lab::shrine() } else { lab::generate(seed + i) };
+    (0..if show == Show::Batch { count } else { 1 }).map(move |i| {
+        let room = match show {
+            Show::Orb => lab::shrine(),
+            // (Seed 6's room is a hypostyle; with --seed, others.)
+            Show::Woven => lab::woven_hall(seed * 6),
+            Show::Batch => lab::generate(seed + i),
+        };
         let width = room.grid.n[0] as f32 * CELL;
         let origin = LAB + Vec3::new(x, LIFT - room.floor, 0.0);
         x += width + 16.0;
@@ -675,8 +701,8 @@ fn rooms(seed: u32, count: u32, orb: bool) -> impl Iterator<Item = lab::Room> {
 }
 
 /// Where you start in the lab: at the first room's door, looking in.
-pub fn start(seed: u32, orb: bool) -> [f32; 5] {
-    let room = rooms(seed, 1, orb).next().unwrap();
+pub fn start(seed: u32, show: Show) -> [f32; 5] {
+    let room = rooms(seed, 1, show).next().unwrap();
     let (eye, at) = (room.grid.origin + room.views[0].1, room.grid.origin + room.views[0].2);
     let to = at - eye;
     [eye.x, eye.y, eye.z, (-to.x).atan2(-to.z).to_degrees(), to.y.atan2(Vec2::new(to.x, to.z).length()).to_degrees()]
@@ -689,8 +715,8 @@ pub struct RoomViews(pub Vec<(String, Vec3, Vec3)>);
 
 /// The lab: its rooms built, where to see them from, and the orbs hanging
 /// in them (`--opt orb`: the shrine alone).
-pub(super) fn lab(seed: u32, count: u32, orb: bool) -> (Parts, RoomViews, Vec<(Vec3, f32)>) {
-    let (parts, report, views, orbs) = built(seed, count, orb);
+pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Vec<(Vec3, f32)>) {
+    let (parts, report, views, orbs) = built(seed, count, show);
     for line in report {
         info!("rooms: {line}");
     }
@@ -702,7 +728,7 @@ pub(super) fn lab(seed: u32, count: u32, orb: bool) -> (Parts, RoomViews, Vec<(V
 pub fn check() -> bool {
     let mut ok = true;
     for seed in (1..=100).step_by(10) {
-        let (_, report, _, _) = built(seed, 10, false);
+        let (_, report, _, _) = built(seed, 10, Show::Batch);
         for line in report {
             if line.contains("OPEN") {
                 ok = false;
@@ -715,14 +741,17 @@ pub fn check() -> bool {
 }
 
 /// The lab's rooms, a line on each, and the views.
-fn built(seed: u32, count: u32, orb: bool) -> (Parts, Vec<String>, RoomViews, Vec<(Vec3, f32)>) {
+fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, Vec<(Vec3, f32)>) {
     let mut parts = Parts::default();
     let mut report = Vec::new();
     let mut views = RoomViews::default();
     let mut orbs = Vec::new();
-    for (i, room) in rooms(seed, count, orb).enumerate() {
+    for (i, room) in rooms(seed, count, show).enumerate() {
         if let Some((at, r)) = room.orb {
             orbs.push((room.grid.origin + at, r));
+        }
+        for (points, thick) in &room.cables {
+            parts.cables.push((points.iter().map(|p| room.grid.origin + *p).collect(), *thick));
         }
         let grid = &room.grid;
         let before = parts.stone.indices.len() / 3;
