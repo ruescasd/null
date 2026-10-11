@@ -886,7 +886,7 @@ fn build(
     }
     // `--opt plan`: a blockout of the chasm's plan instead (see `plan.rs`).
     if args.opt("plan") {
-        let (mut parts, _) = plan::build(args.seed, args.num("plan", 0.0) as u32);
+        let (mut parts, _) = plan::build(args.seed);
         let colliders = parts.stone.collider().into_iter().collect();
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, false);
         return;

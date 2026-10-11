@@ -60,9 +60,10 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               the way's pieces (flight, tunnel, switchback, place, bridge; built out or carved; under
                                               an overhang, by a step, across a joint), listed in the log as "the junctions: slot ..."
     --opt plan                                with --opt chasm: a blockout of a branching chasm plan instead (plain rock blocks,
-                                              the chasm carved as a tree of branches, side branches shallower): --set plan=0 an
-                                              H-tree, 1 a looser tree; --seed; --set fog=3000 to see across it
-    --check plan                              the plans as maps (screenshots/plan/*.pgm: rock white, the chasm darker deeper)
+                                              the chasm carved as a tree of branches: a trunk as wide as the chasm, branches
+                                              narrower; no floor, the rim 1500 m up); --seed; --set fog=3000 to see across it
+    --check plan                              the plan for seeds 1-8 as maps (screenshots/plan/*.pgm: rock white, the chasm
+                                              darker nearer the trunk)
     --opt rooms                               with --opt chasm: the room lab instead: rooms built on a grid of quarter-metre cells
                                               (solid, empty, or a prism: part of a slope or of a quarter circle) by units (arch,
                                               vault, column, stair, slope), meshed from the cells (no 3D booleans), on the ground

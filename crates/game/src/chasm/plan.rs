@@ -1,17 +1,18 @@
-//! A blockout of the chasm's plan (`--opt chasm --opt plan`, `--set plan=0`
-//! an H-tree, `1` a looser tree; `--seed`): its large-scale shape as plain
-//! blocks, to judge it before building on it. Rock, its top at the rim, and
-//! the chasm carved through it on a coarse grid as a tree of branches, each
-//! straight, each narrower than the one it springs from, side branches'
-//! floors higher than the trunk's (the floors step down into the trunk).
-//! The way down is to run mostly inside the rock, so what matters here is
-//! the rock's shape between the branches: fins, blocks, corners, where the
-//! inside meets the chasm.
+//! A blockout of the chasm's plan (`--opt chasm --opt plan`, `--seed`): its
+//! large-scale shape as plain blocks, to judge it before building on it.
+//! Rock, its top at the rim, and the chasm carved through it on a coarse
+//! grid as a tree of straight branches: a trunk as wide as the chasm (its
+//! faces stepping in and out, 30-230 m apart), branches springing square
+//! from it and from each other, each narrower than the one it springs from.
+//! The chasm has no floor: every branch falls as far as the rock goes, the
+//! bottom lost in the haze. The way down is to run mostly inside the rock,
+//! so what matters here is the rock's shape between the branches: fins,
+//! blocks, corners, where the inside meets the chasm.
 
 use bevy::prelude::*;
 use worldgen::noise::hash01;
 
-use super::{HEIGHT, Parts};
+use super::Parts;
 
 /// The grid's cell (metres), and how many cells across the plan is.
 const CELL: f32 = 8.0;
@@ -20,30 +21,34 @@ const N: i32 = 256;
 /// Where the plan's corner is (the world wraps round at 16 km: well inside).
 const ORIGIN: Vec3 = Vec3::new(1000.0, 0.0, 1000.0);
 
-/// A branch of the chasm: a straight run along x or z, from `a` to `b` (the
-/// middle of its ends, in cells), `width` cells across, its floor `floor`
-/// metres up.
+/// The rim's height: high enough that the ground below is lost in the haze.
+const RIM: f32 = 1500.0;
+
+/// A branch of the chasm: a straight run along x or z, its centre line from
+/// `a` to `b` (cells), each side's face stepping in and out in stretches, at
+/// most `reach` cells from it; `level` branchings from the trunk.
 #[derive(Clone, Copy)]
 struct Branch {
     a: IVec2,
     b: IVec2,
-    width: i32,
-    floor: f32,
+    reach: i32,
+    level: u8,
 }
 
 impl Branch {
-    /// Its cells, as a rectangle (lo inclusive, hi exclusive).
+    /// The rectangle it may take (lo inclusive, hi exclusive), with
+    /// `margin` cells round it.
     fn rect(&self, margin: i32) -> (IVec2, IVec2) {
-        let h = self.width / 2;
-        let lo = self.a.min(self.b) - IVec2::splat(h + margin);
-        let hi = self.a.max(self.b) + IVec2::splat(self.width - h + margin);
+        let lo = self.a.min(self.b) - IVec2::splat(self.reach + margin);
+        let hi = self.a.max(self.b) + IVec2::splat(self.reach + 1 + margin);
         (lo, hi)
     }
 }
 
-/// The plan: per cell, rock (`None`) or the chasm and its floor's height.
+/// The plan: per cell, rock (`None`) or the chasm (the level of the
+/// branch there nearest the trunk).
 struct Plan {
-    cells: Vec<Option<f32>>,
+    cells: Vec<Option<u8>>,
     branches: Vec<Branch>,
 }
 
@@ -52,18 +57,42 @@ impl Plan {
         Plan { cells: vec![None; (N * N) as usize], branches: Vec::new() }
     }
 
-    fn get(&self, x: i32, z: i32) -> Option<f32> {
-        if (0..N).contains(&x) && (0..N).contains(&z) { self.cells[(x + z * N) as usize] } else { Some(0.0) }
+    fn get(&self, x: i32, z: i32) -> Option<u8> {
+        if (0..N).contains(&x) && (0..N).contains(&z) { self.cells[(x + z * N) as usize] } else { Some(0) }
     }
 
-    /// Carves a branch (where two meet, the lower floor).
-    fn carve(&mut self, b: Branch) {
-        let (lo, hi) = b.rect(0);
-        for z in lo.y.max(0)..hi.y.min(N) {
-            for x in lo.x.max(0)..hi.x.min(N) {
-                let c = &mut self.cells[(x + z * N) as usize];
-                *c = Some(c.map_or(b.floor, |f| f.min(b.floor)));
+    /// Carves a branch: along it in stretches (longer the wider the
+    /// branch), each side's face a random distance out (the trunk's from a
+    /// sixth of its reach to all of it, as the chasm's; a branch's from
+    /// half, so it doesn't pinch), never the same as the stretch before's,
+    /// so each joint is a step.
+    fn carve(&mut self, b: Branch, r: &dyn Fn(i32, i32) -> f32) {
+        let along = b.b - b.a;
+        let len = along.abs().max_element().max(1);
+        let dir = along / len;
+        let side = IVec2::new(dir.y.abs(), dir.x.abs());
+        let key = self.branches.len() as i32 * 97;
+        let least = if b.level == 0 { 0.17 } else { 0.55 };
+        let out = |k: i32, s: i32| ((b.reach as f32) * (least + (1.0 - least) * r(key + k, s))).round().max(2.0) as i32;
+        let (mut t, mut k) = (0, 0);
+        let (mut lo, mut hi) = (out(0, 10), out(0, 11));
+        while t < len {
+            let run = (b.reach as f32 * (0.8 + 2.5 * r(key + k, 12))).round().max(3.0) as i32;
+            for u in t..(t + run).min(len) {
+                let c = b.a + dir * u;
+                for w in -lo..hi {
+                    let p = c + side * w;
+                    if (0..N).contains(&p.x) && (0..N).contains(&p.y) {
+                        let cell = &mut self.cells[(p.x + p.y * N) as usize];
+                        *cell = Some(cell.map_or(b.level, |l| l.min(b.level)));
+                    }
+                }
             }
+            t += run;
+            k += 1;
+            let (l, h) = (out(k, 10), out(k, 11));
+            lo = if l == lo { if l < b.reach { l + 1 } else { l - 1 } } else { l };
+            hi = if h == hi { if h < b.reach { h + 1 } else { h - 1 } } else { h };
         }
         self.branches.push(b);
     }
@@ -82,52 +111,25 @@ impl Plan {
     }
 }
 
-/// How wide (cells) and how high the floor (m) of a branch so many levels
-/// from the trunk.
-fn level(k: usize) -> (i32, f32) {
-    [(20, 0.0), (14, 110.0), (10, 210.0), (7, 290.0), (5, 350.0)][k.min(4)]
+/// How far each face may stand from a branch's centre line (cells), so many
+/// levels from the trunk: the trunk's as the chasm's (15-115 m), each level
+/// narrower.
+fn reach(level: u8) -> i32 {
+    [14, 9, 6, 4][level.min(3) as usize]
 }
 
-/// An H-tree: a trunk across the middle, at each end of each branch a
-/// branch square to it, centred on it, about 0.7 times as long, narrower,
-/// shallower; four levels, some branches cut off (by `seed`).
-fn htree(seed: u32) -> Plan {
-    let mut plan = Plan::new();
-    let r = |a: i32, b: i32| hash01(seed as i32, a, b, 0x4e1);
-    let mut stack = vec![(IVec2::new(N / 2, N / 2), IVec2::X, 120.0f32, 0usize, 0i32)];
-    while let Some((mid, dir, len, k, key)) = stack.pop() {
-        if k > 1 && r(key, 1) < 0.25 {
-            continue;
-        }
-        let (width, floor) = level(k);
-        let half = (len * 0.5).round() as i32;
-        let b = Branch { a: mid - dir * half, b: mid + dir * half, width, floor };
-        plan.carve(b);
-        if k < 3 {
-            let turn = IVec2::new(dir.y, dir.x);
-            for (j, end) in [b.a, b.b].into_iter().enumerate() {
-                stack.push((end, turn, len * 0.707, k + 1, key * 2 + j as i32 + 1));
-            }
-        }
-    }
-    plan
-}
-
-/// A looser tree: a trunk across the plan, branches springing square from
-/// any branch at random points along it, either side, of random length,
-/// narrower and shallower than it, keeping rock between them; three
-/// levels.
+/// The tree: a trunk across the plan, branches springing square from any
+/// branch at random points along it, either side, of random length,
+/// narrower than it, keeping rock between them; four levels.
 fn tree(seed: u32) -> Plan {
     let mut plan = Plan::new();
     let r = |a: i32, b: i32| hash01(seed as i32, a, b, 0x4e2);
-    let (width, floor) = level(0);
-    plan.carve(Branch { a: IVec2::new(20, N / 2 + ((r(0, 0) - 0.5) * 40.0) as i32), b: IVec2::new(N - 20, N / 2 + ((r(0, 1) - 0.5) * 40.0) as i32), width, floor });
-    let mut tries = 0;
+    let z = N / 2 + ((r(0, 0) - 0.5) * 60.0) as i32;
+    plan.carve(Branch { a: IVec2::new(0, z), b: IVec2::new(N, z), reach: reach(0), level: 0 }, &r);
     let mut i = 0;
-    while i < plan.branches.len() && tries < 4000 {
+    while i < plan.branches.len() {
         let parent = plan.branches[i];
-        let k = (0..5).find(|&k| level(k).0 <= parent.width).unwrap_or(4);
-        if k >= 3 {
+        if parent.level >= 3 {
             i += 1;
             continue;
         }
@@ -135,79 +137,81 @@ fn tree(seed: u32) -> Plan {
         let len = along.abs().max_element();
         let dir = along / len.max(1);
         let turn = IVec2::new(dir.y, dir.x);
-        let (cw, cf) = level(k + 1);
-        // Children every so often along it.
-        let mut t = 12 + (r(i as i32, 2) * 20.0) as i32;
-        while t < len - 12 {
-            tries += 1;
+        let level = parent.level + 1;
+        let cr = reach(level);
+        // (The trunk's branches far apart, so theirs have room to grow.)
+        let spread = if level == 1 { 45.0 } else { 14.0 };
+        // Children every so often along it, each from its centre line out,
+        // keeping rock between it and any other but its parent (its own
+        // reach and a few cells); if one clashes, a shorter one.
+        let mut t = cr + 2 + (r(i as i32, 2) * 12.0) as i32;
+        while t < len - cr - 2 {
             let at = parent.a + dir * t;
-            let side = if r(i as i32 * 31 + t, 3) < 0.5 { 1 } else { -1 };
-            let l = (len as f32 * (0.3 + 0.5 * r(i as i32 * 31 + t, 4))).round() as i32;
-            let start = at + turn * side * (parent.width / 2);
-            let b = Branch { a: start, b: start + turn * side * l, width: cw, floor: cf };
-            if !plan.clashes(&b, cw + 4, i) {
-                plan.carve(b);
-                t += cw * 3 + (r(i as i32 * 31 + t, 5) * 25.0) as i32;
-            } else {
-                t += 6;
+            let key = i as i32 * 31 + t;
+            // (Sides mostly in turn, so both sides of a branch get some.)
+            let side = if (r(key, 3) < 0.25) == (plan.branches.len() % 2 == 0) { 1 } else { -1 };
+            let l = (len as f32 * (0.35 + 0.55 * r(key, 4))).round().max(cr as f32 * 4.0) as i32;
+            let placed = [l, l / 2].into_iter().filter(|&l| l > parent.reach + cr * 3).find_map(|l| {
+                let b = Branch { a: at, b: at + turn * side * l, reach: cr, level };
+                (!plan.clashes(&b, cr + 3, i)).then_some(b)
+            });
+            if let Some(b) = placed {
+                plan.carve(b, &r);
             }
+            t += if placed.is_some() { cr * 2 + 6 + (r(key, 5) * spread) as i32 } else { 3 };
         }
         i += 1;
     }
     plan
 }
 
-/// The blockout: its rock as blocks (its top at the rim; its sides down to
-/// the floors beside them), the floors that stand above the ground, into
-/// `parts`; and where to start (on the rim at the trunk's middle, looking
-/// along it).
-pub(super) fn build(seed: u32, kind: u32) -> (Parts, [f32; 5]) {
-    let plan = if kind == 0 { htree(seed) } else { tree(seed) };
+/// The blockout: its rock as blocks, its top at the rim, its faces down to
+/// the ground (lost in the haze), into `parts`; and where to start (on the
+/// rim at the trunk's near end, looking along it).
+pub(super) fn build(seed: u32) -> (Parts, [f32; 5]) {
+    let plan = tree(seed);
     let mut parts = Parts::default();
     let g = &mut parts.stone;
     let at = |x: i32, z: i32, y: f32| ORIGIN + Vec3::new(x as f32 * CELL, y, z as f32 * CELL);
-    // Tops: of the rock at the rim, of each floor above the ground; merged
-    // along rows.
+    // Tops: of the rock at the rim, merged along rows.
     for z in 0..N {
         let mut x = 0;
         while x < N {
             let here = plan.get(x, z);
             let mut e = x + 1;
-            while e < N && plan.get(e, z) == here {
+            while e < N && plan.get(e, z).is_some() == here.is_some() {
                 e += 1;
             }
-            let y = here.unwrap_or(HEIGHT);
-            if y > 0.0 {
-                g.quad([at(x, z, y), at(x, z + 1, y), at(e, z + 1, y), at(e, z, y)], Vec3::Y);
+            if here.is_none() {
+                g.quad([at(x, z, RIM), at(x, z + 1, RIM), at(e, z + 1, RIM), at(e, z, RIM)], Vec3::Y);
             }
             x = e;
         }
     }
-    // Sides: wherever a cell stands higher than the one beside it, from
-    // that one's height up to its own, facing it (merged along the edge).
-    let height = |c: Option<f32>| c.unwrap_or(HEIGHT);
+    // Faces: wherever rock stands beside the chasm, from the ground to the
+    // rim, facing it (merged along the edge).
+    let rock = |x: i32, z: i32| plan.get(x, z).is_none();
     for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
         let n = Vec3::new(dx as f32, 0.0, dz as f32);
         for line in 0..N {
             // (Along the edge: z for an edge across x, x for one across z.)
             let cell = |t: i32| if dx != 0 { (line, t) } else { (t, line) };
-            let pair = |t: i32| {
+            let face = |t: i32| {
                 let (x, z) = cell(t);
-                (height(plan.get(x, z)), height(plan.get(x + dx, z + dz)))
+                rock(x, z) && !rock(x + dx, z + dz)
             };
             let mut t = 0;
             while t < N {
-                let (h, o) = pair(t);
-                if h <= o {
+                if !face(t) {
                     t += 1;
                     continue;
                 }
                 let mut e = t + 1;
-                while e < N && pair(e) == (h, o) {
+                while e < N && face(e) {
                     e += 1;
                 }
                 let edge = line + if dx + dz > 0 { 1 } else { 0 };
-                let corners = if dx != 0 { [at(edge, t, o), at(edge, e, o), at(edge, e, h), at(edge, t, h)] } else { [at(t, edge, o), at(e, edge, o), at(e, edge, h), at(t, edge, h)] };
+                let corners = if dx != 0 { [at(edge, t, 0.0), at(edge, e, 0.0), at(edge, e, RIM), at(edge, t, RIM)] } else { [at(t, edge, 0.0), at(e, edge, 0.0), at(e, edge, RIM), at(t, edge, RIM)] };
                 let outward = (corners[1] - corners[0]).cross(corners[3] - corners[0]).dot(n) > 0.0;
                 g.quad(if outward { corners } else { [corners[0], corners[3], corners[2], corners[1]] }, n);
                 t = e;
@@ -216,36 +220,33 @@ pub(super) fn build(seed: u32, kind: u32) -> (Parts, [f32; 5]) {
     }
     let trunk = plan.branches[0];
     let (lo, hi) = trunk.rect(0);
-    let eye = at(lo.x + 6, hi.y + 2, HEIGHT + 1.7);
-    let look = at(hi.x, (lo.y + hi.y) / 2, HEIGHT * 0.4) - eye;
+    let eye = at(lo.x + 12, hi.y + 1, RIM + 1.7);
+    let look = at(lo.x + 120, (lo.y + hi.y) / 2, RIM * 0.85) - eye;
     let start = [eye.x, eye.y, eye.z, (-look.x).atan2(-look.z).to_degrees(), look.y.atan2(Vec2::new(look.x, look.z).length()).to_degrees()];
     info!("the plan: {} branches, {} cells of chasm in {} by {} km", plan.branches.len(), plan.cells.iter().filter(|c| c.is_some()).count(), N as f32 * CELL / 1000.0, N as f32 * CELL / 1000.0);
     (parts, start)
 }
 
-/// `--check plan`: each kind's plan for a few seeds as a map (a greyscale
-/// image: rock white, the chasm darker the deeper its floor) in
+/// `--check plan`: the plan for a few seeds as a map (a greyscale image:
+/// rock white, the chasm darker the nearer the trunk) in
 /// `screenshots/plan/`.
 pub fn maps() {
     let _ = std::fs::create_dir_all("screenshots/plan");
-    for kind in 0..2 {
-        for seed in 1..=4 {
-            let plan = if kind == 0 { htree(seed) } else { tree(seed) };
-            let mut bytes = format!("P5 {N} {N} 255
-").into_bytes();
-            for z in 0..N {
-                for x in 0..N {
-                    bytes.push(plan.get(x, z).map_or(235, |f| (40.0 + f / HEIGHT * 120.0) as u8));
-                }
+    for seed in 1..=8 {
+        let plan = tree(seed);
+        let mut bytes = format!("P5 {N} {N} 255\n").into_bytes();
+        for z in 0..N {
+            for x in 0..N {
+                bytes.push(plan.get(x, z).map_or(235, |l| 40 + 35 * l));
             }
-            let path = format!("screenshots/plan/plan{kind}_{seed}.pgm");
-            let _ = std::fs::write(&path, bytes);
-            eprintln!("plan: {path}: {} branches", plan.branches.len());
         }
+        let path = format!("screenshots/plan/plan_{seed}.pgm");
+        let _ = std::fs::write(&path, bytes);
+        eprintln!("plan: {path}: {} branches", plan.branches.len());
     }
 }
 
 /// Where you start in the blockout.
-pub fn start(seed: u32, kind: u32) -> [f32; 5] {
-    build(seed, kind).1
+pub fn start(seed: u32) -> [f32; 5] {
+    build(seed).1
 }
