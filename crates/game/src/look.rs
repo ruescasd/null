@@ -34,10 +34,13 @@ impl Plugin for LookPlugin {
     fn build(&self, app: &mut App) {
         let args = app.world().resource::<Args>().clone();
         // (The room lab: a still night with no fill, so a room shows by its
-        // own light alone.)
+        // own light alone. Both suns well down, 17 and 10 degrees: at 600 s
+        // the dim one stood 3 degrees up, its light grazing in through the
+        // rooms' walls or not as the view turned, the shadow's bias in
+        // texels of a cascade fitted to the view.)
         let rooms = args.opt("chasm") && args.opt("rooms");
         app.insert_resource(Sky {
-            time: args.time.unwrap_or(if rooms { 600.0 } else { 150.0 }),
+            time: args.time.unwrap_or(if rooms { 550.0 } else { 150.0 }),
             speed: 1.0,
             paused: args.shot.is_some() || args.opt("labshots") || rooms,
             soft_shadows: !args.opt("hard"),

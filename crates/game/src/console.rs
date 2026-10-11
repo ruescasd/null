@@ -20,10 +20,7 @@ use bevy::{
         ButtonState, InputSystems,
         keyboard::{Key, KeyboardInput},
     },
-    light::{
-        ShadowFilteringMethod,
-        cluster::{ClusterConfig, ClusterFarZMode, ClusterZConfig},
-    },
+    light::ShadowFilteringMethod,
     pbr::ContactShadows,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
@@ -177,9 +174,8 @@ const SWITCHES: [(&str, &str); 3] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 4] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 3] {
     [
-        ("cluster", "light clustering: 0 Bevy's, 1 one cluster, 2 a fixed far depth (2 km), 3 never shrunk", 0.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
         ("fog", "how far the haze lets you see (m)", if args.opt("chasm") { 600.0 } else { 4500.0 }),
         ("fog_glow", "the haze's glow towards the suns", 0.15),
@@ -298,24 +294,13 @@ fn show(time: Res<Time>, mut console: ResMut<Console>, panel: Single<(&mut Node,
 
 /// The camera follows the switches set up at the start: contact shadows
 /// (`nocontact`), temporal anti-aliasing (`notaa`; without it, shadows
-/// filtered without it too), light clustering (`cluster`).
+/// filtered without it too).
 fn follow(mut commands: Commands, args: Res<Args>, camera: Single<(Entity, Has<ContactShadows>, Has<TemporalAntiAliasing>), With<FlyCam>>) {
     if !args.is_changed() {
         return;
     }
     let (camera, contact, taa) = *camera;
     let mut cam = commands.entity(camera);
-    // (How the view's lights are sorted into clusters, `cluster`: Bevy's
-    // way; one cluster for the whole view, every light everywhere; Bevy's
-    // with its far depth fixed rather than from the last frame's lights;
-    // Bevy's never shrinking its grid.)
-    let bevy = ClusterConfig::default();
-    cam.insert(match args.num("cluster", 0.0) as i32 {
-        1 => ClusterConfig::Single,
-        2 => ClusterConfig::FixedZ { total: 4096, z_slices: 24, z_config: ClusterZConfig { first_slice_depth: 5.0, far_z_mode: ClusterFarZMode::Constant(2000.0) }, dynamic_resizing: true },
-        3 => ClusterConfig::FixedZ { total: 4096, z_slices: 24, z_config: ClusterZConfig::default(), dynamic_resizing: false },
-        _ => bevy,
-    });
     match (!args.opt("nocontact"), contact) {
         (true, false) => {
             cam.insert(ContactShadows::default());

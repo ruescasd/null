@@ -378,11 +378,8 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
             Order::Tiers => format!("an order in {tiers} tiers, an entablature on each"),
         }, posts.len()));
     }
-    // Light: a lamp high in the middle, light back off the floor.
     let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
-    let reach = sx.max(sz) + (ceiling - floor);
-    b.lamp(mid + Vec3::Y * (ceiling - floor - 1.0), reach, strength(reach) * 2.0);
-    b.bounce(mid + Vec3::Y, reach);
+    light(&mut b, spec.size, floor, ceiling);
     // Views: from high in a corner, across the whole of it; from inside each
     // door, looking across the room.
     // (From inside the first door on the floor, up at the far side: where
@@ -553,17 +550,31 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
     b.bands((T, sx - T), (T, sz - T), (bottom, ceiling));
     b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
     b.rhythm((T, sx - T), (T, sz - T), (bottom, ceiling), half((ceiling - bottom) / 3.0).clamp(4.0, 8.0), None, false);
-    // Light: lamps high over the top and the bottom, light back off the
-    // floor at the bottom.
     let point = |t: f32, y: f32| {
         let p = if dir > 0.0 { T + t } else { T + len - t };
         if axis == 0 { Vec3::new(p, y, sz * 0.5) } else { Vec3::new(sx * 0.5, y, p) }
     };
-    let reach = sx.max(sz) + (ceiling - bottom);
-    b.lamp(point(len * 0.2, ceiling - 1.0), reach, strength(reach) * 1.5);
-    b.lamp(point(len * 0.8, ceiling - 1.0), reach, strength(reach) * 1.5);
-    b.bounce(point(len * 0.85, bottom + 1.0), reach);
+    light(&mut b, spec.size, bottom, ceiling);
     b.view("floor", point(1.0, top + 1.7), point(len * 0.8, bottom + 1.0));
     b.view("high", point(len - 1.0, bottom + 1.7), point(len * 0.2, top + 3.0));
     Some(b.finish(bottom))
+}
+
+/// A fitted room's light (its own alone: the lab is at night): a lamp high
+/// in the middle, a lamp on each wall at its middle two thirds of the way
+/// up, and light thrown back off the floor, strong enough to fill it.
+/// (Until review 87 the rooms were lit mostly by a sun 3 degrees up leaking
+/// in through their walls; by their own lamps alone they were near black.)
+fn light(b: &mut B, size: Vec2, floor: f32, ceiling: f32) {
+    let (sx, sz) = (size.x, size.y);
+    let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
+    let high = ceiling - floor;
+    let reach = sx.max(sz) + high;
+    b.lamp(mid + Vec3::Y * (high - 1.0), reach, strength(reach) * 2.0);
+    let y = floor + high * 0.66;
+    let wall = sx.max(sz) * 0.9 + 4.0;
+    for at in [Vec3::new(T + 0.4, y, sz * 0.5), Vec3::new(sx - T - 0.4, y, sz * 0.5), Vec3::new(sx * 0.5, y, T + 0.4), Vec3::new(sx * 0.5, y, sz - T - 0.4)] {
+        b.lamp(at, wall, strength(wall) * 1.5);
+    }
+    b.fill.push((mid + Vec3::Y, reach, strength(reach) * 3.0));
 }
