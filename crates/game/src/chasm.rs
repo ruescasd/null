@@ -498,6 +498,9 @@ struct Parts {
     /// themselves): where, how far they reach, and how bright (times the
     /// chasm's light).
     lights: Vec<(Vec3, f32, f32)>,
+    /// Light standing for light thrown back (the renderer has none): dim,
+    /// never casting shadows.
+    fill: Vec<(Vec3, f32, f32)>,
     /// Flights' steps (seen, not walked on), and the slopes beneath them
     /// (walked on, not seen: real steps make you vault).
     steps: Geometry,
@@ -942,6 +945,9 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
         if shadows {
             commands.entity(light).insert(Shadowed);
         }
+    }
+    for &(at, range, k) in &parts.fill {
+        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
     }
     info!("the chasm: built ({} lights)", parts.lights.len());
 }

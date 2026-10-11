@@ -573,12 +573,68 @@ impl Grid {
 
     /// A round column from `y0` to `y1`, centred at (x, z), of radius `r`
     /// (on whole cells).
-    pub(super) fn column(&mut self, x: f32, z: f32, r: f32, (y0, y1): (f32, f32), cache: &mut Cache) {
-        let form = Form::Round { r: (r * PER_M).round() as u8 };
-        // (Across y, the cross-section's axes are (z, x).)
-        for (dz, dx) in [(0.0, 0.0), (-r, 0.0), (0.0, -r), (-r, -r)] {
+    pub(super) fn column(&mut self, x: f32, z: f32, r: f32, y: (f32, f32), cache: &mut Cache) {
+        self.ring(x, z, (0.0, r), y, true, cache);
+    }
+
+    /// A ring round (x, z) between radii `r.0` and `r.1` (`r.0` 0: a disc),
+    /// from `y0` to `y1` (on whole cells): solid added (`add`), or carved
+    /// out. Only the ring changes: a cell wholly outside it is left as it
+    /// is, and so is a cell the ring would only partly fill that is not
+    /// empty (or only partly carve that is not solid). Exact for a ring at
+    /// least half a metre thick: no cell is crossed by both its circles.
+    pub(super) fn ring(&mut self, x: f32, z: f32, (r0, r1): (f32, f32), (y0, y1): (f32, f32), add: bool, cache: &mut Cache) {
+        let (a, b) = ((r0 * PER_M).round() as u8, (r1 * PER_M).round() as u8);
+        let (y0, y1) = ((y0 * PER_M).round() as i32, (y1 * PER_M).round() as i32);
+        let full = |v: f64| v > 1.0 - 1e-9;
+        let none = |v: f64| v < 1e-9;
+        // (Across y, the cross-section's axes are (z, x): each quarter a
+        // block, its corner at the centre.)
+        for (dz, dx) in [(0.0, 0.0), (-r1, 0.0), (0.0, -r1), (-r1, -r1)] {
             let turn = Turn { flip_x: dz < 0.0, flip_y: dx < 0.0, swap: false };
-            self.block(1, form, turn, Vec3::new(x + dx, y0, z + dz), y1 - y0, cache);
+            let at = cells(Vec3::new(x + dx, 0.0, z + dz));
+            // (The inner block sits in the outer one's corner at the
+            // centre: flipped, it is offset by their difference.)
+            let (oz, ox) = (if dz < 0.0 { (b - a) as i32 } else { 0 }, if dx < 0.0 { (b - a) as i32 } else { 0 });
+            for i in 0..b {
+                for j in 0..b {
+                    // The cell's part inside the outer circle, and outside
+                    // the inner one.
+                    let outer = Prism { axis: 1, form: Form::Round { r: b }, turn, at: (i, j) };
+                    let ao = area(cache.region(&outer));
+                    let (ii, jj) = (i as i32 - oz, j as i32 - ox);
+                    let inner = (a > 0 && (0..a as i32).contains(&ii) && (0..a as i32).contains(&jj)).then(|| Prism { axis: 1, form: Form::Arch { r: a }, turn, at: (ii as u8, jj as u8) });
+                    let ai = inner.map_or(1.0, |p| area(cache.region(&p)));
+                    if none(ao) || none(ai) {
+                        continue;
+                    }
+                    // What the ring is in this cell (both circles crossing
+                    // it: too thin, taken as whole).
+                    let part = if full(ao) && full(ai) {
+                        None
+                    } else if full(ai) {
+                        Some(outer)
+                    } else if full(ao) {
+                        inner
+                    } else {
+                        None
+                    };
+                    for y in y0..y1 {
+                        let c = [at[0] + j as i32, y, at[2] + i as i32];
+                        let now = self.get(c);
+                        let f = match (add, part) {
+                            (true, None) => Filler::Solid,
+                            (true, Some(p)) if now == Filler::Empty => Filler::Prism(p),
+                            (false, None) => Filler::Empty,
+                            // (Carving part of a cell: what is left is the
+                            // rest of it, round the ring.)
+                            (false, Some(p)) if now == Filler::Solid => Filler::Prism(Prism { form: if p.form == outer.form { Form::Arch { r: b } } else { Form::Round { r: a } }, ..p }),
+                            _ => continue,
+                        };
+                        self.set(c, f);
+                    }
+                }
+            }
         }
     }
 
@@ -629,22 +685,20 @@ const LIFT: f32 = 40.0;
 
 /// The lab's rooms (`--set rooms=N`, from `--seed`), each its own recipe,
 /// side by side.
-fn rooms(seed: u32, count: u32) -> Vec<lab::Room> {
+fn rooms(seed: u32, count: u32) -> impl Iterator<Item = lab::Room> {
     let mut x = 0.0;
-    (0..count)
-        .map(|i| {
-            let room = lab::generate(seed + i);
-            let width = room.grid.n[0] as f32 * CELL;
-            let origin = LAB + Vec3::new(x, LIFT - lab::FLOOR, 0.0);
-            x += width + 12.0;
-            lab::Room { grid: Grid { origin, ..room.grid }, ..room }
-        })
-        .collect()
+    (0..count).map(move |i| {
+        let room = lab::generate(seed + i);
+        let width = room.grid.n[0] as f32 * CELL;
+        let origin = LAB + Vec3::new(x, LIFT - room.floor, 0.0);
+        x += width + 16.0;
+        lab::Room { grid: Grid { origin, ..room.grid }, ..room }
+    })
 }
 
 /// Where you start in the lab: at the first room's door, looking in.
 pub fn start(seed: u32) -> [f32; 5] {
-    let room = &rooms(seed, 1)[0];
+    let room = rooms(seed, 1).next().unwrap();
     let (eye, at) = (room.grid.origin + room.views[0].1, room.grid.origin + room.views[0].2);
     let to = at - eye;
     [eye.x, eye.y, eye.z, (-to.x).atan2(-to.z).to_degrees(), to.y.atan2(Vec2::new(to.x, to.z).length()).to_degrees()]
@@ -686,7 +740,7 @@ fn built(seed: u32, count: u32) -> (Parts, Vec<String>, RoomViews) {
     let mut parts = Parts::default();
     let mut report = Vec::new();
     let mut views = RoomViews::default();
-    for (i, room) in rooms(seed, count).into_iter().enumerate() {
+    for (i, room) in rooms(seed, count).enumerate() {
         let grid = &room.grid;
         let before = parts.stone.indices.len() / 3;
         let (enclosed, solid) = grid.mesh(&mut parts.stone);
@@ -701,6 +755,9 @@ fn built(seed: u32, count: u32) -> (Parts, Vec<String>, RoomViews) {
         ));
         for &(p, range, k) in &room.lights {
             parts.lights.push((grid.origin + p, range, k));
+        }
+        for &(p, range, k) in &room.fill {
+            parts.fill.push((grid.origin + p, range, k));
         }
         for &(lo, hi) in &room.glow {
             let (c, e) = (grid.origin + (lo + hi) * 0.5, (hi - lo) * 0.5);
