@@ -26,7 +26,7 @@ pub(super) use lab::{Court, court};
 pub(super) mod orb;
 
 /// A cell's size (a power of two: its multiples are exact).
-pub(super) const CELL: f32 = 0.25;
+pub(crate) const CELL: f32 = 0.25;
 
 /// Cells to a metre.
 const PER_M: f32 = 1.0 / CELL;
@@ -321,17 +321,18 @@ impl Grid {
     /// The room's surface, into `g`. Returns the volume it encloses and the
     /// volume of its cells' solid (they agree when it is closed).
     pub(super) fn mesh(&self, g: &mut Geometry) -> (f64, f64) {
-        self.mesh_with(g, false)
+        self.mesh_with(g, None)
     }
 
     /// The same without its outer faces, for a room cut out of the rock as
     /// one box (its grid's): the rock's faces are its own there (see
-    /// `court`).
-    pub(super) fn mesh_seamed(&self, g: &mut Geometry) {
-        self.mesh_with(g, true);
+    /// `court`); but where `open` says of the cell outside that it is open
+    /// (glass, air), as the grid has them.
+    pub(super) fn mesh_seamed(&self, g: &mut Geometry, open: &dyn Fn([i32; 3]) -> bool) {
+        self.mesh_with(g, Some(open));
     }
 
-    fn mesh_with(&self, g: &mut Geometry, seamed: bool) -> (f64, f64) {
+    fn mesh_with(&self, g: &mut Geometry, seamed: Option<&dyn Fn([i32; 3]) -> bool>) -> (f64, f64) {
         let mut cache = Cache(HashMap::new());
         let start = g.indices.len();
         // Whole faces between solid and empty, by plane (axis, where,
@@ -354,7 +355,10 @@ impl Grid {
                     for d in 0..3 {
                         let mut next = c;
                         next[d] += 1;
-                        if seamed && (self.index(c).is_none() || self.index(next).is_none()) {
+                        if let Some(open) = seamed
+                            && (self.index(c).is_none() || self.index(next).is_none())
+                            && !open(if self.index(c).is_none() { c } else { next })
+                        {
                             continue;
                         }
                         let there = self.get(next);
