@@ -664,12 +664,14 @@ const LIFT: f32 = 40.0;
 /// The lab's rooms (`--set rooms=N`, from `--seed`), each its own recipe,
 /// side by side.
 /// What the lab shows: its batch of rooms, or one room alone (`--opt orb`:
-/// the shrine; `--opt woven`: a hall with a woven column).
+/// the shrine; `--opt woven`: a hall with a woven column; `--opt well`: a
+/// stepwell).
 #[derive(Clone, Copy, PartialEq)]
 pub enum Show {
     Batch,
     Orb,
     Woven,
+    Well,
 }
 
 impl Show {
@@ -678,6 +680,8 @@ impl Show {
             Show::Orb
         } else if args.opt("woven") {
             Show::Woven
+        } else if args.opt("well") {
+            Show::Well
         } else {
             Show::Batch
         }
@@ -691,6 +695,7 @@ fn rooms(seed: u32, count: u32, show: Show) -> impl Iterator<Item = lab::Room> {
             Show::Orb => lab::shrine(),
             // (Seed 6's room is a hypostyle; with --seed, others.)
             Show::Woven => lab::woven_hall(seed * 6),
+            Show::Well => lab::well_court(seed),
             Show::Batch => lab::generate(seed + i),
         };
         let width = room.grid.n[0] as f32 * CELL;
