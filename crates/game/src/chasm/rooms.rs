@@ -648,29 +648,6 @@ impl Grid {
         }
     }
 
-    /// A slope rising `rise` over `run` (cells: 1 over 4, 1 over 2, 1 over
-    /// 1) along `axis` (`dir` +1 or -1) from (x, y, n) up `height`, `width`
-    /// wide, solid beneath; a run of blocks, each a step up and along.
-    pub(super) fn slope(&mut self, axis: usize, dir: f32, x: f32, width: f32, y: f32, n: f32, (run, rise): (u8, u8), height: f32, cache: &mut Cache) {
-        let steps = (height * PER_M / rise as f32).round() as i32;
-        let (run_m, rise_m) = (run as f32 * CELL, rise as f32 * CELL);
-        // (Along x, the cross-section of a prism along z is (x, y): the
-        // slope rising along x as it is; along z, across x it is (y, z):
-        // turned so its height is up. Falling the other way: flipped.)
-        let (along, across) = if axis == 0 { (0, 2) } else { (2, 0) };
-        for i in 0..steps {
-            let a = if dir > 0.0 { n + run_m * i as f32 } else { n - run_m * (i + 1) as f32 };
-            let base = y + rise_m * i as f32;
-            self.fill(self.frame(axis, x, y, a), self.frame(axis, x + width, base, a + run_m), Filler::Solid);
-            let turn = Turn { flip_x: dir < 0.0, flip_y: false, swap: axis == 2 };
-            let mut at = Vec3::ZERO;
-            at[along] = a;
-            at[across] = x;
-            at[1] = base;
-            self.block(across, Form::Ramp { run, rise }, turn, at, width, cache);
-        }
-    }
-
     /// A point in a unit's frame: `x` across it (along the wall), `y` up,
     /// `n` along `axis`.
     fn frame(&self, axis: usize, x: f32, y: f32, n: f32) -> Vec3 {
