@@ -282,14 +282,17 @@ pub(in crate::chasm) fn fitted(spec: &Spec, order: Order, kind: Kind) -> Room {
                     let (lo, hi) = l.band(w[0], w[1]);
                     b.solid(Vec3::new(lo.x, (top - SLAB).max(floor), lo.y), Vec3::new(hi.x, top, hi.y));
                     // A parapet along its open edge (but where it is near
-                    // the floor); under the level pieces, the slab stepped
-                    // back twice into the wall (but low down).
+                    // the floor); under the gallery, the slab stepped back
+                    // twice into the wall (but low down).
                     if top > floor + 0.6
                         && let Some((p, q)) = l.parapet(w[0], w[1])
                     {
                         b.solid(Vec3::new(p.x, top, p.y), Vec3::new(q.x, top + 1.0, q.y));
                     }
-                    let level = l.by_corner((w[0] + w[1]) * 0.5) || (top - y).abs() < 0.01;
+                    // (Only the gallery's: under a flight's corner landing,
+                    // stepped back towards two walls at once, it hung
+                    // under the turn like a stray box.)
+                    let level = (top - y).abs() < 0.01;
                     if level && top - SLAB - 1.5 > floor + CLEAR {
                         let k = l.wall((w[0] + w[1]) * 0.5);
                         for (i, by) in [0.75, 1.5].into_iter().enumerate() {
