@@ -4,6 +4,7 @@ mod camera;
 mod capture;
 mod chasm;
 mod check;
+mod console;
 mod combat;
 mod figure;
 mod landmarks;
@@ -130,6 +131,7 @@ fn main() {
             player::PlayerPlugin,
             structures::StructuresPlugin,
             chasm::ChasmPlugin,
+            console::ConsolePlugin,
         ))
         .run();
 }
