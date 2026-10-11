@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use super::{B, Detail, Room, T, strength};
+use super::{B, Detail, Room, T, half, strength, thickness};
 
 /// What a room must fit: its footprint (x, z, in metres, its walls
 /// included), its height, and its doors: which wall (0 the one at x = 0, 1
@@ -72,6 +72,53 @@ impl Loop {
         }
     }
 
+    /// Which wall `p` lies along (as in `band`).
+    fn wall(&self, p: f32) -> usize {
+        if p < self.w {
+            0
+        } else if p < self.w + self.d {
+            1
+        } else if p < 2.0 * self.w + self.d {
+            2
+        } else {
+            3
+        }
+    }
+
+    /// The band from `lo` to `hi` (as `band` gives it) drawn in toward its
+    /// wall by `by`, along wall `k`.
+    fn toward_wall(&self, k: usize, (mut lo, mut hi): (Vec2, Vec2), by: f32) -> (Vec2, Vec2) {
+        match k {
+            0 => hi.y -= by,
+            1 => lo.x += by,
+            2 => lo.y += by,
+            _ => hi.x -= by,
+        }
+        (lo, hi)
+    }
+
+    /// The parapet along the open edge of the band from `p0` to `p1` (within
+    /// one wall), clear of the corners (where the band turns, its edges
+    /// are the ways on); none if nothing is left.
+    fn parapet(&self, p0: f32, p1: f32) -> Option<(Vec2, Vec2)> {
+        let c = self.corners();
+        let k = self.wall((p0 + p1) * 0.5);
+        let (a, b) = (p0.max(c[k] + BAND), p1.min(c[k + 1] - BAND));
+        if b - a < 0.01 {
+            return None;
+        }
+        let band = self.band(a, b);
+        let edge = self.toward_wall(k, band, 0.0);
+        // (The strip a quarter metre wide at the band's open edge.)
+        let (lo, hi) = edge;
+        Some(match k {
+            0 => (Vec2::new(lo.x, hi.y - 0.25), hi),
+            1 => (lo, Vec2::new(lo.x + 0.25, hi.y)),
+            2 => (lo, Vec2::new(hi.x, lo.y + 0.25)),
+            _ => (Vec2::new(hi.x - 0.25, lo.y), hi),
+        })
+    }
+
     /// Whether `p` lies within a band's width of a corner (where the way
     /// round is level).
     fn by_corner(&self, p: f32) -> bool {
@@ -114,7 +161,7 @@ fn way_down(l: &Loop, p: f32, y: f32, floor: f32, dir: f32, taken: &[Piece]) -> 
 
 /// The room for `spec`.
 pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
-    let d = Detail { reveals: true, ..Default::default() };
+    let d = Detail { reveals: true, coffers: true, bands: true, ..Default::default() };
     let (sx, sz) = (spec.size.x, spec.size.y);
     let mut b = B::new(Vec3::new(sx, spec.height, sz), d);
     let l = Loop { w: sx - 2.0 * T, d: sz - 2.0 * T, size: spec.size };
@@ -189,6 +236,23 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
                 for w in cuts.windows(2) {
                     let (lo, hi) = l.band(w[0], w[1]);
                     b.solid(Vec3::new(lo.x, (top - SLAB).max(floor), lo.y), Vec3::new(hi.x, top, hi.y));
+                    // A parapet along its open edge (but where it is near
+                    // the floor); under the level pieces, the slab stepped
+                    // back twice into the wall (but low down).
+                    if top > floor + 0.6
+                        && let Some((p, q)) = l.parapet(w[0], w[1])
+                    {
+                        b.solid(Vec3::new(p.x, top, p.y), Vec3::new(q.x, top + 1.0, q.y));
+                    }
+                    let level = l.by_corner((w[0] + w[1]) * 0.5) || (top - y).abs() < 0.01;
+                    if level && top - SLAB - 1.5 > floor + CLEAR {
+                        let k = l.wall((w[0] + w[1]) * 0.5);
+                        for (i, by) in [0.75, 1.5].into_iter().enumerate() {
+                            let (p, q) = l.toward_wall(k, (lo, hi), by);
+                            let y1 = top - SLAB - 0.75 * i as f32;
+                            b.solid(Vec3::new(p.x, y1 - 0.75, p.y), Vec3::new(q.x, y1, q.y));
+                        }
+                    }
                 }
             }
         }
@@ -201,6 +265,36 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
     if blocked > 0 {
         b.note(format!("{blocked} ways down BLOCK a door or another way"));
     }
+    // Bands round the walls, coffers in the ceiling; in a hall wide and tall
+    // enough, a giant order of columns in the middle, clear of the band the
+    // ways take (by the orders: a tenth of its height thick, five
+    // thicknesses apart).
+    b.bands((T, sx - T), (T, sz - T), (floor, ceiling));
+    b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
+    let (ox, oz) = ((T + BAND + 1.0, sx - T - BAND - 1.0), (T + BAND + 1.0, sz - T - BAND - 1.0));
+    if !levels.is_empty() && ox.1 - ox.0 >= 10.0 && oz.1 - oz.0 >= 10.0 && ceiling - floor >= 10.0 {
+        let dd = thickness(ceiling - floor, 10.0);
+        let span = half(dd * 5.0).max(4.0);
+        let (nx, nz) = (((ox.1 - ox.0) / span).floor() as i32, ((oz.1 - oz.0) / span).floor() as i32);
+        for i in 0..=nx {
+            for j in 0..=nz {
+                let (x, z) = (half(ox.0 + (ox.1 - ox.0) * i as f32 / nx.max(1) as f32), half(oz.0 + (oz.1 - oz.0) * j as f32 / nz.max(1) as f32));
+                // (None in the way in from a door on the floor: 3 m either
+                // side of it, the band's width and 4 m more into the room.)
+                let reach = BAND + 4.0 + dd * 0.5;
+                let in_the_way = spec.doors.iter().filter(|d| d.2 <= floor + 0.01).any(|&(wall, u, _)| match wall {
+                    0 => x < T + reach && (z - u).abs() < 3.0 + dd * 0.5,
+                    1 => x > sx - T - reach && (z - u).abs() < 3.0 + dd * 0.5,
+                    2 => z < T + reach && (x - u).abs() < 3.0 + dd * 0.5,
+                    _ => z > sz - T - reach && (x - u).abs() < 3.0 + dd * 0.5,
+                });
+                if !in_the_way {
+                    b.column(x, z, dd, (floor, ceiling));
+                }
+            }
+        }
+        b.note(format!("a giant order, {} by {} columns {dd:.1} m thick", nx + 1, nz + 1));
+    }
     // Light: a lamp high in the middle, light back off the floor.
     let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
     let reach = sx.max(sz) + (ceiling - floor);
@@ -208,7 +302,17 @@ pub(in crate::chasm) fn fitted(spec: &Spec) -> Room {
     b.bounce(mid + Vec3::Y, reach);
     // Views: from high in a corner, across the whole of it; from inside each
     // door, looking across the room.
-    b.view("over", Vec3::new(T + 0.5, ceiling - 1.0, T + 0.5), Vec3::new(sx * 0.6, floor + 1.0, sz * 0.6));
+    b.view("high", Vec3::new(sx * 0.5, ceiling - 1.5, T + BAND + 0.75), Vec3::new(sx * 0.5, floor + (ceiling - floor) * 0.3, sz - T - 2.0));
+    // (From inside the first door on the floor, up at the far side.)
+    if let Some(&(wall, u, _)) = spec.doors.iter().find(|d| d.2 <= floor + 0.01) {
+        let (eye, far) = match wall {
+            0 => (Vec3::new(T + 0.75, floor + 1.7, u), Vec3::new(sx - T - BAND, (floor + ceiling) * 0.55, sz - u)),
+            1 => (Vec3::new(sx - T - 0.75, floor + 1.7, u), Vec3::new(T + BAND, (floor + ceiling) * 0.55, sz - u)),
+            2 => (Vec3::new(u, floor + 1.7, T + 0.75), Vec3::new(sx - u, (floor + ceiling) * 0.55, sz - T - BAND)),
+            _ => (Vec3::new(u, floor + 1.7, sz - T - 0.75), Vec3::new(sx - u, (floor + ceiling) * 0.55, T + BAND)),
+        };
+        b.view("floor", eye, far);
+    }
     for (k, &(wall, u, y)) in spec.doors.iter().enumerate() {
         let eye = match wall {
             0 => Vec3::new(T + 1.0, y + 1.7, u),

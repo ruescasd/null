@@ -400,7 +400,7 @@ impl Network {
 
 /// The paths through `plan`: the entrance on the rim beside the trunk's near
 /// end (place 0), places scattered through the rock to `DEPTH` (16-32 m
-/// across, 1-4 storeys, at least 120 m from each other, within 160 m of the
+/// across, 24 m at least if 3 storeys or more; 1-4 storeys, at least 120 m from each other, within 160 m of the
 /// chasm), joined: first the
 /// spine, a chain of places from the entrance down to a deep one most of a
 /// kilometre off, each deeper than the last and no further from it; then
@@ -451,8 +451,11 @@ fn joined(plan: &Plan, seed: u32, start: IVec2) -> Network {
         if places.len() >= 50 {
             break;
         }
-        let size = IVec2::new(2 + (r(t, 1) * 3.0) as i32, 2 + (r(t, 2) * 3.0) as i32);
+        // (Three storeys or more: 24 m across at least, so that its ways
+        // between its storeys need not wind round and round it.)
         let h = (r(t, 3) * 4.0) as i32;
+        let least = if h >= 2 { 3 } else { 2 };
+        let size = IVec2::new(least + (r(t, 1) * (5 - least) as f32) as i32, least + (r(t, 2) * (5 - least) as f32) as i32);
         let top = 2 + (r(t, 4) * (DEPTH - 2 - h) as f32) as i32;
         let at = IVec2::new(4 + (r(t, 5) * (N - 12) as f32) as i32, 4 + (r(t, 6) * (N - 12) as f32) as i32);
         let p = Place { at, size, storeys: (top, top + h) };
