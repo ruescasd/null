@@ -504,6 +504,12 @@ struct Parts {
     /// Light standing for light thrown back (the renderer has none): dim,
     /// never casting shadows.
     fill: Vec<(Vec3, f32, f32)>,
+    /// Lights in rooms with windows: casting shadows when among the
+    /// nearest to the eye (see `near_shadows`), so their light leaves by
+    /// the windows and doors, not through the rock.
+    shadowed: Vec<(Vec3, f32, f32)>,
+    /// Glass (clear, in windows): drawn see-through, and collided with.
+    glass: Geometry,
     /// Flights' steps (seen, not walked on), and the slopes beneath them
     /// (walked on, not seen: real steps make you vault).
     steps: Geometry,
@@ -666,6 +672,10 @@ fn made_from(seed: i32, near: Vec<Massif>, far: Vec<Massif>, routing: Routing, s
         for d in w.door_list() {
             parts.keep.extend(bounds(&wbox(&m.wall, (d.u - d.width, d.u + d.width), (d.v - 1.0, d.v + 4.0), (inner(m, d.v) - 1.0, inner(m, d.v) + 4.0)), 0.5));
         }
+        // (Its window opens in the face: nothing stands before it.)
+        let (u0, u1, v0, v1) = w.window();
+        let n = inner(m, (v0 + v1) * 0.5);
+        parts.keep.extend(bounds(&wbox(&m.wall, (u0 - 1.0, u1 + 1.0), (v0 - 1.0, v1 + 1.0), (n - 1.0, n + 4.0)), 0.5));
     }
     for s in &routing.spans {
         let (lo, hi) = (s.0.min(s.1), s.0.max(s.1));
@@ -715,7 +725,7 @@ impl Made {
     /// tens of metres; the physics can catch on such a seam as on an edge,
     /// and held there the body stops dead, still running).
     fn colliders(&self) -> Vec<Collider> {
-        self.parts.stone.collider().into_iter().chain(self.parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect()
+        self.parts.stone.collider().into_iter().chain(self.parts.glass.collider()).chain(self.parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect()
     }
 
     /// The checks (`--opt seams`, `--check static`): the way reaches the
@@ -952,6 +962,11 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
         tubes(&mut cable_mesh, parts.cables.iter().map(|(p, w)| (&p[..], (*w, *w), 0.05)));
         commands.spawn((Mesh3d(meshes.add(cable_mesh)), MeshMaterial3d(cable), Transform::IDENTITY));
     }
+    if !parts.glass.indices.is_empty() {
+        // (Clear and glossy: barely there face on, a mirror at a glance.)
+        let glass = materials.add(StandardMaterial { base_color: Color::srgba(0.75, 0.8, 0.85, 0.1), perceptual_roughness: 0.04, reflectance: 0.6, alpha_mode: AlphaMode::Blend, ..default() });
+        commands.spawn((Mesh3d(meshes.add(std::mem::take(&mut parts.glass).mesh())), MeshMaterial3d(glass), Transform::IDENTITY, bevy::light::NotShadowCaster));
+    }
     if !parts.strands.is_empty() {
         let woven = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.35, reflectance: 0.5, ..default() });
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -964,6 +979,9 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
         if shadows {
             commands.entity(light).insert(Shadowed);
         }
+    }
+    for &(at, range, k) in &parts.shadowed {
+        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at), Shadowed));
     }
     for &(at, range, k) in &parts.fill {
         commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
@@ -2185,6 +2203,37 @@ impl Well {
         [Door { u: self.door_u(), v: self.top, width: self.width }, Door { u: self.door_u(), v: self.v, width: self.width }]
     }
 
+    /// Its window onto the chasm: a band across its front wall between its
+    /// corner landings, about two and a half times as wide as it is high,
+    /// half way up its court (under its first flight): along from, to; up
+    /// from, to.
+    fn window(&self) -> (f32, f32, f32, f32) {
+        let (u0, u1) = (self.u + self.band + 0.5, self.u + self.size - self.band - 0.5);
+        let h = (((u1 - u0) / 2.4) * 2.0).round() / 2.0;
+        let h = h.min(self.top - self.v - 8.0).max(1.5);
+        let mid = ((self.v + self.top) * 0.5 * 4.0).round() / 4.0;
+        (u0, u1, mid - h * 0.5, mid + h * 0.5)
+    }
+
+    /// Its stone mullions, dividing its window: where along each stands.
+    fn mullions(&self) -> Vec<f32> {
+        let (u0, u1, _, _) = self.window();
+        let n = ((u1 - u0) / 2.5).round().max(1.0) as i32;
+        (1..n).map(|i| u0 + (u1 - u0) * i as f32 / n as f32).collect()
+    }
+
+    /// Its boxes in the table: its room's (a shell's), its window's cut
+    /// through the rock, and before its window kept clear (no route
+    /// passes before it).
+    fn claims(&self, m: &Massif) -> Vec<Claim> {
+        let mut out = shell_claims(m, &self.shell(), &self.door_list());
+        let (u0, u1, v0, v1) = self.window();
+        let face = m.face((v0 + v1) * 0.5);
+        out.push(wclaim(&m.wall, (u0 - 0.5, u1 + 0.5), (v0 - 0.5, v1 + 0.5), (self.front, face + 2.0), Use::Cut));
+        out.push(wclaim(&m.wall, (u0 - 1.0, u1 + 1.0), (v0 - 1.0, v1 + 1.0), (face + 0.5, face + 6.0), Use::Keep));
+        out
+    }
+
     /// Its room as a shell (for its boxes in the table).
     fn shell(&self) -> Shell {
         Shell { u: (self.u, self.u + self.size), v: self.v, height: self.top - self.v + 5.0, front: self.front, back: self.front - self.size, bay: 0.0 }
@@ -2217,6 +2266,12 @@ fn well_cut(m: &Massif, w: &Well) -> Manifold {
         let half = d.width * 0.5;
         cut.push(wbox(&m.wall, (d.u - half, d.u + half), (d.v - 0.3, d.v + 3.0), (w.front - 0.5, m.face(d.v) + 2.0)));
     }
+    // (Its window: through the rock from the court out past the face, the
+    // outer metre stepped back half a metre all round.)
+    let (u0, u1, v0, v1) = w.window();
+    let face = m.face((v0 + v1) * 0.5);
+    cut.push(wbox(&m.wall, (u0, u1), (v0, v1), (w.front - 0.5, face + 2.0)));
+    cut.push(wbox(&m.wall, (u0 - 0.5, u1 + 0.5), (v0 - 0.5, v1 + 0.5), (face - 1.0, face + 2.0)));
     Manifold::batch_union(&cut)
 }
 
@@ -2254,7 +2309,18 @@ fn well(parts: &mut Parts, m: &Massif, w: &Well) -> Manifold {
         parts.slope(&Manifold::hull_pts(&corners));
     }
     for &(p, range, k) in &court.lights {
-        parts.lights.push((at(p), range, k));
+        parts.shadowed.push((at(p), range, k));
+    }
+    // Its window: stone mullions through the embrasure (set back from the
+    // court's face and short of the reveal's step, and reaching into the
+    // rock above and below, so no face of theirs lies on one of the
+    // rock's), and a pane of glass across it, a little in from the court.
+    let (u0, u1, v0, v1) = w.window();
+    let face = m.face((v0 + v1) * 0.5);
+    let mut mullions: Vec<Manifold> = w.mullions().iter().map(|&u| wbox(&m.wall, (u - 0.2, u + 0.2), (v0 - 0.5, v1 + 0.5), (w.front + 0.25, face - 1.25))).collect();
+    parts.glass.solid(&wbox(&m.wall, (u0, u1), (v0, v1), (w.front + 0.6, w.front + 0.68)));
+    for d in w.door_list() {
+        mullions.push(wbox(&m.wall, (d.u - d.width * 0.5, d.u + d.width * 0.5), (d.v - 0.3, d.v), (w.front, inner(m, d.v) + 0.1)));
     }
     for &(lo, hi) in &court.glow {
         let (c, e) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
@@ -2266,13 +2332,8 @@ fn well(parts: &mut Parts, m: &Massif, w: &Well) -> Manifold {
     }
     path.push(m.wall.at(w.door_u(), w.v + 1.2, inner(m, w.v) + 1.0));
     parts.paths.push((format!("stepwell at {:.0} m", w.top), path));
-    info!("the chasm: a stepwell at {:?} ({:.0} m square, down {:.1} m)", m.wall.at(w.u, w.v, w.front), w.size, w.top - w.v);
-    Manifold::batch_union(
-        &w.door_list()
-            .iter()
-            .map(|d| wbox(&m.wall, (d.u - d.width * 0.5, d.u + d.width * 0.5), (d.v - 0.3, d.v), (w.front, inner(m, d.v) + 0.1)))
-            .collect::<Vec<_>>(),
-    )
+    info!("the chasm: a stepwell at {:?} ({:.0} m square, down {:.1} m, a window {:.1} by {:.1} m)", m.wall.at(w.u, w.v, w.front), w.size, w.top - w.v, u1 - u0, v1 - v0);
+    Manifold::batch_union(&mullions)
 }
 
 /// What is carved out of the wall for a hall (see `shell_cut`).
@@ -3138,7 +3199,7 @@ impl Routing {
                     if m.shaft || well.u < 3.0 || well.u + size > m.len - 3.0 || front - size < -BACK + 6.0 || floor < 35.0 || v + 9.0 > HEIGHT || !plain(m, (floor - 1.0, v + 7.0)) {
                         continue;
                     }
-                    let wc = shell_claims(m, &well.shell(), &well.door_list());
+                    let wc = well.claims(m);
                     let wd = w * 0.5 + 1.0;
                     if table.misfit(l1, &wc, &[(here_id.unwrap(), Self::port(m, ua, v, wd))], &[], true, &rockf).is_some() {
                         continue;
@@ -3321,7 +3382,7 @@ impl Routing {
                 Step::Well(well, w) => {
                     legs.push(Leg::Well(wells.len(), ways.len()));
                     table.solo(l1);
-                    table.add(l1, &shell_claims(&walls(well.side)[well.m], &well.shell(), &well.door_list()));
+                    table.add(l1, &well.claims(&walls(well.side)[well.m]));
                     wells.push(well);
                     width = w.width;
                     since += 1;
@@ -3889,7 +3950,7 @@ impl Routing {
                     let wl = &self.wells[k];
                     let m = &walls(wl.side)[wl.m];
                     let w = wl.width * 0.5 + 1.0;
-                    pieces.push((a, "well", shell_claims(m, &wl.shell(), &wl.door_list()), vec![(i.wrapping_sub(1), Self::port(m, wl.door_u(), wl.top, w)), (i, Self::port(m, wl.door_u(), wl.v, w))]));
+                    pieces.push((a, "well", wl.claims(m), vec![(i.wrapping_sub(1), Self::port(m, wl.door_u(), wl.top, w)), (i, Self::port(m, wl.door_u(), wl.v, w))]));
                 }
                 Leg::Hall(h, _) => {
                     let h = &self.halls[h];
