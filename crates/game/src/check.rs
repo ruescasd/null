@@ -28,6 +28,10 @@ use crate::terrain::{Streamer, WorldGen};
 /// Runs the checks the command line asks for; never returns.
 pub fn run(argv: &[String]) -> ! {
     let after = |flag: &str| argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).cloned();
+    if after("--check").as_deref() == Some("plan") {
+        crate::chasm::plan::maps();
+        std::process::exit(0);
+    }
     if after("--check").as_deref() == Some("rooms") {
         std::process::exit(if crate::chasm::rooms::check() { 0 } else { 1 });
     }

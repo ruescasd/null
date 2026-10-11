@@ -24,6 +24,7 @@ use crate::{Args, rope::tubes};
 mod claims;
 use claims::{Claim, ROCK, Table, Use};
 pub mod rooms;
+pub mod plan;
 
 /// A taut cable from `a` to `b`, sagging `sag` in the middle.
 fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
@@ -881,6 +882,13 @@ fn build(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if !args.opt("chasm") {
+        return;
+    }
+    // `--opt plan`: a blockout of the chasm's plan instead (see `plan.rs`).
+    if args.opt("plan") {
+        let (mut parts, _) = plan::build(args.seed, args.num("plan", 0.0) as u32);
+        let colliders = parts.stone.collider().into_iter().collect();
+        show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, false);
         return;
     }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
