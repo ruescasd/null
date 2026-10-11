@@ -940,9 +940,9 @@ struct Shadowed;
 const SHADOWED: usize = 8;
 
 /// Shadows from the lights nearest the eye only (none with `--opt
-/// nolampshadows`).
+/// nolampshadows` or `fullbright`).
 fn near_shadows(args: Res<Args>, camera: Single<&Transform, With<crate::camera::FlyCam>>, mut lights: Query<(&Transform, &mut PointLight), With<Shadowed>>) {
-    if args.opt("nolampshadows") {
+    if args.opt("nolampshadows") || args.opt("fullbright") {
         for (_, mut light) in &mut lights {
             if light.shadow_maps_enabled {
                 light.shadow_maps_enabled = false;

@@ -166,7 +166,8 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
 }
 
 /// The switches that take effect as the game runs, and what each does.
-const SWITCHES: [(&str, &str); 3] = [
+const SWITCHES: [(&str, &str); 4] = [
+    ("fullbright", "an even light from everywhere, no shadows: to see the shapes"),
     ("nolampshadows", "no shadows from lamps"),
     ("nocontact", "no contact shadows (screen space)"),
     ("notaa", "no temporal anti-aliasing (nor temporal shadow filtering)"),
@@ -292,12 +293,22 @@ fn show(time: Res<Time>, mut console: ResMut<Console>, panel: Single<(&mut Node,
     }
 }
 
+/// How bright fullbright is (the ambient light's brightness;
+/// `--set fullbright_level` to try others).
+const FULLBRIGHT: f32 = 1000.0;
+
 /// The camera follows the switches set up at the start: contact shadows
 /// (`nocontact`), temporal anti-aliasing (`notaa`; without it, shadows
-/// filtered without it too).
-fn follow(mut commands: Commands, args: Res<Args>, camera: Single<(Entity, Has<ContactShadows>, Has<TemporalAntiAliasing>), With<FlyCam>>) {
+/// filtered without it too); the ambient light follows `fullbright`.
+fn follow(mut commands: Commands, args: Res<Args>, camera: Single<(Entity, Has<ContactShadows>, Has<TemporalAntiAliasing>), With<FlyCam>>, mut ambient: ResMut<GlobalAmbientLight>) {
     if !args.is_changed() {
         return;
+    }
+    // (Fullbright: the ambient light, otherwise none, raised; the lamps'
+    // shadows go too, see `chasm::near_shadows`.)
+    let level = if args.opt("fullbright") { args.num("fullbright_level", FULLBRIGHT) } else { 0.0 };
+    if ambient.brightness != level {
+        *ambient = GlobalAmbientLight { color: Color::WHITE, brightness: level, ..GlobalAmbientLight::NONE };
     }
     let (camera, contact, taa) = *camera;
     let mut cam = commands.entity(camera);
