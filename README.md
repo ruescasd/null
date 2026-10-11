@@ -64,9 +64,10 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               narrower; no floor, the rim 1500 m up); --seed; --set fog=3000 to see across it
     --check plan                              the plan for seeds 1-8 as maps (screenshots/plan/*.pgm: rock white, the chasm
                                               darker nearer the trunk)
-    --check descent                           the way down through the plan (step 3a, a blockout on its grid): seeds 1-50 to
-                                              360 m, whether each gets there, how long, how much inside, its exposures; seeds
-                                              1-8 written as steps to screenshots/plan/descent_N.txt
+    --check network                           the paths through the plan (step 3a', a blockout on its grid): places scattered
+                                              near the chasm, a spine from the entrance down, the rest joined (a tree and a
+                                              few loops); seeds 1-50: places reached, km of paths, how much inside, exposures,
+                                              the spine, ends per place; seeds 1-8 written to screenshots/plan/network_N.txt
     --opt rooms                               with --opt chasm: the room lab instead: rooms built on a grid of quarter-metre cells
                                               (solid, empty, or a prism: part of a slope or of a quarter circle) by units (arch,
                                               vault, column, stair, slope), meshed from the cells (no 3D booleans), on the ground
