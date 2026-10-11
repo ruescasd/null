@@ -32,6 +32,9 @@ pub fn run(argv: &[String]) -> ! {
         crate::chasm::plan::maps();
         std::process::exit(0);
     }
+    if after("--check").as_deref() == Some("descent") {
+        std::process::exit(if crate::chasm::plan::descent::check() { 0 } else { 1 });
+    }
     if after("--check").as_deref() == Some("rooms") {
         std::process::exit(if crate::chasm::rooms::check() { 0 } else { 1 });
     }

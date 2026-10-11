@@ -14,6 +14,8 @@ use worldgen::noise::hash01;
 
 use super::Parts;
 
+pub mod descent;
+
 /// The grid's cell (metres), and how many cells across the plan is.
 const CELL: f32 = 8.0;
 const N: i32 = 256;
