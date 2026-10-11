@@ -10,7 +10,8 @@
 //!
 //! `--opt console` starts with it down, listing what acts at once. Commands: `help`; `list` (every switch and number set); `NAME` (its
 //! value); `on NAME`, `off NAME`, `toggle NAME` (a switch); `set NAME
-//! VALUE`, `unset NAME` (a number); `clear`. Up brings back the last
+//! VALUE`, `unset NAME` (a number); `where` (the camera, as `--cam`);
+//! `clear`. Up brings back the last
 //! command.
 
 use bevy::{
@@ -19,7 +20,10 @@ use bevy::{
         ButtonState, InputSystems,
         keyboard::{Key, KeyboardInput},
     },
-    light::ShadowFilteringMethod,
+    light::{
+        ShadowFilteringMethod,
+        cluster::{ClusterConfig, ClusterFarZMode, ClusterZConfig},
+    },
     pbr::ContactShadows,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
@@ -96,7 +100,7 @@ fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Con
 /// Typing: the key under Esc puts it down or away; down, characters go on
 /// the line, Backspace takes one off, Enter runs it, Up brings back the
 /// last command, Esc puts it away.
-fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut cursor: Single<&mut CursorOptions>) {
+fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>) {
     for key in keys.read() {
         if key.state != ButtonState::Pressed {
             continue;
@@ -124,6 +128,10 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                 console.back = 0;
                 if line.trim() == "clear" {
                     console.lines.clear();
+                } else if line.trim() == "where" {
+                    let (t, fly) = *camera;
+                    let p = t.translation;
+                    console.lines.push(format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, p.y, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()));
                 } else {
                     let said = run(&line, &mut args);
                     console.lines.extend(said);
@@ -169,8 +177,9 @@ const SWITCHES: [(&str, &str); 3] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 3] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 4] {
     [
+        ("cluster", "light clustering: 0 Bevy's, 1 one cluster, 2 a fixed far depth (2 km), 3 never shrunk", 0.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
         ("fog", "how far the haze lets you see (m)", if args.opt("chasm") { 600.0 } else { 4500.0 }),
         ("fog_glow", "the haze's glow towards the suns", 0.15),
@@ -194,6 +203,7 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "NAME                 its value".into(),
             "on NAME, off NAME, toggle NAME    a switch (--opt NAME)".into(),
             "set NAME VALUE, unset NAME        a number (--set NAME=VALUE)".into(),
+            "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
             "clear                clears this".into(),
             "Others act if read each frame; many only count at the start.".into(),
         ],
@@ -288,13 +298,24 @@ fn show(time: Res<Time>, mut console: ResMut<Console>, panel: Single<(&mut Node,
 
 /// The camera follows the switches set up at the start: contact shadows
 /// (`nocontact`), temporal anti-aliasing (`notaa`; without it, shadows
-/// filtered without it too).
+/// filtered without it too), light clustering (`cluster`).
 fn follow(mut commands: Commands, args: Res<Args>, camera: Single<(Entity, Has<ContactShadows>, Has<TemporalAntiAliasing>), With<FlyCam>>) {
     if !args.is_changed() {
         return;
     }
     let (camera, contact, taa) = *camera;
     let mut cam = commands.entity(camera);
+    // (How the view's lights are sorted into clusters, `cluster`: Bevy's
+    // way; one cluster for the whole view, every light everywhere; Bevy's
+    // with its far depth fixed rather than from the last frame's lights;
+    // Bevy's never shrinking its grid.)
+    let bevy = ClusterConfig::default();
+    cam.insert(match args.num("cluster", 0.0) as i32 {
+        1 => ClusterConfig::Single,
+        2 => ClusterConfig::FixedZ { total: 4096, z_slices: 24, z_config: ClusterZConfig { first_slice_depth: 5.0, far_z_mode: ClusterFarZMode::Constant(2000.0) }, dynamic_resizing: true },
+        3 => ClusterConfig::FixedZ { total: 4096, z_slices: 24, z_config: ClusterZConfig::default(), dynamic_resizing: false },
+        _ => bevy,
+    });
     match (!args.opt("nocontact"), contact) {
         (true, false) => {
             cam.insert(ContactShadows::default());
