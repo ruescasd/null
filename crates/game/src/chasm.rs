@@ -49,7 +49,7 @@ pub struct ChasmPlugin;
 
 impl Plugin for ChasmPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, build);
+        app.add_systems(Startup, build).add_systems(Update, near_shadows);
     }
 }
 
@@ -876,6 +876,33 @@ fn build(
     show(&mut commands, &args, &mut meshes, &mut materials, &mut made.parts, colliders, false);
 }
 
+/// A light that casts shadows when it is among the nearest to the eye (see
+/// `near_shadows`).
+#[derive(Component)]
+struct Shadowed;
+
+/// How many lights cast shadows at once: each casts six shadow maps, and a
+/// few dozen at once (the room lab's row, seen from outside) run the GPU out
+/// of memory.
+const SHADOWED: usize = 8;
+
+/// Shadows from the lights nearest the eye only.
+fn near_shadows(camera: Single<&Transform, With<crate::camera::FlyCam>>, mut lights: Query<(&Transform, &mut PointLight), With<Shadowed>>) {
+    let eye = camera.translation;
+    let mut far: Vec<f32> = lights.iter().map(|(t, _)| t.translation.distance_squared(eye)).collect();
+    if far.is_empty() {
+        return;
+    }
+    far.sort_by(f32::total_cmp);
+    let within = far[far.len().min(SHADOWED) - 1];
+    for (t, mut light) in &mut lights {
+        let near = t.translation.distance_squared(eye) <= within;
+        if light.shadow_maps_enabled != near {
+            light.shadow_maps_enabled = near;
+        }
+    }
+}
+
 /// Puts what is built in the world: its colliders, its meshes by material,
 /// its lights (casting shadows or not).
 fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, parts: &mut Parts, colliders: Vec<Collider>, shadows: bool) {
@@ -888,22 +915,33 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
     let dim = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(8.0), ..default() });
     let cable = materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.05), perceptual_roughness: 0.6, ..default() });
 
-    let steps_mesh = meshes.add(std::mem::take(&mut parts.steps).mesh());
-    commands.spawn((Mesh3d(steps_mesh), MeshMaterial3d(stone.clone()), Transform::IDENTITY));
-    let stone_mesh = meshes.add(std::mem::take(&mut parts.stone).mesh());
-    commands.spawn((Mesh3d(stone_mesh), MeshMaterial3d(stone), Transform::IDENTITY));
-    let dark_mesh = meshes.add(std::mem::take(&mut parts.dark).mesh());
-    commands.spawn((Mesh3d(dark_mesh), MeshMaterial3d(dark), Transform::IDENTITY));
-    let glow_mesh = meshes.add(std::mem::take(&mut parts.glow).mesh());
-    commands.spawn((Mesh3d(glow_mesh), MeshMaterial3d(glow), Transform::IDENTITY, bevy::light::NotShadowCaster));
-    let dim_mesh = meshes.add(std::mem::take(&mut parts.dim).mesh());
-    commands.spawn((Mesh3d(dim_mesh), MeshMaterial3d(dim), Transform::IDENTITY, bevy::light::NotShadowCaster));
-    let mut cable_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-    tubes(&mut cable_mesh, parts.cables.iter().map(|(p, w)| (&p[..], (*w, *w), 0.05)));
-    commands.spawn((Mesh3d(meshes.add(cable_mesh)), MeshMaterial3d(cable), Transform::IDENTITY));
+    // (A mesh with nothing in it is left out: the renderer cannot hold one.)
+    for (g, material, casts) in [
+        (std::mem::take(&mut parts.steps), stone.clone(), true),
+        (std::mem::take(&mut parts.stone), stone, true),
+        (std::mem::take(&mut parts.dark), dark, true),
+        (std::mem::take(&mut parts.glow), glow, false),
+        (std::mem::take(&mut parts.dim), dim, false),
+    ] {
+        if g.indices.is_empty() {
+            continue;
+        }
+        let mesh = commands.spawn((Mesh3d(meshes.add(g.mesh())), MeshMaterial3d(material), Transform::IDENTITY)).id();
+        if !casts {
+            commands.entity(mesh).insert(bevy::light::NotShadowCaster);
+        }
+    }
+    if !parts.cables.is_empty() {
+        let mut cable_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        tubes(&mut cable_mesh, parts.cables.iter().map(|(p, w)| (&p[..], (*w, *w), 0.05)));
+        commands.spawn((Mesh3d(meshes.add(cable_mesh)), MeshMaterial3d(cable), Transform::IDENTITY));
+    }
     let power = args.num("chasm_light", LIGHT);
     for &(at, range, k) in &parts.lights {
-        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: shadows, ..default() }, Transform::from_translation(at)));
+        let light = commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at))).id();
+        if shadows {
+            commands.entity(light).insert(Shadowed);
+        }
     }
     info!("the chasm: built ({} lights)", parts.lights.len());
 }
