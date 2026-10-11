@@ -25,6 +25,7 @@ mod lab;
 pub(super) use lab::{Court, court};
 pub(super) use lab::fit::Spec;
 pub(super) mod orb;
+pub(super) mod pool;
 
 /// A cell's size (a power of two: its multiples are exact).
 pub(crate) const CELL: f32 = 0.25;
@@ -757,12 +758,12 @@ pub struct RoomViews(pub Vec<(String, Vec3, Vec3)>);
 
 /// The lab: its rooms built, where to see them from, and the orbs hanging
 /// in them (`--opt orb`: the shrine alone).
-pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Vec<(Vec3, f32)>) {
-    let (parts, report, views, orbs) = built(seed, count, show);
+pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Vec<(Vec3, f32)>, Vec<(Vec3, f32)>) {
+    let (parts, report, views, orbs, pools) = built(seed, count, show);
     for line in report {
         info!("rooms: {line}");
     }
-    (parts, views, orbs)
+    (parts, views, orbs, pools)
 }
 
 /// `--check rooms`: a hundred rooms' surfaces each enclose what their cells
@@ -770,7 +771,7 @@ pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Vec<(
 pub fn check() -> bool {
     let mut ok = true;
     for seed in (1..=100).step_by(10) {
-        let (_, report, _, _) = built(seed, 10, Show::Batch);
+        let (_, report, _, _, _) = built(seed, 10, Show::Batch);
         for line in report {
             if line.contains("OPEN") {
                 ok = false;
@@ -783,14 +784,18 @@ pub fn check() -> bool {
 }
 
 /// The lab's rooms, a line on each, and the views.
-fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, Vec<(Vec3, f32)>) {
+fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, Vec<(Vec3, f32)>, Vec<(Vec3, f32)>) {
     let mut parts = Parts::default();
     let mut report = Vec::new();
     let mut views = RoomViews::default();
     let mut orbs = Vec::new();
+    let mut pools = Vec::new();
     for (i, room) in rooms(seed, count, show).enumerate() {
         if let Some((at, r)) = room.orb {
             orbs.push((room.grid.origin + at, r));
+        }
+        if let Some((at, r)) = room.pool {
+            pools.push((room.grid.origin + at, r));
         }
         for m in &room.screens {
             let o = room.grid.origin;
@@ -825,5 +830,5 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, V
             views.0.push((format!("{name}_{view}"), grid.origin + *eye, grid.origin + *at));
         }
     }
-    (parts, report, views, orbs)
+    (parts, report, views, orbs, pools)
 }

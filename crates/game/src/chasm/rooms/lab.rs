@@ -45,6 +45,9 @@ pub(super) struct Room {
     pub cables: Vec<(Vec<Vec3>, f32, f32)>,
     /// Light screens: solids in metres from its corner (see `B::screen`).
     pub screens: Vec<Manifold>,
+    /// A pool of ichor in it (see `pool.rs`): its surface's middle and
+    /// radius.
+    pub pool: Option<(Vec3, f32)>,
 }
 
 /// Outer walls' thickness.
@@ -419,7 +422,7 @@ impl B {
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None }
     }
 }
 

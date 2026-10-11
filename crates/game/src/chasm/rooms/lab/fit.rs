@@ -400,8 +400,9 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     b.bands((T, sx - T), (T, sz - T), (floor, ceiling));
     b.coffers((T, sx - T), (T, sz - T), ceiling, half((sx.min(sz) - 2.0 * T) / 4.0).max(2.0));
     let (ox, oz) = ((T + BAND + 1.0, sx - T - BAND - 1.0), (T + BAND + 1.0, sz - T - BAND - 1.0));
+    let mut pool = None;
     if kind == Kind::AtriumWell {
-        tower(&mut b, spec, floor, ceiling);
+        pool = Some(tower(&mut b, spec, floor, ceiling));
     } else if !levels.is_empty() && ox.1 - ox.0 >= 10.0 && oz.1 - oz.0 >= 10.0 && ceiling - floor >= 10.0 {
         let giant = thickness(ceiling - floor, 10.0);
         let span = half(giant * 5.0).max(4.0);
@@ -453,12 +454,14 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
         };
         b.view(["door1", "door2", "door3", "door4", "door5", "door6"][k.min(5)], eye, mid + Vec3::Y * ((y - floor) * 0.6 + 2.0));
     }
-    b.finish(floor)
+    let mut room = b.finish(floor);
+    room.pool = pool;
+    room
 }
 
 /// Atrium II's well: an oculus in the roof over its middle, a chain of
-/// lamps hanging down it, a basin with a fountain at its foot.
-fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
+/// lamps hanging down it, a basin at its foot, a pool of ichor bubbling in it.
+fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) -> (Vec3, f32) {
     let (sx, sz) = (spec.size.x, spec.size.y);
     let (cx, cz) = (sx * 0.5, sz * 0.5);
     let side = sx.min(sz) - 2.0 * T;
@@ -476,7 +479,11 @@ fn tower(b: &mut B, spec: &Spec, floor: f32, ceiling: f32) {
         }
     }
     super::basin(b, (cx, cz), side, BAND, floor);
-    b.note(format!("Atrium II: an open well, an oculus, {} lamps hanging down it, a basin at its foot", n + 1));
+    // (Its pool of ichor: inside the basin's rim, its surface a little below
+    // the floor; see `basin` for its radius.)
+    let r = half(((side - 2.0 * BAND) * 0.3).max(2.0));
+    b.note(format!("Atrium II: an open well, an oculus, {} lamps hanging down it, a basin of ichor at its foot", n + 1));
+    (Vec3::new(cx, floor - 0.15, cz), r - 0.5)
 }
 
 /// A level run or a flight of a cascade: from where to where along it
