@@ -794,7 +794,11 @@ fn overlook(pick: Pick, alt: usize, s: f32, d: Detail) -> Room {
     b.note(format!("in high on a balcony over a hall {w:.0} by {l:.0} m, {depth:.1} m deep, {above:.1} m above; {mode}; light {light}"));
     b.carve(Vec3::new(x0, f, z0), Vec3::new(x1, e + above, z1));
     b.coffers((x0, x1), (z0, z1), e + above, half(w / 4.0).max(2.0));
-    b.beams((x0, x1), (z0, z1), e + above, half(w / 3.0).max(4.0));
+    // (Not over giant columns: they rise to the ceiling where a beam may
+    // run.)
+    if mode != "giant columns" {
+        b.beams((x0, x1), (z0, z1), e + above, half(w / 3.0).max(4.0));
+    }
     // The balcony, on a corbel (sloping, or stepping back down into the
     // wall); its parapet, open where the way goes on.
     b.solid(Vec3::new(x0, e - 0.75, z0), Vec3::new(x1, e, z0 + bd));
@@ -1101,8 +1105,11 @@ fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail, woven: bool) -> Room {
     }
     // Beams on the columns, along their lines both ways (but across the
     // clearing), as wide as the columns, a tenth of a bay deep.
+    // (With beams, the columns stop under them, their capitals carrying
+    // them.)
+    let beam = if d.beams { half(bay / 10.0).max(0.5) } else { 0.0 };
     if d.beams {
-        let depth = half(bay / 10.0).max(0.5);
+        let depth = beam;
         for i in 1..n {
             let u = i as f32 * bay;
             let through = u > c0 && u < c1;
@@ -1127,9 +1134,9 @@ fn hypostyle(pick: Pick, alt: usize, s: f32, d: Detail, woven: bool) -> Room {
             }
             let base = if floor == "a dais across the far side" && z > side - bay { f + 1.0 } else { f };
             if woven && (i, j) == odd {
-                b.woven(x0 + x, z0 + z, dd, (base, f + h));
+                b.woven(x0 + x, z0 + z, dd, (base, f + h - beam));
             } else {
-                b.column(x0 + x, z0 + z, dd, (base, f + h));
+                b.column(x0 + x, z0 + z, dd, (base, f + h - beam));
             }
         }
     }
