@@ -73,7 +73,7 @@ enum Stance {
 }
 
 #[derive(Component)]
-pub(super) struct Hunter {
+pub(crate) struct Hunter {
     kind: Kind,
     rig: Rig,
     /// Its bones last frame (the pieces on them are carried along with

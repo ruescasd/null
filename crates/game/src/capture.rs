@@ -54,6 +54,7 @@ fn bench(
     mut exit: MessageWriter<AppExit>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     entities: Query<()>,
+    hunters: Query<(), With<crate::combat::HunterMarker>>,
 ) {
     if !args.opt("bench") {
         return;
@@ -65,10 +66,11 @@ fn bench(
         return;
     }
     let since = *state.since.get_or_insert(now);
-    if now - since < BENCH_WARMUP {
+    let warmup = args.num("benchwait", BENCH_WARMUP);
+    if now - since < warmup {
         return;
     }
-    if now - since < BENCH_WARMUP + BENCH_TIME {
+    if now - since < warmup + BENCH_TIME {
         state.frames.push(time.delta_secs());
         return;
     }
@@ -76,7 +78,7 @@ fn bench(
     let average = state.frames.iter().sum::<f32>() / n;
     let worst = state.frames.iter().copied().fold(0.0, f32::max);
     info!("bench: {:.0} fps average ({:.2} ms), worst frame {:.2} ms", 1.0 / average, average * 1000.0, worst * 1000.0);
-    info!("bench: {} entities", entities.iter().count());
+    info!("bench: {} entities, {} hunters", entities.iter().count(), hunters.iter().count());
     // The costliest render passes, on the GPU and the CPU.
     let mut passes: Vec<(String, f64)> = diagnostics
         .iter()

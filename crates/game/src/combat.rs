@@ -28,6 +28,8 @@ use crate::{
 };
 
 mod hunter;
+/// A hunter, for what counts them from outside (the benches).
+pub(crate) use hunter::Hunter as HunterMarker;
 mod forms;
 mod grove;
 mod hair;
