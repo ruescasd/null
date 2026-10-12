@@ -608,7 +608,7 @@ fn swarm(
             // Leaping free: flung, slowing, then it is its own.
             s.leap -= dt;
             s.velocity *= (-dt * 2.5).exp();
-            transform.translation += s.velocity * dt;
+            transform.translation = ground.sweep(&Collider::sphere(0.35), transform.translation, s.velocity * dt);
             face(&mut transform, ptransform.translation, dt);
             continue;
         }
@@ -658,7 +658,7 @@ fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, p
             place = Vec3::new(f.x, f.y + 1.0 + h(2) * 1.5, f.z);
             aim = place;
         }
-        if let Some((ahead, l)) = nav.steer(p, place, &mut s.way, &mut s.way_age, dt) {
+        if let Some((ahead, l)) = nav.steer(p, place, &mut s.way, &mut s.way_age, dt, &|a, b| ground.clear(a, b)) {
             left = Some(l);
             if l > 3.5 {
                 aim = ahead + Vec3::Y * 1.6;
@@ -676,7 +676,8 @@ fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, p
         }
     }
     s.velocity += (want - s.velocity).clamp_length_max(20.0 * dt);
-    let mut next = p + s.velocity * dt;
+    // (Flying, a small round body: what is built stops it, it slides on.)
+    let mut next = ground.sweep(&Collider::sphere(0.35), p, s.velocity * dt);
     let ground = ground.at(next) + 0.8;
     if next.y < ground {
         next.y = ground;

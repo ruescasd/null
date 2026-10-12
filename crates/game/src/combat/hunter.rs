@@ -332,6 +332,13 @@ pub(super) fn gather(
                 centre = player.translation + away.normalize_or(Vec3::X) * GATHER_NEAREST;
             }
             centre.y = ground.at(centre) + 2.0;
+            // (In a built place, over the floor nearest it: their middle can
+            // be in the rock, where a hunter would form in a wall.)
+            if let Some(nav) = nav.as_deref()
+                && let Some(j) = nav.nearest(centre, 8)
+            {
+                centre = nav.nodes[j as usize] + Vec3::Y * 2.0;
+            }
             let assembly = commands.spawn((Assembly { centre, time: 0.0 }, Transform::from_translation(centre))).id();
             commands.spawn((
                 AudioPlayer::new(assets.assemble.clone()),
@@ -361,7 +368,8 @@ pub(super) fn gather(
         let want = to * (0.3 + 2.5 * k * k) + Vec3::new((t * 7.0 + s.phase).sin(), 0.0, (t * 6.0 + s.phase).cos());
         let change = (want - s.velocity).clamp_length_max(40.0 * dt);
         s.velocity += change;
-        transform.translation += s.velocity * dt;
+        // (Swept: what is built stops it, as in its flight.)
+        transform.translation = ground.sweep(&Collider::sphere(0.35), transform.translation, s.velocity * dt);
         transform.rotate_local_y(dt * 9.0);
     }
 
@@ -773,7 +781,7 @@ pub(super) fn hunt(
         if let Some(nav) = nav.as_deref() {
             let mut way = std::mem::take(&mut h.way);
             let mut age = h.way_age;
-            if let Some((ahead, left)) = nav.steer(root, target, &mut way, &mut age, dt) {
+            if let Some((ahead, left)) = nav.steer(root, target, &mut way, &mut age, dt, &|a, b| ground.clear(a, b)) {
                 toward = Vec3::new(ahead.x - root.x, 0.0, ahead.z - root.z).normalize_or(toward);
                 straight = left < flat.length() * 1.2 + 1.5;
                 distance = left;
@@ -1011,7 +1019,18 @@ pub(super) fn hunt(
         // (Its ground under where it stands: in a built place, the floor it
         // is on, not one above or below.)
         let y = h.rig.root.y;
-        h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)));
+        // Its body: a capsule sized to it, its foot half a metre over its
+        // feet (the steps of a flight under it, not against it), swept
+        // across, what is built stopping it.
+        let (r, length) = if beast { (0.45, 0.6) } else { (0.35, 1.0) };
+        let shape = Collider::capsule(r, length);
+        let lift = Vec3::Y * (0.5 + r + length * 0.5);
+        let sweep = |from: Vec3, step: Vec3| ground.sweep(&shape, from + lift, Vec3::new(step.x, 0.0, step.z)) - lift + Vec3::Y * step.y;
+        let before = h.rig.root;
+        h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
+        if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {
+            info!("huntlog: {} went through something built, from {:.1} to {:.1}", entity.index_u32(), before, h.rig.root);
+        }
         transform.translation = h.rig.chest();
     }
 }

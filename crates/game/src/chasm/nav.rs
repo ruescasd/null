@@ -18,7 +18,8 @@ const STEP: f32 = 0.6;
 /// How often a way is found afresh (s), and how far on along it to head
 /// for (m).
 const AGAIN: f32 = 0.5;
-const AHEAD: f32 = 3.0;
+/// How many spots on along a way are looked down (12 m).
+const LOOK: usize = 24;
 
 #[derive(Resource)]
 pub(crate) struct Nav {
@@ -120,12 +121,12 @@ impl Nav {
         None
     }
 
-    /// Where to head for on the way from `from` to `to`: a spot a few
-    /// metres on along it (the last, near the end), and how far is left to
+    /// Where to head for on the way from `from` to `to`: the furthest spot
+    /// on along it in plain sight (`clear`), and how far is left to
     /// go along it; `None` if there is no way. The way is kept in `way`,
     /// found afresh every `AGAIN` seconds (`age` counting down), the spots
     /// passed dropped.
-    pub fn steer(&self, from: Vec3, to: Vec3, way: &mut Vec<Vec3>, age: &mut f32, dt: f32) -> Option<(Vec3, f32)> {
+    pub fn steer(&self, from: Vec3, to: Vec3, way: &mut Vec<Vec3>, age: &mut f32, dt: f32, clear: &dyn Fn(Vec3, Vec3) -> bool) -> Option<(Vec3, f32)> {
         let flat = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.z - b.z).length();
         *age -= dt;
         if *age <= 0.0 || way.is_empty() {
@@ -135,8 +136,16 @@ impl Nav {
         while way.len() > 1 && flat(way[0], from) < 1.2 {
             way.remove(0);
         }
-        let last = *way.last()?;
-        let ahead = way.iter().copied().find(|&q| flat(q, from) >= AHEAD).unwrap_or(last);
+        // (The furthest spot on, up to `LOOK` along it, in plain sight: so
+        // a corner is gone round, not cut through; failing that, the next.)
+        way.last()?;
+        let up = Vec3::Y * 0.5;
+        let ahead = (0..way.len().min(LOOK))
+            .rev()
+            .step_by(3)
+            .map(|i| way[i])
+            .find(|&q| flat(q, from) >= 1.0 && clear(from + up, q + up))
+            .unwrap_or(way[0]);
         let left = flat(from, way[0]) + way.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f32>();
         Some((ahead, left))
     }

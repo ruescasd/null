@@ -484,7 +484,9 @@ impl Rig {
     }
 
     /// One frame: move towards the intent, step, pose, and output bones.
-    pub fn update(&mut self, dt: f32, intent: Intent, ground: &impl Fn(f32, f32) -> f32) {
+    /// (`sweep`: where the body gets to, moved from where it is by a step:
+    /// what is built stops it.)
+    pub fn update(&mut self, dt: f32, intent: Intent, ground: &impl Fn(f32, f32) -> f32, sweep: &impl Fn(Vec3, Vec3) -> Vec3) {
         self.time += dt;
         self.crouch += (intent.crouch - self.crouch) * (1.0 - (-dt * 8.0).exp());
         // A raised paw goes up slowly, comes down quicker.
@@ -500,7 +502,12 @@ impl Rig {
             // A leap: ballistic.
             self.air.0 += dt;
             *vy -= 25.0 * dt;
-            self.root += Vec3::new(self.velocity.x, *vy, self.velocity.z) * dt;
+            let before = self.root;
+            self.root = sweep(self.root, Vec3::new(self.velocity.x, *vy, self.velocity.z) * dt);
+            // (Against a wall it drops, not flying on into it.)
+            let got = (self.root - before) / dt.max(1e-4);
+            self.velocity.x = got.x;
+            self.velocity.z = got.z;
             let floor = ground(self.root.x, self.root.z);
             if self.root.y <= floor && *vy < 0.0 {
                 self.root.y = floor;
@@ -525,8 +532,16 @@ impl Rig {
                 let turn = (target - self.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                 self.heading += turn.clamp(-3.0 * dt, 3.0 * dt);
             }
-            self.root += (self.velocity + self.knock) * dt;
+            let before = self.root;
+            self.root = sweep(self.root, (self.velocity + self.knock) * dt);
             self.root.y = ground(self.root.x, self.root.z);
+            // (Stopped by a wall, it goes no faster than it gets: not running
+            // on the spot against it.)
+            let got = (self.root - before) / dt.max(1e-4);
+            if Vec2::new(got.x, got.z).length() < Vec2::new(self.velocity.x, self.velocity.z).length() {
+                self.velocity.x = got.x;
+                self.velocity.z = got.z;
+            }
         }
         self.knock *= (-dt * 6.0).exp();
         self.turn_rate += ((self.heading - old_heading) / dt.max(1e-4) - self.turn_rate) * (1.0 - (-dt * 6.0).exp());

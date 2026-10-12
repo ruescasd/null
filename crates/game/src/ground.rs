@@ -5,6 +5,8 @@
 //! finds the floor it is on and not one above or below it; over the void,
 //! nothing.
 
+use std::time::Duration;
+
 use avian3d::prelude::*;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
@@ -21,6 +23,7 @@ pub struct Ground<'w, 's> {
     world: Res<'w, WorldGen>,
     args: Res<'w, Args>,
     spatial: SpatialQuery<'w, 's>,
+    mover: MoveAndSlide<'w, 's>,
 }
 
 impl Ground<'_, '_> {
@@ -39,6 +42,18 @@ impl Ground<'_, '_> {
     pub fn clear(&self, a: Vec3, b: Vec3) -> bool {
         let to = b - a;
         Dir3::new(to).map_or(true, |d| self.spatial.cast_ray(a, d, to.length(), true, &SpatialQueryFilter::default()).is_none())
+    }
+
+    /// Where a body of `shape`, its middle at `from`, gets to moved by
+    /// `delta`: in a built place as far as what is built lets it, sliding
+    /// along what stops it (as you do); elsewhere all the way.
+    pub fn sweep(&self, shape: &Collider, from: Vec3, delta: Vec3) -> Vec3 {
+        if !self.args.opt("chasm") || delta.length_squared() < 1e-10 {
+            return from + delta;
+        }
+        self.mover
+            .move_and_slide(shape, from, Quat::IDENTITY, delta, Duration::from_secs(1), &MoveAndSlideConfig::default(), &SpatialQueryFilter::default(), |_| MoveAndSlideHitResponse::Accept)
+            .position
     }
 
     /// The ground's height under `p`, or far below it over the void (what
