@@ -119,9 +119,33 @@ struct B {
     round: bool,
     /// A painting asked for (see `hang`), laid at the end; and those laid.
     hanging: Option<(Vec<((f32, f32), (f32, f32))>, (f32, f32), u32)>,
+    /// The bays the rhythm made niches in (see `Bay`): where a painting
+    /// may hang instead.
+    bays: Vec<Bay>,
     paintings: Vec<super::painting::Painting>,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
     screens: Vec<Manifold>,
+}
+
+/// A bay of a wall's rhythm with a niche in it: its wall's frame (which
+/// axis it runs along, which way is out of the room, where its face is),
+/// how far the wall runs, the bay between its pilasters, its height, and
+/// its niche (to fill again for a painting).
+#[derive(Clone, Copy)]
+struct Bay {
+    along: usize,
+    out: f32,
+    face: f32,
+    wall: (f32, f32),
+    span: (f32, f32),
+    y: (f32, f32),
+    niche: (Vec3, Vec3),
+}
+
+impl Bay {
+    fn at(&self, u: f32, n: f32, y: f32) -> Vec3 {
+        if self.along == 0 { Vec3::new(u, y, self.face + self.out * n) } else { Vec3::new(self.face + self.out * n, y, u) }
+    }
 }
 
 /// A box room's walls' rhythm (see `B::rhythm`): its plan, from where to
@@ -130,7 +154,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, paintings: Vec::new(), cables: Vec::new(), screens: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), cables: Vec::new(), screens: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -385,7 +409,7 @@ impl B {
         // dropped for an opening across from it, stood out of place.
         let paired: Vec<Vec<f32>> = (0..4).map(|w| candidates[w].iter().copied().filter(|u| candidates[w ^ 1].iter().any(|v| (v - u).abs() < 0.01)).collect()).collect();
         let kept: Vec<Vec<f32>> = paired.iter().map(|ps| ps.iter().copied().filter(|u| ps.iter().any(|v| (v - u).abs() > 0.01 && (v - u).abs() <= bay + 0.01)).collect()).collect();
-        for (wi, &(along, _, out, face)) in walls.iter().enumerate() {
+        for (wi, &(along, (a, b), out, face)) in walls.iter().enumerate() {
             let at = frame(along, out, face);
             let posts = kept[wi].clone();
             for &u in &posts {
@@ -431,6 +455,8 @@ impl B {
                 if deep && sill + spring + nw * 0.5 < y1 - 0.5 && self.is_empty(at((u0 + u1) * 0.5, -0.1, mid)) {
                     let n0 = if out > 0.0 { face } else { face - 0.75 };
                     self.arch(if along == 0 { 2 } else { 0 }, u0, nw, sill, spring, n0, 0.75);
+                    let (p, q) = (at(u0, 0.0, sill), at(u0 + nw, 0.75, sill + spring + nw * 0.5));
+                    self.bays.push(Bay { along, out, face, wall: (a, b), span: (w[0] + pw * 0.5, w[1] - pw * 0.5), y: (y0, y1), niche: (p.min(q), p.max(q)) });
                 }
             }
         }
@@ -463,60 +489,78 @@ impl B {
     /// metre wide a quarter metre out round it, the picture on the panel,
     /// a lamp over it.
     fn lay_painting(&mut self, (rects, (y0, y1), seed): (Vec<((f32, f32), (f32, f32))>, (f32, f32), u32)) {
-        let (ya, yb) = (y0 + 0.75, (y1 - 0.5).min(y0 + 9.0));
-        if yb - ya < 3.5 {
+        // In a bay of the rhythm, the most central one on its wall (the
+        // longest wall's, of those as central), its niche filled again:
+        // its proportions and its place the bay's. (Hung on the longest
+        // clear stretch of wall, off its middle, as large as fitted, it was
+        // too large for the room to stand anywhere but in the middle: the
+        // user.)
+        let central = |b: &Bay| ((b.span.0 + b.span.1) * 0.5 - (b.wall.0 + b.wall.1) * 0.5).abs() / (b.wall.1 - b.wall.0);
+        let bay = self.bays.iter().copied().filter(|b| b.span.1 - b.span.0 >= 2.75 && b.y.1 - b.y.0 >= 4.5).min_by(|a, b| {
+            central(a).total_cmp(&central(b)).then((b.wall.1 - b.wall.0).total_cmp(&(a.wall.1 - a.wall.0)))
+        });
+        if let Some(bay) = bay {
+            let (lo, hi) = bay.niche;
+            self.solid(lo, hi);
+            let w = half((bay.span.1 - bay.span.0 - 1.25).min(4.0));
+            let h = half((w * 1.5).min(bay.y.1 - bay.y.0 - 2.5));
+            // (Upright always: a bay too low for its width, the painting
+            // narrower. In a vaulted crossing's low bays they came out
+            // landscape.)
+            let w = w.min(half(h / 1.25)).max(1.5);
+            let (uc, yc) = ((bay.span.0 + bay.span.1) * 0.5, bay.y.0 + 1.5 + h * 0.5);
+            self.frame_painting(&|u, n, y| bay.at(u, n, y), (w, h), (uc, yc), seed, "in a bay");
             return;
         }
-        let mut best: Option<(f32, f32, f32, f32, usize, (f32, f32), f32, f32)> = None;
+        // Else on the longest wall with its middle clear, centred on it,
+        // upright (half again as high as wide), a third of the wall wide at
+        // most.
+        let (ya, yb) = (y0 + 1.0, (y1 - 0.5).min(y0 + 9.0));
+        let mut best: Option<(f32, usize, f32, f32, f32, (f32, f32))> = None;
         for &((x0, x1), (z0, z1)) in &rects {
             for (along, (a, b), out, face) in [(2usize, (z0, z1), -1.0f32, x0), (2, (z0, z1), 1.0, x1), (0, (x0, x1), -1.0, z0), (0, (x0, x1), 1.0, z1)] {
                 let at = |u: f32, n: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n) } else { Vec3::new(face + out * n, y, u) };
-                let free = |u: f32| (0..=((yb - ya) / 0.5) as i32).all(|k| { let y = ya + k as f32 * 0.5; self.is_solid(at(u, 0.3, y)) && self.is_empty(at(u, -0.4, y)) });
-                let mut run: Option<f32> = None;
-                let mut u = a + 0.75;
-                while u <= b - 0.75 + 0.01 {
-                    let ok = free(u);
-                    if ok && run.is_none() {
-                        run = Some(u);
-                    }
-                    let end = !ok || u + 0.25 > b - 0.75 + 0.01;
-                    if end && let Some(start) = run.take() {
-                        let stop = if ok { u } else { u - 0.25 };
-                        let w = half(((stop - start) - 1.5).min(5.0));
-                        let h = half((yb - ya - 1.5).min(w * 1.3));
-                        let w = w.min(half(h * 1.6)).max(2.0);
-                        if w >= 2.0 && h >= 2.0 && best.is_none_or(|b| w * h > b.0 * b.1) {
-                            best = Some((w, h, (start + stop) * 0.5, face, along, (out, 0.0), ya + 0.75 + h * 0.5 + ((yb - ya - 1.5 - h) * 0.4).max(0.0), 0.0));
-                        }
-                    }
-                    u += 0.25;
+                let free = |u: f32| (0..=((yb - ya) / 0.5) as i32).all(|k| { let y = ya + k as f32 * 0.5; self.is_solid(at(u, 0.6, y)) && self.is_empty(at(u, -0.4, y)) });
+                let mid = (a + b) * 0.5;
+                // (How far each way from the middle stays clear.)
+                let reach = (0..((b - a) * 2.0) as i32).map(|k| k as f32 * 0.25).take_while(|&d| free(mid - d) && free(mid + d)).last().unwrap_or(-1.0);
+                if reach < 0.0 {
+                    continue;
+                }
+                let w = half((reach * 2.0 - 1.5).min((b - a) / 3.0).min(4.0));
+                let h = half((w * 1.5).min(yb - ya - 1.5));
+                if w >= 1.5 && h >= 2.0 && best.is_none_or(|b| w * h > b.0) {
+                    best = Some((w * h, along, out, face, mid, (w, h)));
                 }
             }
         }
-        let Some((w, h, uc, face, along, (out, _), yc, _)) = best else { return };
-        let at = |u: f32, n: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n) } else { Vec3::new(face + out * n, y, u) };
-        let bx = |b: &mut B, (u0, u1): (f32, f32), (v0, v1): (f32, f32), (n0, n1): (f32, f32), solid: bool| {
-            let (p, q) = (at(u0, n0, v0), at(u1, n1, v1));
-            if solid { b.solid(p.min(q), p.max(q)) } else { b.carve(p.min(q), p.max(q)) }
-        };
-        let (pu, pv) = ((uc - w * 0.5 - 0.25, uc + w * 0.5 + 0.25), (yc - h * 0.5 - 0.25, yc + h * 0.5 + 0.25));
-        bx(self, pu, pv, (0.0, 0.25), false);
-        for (u, v) in [((pu.0 - 0.5, pu.0), (pv.0 - 0.5, pv.1 + 0.5)), ((pu.1, pu.1 + 0.5), (pv.0 - 0.5, pv.1 + 0.5)), ((pu.0, pu.1), (pv.0 - 0.5, pv.0)), ((pu.0, pu.1), (pv.1, pv.1 + 0.5))] {
-            bx(self, u, v, (-0.25, 0.0), true);
+        if let Some((_, along, out, face, mid, (w, h))) = best {
+            let at = move |u: f32, n: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n) } else { Vec3::new(face + out * n, y, u) };
+            self.frame_painting(&at, (w, h), (mid, ya + 0.5 + h * 0.5), seed, "centred on a wall");
         }
-        // (No other lamp before it: the room's wall lamps hang at the walls'
-        // middles, where paintings go too; its own lights it.)
-        let (fa, fb) = (at(pu.0 - 0.75, -1.0, pv.0 - 0.75), at(pu.1 + 0.75, 0.0, pv.1 + 0.75));
+    }
+    /// A painting `w` by `h` with its middle at (`uc`, `yc`) on the wall
+    /// `at` gives the frame of: framed by two steps into the wall, a
+    /// quarter metre each, half a metre and a quarter round it (only
+    /// inwards: framed out and in at once, it looked like a television: the
+    /// user), the picture on the inner one, a lamp over it, and no other
+    /// lamp before it.
+    fn frame_painting(&mut self, at: &dyn Fn(f32, f32, f32) -> Vec3, (w, h): (f32, f32), (uc, yc): (f32, f32), seed: u32, place: &str) {
+        for (m, depth) in [(0.5f32, 0.25f32), (0.25, 0.5)] {
+            let (p, q) = (at(uc - w * 0.5 - m, 0.0, yc - h * 0.5 - m), at(uc + w * 0.5 + m, depth, yc + h * 0.5 + m));
+            self.carve(p.min(q), p.max(q));
+        }
+        let (fa, fb) = (at(uc - w * 0.5 - 1.25, -1.0, yc - h * 0.5 - 1.25), at(uc + w * 0.5 + 1.25, 0.0, yc + h * 0.5 + 1.25));
         let (flo, fhi) = (fa.min(fb), fa.max(fb));
         let inside = |p: Vec3| p.cmpge(flo).all() && p.cmple(fhi).all();
         self.lights.retain(|l| !inside(l.0));
         self.glow.retain(|g| !inside((g.0 + g.1) * 0.5));
         let facing = (at(uc, -1.0, yc) - at(uc, 0.0, yc)).normalize();
-        self.paintings.push(super::painting::Painting { at: at(uc, 0.23, yc), facing, size: Vec2::new(w, h), seed });
+        self.paintings.push(super::painting::Painting { at: at(uc, 0.48, yc), facing, size: Vec2::new(w, h), seed });
         let range = w + h + 4.0;
-        self.lamp(at(uc, -1.25, pv.1 + 0.9), range, strength(range) * 1.2);
-        self.note(format!("a painting {w:.1} by {h:.1} m"));
-        self.view("painting", at(uc, -(w.max(h) + 2.5), yc - 0.3), at(uc, 0.0, yc));
+        self.lamp(at(uc, -1.25, yc + h * 0.5 + 1.0), range, strength(range) * 1.2);
+        self.note(format!("a painting {w:.1} by {h:.1} m, {place}"));
+        self.view("painting", at(uc, -(w.max(h) + 3.0), yc - 0.3), at(uc, 0.0, yc));
     }
     fn view(&mut self, name: &'static str, eye: Vec3, at: Vec3) {
         self.views.push((name, eye, at));

@@ -36,6 +36,10 @@ pub(crate) fn picture(seed: u32, size: Vec2) -> Image {
         1 => newton(w, h, &r),
         _ => ifs(w, h, &r),
     };
+    // (A dark ground: mostly light, it read as a lit screen, a television,
+    // the user; turned over, an etching.)
+    let mean = values.iter().sum::<f32>() / values.len().max(1) as f32;
+    let values: Vec<f32> = if mean > 0.45 { values.into_iter().map(|v| 1.0 - v).collect() } else { values };
     let mut data = Vec::with_capacity((w * h * 4) as usize);
     for v in values {
         let g = (v.clamp(0.0, 1.0) * 255.0) as u8;
