@@ -25,10 +25,12 @@ pub(crate) struct Painting {
     pub facing: Vec3,
     pub size: Vec2,
     pub seed: u32,
+    /// Its picture on a dark ground (turned over if mostly light).
+    pub dark: bool,
 }
 
 /// The picture for a painting `size` across and high, by its seed.
-pub(crate) fn picture(seed: u32, size: Vec2) -> Image {
+pub(crate) fn picture(seed: u32, size: Vec2, dark: bool) -> Image {
     let (w, h) = if size.x >= size.y { (LONG, ((LONG as f32 * size.y / size.x) as u32).max(64)) } else { (((LONG as f32 * size.x / size.y) as u32).max(64), LONG) };
     let r = |k: i32| hash01(seed as i32, k, 0, 0x7a1);
     let values: Vec<f32> = match seed % 3 {
@@ -39,7 +41,7 @@ pub(crate) fn picture(seed: u32, size: Vec2) -> Image {
     // (A dark ground: mostly light, it read as a lit screen, a television,
     // the user; turned over, an etching.)
     let mean = values.iter().sum::<f32>() / values.len().max(1) as f32;
-    let values: Vec<f32> = if mean > 0.45 { values.into_iter().map(|v| 1.0 - v).collect() } else { values };
+    let values: Vec<f32> = if dark && mean > 0.45 { values.into_iter().map(|v| 1.0 - v).collect() } else { values };
     let mut data = Vec::with_capacity((w * h * 4) as usize);
     for v in values {
         let g = (v.clamp(0.0, 1.0) * 255.0) as u8;
@@ -191,7 +193,7 @@ fn attractor(w: u32, h: u32, r: &dyn Fn(i32) -> f32) -> Vec<f32> {
 /// of its wall, lit by the room's light and glowing a little of its own.
 pub(crate) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>, paintings: &[Painting]) {
     for p in paintings {
-        let image = images.add(picture(p.seed, p.size));
+        let image = images.add(picture(p.seed, p.size, p.dark));
         let material = materials.add(StandardMaterial {
             base_color_texture: Some(image.clone()),
             emissive_texture: Some(image),

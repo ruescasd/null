@@ -118,13 +118,24 @@ struct B {
     /// Columns' mouldings round, not square (see `column`).
     round: bool,
     /// A painting asked for (see `hang`), laid at the end; and those laid.
-    hanging: Option<(Vec<((f32, f32), (f32, f32))>, (f32, f32), u32)>,
+    hanging: Option<(Vec<((f32, f32), (f32, f32))>, (f32, f32), u32, Hang)>,
     /// The bays the rhythm made niches in (see `Bay`): where a painting
     /// may hang instead.
     bays: Vec<Bay>,
     paintings: Vec<super::painting::Painting>,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
     screens: Vec<Manifold>,
+}
+
+/// How a room hangs its painting: in a bay of its rhythm (or centred on a
+/// wall), upright, framed inwards, on a dark ground (hypostyles, crossings:
+/// the user); or as large as its longest clear stretch of wall fits, its
+/// panel set in, its frame standing out, as its picture comes (atria: the
+/// user liked them so).
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Hang {
+    Bay,
+    Wall,
 }
 
 /// A bay of a wall's rhythm with a niche in it: its wall's frame (which
@@ -478,8 +489,8 @@ impl B {
     /// its frame's foot 0.75 m over `y.0`, half a metre below `y.1`: laid when the room
     /// is done (after its pilasters, to keep clear of them), on the wall
     /// with the most room for it, if any has enough.
-    fn hang(&mut self, rects: Vec<((f32, f32), (f32, f32))>, y: (f32, f32), seed: u32) {
-        self.hanging = Some((rects, y, seed));
+    fn hang(&mut self, rects: Vec<((f32, f32), (f32, f32))>, y: (f32, f32), seed: u32, how: Hang) {
+        self.hanging = Some((rects, y, seed, how));
     }
     /// Where along each wall there is wall behind and nothing before it
     /// (a pilaster, a door, a flight) all the way up the painting's
@@ -539,6 +550,64 @@ impl B {
             self.frame_painting(&at, (w, h), (mid, ya + 0.5 + h * 0.5), seed, "centred on a wall");
         }
     }
+    /// A painting as large as the longest clear stretch of wall fits (the
+    /// atria's, as the user liked them): see `hang`.
+    fn lay_painting_wall(&mut self, (rects, (y0, y1), seed): (Vec<((f32, f32), (f32, f32))>, (f32, f32), u32)) {
+        let (ya, yb) = (y0 + 0.75, (y1 - 0.5).min(y0 + 9.0));
+        if yb - ya < 3.5 {
+            return;
+        }
+        let mut best: Option<(f32, f32, f32, f32, usize, (f32, f32), f32, f32)> = None;
+        for &((x0, x1), (z0, z1)) in &rects {
+            for (along, (a, b), out, face) in [(2usize, (z0, z1), -1.0f32, x0), (2, (z0, z1), 1.0, x1), (0, (x0, x1), -1.0, z0), (0, (x0, x1), 1.0, z1)] {
+                let at = |u: f32, n: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n) } else { Vec3::new(face + out * n, y, u) };
+                let free = |u: f32| (0..=((yb - ya) / 0.5) as i32).all(|k| { let y = ya + k as f32 * 0.5; self.is_solid(at(u, 0.3, y)) && self.is_empty(at(u, -0.4, y)) });
+                let mut run: Option<f32> = None;
+                let mut u = a + 0.75;
+                while u <= b - 0.75 + 0.01 {
+                    let ok = free(u);
+                    if ok && run.is_none() {
+                        run = Some(u);
+                    }
+                    let end = !ok || u + 0.25 > b - 0.75 + 0.01;
+                    if end && let Some(start) = run.take() {
+                        let stop = if ok { u } else { u - 0.25 };
+                        let w = half(((stop - start) - 1.5).min(5.0));
+                        let h = half((yb - ya - 1.5).min(w * 1.3));
+                        let w = w.min(half(h * 1.6)).max(2.0);
+                        if w >= 2.0 && h >= 2.0 && best.is_none_or(|b| w * h > b.0 * b.1) {
+                            best = Some((w, h, (start + stop) * 0.5, face, along, (out, 0.0), ya + 0.75 + h * 0.5 + ((yb - ya - 1.5 - h) * 0.4).max(0.0), 0.0));
+                        }
+                    }
+                    u += 0.25;
+                }
+            }
+        }
+        let Some((w, h, uc, face, along, (out, _), yc, _)) = best else { return };
+        let at = |u: f32, n: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n) } else { Vec3::new(face + out * n, y, u) };
+        let bx = |b: &mut B, (u0, u1): (f32, f32), (v0, v1): (f32, f32), (n0, n1): (f32, f32), solid: bool| {
+            let (p, q) = (at(u0, n0, v0), at(u1, n1, v1));
+            if solid { b.solid(p.min(q), p.max(q)) } else { b.carve(p.min(q), p.max(q)) }
+        };
+        let (pu, pv) = ((uc - w * 0.5 - 0.25, uc + w * 0.5 + 0.25), (yc - h * 0.5 - 0.25, yc + h * 0.5 + 0.25));
+        bx(self, pu, pv, (0.0, 0.25), false);
+        for (u, v) in [((pu.0 - 0.5, pu.0), (pv.0 - 0.5, pv.1 + 0.5)), ((pu.1, pu.1 + 0.5), (pv.0 - 0.5, pv.1 + 0.5)), ((pu.0, pu.1), (pv.0 - 0.5, pv.0)), ((pu.0, pu.1), (pv.1, pv.1 + 0.5))] {
+            bx(self, u, v, (-0.25, 0.0), true);
+        }
+        // (No other lamp before it: the room's wall lamps hang at the walls'
+        // middles, where paintings go too; its own lights it.)
+        let (fa, fb) = (at(pu.0 - 0.75, -1.0, pv.0 - 0.75), at(pu.1 + 0.75, 0.0, pv.1 + 0.75));
+        let (flo, fhi) = (fa.min(fb), fa.max(fb));
+        let inside = |p: Vec3| p.cmpge(flo).all() && p.cmple(fhi).all();
+        self.lights.retain(|l| !inside(l.0));
+        self.glow.retain(|g| !inside((g.0 + g.1) * 0.5));
+        let facing = (at(uc, -1.0, yc) - at(uc, 0.0, yc)).normalize();
+        self.paintings.push(super::painting::Painting { at: at(uc, 0.23, yc), facing, size: Vec2::new(w, h), seed, dark: false });
+        let range = w + h + 4.0;
+        self.lamp(at(uc, -1.25, pv.1 + 0.9), range, strength(range) * 1.2);
+        self.note(format!("a painting {w:.1} by {h:.1} m"));
+        self.view("painting", at(uc, -(w.max(h) + 2.5), yc - 0.3), at(uc, 0.0, yc));
+    }
     /// A painting `w` by `h` with its middle at (`uc`, `yc`) on the wall
     /// `at` gives the frame of: framed by two steps into the wall, a
     /// quarter metre each, half a metre and a quarter round it (only
@@ -556,7 +625,7 @@ impl B {
         self.lights.retain(|l| !inside(l.0));
         self.glow.retain(|g| !inside((g.0 + g.1) * 0.5));
         let facing = (at(uc, -1.0, yc) - at(uc, 0.0, yc)).normalize();
-        self.paintings.push(super::painting::Painting { at: at(uc, 0.48, yc), facing, size: Vec2::new(w, h), seed });
+        self.paintings.push(super::painting::Painting { at: at(uc, 0.48, yc), facing, size: Vec2::new(w, h), seed, dark: true });
         let range = w + h + 4.0;
         self.lamp(at(uc, -1.25, yc + h * 0.5 + 1.0), range, strength(range) * 1.2);
         self.note(format!("a painting {w:.1} by {h:.1} m, {place}"));
@@ -569,8 +638,11 @@ impl B {
         for r in std::mem::take(&mut self.rhythms) {
             self.lay_rhythm(r);
         }
-        if let Some(h) = self.hanging.take() {
-            self.lay_painting(h);
+        if let Some((rects, y, seed, how)) = self.hanging.take() {
+            match how {
+                Hang::Bay => self.lay_painting((rects, y, seed)),
+                Hang::Wall => self.lay_painting_wall((rects, y, seed)),
+            }
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));

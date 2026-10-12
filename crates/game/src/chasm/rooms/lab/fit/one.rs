@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use super::super::{B, Detail, Room, T, half, strength, thickness};
+use super::super::{B, Detail, Hang, Room, T, half, strength, thickness};
 use super::{SLAB, Spec, light, painting};
 
 /// The level all the doors are on, if they are on one.
@@ -173,7 +173,7 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
     }
     let mid = Vec3::new(sx * 0.5, floor + h * 0.4, sz * 0.5);
     if let Some(seed) = painting(spec) {
-        b.hang(vec![((T, sx - T), (T, sz - T))], (floor, floor + h), seed);
+        b.hang(vec![((T, sx - T), (T, sz - T))], (floor, floor + h), seed, Hang::Bay);
     }
     views(&mut b, spec, mid, &[]);
     b.finish(floor)
@@ -481,7 +481,7 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
         b.lamp(Vec3::new(cx, floor + h + tower - 1.0, cz), h + tower + 4.0, strength(h + tower + 4.0) * 3.0);
     }
     if let Some(seed) = painting(spec) {
-        b.hang(arms.iter().map(|a| (a.0, a.1)).collect(), (floor, floor + wall), seed);
+        b.hang(arms.iter().map(|a| (a.0, a.1)).collect(), (floor, floor + wall), seed, Hang::Bay);
     }
     views(&mut b, spec, Vec3::new(cx, floor + h * 0.6, cz), &extras);
     Some(b.finish(floor))

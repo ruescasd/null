@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use super::{B, Detail, Room, T, half, strength, thickness};
+use super::{B, Detail, Hang, Room, T, half, strength, thickness};
 
 mod one;
 
@@ -537,7 +537,7 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
         b.view(["door1", "door2", "door3", "door4", "door5", "door6"][k.min(5)], eye, mid + Vec3::Y * ((y - floor) * 0.6 + 2.0));
     }
     if let Some(seed) = painting(spec) {
-        b.hang(vec![((T, sx - T), (T, sz - T))], (floor, ceiling), seed);
+        b.hang(vec![((T, sx - T), (T, sz - T))], (floor, ceiling), seed, Hang::Wall);
     }
     let mut room = b.finish(floor);
     room.pool = pool;
