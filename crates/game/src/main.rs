@@ -116,12 +116,10 @@ fn main() {
                 ..default()
             }),
             ..default()
-        // (Draws prepared on the CPU, not by compute passes on the GPU for
-        // every view (`--opt gpubatch`, Bevy's way): that is for scenes of
-        // very many meshes; with ours, each shadow view's passes were a
-        // fixed cost, and a hallway lit by eight lamps casting shadows ran
-        // at 72 frames a second, 170 so.)
-        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() }))
+        // (`--opt cpubatch`: draws prepared on the CPU, not by Bevy's
+        // compute passes for every view. As set, it drew nothing: to be
+        // looked into.)
+        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: !args.opt("cpubatch"), ..default() }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default());
     // (Timings of the render passes only to measure (`--opt diag`, and the
     // benches): they cost themselves, a millisecond, a query round each

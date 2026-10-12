@@ -157,7 +157,8 @@ fn view_bench(
         .collect();
     cpu.sort_by(|a, b| b.1.total_cmp(&a.1));
     let cpu: Vec<String> = cpu.iter().take(4).map(|(p, ms)| format!("{p} {ms:.1}")).collect();
-    info!("viewbench: {name}: {:.0} fps ({:.1} ms, worst {:.1}); gpu ms: {}; cpu ms: {}", 1.0 / average, average * 1000.0, worst * 1000.0, top.join(", "), cpu.join(", "));
+    let gpu: f64 = passes.iter().map(|p| p.1).sum();
+    info!("viewbench: {name}: {:.0} fps ({:.1} ms, worst {:.1}); gpu {gpu:.2} ms in all: {}; cpu ms: {}", 1.0 / average, average * 1000.0, worst * 1000.0, top.join(", "), cpu.join(", "));
     frames.clear();
     *since = 0.0;
     *i += 1;

@@ -964,8 +964,9 @@ struct Shadowed(f32);
 struct StandIn(Option<Entity>);
 
 /// How many lights cast shadows at once (`--set shadowed=N`, or `shadowed
-/// N` in the console, up to `STAND_INS`): each casts six shadow maps.
-const SHADOWED: usize = 8;
+/// N` in the console, up to `STAND_INS`): each casts six shadow maps, a
+/// millisecond and more a frame (each of its views a fixed cost).
+const SHADOWED: usize = 2;
 const STAND_INS: usize = 8;
 
 /// Shadows from the lamps nearest the eye only, cast by the stand-ins put
