@@ -82,13 +82,18 @@ pub(crate) fn animate(time: Res<Time>, layers: Query<&Layer>, mut materials: Res
 }
 
 /// A tile of fine veins: ridged noise, each octave's ridges thinned to
-/// lines, summed; tiling, so it can drift without a seam.
+/// lines, summed, over a bent plane; tiling, so it can drift without a
+/// seam.
 fn veins(seed: u32) -> Image {
     let n = TILE as usize;
     let mut data = Vec::with_capacity(n * n * 4);
     for y in 0..n {
         for x in 0..n {
             let (u, v) = (x as f32 / TILE as f32, y as f32 / TILE as f32);
+            // (Bent by a coarser noise first: unbent, the ridges ran
+            // straight along the lattice's cells here and there, lines
+            // ruled across the wall.)
+            let (u, v) = (u + 0.06 * perlin2(u * 3.0, v * 3.0, 3, seed ^ 0x5a5a), v + 0.06 * perlin2(u * 3.0, v * 3.0, 3, seed ^ 0xa5a5));
             let mut sum = 0.0;
             for (o, w) in [(0, 0.7f32), (1, 0.35), (2, 0.15)] {
                 let period = 4 << o;

@@ -646,11 +646,15 @@ impl B {
     fn intrude(&mut self, seed: u32) {
         self.intrusion = Some(seed);
     }
-    /// One of the niches still open (a painting fills its own), by the
-    /// seed: filled again, and cut upside down in its outline, its half
-    /// circle hanging to the sill; on its back, a shimmer.
+    /// One of the niches still open (a painting fills its own) facing
+    /// another still open across the room, by the seed: filled again, and
+    /// cut upside down in its outline, its half circle hanging to the sill;
+    /// on its back, a shimmer. (Only across from one as it should be: the
+    /// user; seen against it, it is wrong, not another design.)
     fn lay_inverted(&mut self, seed: u32) {
-        let open: Vec<Bay> = self.bays.iter().copied().filter(|b| self.is_empty((b.niche.0 + b.niche.1) * 0.5)).collect();
+        let is_open = |b: &Bay| self.is_empty((b.niche.0 + b.niche.1) * 0.5);
+        let facing = |b: &Bay, c: &Bay| c.along == b.along && c.out == -b.out && (c.span.0 - b.span.0).abs() < 0.01 && (c.span.1 - b.span.1).abs() < 0.01 && (c.niche.0.y - b.niche.0.y).abs() < 0.01;
+        let open: Vec<Bay> = self.bays.iter().copied().filter(|b| is_open(b) && self.bays.iter().any(|c| facing(b, c) && is_open(c))).collect();
         if open.is_empty() {
             return;
         }
