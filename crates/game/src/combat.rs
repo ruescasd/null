@@ -528,7 +528,7 @@ fn swarm(
     let ready = if args.unattended() { streamer.settled } else { streamer.near };
     // (The labs, the rooms' and the plan's, in peace: they are for looking
     // at; a hound forming in one, the user.)
-    let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan"));
+    let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan") || args.opt("region"));
     if args.opt("peace") || lab || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
         return;
     }

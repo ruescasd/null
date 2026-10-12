@@ -167,59 +167,24 @@ fn tree(seed: u32) -> Plan {
     plan
 }
 
+/// Where the blockout leaves its surfaces open, for what is built into the
+/// rock (see `network::region`): cells of the top at the rim; bands (from,
+/// to, in metres up) of a face, by its cell and which way it faces (as
+/// `network::DIRS`).
+#[derive(Default)]
+struct Holes {
+    tops: std::collections::HashSet<IVec2>,
+    faces: std::collections::HashMap<(IVec2, usize), Vec<(f32, f32)>>,
+}
+
 /// The blockout: its rock as blocks, its top at the rim, its faces down to
 /// the ground (lost in the haze), into `parts`; and where to start (on the
 /// rim at the trunk's near end, looking along it).
 pub(super) fn build(seed: u32) -> (Parts, [f32; 5]) {
     let plan = tree(seed);
     let mut parts = Parts::default();
-    let g = &mut parts.stone;
+    blockout(&plan, &Holes::default(), &mut parts.stone);
     let at = |x: i32, z: i32, y: f32| ORIGIN + Vec3::new(x as f32 * CELL, y, z as f32 * CELL);
-    // Tops: of the rock at the rim, merged along rows.
-    for z in 0..N {
-        let mut x = 0;
-        while x < N {
-            let here = plan.get(x, z);
-            let mut e = x + 1;
-            while e < N && plan.get(e, z).is_some() == here.is_some() {
-                e += 1;
-            }
-            if here.is_none() {
-                g.quad([at(x, z, RIM), at(x, z + 1, RIM), at(e, z + 1, RIM), at(e, z, RIM)], Vec3::Y);
-            }
-            x = e;
-        }
-    }
-    // Faces: wherever rock stands beside the chasm, from the ground to the
-    // rim, facing it (merged along the edge).
-    let rock = |x: i32, z: i32| plan.get(x, z).is_none();
-    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-        let n = Vec3::new(dx as f32, 0.0, dz as f32);
-        for line in 0..N {
-            // (Along the edge: z for an edge across x, x for one across z.)
-            let cell = |t: i32| if dx != 0 { (line, t) } else { (t, line) };
-            let face = |t: i32| {
-                let (x, z) = cell(t);
-                rock(x, z) && !rock(x + dx, z + dz)
-            };
-            let mut t = 0;
-            while t < N {
-                if !face(t) {
-                    t += 1;
-                    continue;
-                }
-                let mut e = t + 1;
-                while e < N && face(e) {
-                    e += 1;
-                }
-                let edge = line + if dx + dz > 0 { 1 } else { 0 };
-                let corners = if dx != 0 { [at(edge, t, 0.0), at(edge, e, 0.0), at(edge, e, RIM), at(edge, t, RIM)] } else { [at(t, edge, 0.0), at(e, edge, 0.0), at(e, edge, RIM), at(t, edge, RIM)] };
-                let outward = (corners[1] - corners[0]).cross(corners[3] - corners[0]).dot(n) > 0.0;
-                g.quad(if outward { corners } else { [corners[0], corners[3], corners[2], corners[1]] }, n);
-                t = e;
-            }
-        }
-    }
     let trunk = plan.branches[0];
     let (lo, hi) = trunk.rect(0);
     let eye = at(lo.x + 12, hi.y + 1, RIM + 1.7);
@@ -227,6 +192,78 @@ pub(super) fn build(seed: u32) -> (Parts, [f32; 5]) {
     let start = [eye.x, eye.y, eye.z, (-look.x).atan2(-look.z).to_degrees(), look.y.atan2(Vec2::new(look.x, look.z).length()).to_degrees()];
     info!("the plan: {} branches, {} cells of chasm in {} by {} km", plan.branches.len(), plan.cells.iter().filter(|c| c.is_some()).count(), N as f32 * CELL / 1000.0, N as f32 * CELL / 1000.0);
     (parts, start)
+}
+
+/// The rock's surfaces: its top at the rim (merged along rows), its faces
+/// from the ground to the rim facing the chasm (merged along each edge);
+/// but where `holes` opens them, a cell's top left out, a face's cell
+/// standing alone, its bands left out.
+fn blockout(plan: &Plan, holes: &Holes, g: &mut super::Geometry) {
+    let at = |x: i32, z: i32, y: f32| ORIGIN + Vec3::new(x as f32 * CELL, y, z as f32 * CELL);
+    let top = |x: i32, z: i32| plan.get(x, z).is_none() && !holes.tops.contains(&IVec2::new(x, z));
+    for z in 0..N {
+        let mut x = 0;
+        while x < N {
+            let here = top(x, z);
+            let mut e = x + 1;
+            while e < N && top(e, z) == here {
+                e += 1;
+            }
+            if here {
+                g.quad([at(x, z, RIM), at(x, z + 1, RIM), at(e, z + 1, RIM), at(e, z, RIM)], Vec3::Y);
+            }
+            x = e;
+        }
+    }
+    let rock = |x: i32, z: i32| plan.get(x, z).is_none();
+    for (k, (dx, dz)) in [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().enumerate() {
+        let n = Vec3::new(dx as f32, 0.0, dz as f32);
+        // A face from `t` to `e` along its edge, from `y0` up to `y1`.
+        let mut quad = |line: i32, t: i32, e: i32, y0: f32, y1: f32| {
+            let edge = line + if dx + dz > 0 { 1 } else { 0 };
+            let corners = if dx != 0 { [at(edge, t, y0), at(edge, e, y0), at(edge, e, y1), at(edge, t, y1)] } else { [at(t, edge, y0), at(e, edge, y0), at(e, edge, y1), at(t, edge, y1)] };
+            let outward = (corners[1] - corners[0]).cross(corners[3] - corners[0]).dot(n) > 0.0;
+            g.quad(if outward { corners } else { [corners[0], corners[3], corners[2], corners[1]] }, n);
+        };
+        for line in 0..N {
+            // (Along the edge: z for an edge across x, x for one across z.)
+            let cell = |t: i32| if dx != 0 { IVec2::new(line, t) } else { IVec2::new(t, line) };
+            let face = |t: i32| {
+                let c = cell(t);
+                rock(c.x, c.y) && !rock(c.x + dx, c.y + dz)
+            };
+            let open = |t: i32| holes.faces.get(&(cell(t), k));
+            let mut t = 0;
+            while t < N {
+                if !face(t) {
+                    t += 1;
+                    continue;
+                }
+                if let Some(bands) = open(t) {
+                    let mut bands = bands.clone();
+                    bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let mut y = 0.0;
+                    for (a, b) in bands {
+                        if a > y {
+                            quad(line, t, t + 1, y, a);
+                        }
+                        y = y.max(b);
+                    }
+                    if y < RIM {
+                        quad(line, t, t + 1, y, RIM);
+                    }
+                    t += 1;
+                    continue;
+                }
+                let mut e = t + 1;
+                while e < N && face(e) && open(e).is_none() {
+                    e += 1;
+                }
+                quad(line, t, e, 0.0, RIM);
+                t = e;
+            }
+        }
+    }
 }
 
 /// `--check plan`: the plan for a few seeds as a map (a greyscale image:

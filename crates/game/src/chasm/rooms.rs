@@ -30,6 +30,7 @@ pub(super) mod painting;
 pub(super) mod projector;
 pub(super) mod shimmer;
 pub(super) mod roots;
+pub(in crate::chasm) mod tiles;
 
 /// A cell's size (a power of two: its multiples are exact).
 pub(crate) const CELL: f32 = 0.25;
@@ -830,54 +831,91 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, F
     let mut views = RoomViews::default();
     let mut fixtures = Fixtures::default();
     for (i, room) in rooms(seed, count, show).enumerate() {
-        let o = room.grid.origin;
-        if let Some((at, r)) = room.orb {
-            fixtures.orbs.push((o + at, r));
-        }
-        if let Some((at, r)) = room.pool {
-            fixtures.pools.push((o + at, r));
-        }
-        fixtures.paintings.extend(room.paintings.iter().map(|p| painting::Painting { at: o + p.at, ..*p }));
-        if let Some((at, reach)) = room.projector {
-            fixtures.projectors.push((o + at, reach));
-        }
-        fixtures.shimmers.extend(room.shimmers.iter().map(|s| shimmer::Shimmer { at: o + s.at, ..*s }));
-        fixtures.roots.extend(room.roots.iter().map(|(p, w)| (p.iter().map(|q| o + *q).collect(), *w)));
-        for m in &room.screens {
-            let o = room.grid.origin;
-            parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
-        }
-        for slope in &room.slopes {
-            parts.slopes.push(slope.iter().map(|p| room.grid.origin + *p).collect());
-        }
-        for (points, thick, shade) in &room.cables {
-            parts.strands.push((points.iter().map(|p| room.grid.origin + *p).collect(), *thick, *shade));
-        }
-        let grid = &room.grid;
-        let before = parts.stone.indices.len() / 3;
-        let (enclosed, solid) = grid.mesh(&mut parts.stone);
-        let closed = (enclosed - solid).abs() < solid * 1e-5;
-        let name = format!("room{}", seed + i as u32);
-        report.push(format!(
-            "{name} at x {:.0}: {}; {solid:.0} m3 of cells, {enclosed:.0} m3 enclosed{}; {} triangles",
-            grid.origin.x,
-            room.recipe.join("; "),
-            if closed { "" } else { ": OPEN" },
-            parts.stone.indices.len() / 3 - before
-        ));
-        for &(p, range, k) in &room.lights {
-            parts.lights.push((grid.origin + p, range, k));
-        }
-        for &(p, range, k) in &room.fill {
-            parts.fill.push((grid.origin + p, range, k));
-        }
-        for &(lo, hi) in &room.glow {
-            let (c, e) = (grid.origin + (lo + hi) * 0.5, (hi - lo) * 0.5);
-            parts.glow.oriented(c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
-        }
-        for (view, eye, at) in &room.views {
-            views.0.push((format!("{name}_{view}"), grid.origin + *eye, grid.origin + *at));
-        }
+        report.push(add(room, &format!("room{}", seed + i as u32), &mut parts, &mut fixtures, &mut views));
     }
     (parts, report, views, fixtures)
+}
+
+/// A room built into `parts` where its grid is, what it holds into
+/// `fixtures`, where to see it from into `views` (named `name`): a line on
+/// it.
+fn add(room: lab::Room, name: &str, parts: &mut Parts, fixtures: &mut Fixtures, views: &mut RoomViews) -> String {
+    let o = room.grid.origin;
+    if let Some((at, r)) = room.orb {
+        fixtures.orbs.push((o + at, r));
+    }
+    if let Some((at, r)) = room.pool {
+        fixtures.pools.push((o + at, r));
+    }
+    fixtures.paintings.extend(room.paintings.iter().map(|p| painting::Painting { at: o + p.at, ..*p }));
+    if let Some((at, reach)) = room.projector {
+        fixtures.projectors.push((o + at, reach));
+    }
+    fixtures.shimmers.extend(room.shimmers.iter().map(|s| shimmer::Shimmer { at: o + s.at, ..*s }));
+    fixtures.roots.extend(room.roots.iter().map(|(p, w)| (p.iter().map(|q| o + *q).collect(), *w)));
+    for m in &room.screens {
+        parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
+    }
+    for slope in &room.slopes {
+        parts.slopes.push(slope.iter().map(|p| o + *p).collect());
+    }
+    for (points, thick, shade) in &room.cables {
+        parts.strands.push((points.iter().map(|p| o + *p).collect(), *thick, *shade));
+    }
+    let grid = &room.grid;
+    let before = parts.stone.indices.len() / 3;
+    let (enclosed, solid) = grid.mesh(&mut parts.stone);
+    let closed = (enclosed - solid).abs() < solid * 1e-5;
+    let line = format!(
+        "{name} at x {:.0}: {}; {solid:.0} m3 of cells, {enclosed:.0} m3 enclosed{}; {} triangles",
+        o.x,
+        room.recipe.join("; "),
+        if closed { "" } else { ": OPEN" },
+        parts.stone.indices.len() / 3 - before
+    );
+    for &(p, range, k) in &room.lights {
+        parts.lights.push((o + p, range, k));
+    }
+    for &(p, range, k) in &room.fill {
+        parts.fill.push((o + p, range, k));
+    }
+    for &(lo, hi) in &room.glow {
+        let (c, e) = (o + (lo + hi) * 0.5, (hi - lo) * 0.5);
+        parts.glow.oriented(c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
+    }
+    for (view, eye, at) in &room.views {
+        views.0.push((format!("{name}_{view}"), o + *eye, o + *at));
+    }
+    line
+}
+
+/// A place's room in a region built for real (see
+/// `plan::network::region`): what its doors make it (see `fit::chosen`; `k`
+/// the place's number, to vary it), its grid's corner at `origin`; its wall
+/// `glass` (numbered as `Spec`'s), if any, open on the chasm and glazed (a
+/// stepwell's). Built into `parts`, as `add`: a line on it.
+pub(in crate::chasm) fn place(spec: &Spec, origin: Vec3, k: usize, glass: Option<usize>, parts: &mut Parts, fixtures: &mut Fixtures, views: &mut RoomViews) -> String {
+    let room = match glass {
+        Some(w) => lab::fit::stepwell(spec, w),
+        None => lab::fit::fitted(spec, lab::fit::chosen(spec, k)),
+    };
+    let mut room = lab::Room { grid: Grid { origin, ..room.grid }, ..room };
+    if let Some(w) = glass {
+        // (Its wall on the chasm carved away, but a metre at each end and
+        // its slabs top and bottom; a pane just inside its face.)
+        let (sx, sy, sz) = (spec.size.x, spec.height, spec.size.y);
+        let (lo, hi, pane) = match w {
+            0 => (Vec3::new(0.0, 1.0, 1.0), Vec3::new(1.5, sy - 1.0, sz - 1.0), Vec3::new(0.05, 0.0, 0.0)),
+            1 => (Vec3::new(sx - 1.5, 1.0, 1.0), Vec3::new(sx, sy - 1.0, sz - 1.0), Vec3::new(sx - 0.05, 0.0, 0.0)),
+            2 => (Vec3::new(1.0, 1.0, 0.0), Vec3::new(sx - 1.0, sy - 1.0, 1.5), Vec3::new(0.0, 0.0, 0.05)),
+            _ => (Vec3::new(1.0, 1.0, sz - 1.5), Vec3::new(sx - 1.0, sy - 1.0, sz), Vec3::new(0.0, 0.0, sz - 0.05)),
+        };
+        room.grid.fill(lo, hi, Filler::Empty);
+        let c = (lo + hi) * 0.5;
+        let c = Vec3::new(if w < 2 { pane.x } else { c.x }, c.y, if w >= 2 { pane.z } else { c.z });
+        let e = (hi - lo) * 0.5;
+        let e = Vec3::new(if w < 2 { 0.02 } else { e.x }, e.y, if w >= 2 { 0.02 } else { e.z });
+        parts.glass.oriented(origin + c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
+    }
+    add(room, &spec.name, parts, fixtures, views)
 }

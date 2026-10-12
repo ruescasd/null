@@ -545,10 +545,11 @@ pub fn walk(
         }
         player.ready = true;
         // (In the chasm, on the rim of the wall, not the floor far below; in
-        // the room lab, where it puts you, on a room's floor high above the
-        // ground.)
+        // the room lab and a region of the plan, where it puts you, high
+        // above the ground: there, put on the ground, you were in the world
+        // under the plan, and the GPU ran out of memory.)
         let floor = if args.opt("chasm") && !args.opt("rooms") && !args.opt("plan") { crate::chasm::rim(args.seed, p.x, p.z).unwrap_or(ground_height) } else { ground_height };
-        if !(args.opt("chasm") && args.opt("rooms")) {
+        if !(args.opt("chasm") && (args.opt("rooms") || args.opt("region"))) {
             transform.translation.y = floor + EYE + 0.3;
         }
     }

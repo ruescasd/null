@@ -892,22 +892,27 @@ fn build(
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, false);
         return;
     }
+    // `--opt region`: a region of the plan built for real (see
+    // `plan::network::region`).
+    if args.opt("region") {
+        let (mut parts, fixtures, views, report) = plan::network::region::build(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"));
+        for line in report {
+            info!("region: {line}");
+        }
+        commands.insert_resource(views);
+        if args.opt("walkbot") {
+            commands.insert_resource(Way(plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"))));
+        }
+        furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
+        let colliders = parts.stone.collider().into_iter().chain(parts.glass.collider()).chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
+        return;
+    }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
     if args.opt("rooms") {
         let (mut parts, views, fixtures) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
-        rooms::painting::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &fixtures.paintings);
-        rooms::shimmer::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &fixtures.shimmers);
-        rooms::roots::spawn(&mut commands, &mut meshes, &mut materials, &fixtures.roots);
-        for (at, reach) in fixtures.projectors {
-            rooms::projector::spawn(&mut commands, &mut images, at, reach);
-        }
-        for (at, r) in fixtures.pools {
-            rooms::pool::spawn(&mut commands, &mut meshes, &mut materials, at, r);
-        }
         commands.insert_resource(views);
-        for (at, r) in fixtures.orbs {
-            rooms::orb::spawn(&mut commands, &mut meshes, &mut materials, at, r);
-        }
+        furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
         // (The rooms' flights walked on their slopes, each its own convex
         // collider, as the chasm's.)
         let colliders = parts.stone.collider().into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
@@ -941,39 +946,82 @@ fn build(
     show(&mut commands, &args, &mut meshes, &mut materials, &mut made.parts, colliders, false);
 }
 
-/// A light that casts shadows when it is among the nearest to the eye (see
-/// `near_shadows`).
+/// A lamp that casts shadows when it is among the nearest to the eye (see
+/// `near_shadows`): its intensity.
 #[derive(Component)]
-struct Shadowed;
+struct Shadowed(f32);
+
+/// A light that stands in for a lamp near the eye, casting its shadows (the
+/// lamp it stands in for, if any): a few of them, moved from lamp to lamp.
+/// (Each lamp casting its own in turn, the GPU kept what each had cast with
+/// and ran out of memory, walking past four hundred in a region of the
+/// plan.)
+#[derive(Component)]
+struct StandIn(Option<Entity>);
 
 /// How many lights cast shadows at once: each casts six shadow maps, and a
 /// few dozen at once (the room lab's row, seen from outside) run the GPU out
 /// of memory.
 const SHADOWED: usize = 8;
 
-/// Shadows from the lights nearest the eye only (none with `--opt
+/// Shadows from the lamps nearest the eye only, cast by the stand-ins put
+/// in their places, the lamps themselves dark meanwhile (none with `--opt
 /// nolampshadows` or `fullbright`).
-fn near_shadows(args: Res<Args>, camera: Single<&Transform, With<crate::camera::FlyCam>>, mut lights: Query<(&Transform, &mut PointLight), With<Shadowed>>) {
-    if args.opt("nolampshadows") || args.opt("fullbright") {
-        for (_, mut light) in &mut lights {
-            if light.shadow_maps_enabled {
-                light.shadow_maps_enabled = false;
+fn near_shadows(
+    args: Res<Args>,
+    camera: Single<&Transform, (With<crate::camera::FlyCam>, Without<StandIn>)>,
+    mut lamps: Query<(Entity, &Transform, &mut PointLight, &Shadowed), Without<StandIn>>,
+    mut stand: Query<(&mut StandIn, &mut Transform, &mut PointLight), Without<Shadowed>>,
+) {
+    let off = args.opt("nolampshadows") || args.opt("fullbright");
+    let eye = camera.translation;
+    let mut near: Vec<(f32, Entity)> = if off { Vec::new() } else { lamps.iter().map(|(e, t, _, _)| (t.translation.distance_squared(eye), e)).collect() };
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.truncate(SHADOWED);
+    let near: Vec<Entity> = near.into_iter().map(|n| n.1).collect();
+    // (Each keeps the lamp it has while that is still near: no flicker.)
+    let kept: Vec<Entity> = stand.iter().filter_map(|s| s.0.0.filter(|e| near.contains(e))).collect();
+    let mut free = near.iter().copied().filter(|e| !kept.contains(e));
+    for (mut s, mut t, mut light) in &mut stand {
+        if s.0.is_some_and(|e| !near.contains(&e)) {
+            if let Some(old) = s.0.take()
+                && let Ok((_, _, mut l, base)) = lamps.get_mut(old)
+            {
+                l.intensity = base.0;
             }
         }
-        return;
-    }
-    let eye = camera.translation;
-    let mut far: Vec<f32> = lights.iter().map(|(t, _)| t.translation.distance_squared(eye)).collect();
-    if far.is_empty() {
-        return;
-    }
-    far.sort_by(f32::total_cmp);
-    let within = far[far.len().min(SHADOWED) - 1];
-    for (t, mut light) in &mut lights {
-        let near = t.translation.distance_squared(eye) <= within;
-        if light.shadow_maps_enabled != near {
-            light.shadow_maps_enabled = near;
+        if s.0.is_none() {
+            s.0 = free.next();
         }
+        match s.0.and_then(|e| lamps.get_mut(e).ok()) {
+            Some((_, lt, mut l, base)) => {
+                t.translation = lt.translation;
+                *light = PointLight { intensity: base.0, range: l.range, radius: l.radius, shadow_maps_enabled: true, ..*l };
+                l.intensity = 0.0;
+            }
+            None => {
+                if light.intensity != 0.0 {
+                    light.intensity = 0.0;
+                }
+            }
+        }
+    }
+}
+
+/// Puts what the rooms hold in the world: paintings, shimmers, roots, star
+/// projectors, pools, orbs.
+fn furnish(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>, fixtures: rooms::Fixtures) {
+    rooms::painting::spawn(commands, meshes, materials, images, &fixtures.paintings);
+    rooms::shimmer::spawn(commands, meshes, materials, images, &fixtures.shimmers);
+    rooms::roots::spawn(commands, meshes, materials, &fixtures.roots);
+    for (at, reach) in fixtures.projectors {
+        rooms::projector::spawn(commands, images, at, reach);
+    }
+    for (at, r) in fixtures.pools {
+        rooms::pool::spawn(commands, meshes, materials, at, r);
+    }
+    for (at, r) in fixtures.orbs {
+        rooms::orb::spawn(commands, meshes, materials, at, r);
     }
 }
 
@@ -1026,11 +1074,16 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
     for &(at, range, k) in &parts.lights {
         let light = commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at))).id();
         if shadows {
-            commands.entity(light).insert(Shadowed);
+            commands.entity(light).insert(Shadowed(power * k));
         }
     }
     for &(at, range, k) in &parts.shadowed {
-        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at), Shadowed));
+        commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at), Shadowed(power * k)));
+    }
+    if shadows || !parts.shadowed.is_empty() {
+        for _ in 0..SHADOWED {
+            commands.spawn((StandIn(None), PointLight { intensity: 0.0, range: 1.0, shadow_maps_enabled: true, ..default() }, Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0))));
+        }
     }
     for &(at, range, k) in &parts.fill {
         commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));

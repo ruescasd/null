@@ -38,7 +38,7 @@ impl Plugin for LookPlugin {
         // the dim one stood 3 degrees up, its light grazing in through the
         // rooms' walls or not as the view turned, the shadow's bias in
         // texels of a cascade fitted to the view.)
-        let rooms = args.opt("chasm") && args.opt("rooms");
+        let rooms = args.opt("chasm") && (args.opt("rooms") || args.opt("region"));
         app.insert_resource(Sky {
             time: args.time.unwrap_or(if rooms { 550.0 } else { 150.0 }),
             speed: 1.0,
@@ -192,7 +192,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") && args.opt("plan") { crate::chasm::plan::start(args.seed) } else if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::start(args.seed, crate::chasm::rooms::Show::of(&args)) } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
+    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") && args.opt("region") { crate::chasm::plan::network::region::start(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside")) } else if args.opt("chasm") && args.opt("plan") { crate::chasm::plan::start(args.seed) } else if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::start(args.seed, crate::chasm::rooms::Show::of(&args)) } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
     let ground = world.ground_height(x, z);
     let fly = FlyCam {
         yaw: yaw.to_radians(),

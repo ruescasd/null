@@ -20,6 +20,8 @@ use bevy::prelude::*;
 use worldgen::noise::hash01;
 
 use super::{CELL, N, Plan, tree};
+
+pub mod region;
 use crate::chasm::rooms::Spec;
 
 /// A storey's height (m).
@@ -191,13 +193,15 @@ fn exposure(cells: &Cells, taken: &Taken, c: IVec2, d: IVec2, s: i32, kind: Kind
                 exit: (exit, s),
             })
         }
-        // A stepwell two cells along the face, its front glass, 3-5 storeys
-        // inside it, out by its far end.
+        // A stepwell three cells along the face (its flights, a storey
+        // each, long enough to walk), its front glass, 3 or 5 storeys
+        // inside it (odd: its flights turn at its ends, so it is left by
+        // its far end), out by its far end.
         Kind::Glass => sides.into_iter().find_map(|t| {
-            let c2 = c + t;
-            let e = s + (3 + (r(3) * 3.0) as i32) * toward;
+            let c2 = c + t * 2;
+            let e = s + (3 + 2 * (r(3) * 2.0) as i32) * toward;
             let exit = c2 - d;
-            let room = [c, c2];
+            let room = [c, c + t, c2];
             if e < 1 || !room.iter().all(|&a| cells.face(a).is_some() && cells.void(a + d) && (s.min(e)..=s.max(e)).all(|s| free(a, s))) || !cells.inside(exit) || !free(exit, e) {
                 return None;
             }
@@ -272,7 +276,9 @@ fn stretch(cells: &Cells, taken: &Taken, from: &[IVec2], s: i32, climb: i32, rea
 }
 
 /// The steps and what they take of a stretch along `path` from storey `s`,
-/// `climb` storeys in one flight somewhere along it (`r` where), but its
+/// `climb` storeys in one flight somewhere along it (`r` where, give or
+/// take: on a straight run, each of its cells between two in line with it:
+/// a storey up a cell, turning in it, would be too steep to walk), but its
 /// last cell (left to what comes after).
 fn flight(path: &[IVec2], s: i32, climb: i32, r: f32) -> Option<(Vec<Step>, Vec<(IVec2, i32)>, i32)> {
     let k = path.len() as i32 - 1;
@@ -280,7 +286,10 @@ fn flight(path: &[IVec2], s: i32, climb: i32, r: f32) -> Option<(Vec<Step>, Vec<
     if n > k - 1 {
         return None;
     }
-    let at = 1 + (r * (k - 1 - n) as f32) as i32;
+    let straight = |i: i32| path[(i + 1) as usize] - path[i as usize] == path[i as usize] - path[(i - 1) as usize];
+    let first = 1 + (r * (k - 1 - n) as f32) as i32;
+    let options = k - n;
+    let at = (0..options).map(|o| 1 + (first - 1 + o) % options).find(|&at| (at..at + n).all(straight))?;
     let storey = |i: i32| s + climb.signum() * (i - at + 1).clamp(0, n);
     let steps = (0..k).map(|i| Step { at: path[i as usize], storey: storey(i), what: if i > 0 && storey(i) != storey(i - 1) { What::Stair } else { What::In } }).collect();
     let takes = (1..k).flat_map(|i| [(path[i as usize], storey(i) - 1), (path[i as usize], storey(i)), (path[i as usize], storey(i) + 1)]).collect();
@@ -611,27 +620,32 @@ pub(in crate::chasm) fn specs(seed: u32, count: usize) -> Vec<Spec> {
         if ds.is_empty() || i == 0 {
             continue;
         }
-        let size = p.size.as_vec2() * CELL;
-        let level = |s: i32| 1.0 + (p.storeys.1 - s) as f32 * STOREY;
-        let doors = ds
-            .iter()
-            .map(|d| {
-                let along = |c: i32, a: i32| (c - a) as f32 * CELL + CELL * 0.5;
-                let (wall, u) = match (d.out.x, d.out.y) {
-                    (-1, _) => (0, along(d.cell.y, p.at.y)),
-                    (1, _) => (1, along(d.cell.y, p.at.y)),
-                    (_, -1) => (2, along(d.cell.x, p.at.x)),
-                    _ => (3, along(d.cell.x, p.at.x)),
-                };
-                (wall, u, level(d.storey))
-            })
-            .collect();
         let spread = ds.iter().map(|d| d.storey).max().unwrap() - ds.iter().map(|d| d.storey).min().unwrap();
-        let height = 1.0 + (p.storeys.1 - p.storeys.0 + 1) as f32 * STOREY;
-        out.push((spread, ds.len(), Spec { size, height, doors, name: format!("place {i} (storeys {}-{})", p.storeys.0, p.storeys.1) }));
+        out.push((spread, ds.len(), spec(p, ds, format!("place {i} (storeys {}-{})", p.storeys.0, p.storeys.1))));
     }
     out.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
     out.into_iter().take(count).map(|o| o.2).collect()
+}
+
+/// The room a place must be, for its doors: a place's cells are 8 m
+/// across, its storeys 6 m high, its floor slab a metre under its lowest
+/// storey's floor; a door is in the middle of its cell's side.
+fn spec(p: &Place, ds: &[Door], name: String) -> Spec {
+    let level = |s: i32| 1.0 + (p.storeys.1 - s) as f32 * STOREY;
+    let doors = ds
+        .iter()
+        .map(|d| {
+            let along = |c: i32, a: i32| (c - a) as f32 * CELL + CELL * 0.5;
+            let (wall, u) = match (d.out.x, d.out.y) {
+                (-1, _) => (0, along(d.cell.y, p.at.y)),
+                (1, _) => (1, along(d.cell.y, p.at.y)),
+                (_, -1) => (2, along(d.cell.x, p.at.x)),
+                _ => (3, along(d.cell.x, p.at.x)),
+            };
+            (wall, u, level(d.storey))
+        })
+        .collect();
+    Spec { size: p.size.as_vec2() * CELL, height: 1.0 + (p.storeys.1 - p.storeys.0 + 1) as f32 * STOREY, doors, name }
 }
 
 /// How far it is to walk along steps (m), all of it and inside the rock.

@@ -731,6 +731,110 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 /// up, and light thrown back off the floor, strong enough to fill it.
 /// (Until review 87 the rooms were lit mostly by a sun 3 degrees up leaking
 /// in through their walls; by their own lamps alone they were near black.)
+/// A glass stepwell (a path's way out onto the chasm, step 3b): a long
+/// room along the face, glazed on it (wall `glass`, as `Spec`'s walls;
+/// see `rooms::place`), a stair switching back and forth along it, a
+/// storey a flight, the first in a lane against the glass, the next in one
+/// behind it, and so on; landings across both lanes at its ends, a storey
+/// apart at each end in turn; its doors (at its lowest storey and its
+/// highest) onto the landings at their ends. The flights' steps a quarter
+/// of a metre up, their undersides stepped; walked on hidden slopes.
+pub(in crate::chasm) fn stepwell(spec: &Spec, glass: usize) -> Room {
+    let (sx, sz) = (spec.size.x, spec.size.y);
+    let along_x = glass >= 2;
+    let (len, depth) = if along_x { (sx, sz) } else { (sz, sx) };
+    // (Along it `u`, in from the glass `n`.)
+    let at = move |u: f32, n: f32, y: f32| match glass {
+        0 => Vec3::new(n, y, u),
+        1 => Vec3::new(sx - n, y, u),
+        2 => Vec3::new(u, y, n),
+        _ => Vec3::new(u, y, sz - n),
+    };
+    let storeys = ((spec.height - 1.0) / 6.0).round() as i32;
+    let level = |k: i32| 1.0 + k as f32 * 6.0;
+    let mut b = B::new(Vec3::new(sx, spec.height, sz), Detail { reveals: true, ..Default::default() });
+    let (p, q) = (at(T, T, 1.0), at(len - T, depth - T, spec.height - 1.0));
+    b.carve(p.min(q), p.max(q));
+    for &(wall, u, y) in &spec.doors {
+        let (axis, n) = match wall {
+            0 => (0, 0.0),
+            1 => (0, sx - T),
+            2 => (2, 0.0),
+            _ => (2, sz - T),
+        };
+        b.door(axis, u - 1.0, 2.0, y, 2.5, n, T);
+    }
+    // Which end each storey's landing is at: the lowest door's first.
+    let lowest = spec.doors.iter().min_by(|a, b| a.2.total_cmp(&b.2)).map(|d| d.1).unwrap_or(0.0);
+    let first = if lowest < len * 0.5 { 0 } else { 1 };
+    let end = |k: i32| (first + k as usize) % 2;
+    const LAND: f32 = 4.0;
+    let landing = |e: usize| if e == 0 { (T, T + LAND) } else { (len - T - LAND, len - T) };
+    let lanes = [(T, depth * 0.5 - 0.25), (depth * 0.5 + 0.25, depth - T)];
+    let run = (T + LAND, len - T - LAND);
+    let mut slopes = Vec::new();
+    for k in 0..storeys - 1 {
+        let (from, lane) = (end(k), lanes[(k % 2) as usize]);
+        // Steps from the landing it leaves to the one it comes to, each
+        // its edge on the line from the one's edge to the other's.
+        let edge = |i: i32| {
+            let t = half((run.1 - run.0) * i as f32 / 24.0 * 2.0) / 2.0;
+            if from == 0 { run.0 + t } else { run.1 - t }
+        };
+        for i in 1..24 {
+            let top = level(k) + 0.25 * i as f32;
+            let (u0, u1) = (edge(i), edge(i + 1));
+            let (p, q) = (at(u0, lane.0, top - 1.0), at(u1, lane.1, top));
+            b.solid(p.min(q), p.max(q));
+        }
+        let (u0, u1) = landing(end(k + 1));
+        let (p, q) = (at(u0, T, level(k + 1) - 0.75), at(u1, depth - T, level(k + 1)));
+        b.solid(p.min(q), p.max(q));
+        let mut corners = Vec::new();
+        for (u, y) in [(edge(0), level(k) + LIFT), (edge(24), level(k + 1) + LIFT)] {
+            for n in [lane.0, lane.1] {
+                corners.push(at(u, n, y));
+                corners.push(at(u, n, y - 0.5));
+            }
+        }
+        slopes.push(corners);
+    }
+    for k in 0..storeys {
+        let (u0, u1) = landing(end(k));
+        let c = at((u0 + u1) * 0.5, depth * 0.5, level(k) + 3.5);
+        b.lamp(c, 18.0, strength(18.0) * 5.0);
+    }
+    let mid = at(len * 0.5, depth * 0.5, level(storeys / 2) + 1.0);
+    b.fill.push((mid, len + spec.height, strength(len + spec.height) * 3.0));
+    b.note(format!("{}: a glass stepwell {len:.0} m along the face, {} flights switching back", spec.name, storeys - 1));
+    b.view("stair", at(if first == 0 { T + 2.0 } else { len - T - 2.0 }, depth * 0.5, level(0) + 1.7), at(len * 0.5, depth * 0.5, level(storeys - 1) + 2.0));
+    let mut room = b.finish(1.0);
+    room.slopes = slopes;
+    room
+}
+
+/// What a place's room is, in a region built for real (step 3b): on
+/// several levels, a cascade where its doors allow, else Atrium I and II in
+/// turn (by `k`, the place's number); on one, a rotunda where its footprint
+/// is near square, a crossing where it leaves corners, else a hypostyle.
+pub(in crate::chasm) fn chosen(spec: &Spec, k: usize) -> Kind {
+    if one::level(spec).is_none() {
+        if fits(spec, Kind::Cascade) {
+            Kind::Cascade
+        } else if k % 2 == 0 {
+            Kind::Atrium
+        } else {
+            Kind::AtriumWell
+        }
+    } else if fits(spec, Kind::Rotunda) {
+        Kind::Rotunda
+    } else if fits(spec, Kind::Crossing) {
+        Kind::Crossing
+    } else {
+        Kind::Hypostyle
+    }
+}
+
 /// Whether a place's room has an intrusion (a niche upside down: one in
 /// three, for now), and its seed.
 pub(super) fn intrusion(spec: &Spec) -> Option<u32> {
