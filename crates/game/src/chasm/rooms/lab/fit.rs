@@ -11,6 +11,8 @@ use bevy::prelude::*;
 
 use super::{B, Detail, Room, T, half, strength, thickness};
 
+mod one;
+
 /// What a room must fit: its footprint (x, z, in metres, its walls
 /// included), its height, and its doors: which wall (0 the one at x = 0, 1
 /// at the far x, 2 at z = 0, 3 at the far z), where along it (the door's
@@ -31,16 +33,22 @@ pub(in crate::chasm) struct Spec {
 /// basin at its foot. (Named as one kind and its variant, so they read as
 /// close; atria, not galleries, which are long rooms or the walkways along
 /// a wall: the user.)
+/// For a place whose doors are all on one level (see `one.rs`): 3 a
+/// hypostyle; 4 a rotunda, 5 a crossing, where its footprint and doors allow,
+/// else a hypostyle. (A kind for one level, at a place on several: Atrium I.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Atrium,
     Cascade,
     AtriumWell,
+    Hypostyle,
+    Rotunda,
+    Crossing,
 }
 
 impl Kind {
     pub fn of(n: u8) -> Kind {
-        [Kind::Atrium, Kind::Cascade, Kind::AtriumWell][(n as usize).min(2)]
+        [Kind::Atrium, Kind::Cascade, Kind::AtriumWell, Kind::Hypostyle, Kind::Rotunda, Kind::Crossing][(n as usize).min(5)]
     }
 }
 
@@ -56,7 +64,7 @@ const LIFT: f32 = 0.05;
 /// The band along the walls the landings and flights take (m).
 const BAND: f32 = 2.5;
 /// A landing's or flight's slab; and the headroom over it.
-const SLAB: f32 = 1.0;
+pub(super) const SLAB: f32 = 1.0;
 const CLEAR: f32 = 3.0;
 
 /// The walls' inner faces as one loop, from the corner at (T, T) along x,
@@ -205,6 +213,14 @@ fn way_down(l: &Loop, p: f32, y: f32, floor: f32, dir: f32, taken: &[Piece]) -> 
 
 /// The room for `spec`.
 pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
+    if matches!(kind, Kind::Hypostyle | Kind::Rotunda | Kind::Crossing) && one::level(spec).is_some() {
+        let made = match kind {
+            Kind::Rotunda => one::rotunda(spec),
+            Kind::Crossing => one::crossing(spec),
+            _ => None,
+        };
+        return made.unwrap_or_else(|| one::hypostyle(spec));
+    }
     if kind == Kind::Cascade
         && let Some(room) = cascade(spec)
     {
@@ -695,7 +711,7 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 /// up, and light thrown back off the floor, strong enough to fill it.
 /// (Until review 87 the rooms were lit mostly by a sun 3 degrees up leaking
 /// in through their walls; by their own lamps alone they were near black.)
-fn light(b: &mut B, size: Vec2, floor: f32, ceiling: f32) {
+pub(super) fn light(b: &mut B, size: Vec2, floor: f32, ceiling: f32) {
     let (sx, sz) = (size.x, size.y);
     let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
     let high = ceiling - floor;

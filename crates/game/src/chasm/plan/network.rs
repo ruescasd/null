@@ -544,7 +544,36 @@ fn joined(plan: &Plan, seed: u32, start: IVec2) -> Network {
             loops += 1;
         }
     }
-    Network { places, paths, bottom, spine }
+    // Places whose doors are all on one storey: their floor that storey,
+    // their height in proportion to their footprint (two storeys at 16 m,
+    // three at 24, four at 32), grown up into the rock above as far as it
+    // is free (a storey's margin from anything there). Their rooms rise from
+    // their doors: given the storeys the paths happened to leave them, most
+    // were one storey high, a rotunda 29 m across 4 m high.
+    let mut net = Network { places, paths, bottom, spine };
+    let doors = net.doors();
+    for (i, ds) in doors.iter().enumerate() {
+        let Some(first) = ds.first() else { continue };
+        if i == 0 || ds.iter().any(|d| d.storey != first.storey) {
+            continue;
+        }
+        let p = net.places[i];
+        let own: Vec<(i32, i32, i32)> = p.cells().flat_map(|c| (p.storeys.0 - 1..=p.storeys.1 + 1).map(move |s| (c.x, c.y, s))).collect();
+        for k in &own {
+            taken.0.remove(k);
+        }
+        let want = (((p.size.x + p.size.y) as f32 * 0.5 * CELL / 8.0).round() as i32).clamp(2, 4);
+        let floor = first.storey;
+        let mut top = floor;
+        while floor - top + 1 < want && top - 1 >= 1 && p.cells().all(|c| !taken.any(c, (top - 2, top - 1))) {
+            top -= 1;
+        }
+        net.places[i].storeys = (top, floor);
+        for c in net.places[i].cells() {
+            taken.0.extend((top - 1..=floor + 1).map(|s| (c.x, c.y, s)));
+        }
+    }
+    net
 }
 
 /// The shortest ways from place `from` along the paths (each `lengths`

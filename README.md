@@ -79,7 +79,8 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               room's door (walk; --opt noclip between rooms). --set kind=0 Atrium I (an open hall, galleries round it),
                                               1 a cascade where the doors allow (those places first), 2 Atrium II (its galleries
                                               round an open well, lamps hanging down it, an oculus, a basin of
-                                              bubbling ichor: an experiment, see chasm/rooms/pool.rs)
+                                              bubbling ichor: an experiment, see chasm/rooms/pool.rs); for places whose doors are all on
+                                              one level (those first): 3 a hypostyle, 4 a rotunda, 5 a crossing (else a hypostyle)
     --opt pushbot                             holds forward from where --cam puts you for --set push_secs (5) seconds, logging
                                               where you are and how fast (--set push_log, 0.1 s): how a flight climbs, straight
                                               or at an angle
