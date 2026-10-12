@@ -192,13 +192,6 @@ fn accelerate(v: &mut Vec3, wishdir: Vec3, wishspeed: f32, accel: f32, dt: f32) 
     *v += wishdir * (accel * dt * wishspeed).min(add);
 }
 
-/// Removes the component of `v` going into a surface.
-fn clip(v: Vec3, normal: Vec3) -> Vec3 {
-    let into = v.dot(normal);
-    let into = if into < 0.0 { into * 1.001 } else { into / 1.001 };
-    v - normal * into
-}
-
 struct Mover<'a, 'w, 's> {
     query: &'a MoveAndSlide<'w, 's>,
     shape: Collider,
@@ -632,7 +625,14 @@ pub fn walk(
                 friction(&mut player.velocity, dt);
             }
             accelerate(&mut player.velocity, wishdir, if input.walk { WALK_SPEED } else { MAX_SPEED }, GROUND_ACCEL, dt);
-            player.velocity = clip(player.velocity, player.ground_normal);
+            // Along the ground: as fast across as on the level, rising or
+            // falling as the ground slopes. (Clipped into the slope, the
+            // speed across was cut to its cosine squared each time the body
+            // went from moving level to down it, stepping onto a flight, put
+            // back on it after a step down: down a flight at six tenths of
+            // the speed up it, the user.)
+            let n = player.ground_normal;
+            player.velocity.y = -(player.velocity.x * n.x + player.velocity.z * n.z) / n.y.max(0.1);
         } else {
             accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
             player.velocity.y -= GRAVITY * dt;

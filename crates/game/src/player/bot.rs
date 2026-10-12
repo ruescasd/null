@@ -375,6 +375,7 @@ fn walk(
     if !player.ready {
         return;
     }
+    let walklog = way.0.first().is_some() && std::env::args().any(|a| a == "walklog");
     // (Up to eight times as fast, never more per frame than the movement
     // simulates, 0.1 s: or time would run on without it under load.)
     if real_dt > 0.0 {
@@ -406,6 +407,11 @@ fn walk(
     let flat = Vec2::new(target.x - p.x, target.z - p.z);
     let d = flat.length();
     if d < 0.6 && (feet - target.y).abs() < 1.6 {
+        // (`--opt walklog`: each point as it is reached, when, and where:
+        // to compare how long its stretches take, up a flight and down.)
+        if walklog {
+            info!("walklog: {:.3} s, point {}, at {:.2} {:.2} {:.2}, {what}", now - started, state.walk, p.x, feet, p.z);
+        }
         state.walk += 1;
         state.walk_best = f32::MAX;
         state.walk_since = now;
@@ -442,7 +448,8 @@ fn walk(
     fly.yaw = (-flat.x).atan2(-flat.y);
     fly.pitch = -0.3;
     input.wish = Vec2::Y;
-    input.walk = d < 4.0;
+    // (`--opt walkrun`: running all the way, to time it fairly.)
+    input.walk = d < 4.0 && !std::env::args().any(|a| a == "walkrun");
 }
 
 /// The wall test: for each place, stand there a moment, then walk straight
