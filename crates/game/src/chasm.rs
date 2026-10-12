@@ -880,6 +880,7 @@ fn build(
     args: Res<Args>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     if !args.opt("chasm") {
         return;
@@ -893,7 +894,8 @@ fn build(
     }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
     if args.opt("rooms") {
-        let (mut parts, views, orbs, pools) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
+        let (mut parts, views, orbs, pools, paintings) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
+        rooms::painting::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &paintings);
         for (at, r) in pools {
             rooms::pool::spawn(&mut commands, &mut meshes, &mut materials, at, r);
         }

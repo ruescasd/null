@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 
 use super::super::{B, Detail, Room, T, half, strength, thickness};
-use super::{SLAB, Spec, light};
+use super::{SLAB, Spec, light, painting};
 
 /// The level all the doors are on, if they are on one.
 pub(super) fn level(spec: &Spec) -> Option<f32> {
@@ -172,6 +172,9 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
         b.lamp(c, h + lantern + w * 0.5, strength(h + lantern + w * 0.5) * 2.0);
     }
     let mid = Vec3::new(sx * 0.5, floor + h * 0.4, sz * 0.5);
+    if let Some(seed) = painting(spec) {
+        b.hang(vec![((T, sx - T), (T, sz - T))], (floor, floor + h), seed);
+    }
     views(&mut b, spec, mid, &[]);
     b.finish(floor)
 }
@@ -476,6 +479,9 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
     light(&mut b, spec.size, floor, floor + wall);
     if steps > 0 {
         b.lamp(Vec3::new(cx, floor + h + tower - 1.0, cz), h + tower + 4.0, strength(h + tower + 4.0) * 3.0);
+    }
+    if let Some(seed) = painting(spec) {
+        b.hang(arms.iter().map(|a| (a.0, a.1)).collect(), (floor, floor + wall), seed);
     }
     views(&mut b, spec, Vec3::new(cx, floor + h * 0.6, cz), &extras);
     Some(b.finish(floor))

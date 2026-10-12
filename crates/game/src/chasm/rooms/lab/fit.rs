@@ -536,6 +536,9 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
         };
         b.view(["door1", "door2", "door3", "door4", "door5", "door6"][k.min(5)], eye, mid + Vec3::Y * ((y - floor) * 0.6 + 2.0));
     }
+    if let Some(seed) = painting(spec) {
+        b.hang(vec![((T, sx - T), (T, sz - T))], (floor, ceiling), seed);
+    }
     let mut room = b.finish(floor);
     room.pool = pool;
     room.slopes = slopes;
@@ -722,6 +725,12 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 /// up, and light thrown back off the floor, strong enough to fill it.
 /// (Until review 87 the rooms were lit mostly by a sun 3 degrees up leaking
 /// in through their walls; by their own lamps alone they were near black.)
+/// Whether a place's room has a painting (seven in ten), and its seed.
+pub(super) fn painting(spec: &Spec) -> Option<u32> {
+    let h = spec.name.bytes().fold(2166136261u32, |h, c| (h ^ c as u32).wrapping_mul(16777619));
+    (h % 10 < 7).then_some(h / 10)
+}
+
 pub(super) fn light(b: &mut B, size: Vec2, floor: f32, ceiling: f32) {
     let (sx, sz) = (size.x, size.y);
     let mid = Vec3::new(sx * 0.5, floor, sz * 0.5);
