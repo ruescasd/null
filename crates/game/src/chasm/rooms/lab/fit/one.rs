@@ -52,9 +52,9 @@ fn views(b: &mut B, spec: &Spec, mid: Vec3, extra: &[f32]) {
 }
 
 /// A hypostyle: the hall filling the footprint, on the doors' level, as
-/// high as a third of its mean side (5 m at least); columns by the orders
-/// (a tenth of its height thick) at the crossings of bays dividing each
-/// side evenly, near six thicknesses each; a clearing of a bay or two in
+/// high as a third of its mean side (5 m at least); stocky columns (a
+/// sixth of its height thick) at the crossings of bays dividing each side
+/// evenly, near four and a half thicknesses each; a clearing of a bay or two in
 /// the middle, under a lantern rising into what height is left; columns
 /// kept out of every door's way in; pilasters answering them along the
 /// walls, niches between; coffers, beams on the columns, bands.
@@ -64,8 +64,11 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
     let room = spec.height - SLAB - floor;
     let (w, d) = (sx - 2.0 * T, sz - 2.0 * T);
     let h = half(((w + d) * 0.5 / 3.0).max(5.0)).min(room);
-    let dd = thickness(h, 10.0);
-    let target = (dd * 6.0).max(4.0);
+    // (Stocky, a forest: a sixth of the height thick, four and a half
+    // thicknesses apart. By the classical orders, a tenth, in halls this
+    // low they were half a metre thick, thin as poles: the user.)
+    let dd = thickness(h, 6.0);
+    let target = (dd * 4.5).max(4.0);
     let (nx, nz) = (((w / target).round() as i32).max(2), ((d / target).round() as i32).max(2));
     let (bx, bz) = (w / nx as f32, d / nz as f32);
     let mut b = B::new(Vec3::new(sx, spec.height, sz), Detail { reveals: true, coffers: true, bands: true, pilasters: true, beams: true, screens: false });
