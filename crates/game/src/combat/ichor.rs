@@ -122,7 +122,7 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
 
 /// An irregular pool: a wobbly blob, a few lobes reaching out, and drops
 /// scattered round it. White, its shape in the alpha.
-fn splat_image(seed: u32) -> Image {
+pub(crate) fn splat_image(seed: u32) -> Image {
     const N: u32 = 128;
     let r = |k: i32| hash01(seed as i32, k, 3, 0x1c0);
     let lobes: Vec<(f32, f32, f32)> = (0..7).map(|k| (r(k) * std::f32::consts::TAU, 0.08 + 0.12 * r(k + 20), 0.12 + 0.2 * r(k + 40))).collect();

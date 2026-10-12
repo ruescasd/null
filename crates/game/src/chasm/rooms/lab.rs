@@ -58,6 +58,8 @@ pub(super) struct Room {
     pub projector: Option<(Vec3, f32)>,
     /// Shimmers behind its walls (see `shimmer.rs`, `B::intrude`).
     pub shimmers: Vec<super::shimmer::Shimmer>,
+    /// Its painting's bleeding (see `bleed.rs`, `B::bleed`).
+    pub bleeds: Vec<super::bleed::Bleed>,
 }
 
 /// Outer walls' thickness.
@@ -132,6 +134,9 @@ struct B {
     /// seed; and the shimmers laid.
     intrusion: Option<u32>,
     shimmers: Vec<super::shimmer::Shimmer>,
+    /// Whether its painting bleeds (see `bleed`); and its way.
+    bleeding: bool,
+    bleeds: Vec<super::bleed::Bleed>,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
     screens: Vec<Manifold>,
 }
@@ -174,7 +179,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), intrusion: None, shimmers: Vec::new(), cables: Vec::new(), screens: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), intrusion: None, shimmers: Vec::new(), bleeding: false, bleeds: Vec::new(), cables: Vec::new(), screens: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -507,7 +512,7 @@ impl B {
     /// its frame (5 m wide at most, as high as 1.3 times its width at
     /// most); in it, a panel a quarter metre into the wall, a frame half a
     /// metre wide a quarter metre out round it, the picture on the panel,
-    /// a lamp over it.
+    /// lit from below (see `uplight`).
     fn lay_painting(&mut self, (rects, (y0, y1), seed): (Vec<((f32, f32), (f32, f32))>, (f32, f32), u32)) {
         // In a bay of the rhythm, the most central one on its wall (the
         // longest wall's, of those as central), its niche filled again:
@@ -529,7 +534,7 @@ impl B {
             // landscape.)
             let w = w.min(half(h / 1.25)).max(1.5);
             let (uc, yc) = ((bay.span.0 + bay.span.1) * 0.5, bay.y.0 + 1.5 + h * 0.5);
-            self.frame_painting(&|u, n, y| bay.at(u, n, y), (w, h), (uc, yc), seed, "in a bay");
+            self.frame_painting(&|u, n, y| bay.at(u, n, y), (w, h), (uc, yc), bay.y.0, seed, "in a bay");
             return;
         }
         // Else on the longest wall with its middle clear, centred on it,
@@ -556,7 +561,7 @@ impl B {
         }
         if let Some((_, along, out, face, mid, (w, h))) = best {
             let at = move |u: f32, n: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n) } else { Vec3::new(face + out * n, y, u) };
-            self.frame_painting(&at, (w, h), (mid, ya + 0.5 + h * 0.5), seed, "centred on a wall");
+            self.frame_painting(&at, (w, h), (mid, ya + 0.5 + h * 0.5), y0, seed, "centred on a wall");
         }
     }
     /// A painting as large as the longest clear stretch of wall fits (the
@@ -612,8 +617,8 @@ impl B {
         self.glow.retain(|g| !inside((g.0 + g.1) * 0.5));
         let facing = (at(uc, -1.0, yc) - at(uc, 0.0, yc)).normalize();
         self.paintings.push(super::painting::Painting { at: at(uc, 0.23, yc), facing, size: Vec2::new(w, h), seed, dark: false });
-        let range = w + h + 4.0;
-        self.lamp(at(uc, -1.25, pv.1 + 0.9), range, strength(range) * 1.2);
+        let range = h + (yc - y0) + 4.0;
+        self.uplight(&at, uc, w, y0, range);
         self.note(format!("a painting {w:.1} by {h:.1} m"));
         self.view("painting", at(uc, -(w.max(h) + 2.5), yc - 0.3), at(uc, 0.0, yc));
     }
@@ -621,9 +626,9 @@ impl B {
     /// `at` gives the frame of: framed by two steps into the wall, a
     /// quarter metre each, half a metre and a quarter round it (only
     /// inwards: framed out and in at once, it looked like a television: the
-    /// user), the picture on the inner one, a lamp over it, and no other
+    /// user), the picture on the inner one, lit from below (see `uplight`), and no other
     /// lamp before it.
-    fn frame_painting(&mut self, at: &dyn Fn(f32, f32, f32) -> Vec3, (w, h): (f32, f32), (uc, yc): (f32, f32), seed: u32, place: &str) {
+    fn frame_painting(&mut self, at: &dyn Fn(f32, f32, f32) -> Vec3, (w, h): (f32, f32), (uc, yc): (f32, f32), floor: f32, seed: u32, place: &str) {
         for (m, depth) in [(0.5f32, 0.25f32), (0.25, 0.5)] {
             let (p, q) = (at(uc - w * 0.5 - m, 0.0, yc - h * 0.5 - m), at(uc + w * 0.5 + m, depth, yc + h * 0.5 + m));
             self.carve(p.min(q), p.max(q));
@@ -635,10 +640,81 @@ impl B {
         self.glow.retain(|g| !inside((g.0 + g.1) * 0.5));
         let facing = (at(uc, -1.0, yc) - at(uc, 0.0, yc)).normalize();
         self.paintings.push(super::painting::Painting { at: at(uc, 0.48, yc), facing, size: Vec2::new(w, h), seed, dark: true });
-        let range = w + h + 4.0;
-        self.lamp(at(uc, -1.25, yc + h * 0.5 + 1.0), range, strength(range) * 1.2);
+        let range = h + (yc - floor) + 4.0;
+        self.uplight(at, uc, w, floor, range);
         self.note(format!("a painting {w:.1} by {h:.1} m, {place}"));
         self.view("painting", at(uc, -(w.max(h) + 3.0), yc - 0.3), at(uc, 0.0, yc));
+    }
+    /// An intrusion (the user's): its painting bleeds, ichor seeping out of
+    /// the picture and running down to the floor (see `bleed.rs`).
+    fn bleed(&mut self) {
+        self.bleeding = true;
+    }
+    /// The way the ichor runs from a seep on the painting: down the
+    /// picture's face, then the panel's; where a ledge is under it (a
+    /// frame's step), out along its top to its lip, and down the face
+    /// under that; to the floor (no lip within a metre), or off an
+    /// overhang (nothing behind it), dripping to the floor below. Each
+    /// point just off what it runs on.
+    fn lay_bleed(&mut self) {
+        let Some(p) = self.paintings.last().copied() else { return };
+        let r = |k: i32| hash01(p.seed as i32, k, 0, 0xb1ed);
+        let side = Vec3::Y.cross(p.facing).normalize();
+        // (From the picture's middle: across it, up it, into the wall.)
+        let at = move |u: f32, n: f32, y: f32| p.at + side * u - p.facing * n + Vec3::Y * y;
+        let air = |u: f32, n: f32, y: f32| self.is_empty(at(u, n, y));
+        const F: f32 = 0.01;
+        const OFF: f32 = 0.006;
+        let u = (r(1) - 0.5) * p.size.x * 0.6;
+        let bottom = -p.size.y * 0.5;
+        let y0 = bottom + p.size.y * (0.25 + 0.35 * r(2));
+        // Down the picture, then onto the panel behind its edge.
+        let mut face = 0.0;
+        while air(u, face + F, bottom - 0.05) && face < 1.0 {
+            face += F;
+        }
+        let mut path = vec![at(u, -OFF, y0), at(u, -OFF, bottom), at(u, face - OFF, bottom)];
+        let mut y = bottom;
+        let mut drip = None;
+        for _ in 0..12 {
+            while air(u, face - F, y - F) && !air(u, face + F, y - F) && y > -30.0 {
+                y -= F;
+            }
+            if !air(u, face - F, y - F) {
+                // A ledge under it: out along it to its lip; none within a
+                // metre, the floor.
+                let mut n = face;
+                while !air(u, n - F, y - F) && face - n < 1.0 {
+                    n -= F;
+                }
+                path.push(at(u, face - OFF, y + OFF));
+                if face - n >= 1.0 {
+                    break;
+                }
+                path.push(at(u, n - OFF, y + OFF));
+                face = n;
+                continue;
+            }
+            // Nothing behind it: it drips, to the floor below.
+            let lip = at(u, face - OFF, y);
+            path.push(lip);
+            let mut fy = y;
+            while air(u, face - OFF, fy - F) && y - fy < 30.0 {
+                fy -= F;
+            }
+            drip = Some(at(u, face, fy).y);
+            break;
+        }
+        let ending = if drip.is_some() { "drips" } else { "runs down to the floor" };
+        self.note(format!("an intrusion: its painting bleeds, a stream that {ending}"));
+        // (Seen whole: from where it seeps to the floor.)
+        let foot = *path.last().unwrap();
+        let floor = drip.unwrap_or(foot.y);
+        let (top, low) = (path[0], Vec3::new(foot.x, floor, foot.z));
+        let back = ((top.y - floor) * 1.3).max(3.0);
+        self.view("bleeding", Vec3::new(foot.x, floor + 1.6, foot.z) + p.facing * back + side * 0.8, (top + low) * 0.5);
+        self.view("bleeding_floor", low + p.facing * 1.4 + side * 0.4 + Vec3::Y * 1.3, low + p.facing * 0.1);
+        self.bleeds.push(super::bleed::Bleed { path, facing: p.facing, drip, seed: p.seed });
     }
     /// An intrusion (the user's): one of the room's niches upside down,
     /// a shimmer on its back. Laid when the room is done (after its
@@ -672,6 +748,30 @@ impl B {
         self.note(format!("an intrusion: a niche upside down, {nw:.1} m wide, a shimmer behind it"));
         self.view("intrusion", bay.at(uc, -(nw + 3.0), lo.y + 1.0), bay.at(uc, 0.0, yc));
     }
+    /// A painting's light, from below (the user: the floor under it lit
+    /// too, where a bleeding one's ichor gathers): in a slot cut in the
+    /// floor before it, a quarter metre wide and deep, most of its width
+    /// long, a glowing strip at its bottom, the lamp just over it (in it,
+    /// its walls shaded the floor under the painting, and most of the
+    /// painting). Where the floor before it is not whole, the lamp alone,
+    /// low, unseen.
+    fn uplight(&mut self, at: &dyn Fn(f32, f32, f32) -> Vec3, uc: f32, w: f32, floor: f32, range: f32) {
+        let len = half(w * 0.8).max(1.0);
+        let whole = (0..=8).all(|i| {
+            let u = uc - len * 0.5 + len * i as f32 / 8.0;
+            self.is_solid(at(u, -0.875, floor - 0.1)) && self.is_empty(at(u, -0.875, floor + 0.1))
+        });
+        let k = strength(range) * 1.2;
+        if !whole {
+            self.lights.push((at(uc, -0.9, floor + 0.2), range, k));
+            return;
+        }
+        let (p, q) = (at(uc - len * 0.5, -1.0, floor - 0.25), at(uc + len * 0.5, -0.75, floor));
+        self.carve(p.min(q), p.max(q));
+        let (p, q) = (at(uc - len * 0.5 + 0.05, -0.95, floor - 0.25), at(uc + len * 0.5 - 0.05, -0.8, floor - 0.22));
+        self.glow.push((p.min(q), p.max(q)));
+        self.lights.push((at(uc, -0.875, floor + 0.15), range, k));
+    }
     fn view(&mut self, name: &'static str, eye: Vec3, at: Vec3) {
         self.views.push((name, eye, at));
     }
@@ -685,12 +785,15 @@ impl B {
                 Hang::Wall => self.lay_painting_wall((rects, y, seed)),
             }
         }
+        if self.bleeding {
+            self.lay_bleed();
+        }
         if let Some(seed) = self.intrusion.take() {
             self.lay_inverted(seed);
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None, shimmers: self.shimmers }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None, shimmers: self.shimmers, bleeds: self.bleeds }
     }
 }
 

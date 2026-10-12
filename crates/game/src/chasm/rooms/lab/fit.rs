@@ -538,6 +538,9 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     }
     if let Some(seed) = painting(spec) {
         b.hang(vec![((T, sx - T), (T, sz - T))], (floor, ceiling), seed, Hang::Wall);
+        if bleeds(seed) {
+            b.bleed();
+        }
     }
     if let Some(seed) = intrusion(spec) {
         b.intrude(seed);
@@ -733,6 +736,11 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 pub(super) fn intrusion(spec: &Spec) -> Option<u32> {
     let h = spec.name.bytes().fold(2166136261u32 ^ 0x1b7d, |h, c| (h ^ c as u32).wrapping_mul(16777619));
     (h % 3 == 0).then_some(h / 3)
+}
+
+/// Whether a painting bleeds (an intrusion: one in three, for now).
+pub(super) fn bleeds(seed: u32) -> bool {
+    (seed / 7) % 3 == 0
 }
 
 /// Whether a place's room has a painting (seven in ten), and its seed.

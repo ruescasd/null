@@ -29,6 +29,7 @@ pub(super) mod pool;
 pub(super) mod painting;
 pub(super) mod projector;
 pub(super) mod shimmer;
+pub(super) mod bleed;
 
 /// A cell's size (a power of two: its multiples are exact).
 pub(crate) const CELL: f32 = 0.25;
@@ -792,6 +793,7 @@ pub(super) struct Fixtures {
     pub paintings: Vec<painting::Painting>,
     pub projectors: Vec<(Vec3, f32)>,
     pub shimmers: Vec<shimmer::Shimmer>,
+    pub bleeds: Vec<bleed::Bleed>,
 }
 
 /// The lab: its rooms built, where to see them from, and what they hold
@@ -840,6 +842,7 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, F
             fixtures.projectors.push((o + at, reach));
         }
         fixtures.shimmers.extend(room.shimmers.iter().map(|s| shimmer::Shimmer { at: o + s.at, ..*s }));
+        fixtures.bleeds.extend(room.bleeds.iter().map(|b| bleed::Bleed { path: b.path.iter().map(|p| o + *p).collect(), drip: b.drip.map(|y| o.y + y), ..b.clone() }));
         for m in &room.screens {
             let o = room.grid.origin;
             parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));

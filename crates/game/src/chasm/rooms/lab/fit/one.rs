@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 
 use super::super::{B, Detail, Hang, Room, T, half, strength, thickness};
-use super::{SLAB, Spec, intrusion, light, painting};
+use super::{SLAB, Spec, bleeds, intrusion, light, painting};
 
 /// The level all the doors are on, if they are on one.
 pub(super) fn level(spec: &Spec) -> Option<f32> {
@@ -174,6 +174,9 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
     let mid = Vec3::new(sx * 0.5, floor + h * 0.4, sz * 0.5);
     if let Some(seed) = painting(spec) {
         b.hang(vec![((T, sx - T), (T, sz - T))], (floor, floor + h), seed, Hang::Bay);
+        if bleeds(seed) {
+            b.bleed();
+        }
     }
     if let Some(seed) = intrusion(spec) {
         b.intrude(seed);
@@ -515,6 +518,9 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
     }
     if let Some(seed) = painting(spec) {
         b.hang(arms.iter().map(|a| (a.0, a.1)).collect(), (floor, floor + wall), seed, Hang::Bay);
+        if bleeds(seed) {
+            b.bleed();
+        }
     }
     if let Some(seed) = intrusion(spec) {
         b.intrude(seed);
