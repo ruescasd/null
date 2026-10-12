@@ -326,6 +326,20 @@ fn exposure(run: &[super::Step], cells: &Cells, before: &super::Step, after: &su
         let (lo, hi) = (p.min(q), p.max(q));
         let (c, e) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
         parts.stone.oriented(c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
+        // (Walked on: spots over it in the columns the floors' are in.)
+        let s = crate::chasm::nav::SPACING;
+        let first = |a: f32| ((a - 0.375) / s).ceil() * s + 0.375;
+        // (Up to a tenth of a metre from its ends: the spots of the tile it
+        // meets are half a metre on, joined.)
+        let mut z = first(lo.z + 0.1);
+        while z < hi.z - 0.1 {
+            let mut x = first(lo.x + 0.1);
+            while x < hi.x - 0.1 {
+                parts.walkable.push(Vec3::new(x, hi.y, z));
+                x += s;
+            }
+            z += s;
+        }
     };
     let lamp = |parts: &mut Parts, p: Vec3| {
         parts.lights.push((p, 18.0, 0.0006 * (18.0f32 / 14.0).powi(2) * 2.0));

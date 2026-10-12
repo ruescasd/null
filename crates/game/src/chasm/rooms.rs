@@ -257,6 +257,29 @@ impl Grid {
         }
     }
 
+    /// Where it can be walked, in the world: in every other column of
+    /// cells (half a metre apart), each empty cell on a solid or partly
+    /// solid one with `headroom` cells empty over it, inside the grid (what
+    /// is past its top is not known to be clear: the rock over a tile's
+    /// roof), as the middle of the cell's floor.
+    pub(in crate::chasm) fn walkable(&self, headroom: i32) -> Vec<Vec3> {
+        let mut out = Vec::new();
+        let empty = |c: [i32; 3]| matches!(self.get(c), Filler::Empty);
+        for z in (1..self.n[2]).step_by(2) {
+            for x in (1..self.n[0]).step_by(2) {
+                for y in 1..self.n[1] - headroom {
+                    if !empty([x, y, z]) || empty([x, y - 1, z]) {
+                        continue;
+                    }
+                    if (1..headroom).all(|k| empty([x, y + k, z])) {
+                        out.push(self.origin + Vec3::new((x as f32 + 0.5) * CELL, y as f32 * CELL, (z as f32 + 0.5) * CELL));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Fills the cells from `lo` up to `hi` (in metres from the grid's
     /// corner, rounded to cells).
     pub(super) fn fill(&mut self, lo: Vec3, hi: Vec3, f: Filler) {
@@ -771,6 +794,9 @@ fn rooms(seed: u32, count: u32, show: Show) -> impl Iterator<Item = lab::Room> {
     })
 }
 
+/// How many cells clear over a floor for it to be walked (1.75 m).
+pub(in crate::chasm) const HEADROOM: i32 = 7;
+
 /// Where you start in the lab: at the first room's door, looking in.
 pub fn start(seed: u32, show: Show) -> [f32; 5] {
     let room = rooms(seed, 1, show).next().unwrap();
@@ -865,6 +891,7 @@ fn add(room: lab::Room, name: &str, parts: &mut Parts, fixtures: &mut Fixtures, 
         parts.strands.push((points.iter().map(|p| o + *p).collect(), *thick, *shade));
     }
     let grid = &room.grid;
+    parts.walkable.extend(grid.walkable(HEADROOM));
     let (enclosed, solid) = grid.mesh(&mut g);
     let triangles = g.indices.len() / 3;
     parts.chunks.push(g);

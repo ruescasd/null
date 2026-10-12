@@ -148,6 +148,7 @@ pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
         }
         let g = Grid { origin: tile.origin, ..g };
         g.mesh(&mut chunk);
+        parts.walkable.extend(g.walkable(super::HEADROOM));
         parts.slopes.extend(slopes);
         if tile.lamp
             && let Some(p) = lamp_at

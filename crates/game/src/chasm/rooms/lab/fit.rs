@@ -781,7 +781,10 @@ pub(in crate::chasm) fn stepwell(spec: &Spec, glass: usize) -> Room {
             let t = half((run.1 - run.0) * i as f32 / 24.0 * 2.0) / 2.0;
             if from == 0 { run.0 + t } else { run.1 - t }
         };
-        for i in 1..24 {
+        // (From its first tread, level with the landing it leaves: begun at
+        // the second, a tread's width between the landing and the flight
+        // was open to the flight below.)
+        for i in 0..24 {
             let top = level(k) + 0.25 * i as f32;
             let (u0, u1) = (edge(i), edge(i + 1));
             let (p, q) = (at(u0, lane.0, top - 1.0), at(u1, lane.1, top));

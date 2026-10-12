@@ -25,6 +25,7 @@ mod claims;
 use claims::{Claim, ROCK, Table, Use};
 pub mod rooms;
 pub mod plan;
+pub(crate) mod nav;
 
 /// A taut cable from `a` to `b`, sagging `sag` in the middle.
 fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
@@ -492,6 +493,9 @@ struct Parts {
     /// is out of view, or out of a lamp's reach, is not drawn: as one mesh,
     /// every shadow drew all of it.
     chunks: Vec<Geometry>,
+    /// Where it can be walked (see `nav`): spots on its floors half a
+    /// metre apart.
+    walkable: Vec<Vec3>,
     dark: Geometry,
     /// Light built in: lines along bands, strips deep in shafts, glowing
     /// grooves and the edges of overhangs; `dim`, slits lit faintly within.
@@ -903,7 +907,24 @@ fn build(
         for line in report {
             info!("region: {line}");
         }
+        // Where creatures can go, and whether it joins the paths: each step
+        // of the walker's way to the next, unless jumped.
+        let nav = nav::Nav::new(&parts.walkable);
+        let way = plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"));
+        let (pieces, largest) = nav.pieces();
+        let broken: Vec<&str> = way.windows(2).filter(|w| !w[1].1.starts_with("jump") && nav.path(w[0].0, w[1].0).is_none()).map(|w| w[1].1.as_str()).collect();
+        info!("region: nav {} spots in {pieces} pieces (the largest {largest}); the way's {} steps, {} not joined{}", nav.nodes.len(), way.len() - 1, broken.len(), broken.iter().take(6).map(|b| format!("; {b}")).collect::<String>());
+        // (And through the rooms: from where the walker leaves one path to
+        // where it takes up the next, jumped over by the walker.)
+        let jumps: Vec<&[(Vec3, String)]> = way.windows(2).filter(|w| w[1].1.starts_with("jump to path") && nav.path(w[0].0, w[1].0).is_none()).collect();
+        info!(
+            "region: nav: {} of the way's jumps not walkable{}{}",
+            jumps.len(),
+            jumps.iter().take(6).map(|w| format!("; {}", w[1].1)).collect::<String>(),
+            jumps.first().and_then(|w| nav.closest_reach(w[0].0, w[1].0)).map_or(String::new(), |p| format!(" (the first gives out at {p:.1})"))
+        );
         commands.insert_resource(views);
+        commands.insert_resource(nav);
         if args.opt("walkbot") {
             commands.insert_resource(Way(plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"))));
         }
