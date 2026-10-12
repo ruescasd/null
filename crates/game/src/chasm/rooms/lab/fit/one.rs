@@ -246,6 +246,7 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
         ways.push(((wall, u, y), Some(((depth((off.abs() - pw).max(0.0)) - 0.5).max(0.25), depth(off.abs() + pw) + 0.5, pw))));
     }
     let wall_h = half(rad.min(room - 2.0)).max(4.0).min(room);
+    let stars = planetarium(spec);
     let mut b = B::new(Vec3::new(sx, spec.height, sz), Detail { reveals: true, coffers: true, bands: true, ..Default::default() });
     // (The doors and passages first, then the drum: cut after it, their
     // arches' shapes reaching into it stood there as slivers in the open.)
@@ -278,7 +279,7 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
     for k in (0..4).filter(|&k| chambers[k]) {
         let (p, q) = chamber_box(k);
         b.carve(p, Vec3::new(q.x, floor + 0.75, q.z));
-        b.lamp((p + q) * 0.5 + Vec3::Y * 1.0, kx.max(kz) * 2.0 + 4.0, strength(kx.max(kz) * 2.0 + 4.0) * 0.5);
+        b.lamp((p + q) * 0.5 + Vec3::Y * 1.0, kx.max(kz) * 2.0 + 4.0, strength(kx.max(kz) * 2.0 + 4.0) * if stars { 0.1 } else { 0.5 });
     }
     // Engaged columns round the drum, twelve places about it, each sunk
     // two fifths into the wall, by the orders (a tenth of the wall's
@@ -314,21 +315,50 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
         let y = floor + wall_h + (k - 1) as f32 * dh;
         b.ring(cx, cz, (0.0, rad - k as f32 * dr), (y, y + dh), false);
     }
-    let oculus = (rad - (levels + 1) as f32 * dr).max(1.0);
-    b.ring(cx, cz, (0.0, oculus), (floor + wall_h + levels as f32 * dh, spec.height), false);
-    b.sky(Vec3::new(cx, spec.height, cz), oculus + 1.0, room + 12.0, strength(room + 12.0) * 6.0);
+    // (A planetarium's dome closed, dark: no oculus.)
+    if !stars {
+        let oculus = (rad - (levels + 1) as f32 * dr).max(1.0);
+        b.ring(cx, cz, (0.0, oculus), (floor + wall_h + levels as f32 * dh, spec.height), false);
+        b.sky(Vec3::new(cx, spec.height, cz), oculus + 1.0, room + 12.0, strength(room + 12.0) * 6.0);
+    }
+    // A planetarium: the projector on a pedestal in the middle, half way up
+    // the room or near it, as far from the floor as from the walls and the
+    // dome (low, the floor round it was bright, the walls far and faint);
+    // lit only by it (its stars, and the little light it lets out all
+    // round: see `projector.rs`), and the chambers' lamps turned low.
+    let projector = stars.then(|| {
+        let up = (room * 0.45).clamp(3.5, wall_h);
+        let (foot, at) = (floor + up - 1.5, Vec3::new(cx, floor + up, cz));
+        b.column(cx, cz, thickness(up, 8.0).max(1.25), (floor, foot));
+        let reach = 2.0 * (rad * rad + up.max(room - up).powi(2)).sqrt() + 4.0;
+        b.view("projector", Vec3::new(cx + rad * 0.6, floor + 1.7, cz + rad * 0.3), at);
+        b.view("stars", Vec3::new(cx - rad * 0.7, floor + 1.7, cz), Vec3::new(cx + rad, floor + wall_h, cz));
+        b.note("a planetarium: dark, its dome closed, a star projector in the middle");
+        (at, reach, foot)
+    });
     let extras: Vec<f32> = ways.iter().map(|w| w.1.map_or(0.0, |w| w.0)).collect();
     b.note(format!(
-        "{}: a rotunda {:.0} m across, its wall {wall_h:.1} m high, {columns} engaged columns round it, a dome stepped {levels} times to an oculus; {} doors, {} into corner chambers ({} of them), the rest by passages to portals",
+        "{}: a rotunda {:.0} m across, its wall {wall_h:.1} m high, {columns} engaged columns round it, a dome stepped {levels} times{}; {} doors, {} into corner chambers ({} of them), the rest by passages to portals",
         spec.name,
         rad * 2.0,
+        if stars { "" } else { " to an oculus" },
         spec.doors.len(),
         ways.iter().filter(|w| w.1.is_none()).count(),
         chambers.iter().filter(|c| **c).count()
     ));
-    light(&mut b, spec.size, floor, floor + wall_h);
+    if !stars {
+        light(&mut b, spec.size, floor, floor + wall_h);
+    }
     views(&mut b, spec, Vec3::new(cx, floor + wall_h * 0.6, cz), &extras);
-    Some(b.finish(floor))
+    let mut r = b.finish(floor);
+    r.projector = projector;
+    Some(r)
+}
+
+/// Whether a rotunda is a planetarium (half of them, by its place's name).
+fn planetarium(spec: &Spec) -> bool {
+    let h = spec.name.bytes().fold(0x811c9dc5u32 ^ 0x51a7, |h, c| (h ^ c as u32).wrapping_mul(16777619));
+    (h >> 7) % 2 == 0
 }
 
 /// A crossing: two halls a third of the narrower side wide (6 m at least)

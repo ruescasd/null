@@ -53,6 +53,9 @@ pub(super) struct Room {
     pub slopes: Vec<Vec<Vec3>>,
     /// Paintings on its walls (see `painting.rs`, `B::hang`).
     pub paintings: Vec<super::painting::Painting>,
+    /// A star projector (see `projector.rs`): its middle, how far its light
+    /// reaches, and the top of its pedestal.
+    pub projector: Option<(Vec3, f32, f32)>,
 }
 
 /// Outer walls' thickness.
@@ -646,7 +649,7 @@ impl B {
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None }
     }
 }
 

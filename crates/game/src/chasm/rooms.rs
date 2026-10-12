@@ -27,6 +27,7 @@ pub(super) use lab::fit::Spec;
 pub(super) mod orb;
 pub(super) mod pool;
 pub(super) mod painting;
+pub(super) mod projector;
 
 /// A cell's size (a power of two: its multiples are exact).
 pub(crate) const CELL: f32 = 0.25;
@@ -767,14 +768,25 @@ pub fn start(seed: u32, show: Show) -> [f32; 5] {
 #[derive(Resource, Default)]
 pub struct RoomViews(pub Vec<(String, Vec3, Vec3)>);
 
-/// The lab: its rooms built, where to see them from, and the orbs hanging
-/// in them (`--opt orb`: the shrine alone).
-pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Vec<(Vec3, f32)>, Vec<(Vec3, f32)>, Vec<painting::Painting>) {
-    let (parts, report, views, orbs, pools, paintings) = built(seed, count, show);
+/// What the rooms hold that is not built of their cells, in the world's
+/// metres: orbs, pools of ichor (each a centre and a radius), paintings,
+/// star projectors (see `Room`).
+#[derive(Default)]
+pub(super) struct Fixtures {
+    pub orbs: Vec<(Vec3, f32)>,
+    pub pools: Vec<(Vec3, f32)>,
+    pub paintings: Vec<painting::Painting>,
+    pub projectors: Vec<(Vec3, f32, f32)>,
+}
+
+/// The lab: its rooms built, where to see them from, and what they hold
+/// (`--opt orb`: the shrine alone).
+pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Fixtures) {
+    let (parts, report, views, fixtures) = built(seed, count, show);
     for line in report {
         info!("rooms: {line}");
     }
-    (parts, views, orbs, pools, paintings)
+    (parts, views, fixtures)
 }
 
 /// `--check rooms`: a hundred rooms' surfaces each enclose what their cells
@@ -782,7 +794,7 @@ pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Vec<(
 pub fn check() -> bool {
     let mut ok = true;
     for seed in (1..=100).step_by(10) {
-        let (_, report, _, _, _, _) = built(seed, 10, Show::Batch);
+        let (_, report, _, _) = built(seed, 10, Show::Batch);
         for line in report {
             if line.contains("OPEN") {
                 ok = false;
@@ -795,21 +807,23 @@ pub fn check() -> bool {
 }
 
 /// The lab's rooms, a line on each, and the views.
-fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, Vec<(Vec3, f32)>, Vec<(Vec3, f32)>, Vec<painting::Painting>) {
+fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, Fixtures) {
     let mut parts = Parts::default();
     let mut report = Vec::new();
     let mut views = RoomViews::default();
-    let mut orbs = Vec::new();
-    let mut pools = Vec::new();
-    let mut paintings = Vec::new();
+    let mut fixtures = Fixtures::default();
     for (i, room) in rooms(seed, count, show).enumerate() {
+        let o = room.grid.origin;
         if let Some((at, r)) = room.orb {
-            orbs.push((room.grid.origin + at, r));
+            fixtures.orbs.push((o + at, r));
         }
         if let Some((at, r)) = room.pool {
-            pools.push((room.grid.origin + at, r));
+            fixtures.pools.push((o + at, r));
         }
-        paintings.extend(room.paintings.iter().map(|p| painting::Painting { at: room.grid.origin + p.at, ..*p }));
+        fixtures.paintings.extend(room.paintings.iter().map(|p| painting::Painting { at: o + p.at, ..*p }));
+        if let Some((at, reach, foot)) = room.projector {
+            fixtures.projectors.push((o + at, reach, o.y + foot));
+        }
         for m in &room.screens {
             let o = room.grid.origin;
             parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
@@ -846,5 +860,5 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, V
             views.0.push((format!("{name}_{view}"), grid.origin + *eye, grid.origin + *at));
         }
     }
-    (parts, report, views, orbs, pools, paintings)
+    (parts, report, views, fixtures)
 }

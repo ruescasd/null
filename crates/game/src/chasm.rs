@@ -50,7 +50,7 @@ pub struct ChasmPlugin;
 
 impl Plugin for ChasmPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, build).add_systems(Update, (near_shadows, rooms::orb::animate, rooms::pool::animate));
+        app.add_systems(Startup, build).add_systems(Update, (near_shadows, rooms::orb::animate, rooms::pool::animate, rooms::projector::animate));
     }
 }
 
@@ -894,13 +894,16 @@ fn build(
     }
     // `--opt rooms`: the room lab instead (see `rooms.rs`).
     if args.opt("rooms") {
-        let (mut parts, views, orbs, pools, paintings) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
-        rooms::painting::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &paintings);
-        for (at, r) in pools {
+        let (mut parts, views, fixtures) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
+        rooms::painting::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &fixtures.paintings);
+        for (at, reach, foot) in fixtures.projectors {
+            rooms::projector::spawn(&mut commands, &mut meshes, &mut materials, &mut images, at, reach, foot);
+        }
+        for (at, r) in fixtures.pools {
             rooms::pool::spawn(&mut commands, &mut meshes, &mut materials, at, r);
         }
         commands.insert_resource(views);
-        for (at, r) in orbs {
+        for (at, r) in fixtures.orbs {
             rooms::orb::spawn(&mut commands, &mut meshes, &mut materials, at, r);
         }
         // (The rooms' flights walked on their slopes, each its own convex
