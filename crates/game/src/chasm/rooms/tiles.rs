@@ -22,6 +22,8 @@ const SPRING: f32 = 3.0;
 const DOOR: f32 = 2.0;
 const DOOR_SPRING: f32 = 2.5;
 const MOUTH: f32 = 1.5;
+/// Tiles to a mesh (in the order they are given: along their paths).
+const RUN: usize = 6;
 /// A flight's risers, and how high its slope stands over its steps.
 const RISER: f32 = 0.25;
 const LIFT: f32 = 0.05;
@@ -86,7 +88,12 @@ fn way(g: &mut Grid, cache: &mut Cache, side: usize, (t0, t1): (f32, f32), y: f3
 /// lamps.
 pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
     let mut cache = Cache(Default::default());
-    for tile in tiles {
+    // (In runs of a few, each run its own mesh: see `Parts::chunks`.)
+    let mut chunk = super::super::Geometry::default();
+    for (k, tile) in tiles.iter().enumerate() {
+        if k % RUN == 0 && !chunk.indices.is_empty() {
+            parts.chunks.push(std::mem::take(&mut chunk));
+        }
         let mut g = Grid::solid(Vec3::ZERO, Vec3::new(SIDE, tile.height, SIDE));
         let mut slopes: Vec<Vec<Vec3>> = Vec::new();
         let mut lamp_at = None;
@@ -140,7 +147,7 @@ pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
             lamp_at.get_or_insert(Vec3::new(SIDE * 0.5, arm.floor + 3.9, SIDE * 0.5));
         }
         let g = Grid { origin: tile.origin, ..g };
-        g.mesh(&mut parts.stone);
+        g.mesh(&mut chunk);
         parts.slopes.extend(slopes);
         if tile.lamp
             && let Some(p) = lamp_at
@@ -152,5 +159,8 @@ pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
             parts.lights.push((p, range, 0.0006 * (range / 14.0f32).powi(2) * 6.0));
             parts.glow.oriented(p, Vec3::X * 0.15, Vec3::Y * 0.15, Vec3::Z * 0.15);
         }
+    }
+    if !chunk.indices.is_empty() {
+        parts.chunks.push(chunk);
     }
 }

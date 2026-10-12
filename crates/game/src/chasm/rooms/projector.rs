@@ -36,21 +36,30 @@ pub(crate) struct Projector {
     lean: Quat,
 }
 
+/// How far from the projector its shadows are cast (beyond, it is out of
+/// sight, or nearly: casting, it cost as much as a lamp's shadows, a
+/// millisecond and more, wherever you were).
+const SHADOWS: f32 = 60.0;
+
 /// Puts a projector's light at `at`, reaching `reach`.
 pub(crate) fn spawn(commands: &mut Commands, images: &mut Assets<Image>, at: Vec3, reach: f32) {
     let lean = Quat::from_rotation_z(LEAN);
     commands.spawn((
         Projector { lean },
-        PointLight { intensity: LIGHT * (reach / REACH).powi(2).max(1.0), range: reach, shadow_maps_enabled: true, ..default() },
+        PointLight { intensity: LIGHT * (reach / REACH).powi(2).max(1.0), range: reach, shadow_maps_enabled: false, ..default() },
         PointLightTexture { image: images.add(stars()), cubemap_layout: CubemapLayout::SequenceVertical },
         Transform::from_translation(at).with_rotation(lean),
     ));
 }
 
-/// It turns about its pole.
-pub(crate) fn animate(time: Res<Time>, mut projectors: Query<(&Projector, &mut Transform)>) {
-    for (p, mut t) in &mut projectors {
+/// It turns about its pole; its shadows cast only from near.
+pub(crate) fn animate(time: Res<Time>, camera: Single<&Transform, (With<crate::camera::FlyCam>, Without<Projector>)>, mut projectors: Query<(&Projector, &mut Transform, &mut PointLight)>) {
+    for (p, mut t, mut light) in &mut projectors {
         t.rotation = p.lean * Quat::from_rotation_y(time.elapsed_secs() * TURN);
+        let near = t.translation.distance(camera.translation) < SHADOWS;
+        if light.shadow_maps_enabled != near {
+            light.shadow_maps_enabled = near;
+        }
     }
 }
 

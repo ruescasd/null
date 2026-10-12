@@ -198,7 +198,7 @@ fn setup(
         yaw: yaw.to_radians(),
         pitch: pitch.to_radians(),
         speed: 25.0,
-        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots") || args.opt("roomshots"),
+        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots") || args.opt("roomshots") || args.opt("viewbench"),
     };
 
     let stars = star_cubemap(&mut images);
@@ -272,7 +272,7 @@ fn setup(
             Sun(i),
             DirectionalLight {
                 illuminance: orbit.illuminance,
-                shadow_maps_enabled: true,
+                shadow_maps_enabled: !args.opt("nosunshadows"),
                 contact_shadows_enabled: true,
                 ..default()
             },
@@ -402,6 +402,7 @@ fn darken(args: Res<Args>, gloom: Res<Gloom>, camera: Single<(Option<&mut Distan
 }
 
 fn move_suns(
+    args: Res<Args>,
     sky: Res<Sky>,
     tuning: Res<Tuning>,
     // Bevy turns the generated light into an `EnvironmentMapLight` once the
@@ -422,8 +423,14 @@ fn move_suns(
         let orbit = &SUNS[sun.0];
         let dir = orbit.direction(sky.time);
         *transform = Transform::IDENTITY.looking_to(-dir, Vec3::Y);
-        // Below the horizon a sun is simply off.
+        // Below the horizon a sun is simply off, and casts no shadows
+        // (its cascades drew everything in view each frame for nothing:
+        // at night in a region of the plan, 5 ms).
         let up = dir.y.max(0.0);
+        let shadows = up > 0.0 && !args.opt("nosunshadows");
+        if light.shadow_maps_enabled != shadows {
+            light.shadow_maps_enabled = shadows;
+        }
         light.illuminance = orbit.illuminance * (up * 20.0).min(1.0);
         light.soft_shadow_size =
             sky.soft_shadows.then_some(orbit.shadow_softness * tuning.softness[sun.0]);

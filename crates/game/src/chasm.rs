@@ -488,6 +488,10 @@ const SHAFT_DEPTH: f32 = -18.0;
 #[derive(Default)]
 struct Parts {
     stone: Geometry,
+    /// Stone in pieces (a room, a run of tiles), each its own mesh, so what
+    /// is out of view, or out of a lamp's reach, is not drawn: as one mesh,
+    /// every shadow drew all of it.
+    chunks: Vec<Geometry>,
     dark: Geometry,
     /// Light built in: lines along bands, strips deep in shafts, glowing
     /// grooves and the edges of overhangs; `dim`, slits lit faintly within.
@@ -904,7 +908,7 @@ fn build(
             commands.insert_resource(Way(plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"))));
         }
         furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
-        let colliders = parts.stone.collider().into_iter().chain(parts.glass.collider()).chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        let colliders = parts.stone.collider().into_iter().chain(parts.chunks.iter().filter_map(|g| g.collider())).chain(parts.glass.collider()).chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }
@@ -915,7 +919,7 @@ fn build(
         furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
         // (The rooms' flights walked on their slopes, each its own convex
         // collider, as the chasm's.)
-        let colliders = parts.stone.collider().into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        let colliders = parts.stone.collider().into_iter().chain(parts.chunks.iter().filter_map(|g| g.collider())).chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }
@@ -959,10 +963,10 @@ struct Shadowed(f32);
 #[derive(Component)]
 struct StandIn(Option<Entity>);
 
-/// How many lights cast shadows at once: each casts six shadow maps, and a
-/// few dozen at once (the room lab's row, seen from outside) run the GPU out
-/// of memory.
-const SHADOWED: usize = 8;
+/// How many lights cast shadows at once (`--set shadowed=N`): each casts
+/// six shadow maps, a millisecond and more a frame; two keep a region of
+/// the plan over 100 frames a second (eight, it ran at 50-70).
+const SHADOWED: usize = 2;
 
 /// Shadows from the lamps nearest the eye only, cast by the stand-ins put
 /// in their places, the lamps themselves dark meanwhile (none with `--opt
@@ -977,7 +981,7 @@ fn near_shadows(
     let eye = camera.translation;
     let mut near: Vec<(f32, Entity)> = if off { Vec::new() } else { lamps.iter().map(|(e, t, _, _)| (t.translation.distance_squared(eye), e)).collect() };
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.truncate(SHADOWED);
+    near.truncate(stand.iter().count());
     let near: Vec<Entity> = near.into_iter().map(|n| n.1).collect();
     // (Each keeps the lamp it has while that is still near: no flicker.)
     let kept: Vec<Entity> = stand.iter().filter_map(|s| s.0.0.filter(|e| near.contains(e))).collect();
@@ -1037,6 +1041,11 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
     let dim = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(8.0), ..default() });
     let cable = materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.05), perceptual_roughness: 0.6, ..default() });
 
+    for g in std::mem::take(&mut parts.chunks) {
+        if !g.indices.is_empty() {
+            commands.spawn((Mesh3d(meshes.add(g.mesh())), MeshMaterial3d(stone.clone()), Transform::IDENTITY));
+        }
+    }
     // (A mesh with nothing in it is left out: the renderer cannot hold one.)
     for (g, material, casts) in [
         (std::mem::take(&mut parts.steps), stone.clone(), true),
@@ -1081,7 +1090,7 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
         commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at), Shadowed(power * k)));
     }
     if shadows || !parts.shadowed.is_empty() {
-        for _ in 0..SHADOWED {
+        for _ in 0..args.num("shadowed", SHADOWED as f32) as usize {
             commands.spawn((StandIn(None), PointLight { intensity: 0.0, range: 1.0, shadow_maps_enabled: true, ..default() }, Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0))));
         }
     }

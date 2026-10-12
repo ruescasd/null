@@ -16,7 +16,7 @@ impl Plugin for CapturePlugin {
         app.init_resource::<AutoShot>()
             .init_resource::<Bench>()
             .init_resource::<Tour>()
-            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus, room_tour));
+            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus, room_tour, view_bench));
     }
 }
 
@@ -88,6 +88,79 @@ fn bench(
         info!("bench: {path} {ms:.2} ms");
     }
     exit.write(AppExit::Success);
+}
+
+/// `--opt viewbench` (in the room lab or a region of the plan): frame times
+/// from a few of its views (where to see the rooms from, see
+/// `chasm::rooms::RoomViews`), the first of each sort (`entrance`,
+/// `inside`, `floor`, `out`, `stair`, `high`), each held still a while,
+/// then measured: the average, the worst frame, the costliest render
+/// passes. Then exits.
+fn view_bench(
+    args: Res<Args>,
+    time: Res<Time>,
+    views: Option<Res<crate::chasm::rooms::RoomViews>>,
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    mut step: Local<(Option<Vec<usize>>, usize, f32, Vec<f32>)>,
+    camera: Single<(&mut Transform, &mut crate::camera::FlyCam)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(views) = views else { return };
+    if !args.opt("viewbench") {
+        return;
+    }
+    let (chosen, i, since, frames) = &mut *step;
+    let chosen = chosen.get_or_insert_with(|| {
+        let mut out = Vec::new();
+        for sort in ["entrance", "_inside", "_floor", "_out", "_stair", "_high"] {
+            out.extend(views.0.iter().enumerate().filter(|(_, v)| v.0.contains(sort)).map(|(k, _)| k).take(if sort == "entrance" { 1 } else { 2 }));
+        }
+        out.truncate(args.num("views", 99.0) as usize);
+        out
+    });
+    let now = time.elapsed_secs();
+    let Some(&k) = chosen.get(*i) else {
+        exit.write(AppExit::Success);
+        return;
+    };
+    let (name, eye, at) = &views.0[k];
+    let (mut transform, mut fly) = camera.into_inner();
+    let to = *at - *eye;
+    fly.yaw = (-to.x).atan2(-to.z);
+    fly.pitch = to.y.atan2(Vec2::new(to.x, to.z).length());
+    transform.translation = *eye;
+    transform.rotation = fly.rotation();
+    if *since == 0.0 {
+        *since = now;
+    }
+    if now - *since < BENCH_WARMUP + 1.0 {
+        return;
+    }
+    if now - *since < BENCH_WARMUP + 1.0 + 4.0 {
+        frames.push(time.delta_secs());
+        return;
+    }
+    let n = frames.len().max(1) as f32;
+    let average = frames.iter().sum::<f32>() / n;
+    let worst = frames.iter().copied().fold(0.0, f32::max);
+    let mut passes: Vec<(String, f64)> = diagnostics
+        .iter()
+        .filter(|d| d.path().as_str().starts_with("render/") && d.path().as_str().contains("elapsed_gpu"))
+        .filter_map(|d| Some((d.path().as_str().trim_start_matches("render/").trim_end_matches("/elapsed_gpu").to_string(), d.average()?)))
+        .collect();
+    passes.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let top: Vec<String> = passes.iter().take(6).map(|(p, ms)| format!("{p} {ms:.1}")).collect();
+    let mut cpu: Vec<(String, f64)> = diagnostics
+        .iter()
+        .filter(|d| d.path().as_str().starts_with("render/") && d.path().as_str().contains("elapsed_cpu"))
+        .filter_map(|d| Some((d.path().as_str().trim_start_matches("render/").trim_end_matches("/elapsed_cpu").to_string(), d.average()?)))
+        .collect();
+    cpu.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let cpu: Vec<String> = cpu.iter().take(4).map(|(p, ms)| format!("{p} {ms:.1}")).collect();
+    info!("viewbench: {name}: {:.0} fps ({:.1} ms, worst {:.1}); gpu ms: {}; cpu ms: {}", 1.0 / average, average * 1000.0, worst * 1000.0, top.join(", "), cpu.join(", "));
+    frames.clear();
+    *since = 0.0;
+    *i += 1;
 }
 
 /// The lab tour (`--opt lab --opt labshots`): every candidate from the same

@@ -853,8 +853,10 @@ fn add(room: lab::Room, name: &str, parts: &mut Parts, fixtures: &mut Fixtures, 
     }
     fixtures.shimmers.extend(room.shimmers.iter().map(|s| shimmer::Shimmer { at: o + s.at, ..*s }));
     fixtures.roots.extend(room.roots.iter().map(|(p, w)| (p.iter().map(|q| o + *q).collect(), *w)));
+    // (Its own mesh: see `Parts::chunks`.)
+    let mut g = super::Geometry::default();
     for m in &room.screens {
-        parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
+        g.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
     }
     for slope in &room.slopes {
         parts.slopes.push(slope.iter().map(|p| o + *p).collect());
@@ -863,15 +865,16 @@ fn add(room: lab::Room, name: &str, parts: &mut Parts, fixtures: &mut Fixtures, 
         parts.strands.push((points.iter().map(|p| o + *p).collect(), *thick, *shade));
     }
     let grid = &room.grid;
-    let before = parts.stone.indices.len() / 3;
-    let (enclosed, solid) = grid.mesh(&mut parts.stone);
+    let (enclosed, solid) = grid.mesh(&mut g);
+    let triangles = g.indices.len() / 3;
+    parts.chunks.push(g);
     let closed = (enclosed - solid).abs() < solid * 1e-5;
     let line = format!(
         "{name} at x {:.0}: {}; {solid:.0} m3 of cells, {enclosed:.0} m3 enclosed{}; {} triangles",
         o.x,
         room.recipe.join("; "),
         if closed { "" } else { ": OPEN" },
-        parts.stone.indices.len() / 3 - before
+        triangles
     );
     for &(p, range, k) in &room.lights {
         parts.lights.push((o + p, range, k));
