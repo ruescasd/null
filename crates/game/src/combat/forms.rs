@@ -130,6 +130,7 @@ pub(super) fn lab(
 pub(super) fn gaze(
     args: Res<Args>,
     time: Res<Time>,
+    ground: crate::ground::Ground,
     camera: Single<&Transform, With<FlyCam>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gazed: Query<(&GlobalTransform, &mut Gazed, Has<Asleep>)>,
@@ -148,7 +149,8 @@ pub(super) fn gaze(
             continue;
         }
         let to = transform.translation() - camera.translation;
-        let looked = to.length() < LOOK_WITHIN && to.normalize_or(Vec3::Y).dot(*camera.forward()) > LOOK_COS;
+        // (Seen: not through a wall or a floor.)
+        let looked = to.length() < LOOK_WITHIN && to.normalize_or(Vec3::Y).dot(*camera.forward()) > LOOK_COS && ground.clear(camera.translation, transform.translation());
         g.gaze = if looked { (g.gaze + dt / 1.5).min(1.0) } else { (g.gaze - dt / 2.5).max(0.0) };
     }
     for (m, mut transform) in &mut morphs {

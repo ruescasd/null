@@ -121,6 +121,10 @@ pub(super) fn leech(
             if s.mode != Mode::Free || s.dark < 0.5 || to.length() > REACH || held.contains(&bud) {
                 continue;
             }
+            // (Not through a wall or a floor.)
+            if !ground.clear(eye.translation, transform.translation) {
+                continue;
+            }
             if hash01(bud.index_u32() as i32, t, 0, 0x711) >= dt / EVERY {
                 continue;
             }

@@ -628,8 +628,9 @@ fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, p
     let eye = player.translation;
     // (It turns to face you, even while it stands still.)
     face(transform, eye, dt);
-    let seen = (p - eye).normalize_or(Vec3::Y).dot(*player.forward()) > 0.55;
-    if seen && p.distance(eye) < STILL_WITHIN {
+    // (Seen: not through a wall or a floor.)
+    let seen = p.distance(eye) < STILL_WITHIN && (p - eye).normalize_or(Vec3::Y).dot(*player.forward()) > 0.55 && ground.clear(eye, p);
+    if seen {
         s.velocity = Vec3::ZERO;
         return;
     }
@@ -703,6 +704,7 @@ fn face(transform: &mut Transform, eye: Vec3, dt: f32) {
 fn gloom(
     time: Res<Time>,
     args: Res<Args>,
+    ground: crate::ground::Ground,
     player: Single<&Transform, With<Player>>,
     swarm: Query<(&Transform, &Swarmer), Without<Player>>,
     mut gloom: ResMut<crate::look::Gloom>,
@@ -712,7 +714,13 @@ fn gloom(
     let sum: f32 = swarm
         .iter()
         .filter(|(_, s)| s.mode != Mode::Dormant)
-        .map(|(t, s)| s.dark * ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2))
+        // (Through a wall or a floor, a quarter of it: something unseen
+        // close by, not the whole room's dark from the storey below.)
+        .map(|(t, s)| {
+            let near = ((GLOOM_REACH - t.translation.distance(player.translation)) / (GLOOM_REACH - GLOOM_FULL)).clamp(0.0, 1.0).powi(2);
+            let seen = if near > 0.0 && !ground.clear(player.translation, t.translation) { 0.25 } else { 1.0 };
+            s.dark * near * seen
+        })
         .sum();
     let target = 1.0 - (-args.num("gloom_each", 0.4) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
