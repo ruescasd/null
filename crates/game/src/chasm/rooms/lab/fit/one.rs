@@ -130,12 +130,19 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
     };
     let mut columns = 0;
     let mut posts = Vec::new();
+    let can = |i: i32, j: i32| {
+        let (x, z) = (T + i as f32 * bx, T + j as f32 * bz);
+        let cleared = x > cx.0 + 0.01 && x < cx.1 - 0.01 && z > cz.0 + 0.01 && z < cz.1 - 0.01;
+        !cleared && !in_the_way(x, z)
+    };
+    // (Only where its mirrors across the hall's middle lines can stand too:
+    // kept wherever no door's way in was, a column could stand alone in
+    // its row, out of place: the user.)
+    b.round = spec.name.bytes().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32)) % 2 == 1;
     for i in 1..nx {
         for j in 1..nz {
-            let (x, z) = (T + i as f32 * bx, T + j as f32 * bz);
-            let cleared = x > cx.0 + 0.01 && x < cx.1 - 0.01 && z > cz.0 + 0.01 && z < cz.1 - 0.01;
-            if !cleared && !in_the_way(x, z) {
-                b.column(x, z, dd, (floor, floor + h - beam));
+            if can(i, j) && can(nx - i, j) && can(i, nz - j) && can(nx - i, nz - j) {
+                b.column(T + i as f32 * bx, T + j as f32 * bz, dd, (floor, floor + h - beam));
                 posts.push((i, j));
                 columns += 1;
             }
@@ -158,7 +165,7 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
     for &dr in &spec.doors {
         door(&mut b, spec, dr, 0.0);
     }
-    b.note(format!("{}: a hypostyle {sx:.0} by {sz:.0} m, {h:.1} m high, {columns} columns {dd:.1} m thick, bays {bx:.1} by {bz:.1} m; a clearing under a lantern {lantern:.1} m higher; {} doors", spec.name, spec.doors.len()));
+    b.note(format!("{}: a hypostyle {sx:.0} by {sz:.0} m, {h:.1} m high, {columns} columns {dd:.1} m thick ({} mouldings), bays {bx:.1} by {bz:.1} m; a clearing under a lantern {lantern:.1} m higher; {} doors", spec.name, if b.round { "round" } else { "square" }, spec.doors.len()));
     light(&mut b, spec.size, floor, floor + h);
     if lantern >= 2.0 {
         let c = Vec3::new((cx.0 + cx.1) * 0.5, floor + h + lantern - 1.0, (cz.0 + cz.1) * 0.5);
@@ -270,6 +277,32 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
         b.carve(p, Vec3::new(q.x, floor + 0.75, q.z));
         b.lamp((p + q) * 0.5 + Vec3::Y * 1.0, kx.max(kz) * 2.0 + 4.0, strength(kx.max(kz) * 2.0 + 4.0) * 0.5);
     }
+    // Engaged columns round the drum, twelve places about it, each sunk
+    // two fifths into the wall, by the orders (a tenth of the wall's
+    // height thick), up to its cornice; but by a door's mouth or a
+    // chamber's opening. (The rotundas were bare, the user; niches cut into
+    // the curve, their half-domes in quarter-metre layers, read as stacks
+    // of coins.)
+    let dc = thickness(wall_h, 10.0);
+    let mouths: Vec<f32> = spec.doors.iter().map(|&d| {
+        let p = inward(spec, d, 0.0, 0.0);
+        (p.z - cz).atan2(p.x - cx)
+    }).collect();
+    let openings: Vec<f32> = (0..4).filter(|&k| chambers[k]).map(|k| [-0.75f32, -0.25, 0.25, 0.75][k] * std::f32::consts::PI).collect();
+    let mut columns = 0;
+    for k in 0..12 {
+        let a = (k as f32 + 0.5) * std::f32::consts::TAU / 12.0 - std::f32::consts::PI;
+        let near = |b: f32| {
+            let d = (a - b).rem_euclid(std::f32::consts::TAU);
+            d.min(std::f32::consts::TAU - d) < (dc + 2.5) / rad
+        };
+        if mouths.iter().chain(&openings).any(|&b| near(b)) {
+            continue;
+        }
+        let at = rad - dc * 0.5 * 0.2;
+        b.column(cx + a.cos() * at, cz + a.sin() * at, dc, (floor, floor + wall_h - 1.0));
+        columns += 1;
+    }
     // The dome: stepped in, ring by ring, to an oculus, in the height left.
     let above = room - wall_h;
     let levels = ((above / 1.5).floor() as i32).clamp(0, 6);
@@ -283,7 +316,7 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
     b.sky(Vec3::new(cx, spec.height, cz), oculus + 1.0, room + 12.0, strength(room + 12.0) * 6.0);
     let extras: Vec<f32> = ways.iter().map(|w| w.1.map_or(0.0, |w| w.0)).collect();
     b.note(format!(
-        "{}: a rotunda {:.0} m across, its wall {wall_h:.1} m high, a dome stepped {levels} times to an oculus; {} doors, {} into corner chambers ({} of them), the rest by passages to portals",
+        "{}: a rotunda {:.0} m across, its wall {wall_h:.1} m high, {columns} engaged columns round it, a dome stepped {levels} times to an oculus; {} doors, {} into corner chambers ({} of them), the rest by passages to portals",
         spec.name,
         rad * 2.0,
         spec.doors.len(),
@@ -364,6 +397,37 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
             b.coffers((a, c), (e, f), floor + h, half(arm / 3.0).max(2.0));
             b.beams((a, c), (e, f), floor + h, half(arm * 0.75).max(3.0));
         }
+    }
+    // Over a vaulted arm, a transverse arch at each bay (where its
+    // pilasters stand), half a metre wide, 0.4 m deep under the vault,
+    // springing where it springs; but in the crossing and at the arm's ends.
+    // (The vaulted arms' beams: the user wanted beams on the ceiling.)
+    if vaulted {
+        let bay = half(arm * 0.75).max(3.0);
+        let spring = h - arm * 0.5;
+        let mut arches = 0;
+        for &((a, c), (e, f), axis) in &arms {
+            let (from, to, skip) = if axis == 2 { (e, f, (z0, z1)) } else { (a, c, (x0, x1)) };
+            let len = to - from;
+            let n = (len / bay).floor() as i32;
+            let start = half((len - n as f32 * bay) * 0.5);
+            for k in 0..=n {
+                let u = from + start + k as f32 * bay;
+                if u < from + 0.6 || u > to - 0.6 || (u > skip.0 - 0.5 && u < skip.1 + 0.5) {
+                    continue;
+                }
+                arches += 1;
+                let top = floor + spring + arm * 0.5;
+                if axis == 2 {
+                    b.solid(Vec3::new(a, floor + spring, u - 0.25), Vec3::new(c, top, u + 0.25));
+                    b.vault(2, a + 0.4, c - a - 0.8, floor, spring, u - 0.25, 0.5);
+                } else {
+                    b.solid(Vec3::new(u - 0.25, floor + spring, e), Vec3::new(u + 0.25, top, f));
+                    b.vault(0, e + 0.4, f - e - 0.8, floor, spring, u - 0.25, 0.5);
+                }
+            }
+        }
+        b.note(format!("{arches} transverse arches over the arms"));
     }
     b.carve(Vec3::new(x0, floor, z0), Vec3::new(x1, floor + h, z1));
     // The tower over the crossing, stepped in, in the height left.

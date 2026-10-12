@@ -113,6 +113,8 @@ struct B {
     d: Detail,
     /// The walls' rhythms, laid last (see `rhythm`).
     rhythms: Vec<Rhythm>,
+    /// Columns' mouldings round, not square (see `column`).
+    round: bool,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
     screens: Vec<Manifold>,
 }
@@ -123,7 +125,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), cables: Vec::new(), screens: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, cables: Vec::new(), screens: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -155,16 +157,26 @@ impl B {
     }
     /// A column of thickness `d` from `y0` to `y1`: a square base and a
     /// capital (a slab on a narrower one) round a round shaft.
+    /// (Tall, its base mirrors its capital, two steps each: a slab a
+    /// quarter metre wider than the shaft, and one as wide; square, or
+    /// with `round`, round. The base was one blocky slab under a capital
+    /// of two: the user.)
     fn column(&mut self, x: f32, z: f32, d: f32, (y0, y1): (f32, f32)) {
         let r = d * 0.5;
         let tall = y1 - y0 >= 3.0;
         let (base, cap) = if tall { (0.5, 0.5) } else { (0.0, 0.25) };
         if tall {
-            self.solid(Vec3::new(x - r - 0.25, y0, z - r - 0.25), Vec3::new(x + r + 0.25, y0 + base, z + r + 0.25));
-            self.solid(Vec3::new(x - r - 0.25, y1 - 0.25, z - r - 0.25), Vec3::new(x + r + 0.25, y1, z + r + 0.25));
+            for (radius, (a, b)) in [(r + 0.25, (y0, y0 + 0.25)), (r, (y0 + 0.25, y0 + 0.5)), (r, (y1 - 0.5, y1 - 0.25)), (r + 0.25, (y1 - 0.25, y1))] {
+                if self.round {
+                    self.ring(x, z, (0.0, radius), (a, b), true);
+                } else {
+                    self.solid(Vec3::new(x - radius, a, z - radius), Vec3::new(x + radius, b, z + radius));
+                }
+            }
+        } else {
+            self.solid(Vec3::new(x - r, y1 - cap, z - r), Vec3::new(x + r, y1, z + r));
         }
         self.g.column(x, z, r, (y0 + base, y1 - cap), &mut self.c);
-        self.solid(Vec3::new(x - r, y1 - cap, z - r), Vec3::new(x + r, y1 - if tall { 0.25 } else { 0.0 }, z + r));
     }
     /// A column like `column`, its base and capital stone, but its shaft
     /// woven of cables (the beasts' weave): from deep in the base to deep
