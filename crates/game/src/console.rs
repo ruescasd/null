@@ -35,7 +35,7 @@ impl Plugin for ConsolePlugin {
         app.init_resource::<Console>()
             .add_systems(Startup, spawn)
             .add_systems(PreUpdate, (type_in, swallow).chain().after(InputSystems))
-            .add_systems(Update, (show, follow));
+            .add_systems(Update, (show, follow, loudness));
     }
 }
 
@@ -97,7 +97,7 @@ fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Con
 /// Typing: the key under Esc puts it down or away; down, characters go on
 /// the line, Backspace takes one off, Enter runs it, Up brings back the
 /// last command, Esc puts it away.
-fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>) {
+fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>, mut exit: MessageWriter<AppExit>) {
     for key in keys.read() {
         if key.state != ButtonState::Pressed {
             continue;
@@ -125,6 +125,8 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                 console.back = 0;
                 if line.trim() == "clear" {
                     console.lines.clear();
+                } else if line.trim() == "quit" || line.trim() == "exit" {
+                    exit.write(AppExit::Success);
                 } else if line.trim() == "where" {
                     let (t, fly) = *camera;
                     let p = t.translation;
@@ -166,7 +168,8 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
 }
 
 /// The switches that take effect as the game runs, and what each does.
-const SWITCHES: [(&str, &str); 4] = [
+const SWITCHES: [(&str, &str); 5] = [
+    ("mute", "no sound"),
     ("fullbright", "an even light from everywhere, no shadows: to see the shapes"),
     ("nolampshadows", "no shadows from lamps"),
     ("nocontact", "no contact shadows (screen space)"),
@@ -175,8 +178,9 @@ const SWITCHES: [(&str, &str); 4] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 4] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 5] {
     [
+        ("volume", "how loud (1 as made, 0 silent)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
         ("fog", "how far the haze lets you see (m)", if args.opt("chasm") { 600.0 } else { 4500.0 }),
@@ -221,6 +225,7 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
             "clear                clears this".into(),
+            "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),
         ],
         ["list"] => {
@@ -293,6 +298,42 @@ fn distance(a: &str, b: &str) -> usize {
         }
     }
     row[b.len()]
+}
+
+/// The sound follows `volume` and `mute` (and is silent when nobody is
+/// playing): what starts from now on (the global volume) and what is
+/// already sounding (each playing sound's own, rescaled; muted at 0).
+fn loudness(
+    args: Res<Args>,
+    mut global: ResMut<bevy::audio::GlobalVolume>,
+    mut sinks: Query<&mut bevy::audio::AudioSink>,
+    mut spatial: Query<&mut bevy::audio::SpatialAudioSink>,
+    mut last: Local<Option<(f32, f32)>>,
+) {
+    use bevy::audio::{AudioSinkPlayback, Volume};
+    let v = if args.unattended() || args.opt("mute") { 0.0 } else { args.num("volume", 1.0).max(0.0) };
+    // (What it was, and what it was last when not silent.)
+    let (was, heard) = *last.get_or_insert((global.volume.to_linear(), global.volume.to_linear().max(1e-3)));
+    if v == was {
+        return;
+    }
+    global.volume = Volume::Linear(v);
+    let scale = if v > 0.0 { v / heard } else { 1.0 };
+    let each = |sink: &mut dyn AudioSinkPlayback| {
+        if v == 0.0 {
+            sink.mute();
+        } else {
+            sink.unmute();
+            sink.set_volume(Volume::Linear(sink.volume().to_linear() * scale));
+        }
+    };
+    for mut sink in &mut sinks {
+        each(&mut *sink);
+    }
+    for mut sink in &mut spatial {
+        each(&mut *sink);
+    }
+    *last = Some((v, if v > 0.0 { v } else { heard }));
 }
 
 /// Slides it down or up, and shows what it has said and the line.
@@ -377,5 +418,8 @@ mod tests {
         assert!(set.len() == 2 && set[1].contains("did you mean shadowed"), "{set:?}");
         assert_eq!(run("shadowmap", &mut args)[0], "shadowmap on");
         assert_eq!(distance("shadowmaps", "shadowed"), 4);
+        assert_eq!(run("volume", &mut args)[0], "volume 1 (default)");
+        assert_eq!(run("volume 0.3", &mut args)[0], "volume 0.3");
+        assert_eq!(run("mute on", &mut args), vec!["mute on".to_string()]);
     }
 }
