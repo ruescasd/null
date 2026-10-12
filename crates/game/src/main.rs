@@ -116,11 +116,16 @@ fn main() {
                 ..default()
             }),
             ..default()
-        // (`--opt cpubatch`: draws prepared on the CPU, not by Bevy's
-        // compute passes for every view. As set, it drew nothing: to be
-        // looked into.)
-        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: !args.opt("cpubatch"), ..default() }))
+        // (Draws prepared on the CPU, not by Bevy's compute passes for
+        // every view (`--opt gpubatch`, Bevy's way, for scenes of very many
+        // meshes): with ours, each shadow view's passes were a fixed cost,
+        // and with eight lamps casting shadows the region ran at 57-74
+        // frames a second, 98-136 so. See `CpuBatching`.)
+        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default());
+    if !args.opt("gpubatch") {
+        app.add_plugins(CpuBatching);
+    }
     // (Timings of the render passes only to measure (`--opt diag`, and the
     // benches): they cost themselves, a millisecond, a query round each
     // pass.)
@@ -142,4 +147,28 @@ fn main() {
             console::ConsolePlugin,
         ))
         .run();
+}
+
+/// Draws prepared on the CPU in every view: with Bevy's GPU instance
+/// building off (see `PbrPlugin`), the views must be told too, or each
+/// still expects what the GPU builds, and nothing is drawn. Told as each
+/// frame is extracted (what the GPU supports is found once the device is
+/// ready, after the plugins are set up, and would overwrite it).
+struct CpuBatching;
+
+impl Plugin for CpuBatching {
+    fn build(&self, app: &mut App) {
+        if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            render.add_systems(bevy::render::ExtractSchedule, cpu_batching);
+        }
+    }
+}
+
+fn cpu_batching(support: Option<ResMut<bevy::render::batching::gpu_preprocessing::GpuPreprocessingSupport>>) {
+    use bevy::render::batching::gpu_preprocessing::GpuPreprocessingMode;
+    if let Some(mut support) = support
+        && support.max_supported_mode != GpuPreprocessingMode::None
+    {
+        support.max_supported_mode = GpuPreprocessingMode::None;
+    }
 }
