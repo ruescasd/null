@@ -189,6 +189,18 @@ fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 4] {
 /// `fullbright off`, `ev 9`, `ev default`; its name alone, its value.
 fn run(line: &str, args: &mut Args) -> Vec<String> {
     let words: Vec<&str> = line.split_whitespace().collect();
+    // (A name the console knows: one that acts at once, or one given at
+    // the start or set since. Any other, said so, not read back as off as
+    // though it were one (the user, mistyping `shadowed`), with the
+    // nearest it knows.)
+    let known = |args: &Args, name: &str| SWITCHES.iter().any(|s| s.0 == name) || numbers(args).iter().any(|n| n.0 == name) || args.opts.iter().any(|o| o == name) || args.sets.iter().any(|(k, _)| k == name);
+    let hint = |args: &Args, name: &str| {
+        let names: Vec<&str> = SWITCHES.iter().map(|s| s.0).chain(numbers(args).iter().map(|n| n.0)).collect();
+        let near = names.into_iter().map(|n| (distance(n, name), n)).filter(|(d, n)| *d <= 3 || n.chars().zip(name.chars()).take_while(|(a, b)| a == b).count() >= 5).min();
+        near.map_or("; list shows those that do".into(), |(_, n)| format!("; did you mean {n}?"))
+    };
+    let unknown = |args: &Args, name: &str| format!("{name}: not a setting that acts as the game runs{}", hint(args, name));
+    let warned = |args: &Args, name: &str| format!("  (not a setting that acts as the game runs: it may do nothing now{})", hint(args, name));
     // (A number known to act at once shows its default when not set.)
     let value = |args: &Args, name: &str| {
         if let Some((_, _, default)) = numbers(args).into_iter().find(|n| n.0 == name) {
@@ -238,10 +250,11 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             out
         }
         [name, "on"] => {
+            let was = known(args, name);
             if !args.opt(name) {
                 args.opts.push(name.to_string());
             }
-            vec![value(args, name)]
+            if was { vec![value(args, name)] } else { vec![value(args, name), warned(args, name)] }
         }
         [name, "off"] => {
             args.opts.retain(|o| o != name);
@@ -253,15 +266,33 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
         }
         [name, v] => match v.parse::<f32>() {
             Ok(v) => {
+                let was = known(args, name);
                 args.sets.retain(|(k, _)| k != name);
                 args.sets.push((name.to_string(), v));
-                vec![value(args, name)]
+                if was { vec![value(args, name)] } else { vec![value(args, name), warned(args, name)] }
             }
             Err(_) => vec![format!("{name}: on, off, a number or default, not {v}")],
         },
-        [name] => vec![value(args, name)],
+        [name] if known(args, name) => vec![value(args, name)],
+        [name] => vec![unknown(args, name)],
         _ => vec![format!("not understood: {line} (help)")],
     }
+}
+
+/// How many letters must change to make one word the other (Levenshtein).
+fn distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let here = row[j + 1];
+            row[j + 1] = (row[j + 1] + 1).min(row[j] + 1).min(prev + usize::from(ca != *cb));
+            prev = here;
+        }
+    }
+    row[b.len()]
 }
 
 /// Slides it down or up, and shows what it has said and the line.
@@ -328,5 +359,23 @@ fn follow(mut commands: Commands, args: Res<Args>, camera: Single<(Entity, Has<C
             cam.insert(ShadowFilteringMethod::Gaussian);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_names_said_so() {
+        let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None };
+        let said = run("shadowmaps", &mut args);
+        assert!(said[0].contains("not a setting") && said[0].contains("shadowed"), "{said:?}");
+        assert_eq!(run("shadowed", &mut args)[0], "shadowed 8 (default)");
+        assert_eq!(run("nolampshadows", &mut args)[0], "nolampshadows off");
+        let set = run("shadowmap on", &mut args);
+        assert!(set.len() == 2 && set[1].contains("did you mean shadowed"), "{set:?}");
+        assert_eq!(run("shadowmap", &mut args)[0], "shadowmap on");
+        assert_eq!(distance("shadowmaps", "shadowed"), 4);
     }
 }
