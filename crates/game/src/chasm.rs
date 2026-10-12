@@ -896,8 +896,8 @@ fn build(
     if args.opt("rooms") {
         let (mut parts, views, fixtures) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
         rooms::painting::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &fixtures.paintings);
-        for (at, reach, foot) in fixtures.projectors {
-            rooms::projector::spawn(&mut commands, &mut meshes, &mut materials, &mut images, at, reach, foot);
+        for (at, reach) in fixtures.projectors {
+            rooms::projector::spawn(&mut commands, &mut images, at, reach);
         }
         for (at, r) in fixtures.pools {
             rooms::pool::spawn(&mut commands, &mut meshes, &mut materials, at, r);

@@ -776,7 +776,7 @@ pub(super) struct Fixtures {
     pub orbs: Vec<(Vec3, f32)>,
     pub pools: Vec<(Vec3, f32)>,
     pub paintings: Vec<painting::Painting>,
-    pub projectors: Vec<(Vec3, f32, f32)>,
+    pub projectors: Vec<(Vec3, f32)>,
 }
 
 /// The lab: its rooms built, where to see them from, and what they hold
@@ -821,8 +821,8 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, F
             fixtures.pools.push((o + at, r));
         }
         fixtures.paintings.extend(room.paintings.iter().map(|p| painting::Painting { at: o + p.at, ..*p }));
-        if let Some((at, reach, foot)) = room.projector {
-            fixtures.projectors.push((o + at, reach, o.y + foot));
+        if let Some((at, reach)) = room.projector {
+            fixtures.projectors.push((o + at, reach));
         }
         for m in &room.screens {
             let o = room.grid.origin;

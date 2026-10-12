@@ -321,20 +321,20 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
         b.ring(cx, cz, (0.0, oculus), (floor + wall_h + levels as f32 * dh, spec.height), false);
         b.sky(Vec3::new(cx, spec.height, cz), oculus + 1.0, room + 12.0, strength(room + 12.0) * 6.0);
     }
-    // A planetarium: the projector on a pedestal in the middle, half way up
+    // A planetarium: the projector's light over a pedestal in the middle, half way up
     // the room or near it, as far from the floor as from the walls and the
     // dome (low, the floor round it was bright, the walls far and faint);
     // lit only by it (its stars, and the little light it lets out all
     // round: see `projector.rs`), and the chambers' lamps turned low.
     let projector = stars.then(|| {
         let up = (room * 0.45).clamp(3.5, wall_h);
-        let (foot, at) = (floor + up - 1.5, Vec3::new(cx, floor + up, cz));
-        b.column(cx, cz, thickness(up, 8.0).max(1.25), (floor, foot));
+        let at = Vec3::new(cx, floor + up, cz);
+        b.column(cx, cz, thickness(up, 8.0).max(1.25), (floor, floor + up - 1.5));
         let reach = 2.0 * (rad * rad + up.max(room - up).powi(2)).sqrt() + 4.0;
         b.view("projector", Vec3::new(cx + rad * 0.6, floor + 1.7, cz + rad * 0.3), at);
         b.view("stars", Vec3::new(cx - rad * 0.7, floor + 1.7, cz), Vec3::new(cx + rad, floor + wall_h, cz));
-        b.note("a planetarium: dark, its dome closed, a star projector in the middle");
-        (at, reach, foot)
+        b.note("a planetarium: dark, its dome closed, stars thrown from over an empty pedestal in the middle");
+        (at, reach)
     });
     let extras: Vec<f32> = ways.iter().map(|w| w.1.map_or(0.0, |w| w.0)).collect();
     b.note(format!(

@@ -53,9 +53,9 @@ pub(super) struct Room {
     pub slopes: Vec<Vec<Vec3>>,
     /// Paintings on its walls (see `painting.rs`, `B::hang`).
     pub paintings: Vec<super::painting::Painting>,
-    /// A star projector (see `projector.rs`): its middle, how far its light
-    /// reaches, and the top of its pedestal.
-    pub projector: Option<(Vec3, f32, f32)>,
+    /// A star projector (see `projector.rs`): where its light is, and how
+    /// far it reaches.
+    pub projector: Option<(Vec3, f32)>,
 }
 
 /// Outer walls' thickness.

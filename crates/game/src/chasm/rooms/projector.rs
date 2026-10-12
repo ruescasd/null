@@ -1,16 +1,17 @@
 //! A star projector (the user's: a starfield on a rotunda's walls): in the
-//! middle of a dark rotunda, on a pedestal, two dark spheres on an axis
-//! tilted as a sky's pole is, each set with faintly lit lenses, and between
-//! them a light whose throw is a starfield (a light texture: a cube of
-//! stars, in the light's own frame, Bevy's `PointLightTexture`). It turns
-//! slowly about its pole, and the stars wheel over the walls, the dome, the
-//! floor; what stands in their way (the room's columns, whoever walks in)
-//! casts its shadow across them.
+//! middle of a dark rotunda, over an empty pedestal, nothing to be seen but
+//! its throw, a starfield (a light texture: a cube of stars, in the light's
+//! own frame, Bevy's `PointLightTexture`). (It had a body, two dark spheres
+//! on an axis, lenses lit on them: the stars best come from nowhere, the
+//! user.) It turns slowly about a pole tilted as a sky's is, and the stars
+//! wheel over the walls, the dome, the floor; what stands in their way (the
+//! pedestal, the room's columns, whoever walks in) casts its shadow across
+//! them.
 
 use bevy::{
     asset::RenderAssetUsages,
     camera::primitives::CubemapLayout,
-    light::{NotShadowCaster, PointLightTexture},
+    light::PointLightTexture,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
@@ -29,54 +30,21 @@ const TURN: f32 = std::f32::consts::TAU / 360.0;
 const LEAN: f32 = 0.6;
 /// The light it lets out all round (of a star's): the room just seen.
 const LEAK: f32 = 0.06;
-/// The spheres: their radius, how far each is from the middle.
-const BALL: f32 = 0.4;
-const ARM: f32 = 1.0;
-
 /// A projector: how it leans (from upright to its pole).
 #[derive(Component)]
 pub(crate) struct Projector {
     lean: Quat,
 }
 
-/// Builds a projector with its middle at `at`, its light reaching `reach`,
-/// its post down to `foot`.
-pub(crate) fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>, at: Vec3, reach: f32, foot: f32) {
-    let metal = materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.055), metallic: 0.8, perceptual_roughness: 0.35, ..default() });
-    let lens = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(0.8), ..default() });
+/// Puts a projector's light at `at`, reaching `reach`.
+pub(crate) fn spawn(commands: &mut Commands, images: &mut Assets<Image>, at: Vec3, reach: f32) {
     let lean = Quat::from_rotation_z(LEAN);
-    let projector = commands.spawn((Projector { lean }, Transform::from_translation(at).with_rotation(lean), Visibility::default())).id();
-    let stars = images.add(stars());
-    let mut parts = vec![commands
-        .spawn((
-            PointLight { intensity: LIGHT * (reach / REACH).powi(2).max(1.0), range: reach, shadow_maps_enabled: true, ..default() },
-            PointLightTexture { image: stars, cubemap_layout: CubemapLayout::SequenceVertical },
-            Transform::IDENTITY,
-        ))
-        .id()];
-    let ball = meshes.add(Sphere::new(BALL).mesh().uv(32, 18));
-    let dot = meshes.add(Cuboid::new(0.045, 0.045, 0.02));
-    for side in [-1.0f32, 1.0] {
-        let c = Vec3::Y * ARM * side;
-        parts.push(commands.spawn((Mesh3d(ball.clone()), MeshMaterial3d(metal.clone()), Transform::from_translation(c), NotShadowCaster)).id());
-        // (Its lenses, over the sphere but its foot: they show it turning.)
-        for k in 0..20 {
-            let r = |j: i32| hash01(k, j, side as i32, 0x1e75);
-            let d = Vec3::new(r(1) - 0.5, (r(2) - 0.5) * 0.6 + side * 0.4, r(3) - 0.5).normalize();
-            if d.dot(Vec3::Y * side) < -0.3 {
-                continue;
-            }
-            parts.push(commands.spawn((Mesh3d(dot.clone()), MeshMaterial3d(lens.clone()), Transform::from_translation(c + d * BALL).with_rotation(Quat::from_rotation_arc(Vec3::Z, d)), NotShadowCaster)).id());
-        }
-    }
-    // (The axis between them, a collar at the middle round the light.)
-    parts.push(commands.spawn((Mesh3d(meshes.add(Cylinder::new(0.12, ARM * 2.0))), MeshMaterial3d(metal.clone()), Transform::IDENTITY, NotShadowCaster)).id());
-    parts.push(commands.spawn((Mesh3d(meshes.add(Cylinder::new(0.3, 0.3))), MeshMaterial3d(metal.clone()), Transform::IDENTITY, NotShadowCaster)).id());
-    commands.entity(projector).add_children(&parts);
-    // The post it turns on, from its pedestal up to its collar (standing
-    // still).
-    let post = at.y - 0.15 - foot;
-    commands.spawn((Mesh3d(meshes.add(Cylinder::new(0.12, post))), MeshMaterial3d(metal), Transform::from_translation(Vec3::new(at.x, foot + post * 0.5, at.z)), NotShadowCaster));
+    commands.spawn((
+        Projector { lean },
+        PointLight { intensity: LIGHT * (reach / REACH).powi(2).max(1.0), range: reach, shadow_maps_enabled: true, ..default() },
+        PointLightTexture { image: images.add(stars()), cubemap_layout: CubemapLayout::SequenceVertical },
+        Transform::from_translation(at).with_rotation(lean),
+    ));
 }
 
 /// It turns about its pole.
