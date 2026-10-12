@@ -963,10 +963,12 @@ struct Shadowed(f32);
 #[derive(Component)]
 struct StandIn(Option<Entity>);
 
-/// How many lights cast shadows at once (`--set shadowed=N`): each casts
-/// six shadow maps, a millisecond and more a frame; two keep a region of
-/// the plan over 100 frames a second (eight, it ran at 50-70).
+/// How many lights cast shadows at once (`--set shadowed=N`, or `shadowed
+/// N` in the console, up to `STAND_INS`): each casts six shadow maps, a
+/// millisecond and more a frame; two keep a region of the plan over 100
+/// frames a second (eight, it ran at 50-70).
 const SHADOWED: usize = 2;
+const STAND_INS: usize = 8;
 
 /// Shadows from the lamps nearest the eye only, cast by the stand-ins put
 /// in their places, the lamps themselves dark meanwhile (none with `--opt
@@ -978,10 +980,12 @@ fn near_shadows(
     mut stand: Query<(&mut StandIn, &mut Transform, &mut PointLight), Without<Shadowed>>,
 ) {
     let off = args.opt("nolampshadows") || args.opt("fullbright");
+    // (Those past how many are wanted stand idle: no light, no shadows.)
+    let wanted = (args.num("shadowed", SHADOWED as f32).max(0.0) as usize).min(STAND_INS);
     let eye = camera.translation;
     let mut near: Vec<(f32, Entity)> = if off { Vec::new() } else { lamps.iter().map(|(e, t, _, _)| (t.translation.distance_squared(eye), e)).collect() };
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.truncate(stand.iter().count());
+    near.truncate(wanted);
     let near: Vec<Entity> = near.into_iter().map(|n| n.1).collect();
     // (Each keeps the lamp it has while that is still near: no flicker.)
     let kept: Vec<Entity> = stand.iter().filter_map(|s| s.0.0.filter(|e| near.contains(e))).collect();
@@ -1006,6 +1010,9 @@ fn near_shadows(
             None => {
                 if light.intensity != 0.0 {
                     light.intensity = 0.0;
+                }
+                if light.shadow_maps_enabled {
+                    light.shadow_maps_enabled = false;
                 }
             }
         }
@@ -1090,8 +1097,8 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
         commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at), Shadowed(power * k)));
     }
     if shadows || !parts.shadowed.is_empty() {
-        for _ in 0..args.num("shadowed", SHADOWED as f32) as usize {
-            commands.spawn((StandIn(None), PointLight { intensity: 0.0, range: 1.0, shadow_maps_enabled: true, ..default() }, Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0))));
+        for _ in 0..STAND_INS {
+            commands.spawn((StandIn(None), PointLight { intensity: 0.0, range: 1.0, shadow_maps_enabled: false, ..default() }, Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0))));
         }
     }
     for &(at, range, k) in &parts.fill {
