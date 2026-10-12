@@ -720,14 +720,16 @@ fn rooms(seed: u32, count: u32, show: Show) -> impl Iterator<Item = lab::Room> {
     let mut specs = if matches!(show, Show::Fit(..)) { super::plan::network::specs(seed, if many { 100 } else { count as usize }) } else { Vec::new() };
     // (The kinds for one level: the places whose doors are on one first,
     // those with the most doors first among them.)
-    if matches!(show, Show::Fit(k) if k >= 3) {
-        let one = |s: &Spec| s.doors.iter().all(|d| (d.2 - s.doors[0].2).abs() < 0.01);
-        specs.sort_by_key(|s| (!one(s), std::cmp::Reverse(s.doors.len())));
-        specs.truncate(count as usize);
-    }
-    // (Cascades: the places whose doors allow one first.)
-    if matches!(show, Show::Fit(1)) {
-        specs.sort_by_key(|s| lab::fit::cascade(s).is_none());
+    // (The kinds that fit only some places: those places first, the most
+    // doors first among them; what a place does not fit it falls back from,
+    // shown under the kind's name, was taken for the kind.)
+    if let Show::Fit(k) = show
+        && (k == 1 || k >= 3)
+    {
+        let kind = lab::fit::Kind::of(k);
+        let mut keyed: Vec<(bool, usize, Spec)> = specs.into_iter().map(|s| (!lab::fit::fits(&s, kind), s.doors.len(), s)).collect();
+        keyed.sort_by_key(|(misfit, doors, _)| (*misfit, std::cmp::Reverse(*doors)));
+        specs = keyed.into_iter().map(|k| k.2).collect();
         specs.truncate(count as usize);
     }
     let n = match show {

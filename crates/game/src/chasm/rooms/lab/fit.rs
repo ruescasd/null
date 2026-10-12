@@ -212,6 +212,17 @@ fn way_down(l: &Loop, p: f32, y: f32, floor: f32, dir: f32, taken: &[Piece]) -> 
 }
 
 /// The room for `spec`.
+/// Whether a place takes the kind itself (not what it falls back to).
+pub(in crate::chasm) fn fits(spec: &Spec, kind: Kind) -> bool {
+    match kind {
+        Kind::Cascade => cascade(spec).is_some(),
+        Kind::Hypostyle => one::level(spec).is_some(),
+        Kind::Rotunda => one::rotunda(spec).is_some(),
+        Kind::Crossing => one::crossing(spec).is_some(),
+        _ => true,
+    }
+}
+
 pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     if matches!(kind, Kind::Hypostyle | Kind::Rotunda | Kind::Crossing) && one::level(spec).is_some() {
         let made = match kind {

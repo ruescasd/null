@@ -18,17 +18,39 @@ pub(super) fn level(spec: &Spec) -> Option<f32> {
     spec.doors.iter().all(|d| (d.2 - y).abs() < 0.01).then_some(y)
 }
 
-/// A door through its wall and `extra` metres on into the rock (a passage
-/// in to the room), 2 m wide, arched, with stepped reveals.
+/// A door through its wall, 2 m wide, arched, its reveals stepped on the
+/// wall's faces; or, with `extra` metres on into the rock, a plain arched
+/// passage in to the room, its reveals on the outer face only. (The reveals at the passage's far end, where it
+/// meets the room, were cut through by a curved wall, a drum's, into
+/// notches.)
 fn door(b: &mut B, spec: &Spec, (wall, u, y): (usize, f32, f32), extra: f32) {
     let (sx, sz) = (spec.size.x, spec.size.y);
-    let (axis, n) = match wall {
-        0 => (0, 0.0),
-        1 => (0, sx - T - extra),
-        2 => (2, 0.0),
-        _ => (2, sz - T - extra),
+    let (axis, n, on) = match wall {
+        0 => (0, 0.0, T),
+        1 => (0, sx - T, sx - T - extra),
+        2 => (2, 0.0, T),
+        _ => (2, sz - T, sz - T - extra),
     };
-    b.door(axis, u - 1.0, 2.0, y, 2.5, n, T + extra);
+    if extra <= 0.0 {
+        b.door(axis, u - 1.0, 2.0, y, 2.5, n, T);
+        return;
+    }
+    // (Its reveals on the wall's outer face only, where the way comes to it:
+    // on its inner face, 4 m wide, they showed as slits beside the
+    // passage, in a rotunda's portal.)
+    b.arch(axis, u - 1.0, 2.0, y, 2.5, n, T);
+    b.arch(axis, u - 1.0, 2.0, y, 2.5, on, extra);
+    let outer = |d: f32| if n > 0.0 { n + T - d } else { 0.0 };
+    for (k, d) in [(1.0, 0.5), (2.0, 0.25)] {
+        b.arch(axis, u - 1.0 - k * 0.5, 2.0 + k, y, 2.5, outer(d), d);
+    }
+}
+
+/// Clears a door's sill of what was laid along the walls after it was cut
+/// (the plinth band), from its wall `extra` and half a metre on in.
+fn sill(b: &mut B, spec: &Spec, (wall, u, y): (usize, f32, f32), extra: f32) {
+    let (a, c) = (inward(spec, (wall, u - 1.0, y), -T, 0.0), inward(spec, (wall, u + 1.0, y), extra + 0.5, 0.75));
+    b.carve(a.min(c), a.max(c));
 }
 
 /// A point `d` in from a door's wall at its middle, `up` above its sill.
@@ -43,11 +65,17 @@ fn inward(spec: &Spec, (wall, u, y): (usize, f32, f32), d: f32, up: f32) -> Vec3
 }
 
 /// Views: from inside the first door (past its passage, `extra` deep), at
-/// the room's middle a little up; from inside each door, the same.
+/// the room's middle a little up; from inside each door, the same; from the
+/// middle, at each door's mouth.
 fn views(b: &mut B, spec: &Spec, mid: Vec3, extra: &[f32]) {
     for (k, &d) in spec.doors.iter().enumerate() {
         let eye = inward(spec, d, 1.0 + extra.get(k).copied().unwrap_or(0.0), 1.7);
         b.view(["floor", "door2", "door3", "door4", "door5", "door6"][k.min(5)], eye, mid);
+    }
+    // (And from the middle, at each door's mouth.)
+    for (k, &d) in spec.doors.iter().enumerate() {
+        let mouth = inward(spec, d, extra.get(k).copied().unwrap_or(0.0), 1.75);
+        b.view(["mouth1", "mouth2", "mouth3", "mouth4", "mouth5", "mouth6"][k.min(5)], Vec3::new(mid.x, d.2 + 1.7, mid.z), mouth);
     }
 }
 
@@ -144,8 +172,9 @@ pub(super) fn hypostyle(spec: &Spec) -> Room {
 /// A rotunda: a drum as wide as the footprint allows (near square only: no
 /// more than 4:3), its wall as high as its radius (the Pantheon's) or as
 /// the height allows, a stepped dome over it in what is left, an oculus in
-/// its crown; the corners solid; each door a passage cut straight in to
-/// the drum. None if a door is too near a corner to reach the drum.
+/// its crown; the corners solid, but those a door is near, hollowed into
+/// chambers opening into the drum, the door into them; other doors a
+/// passage cut straight in to a portal in the drum, a flat-backed recess. None if a door is too near a corner to reach the drum.
 pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
     let (sx, sz) = (spec.size.x, spec.size.y);
     if sx.max(sz) / sx.min(sz) > 1.34 {
@@ -155,22 +184,92 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
     let room = spec.height - SLAB - floor;
     let rad = (sx.min(sz) - 2.0 * T) * 0.5;
     let (cx, cz) = (sx * 0.5, sz * 0.5);
-    // (Each door's passage: from its wall to the drum, a little into it.)
-    let mut passages = Vec::new();
+    // Corner chambers: each corner a door is near hollowed out from the
+    // walls to just inside the drum (its corner a metre past the drum's
+    // diagonal), the door opening into it, it into the drum. (Doors are
+    // mostly in corner cells; a passage from one, with a portal, dug 6 m
+    // through the corner's rock, and two from one corner's walls hollowed
+    // it out between them.)
+    let diag = rad / std::f32::consts::SQRT_2;
+    let (kx, kz) = (cx - diag + 1.0 - T, cz - diag + 1.0 - T);
+    let chamber_box = |k: usize| -> (Vec3, Vec3) {
+        let (x0, x1) = if k == 0 || k == 3 { (T, T + kx) } else { (sx - T - kx, sx - T) };
+        let (z0, z1) = if k < 2 { (T, T + kz) } else { (sz - T - kz, sz - T) };
+        (Vec3::new(x0, floor, z0), Vec3::new(x1, floor + 4.5, z1))
+    };
+    let mut chambers = [false; 4];
+    // Each door: into a corner chamber, or by a passage to a portal in the
+    // drum (a recess with a flat back, as deep as the drum's curve across
+    // it, the passage opening in its back; cut straight into the curve, an
+    // arched passage's mouth was a warped edge).
+    let mut ways: Vec<((usize, f32, f32), Option<(f32, f32, f32)>)> = Vec::new();
     for &(wall, u, y) in &spec.doors {
+        let (along_k, side) = match wall {
+            0 | 1 => (kz, sz),
+            _ => (kx, sx),
+        };
+        let low = u + 1.0 <= T + along_k - 0.5;
+        let high = u - 1.0 >= side - T - along_k + 0.5;
+        if low || high {
+            let k = match (wall, high) {
+                (0, false) | (2, false) => 0,
+                (1, false) | (2, true) => 1,
+                (1, true) | (3, true) => 2,
+                _ => 3,
+            };
+            chambers[k] = true;
+            ways.push(((wall, u, y), None));
+            continue;
+        }
         let (off, to_centre) = match wall {
             0 | 1 => (u - cz, cx - T),
             _ => (u - cx, cz - T),
         };
-        if off.abs() > rad - 1.5 {
+        let pw = if off.abs() + 2.0 < rad - 0.5 { 2.0 } else { 1.5 };
+        if off.abs() + pw > rad - 0.5 {
             return None;
         }
-        passages.push(((wall, u, y), to_centre - (rad * rad - off * off).sqrt() + 0.5));
+        let depth = |o: f32| to_centre - (rad * rad - o * o).sqrt();
+        // (Its back where the drum comes nearest across it, half a metre
+        // short, so the back is rock all across; its front past where the
+        // drum is furthest.)
+        ways.push(((wall, u, y), Some(((depth((off.abs() - pw).max(0.0)) - 0.5).max(0.25), depth(off.abs() + pw) + 0.5, pw))));
     }
     let wall_h = half(rad.min(room - 2.0)).max(4.0).min(room);
     let mut b = B::new(Vec3::new(sx, spec.height, sz), Detail { reveals: true, coffers: true, bands: true, ..Default::default() });
+    // (The doors and passages first, then the drum: cut after it, their
+    // arches' shapes reaching into it stood there as slivers in the open.)
+    let portal = |d: (usize, f32, f32), (back, front, pw): (f32, f32, f32), top: f32| {
+        let (p, q) = (inward(spec, (d.0, d.1 - pw, d.2), back, 0.0), inward(spec, (d.0, d.1 + pw, d.2), front, top));
+        (p.min(q), p.max(q))
+    };
+    for &(d, way) in &ways {
+        door(&mut b, spec, d, way.map_or(0.0, |w| w.0));
+        if let Some(w) = way {
+            let (p, q) = portal(d, w, 4.5);
+            b.carve(p, q);
+        }
+    }
+    for k in (0..4).filter(|&k| chambers[k]) {
+        let (p, q) = chamber_box(k);
+        b.carve(p, q);
+    }
     b.ring(cx, cz, (0.0, rad), (floor, floor + wall_h), false);
     b.round_bands((cx, cz), rad, (floor, floor + wall_h));
+    // (The drum's plinth laid across the portals' and chambers' floors:
+    // cleared.)
+    for &(d, way) in &ways {
+        if let Some(w) = way {
+            let (p, q) = portal(d, w, 0.75);
+            b.carve(p, q);
+        }
+        sill(&mut b, spec, d, way.map_or(0.0, |w| w.0));
+    }
+    for k in (0..4).filter(|&k| chambers[k]) {
+        let (p, q) = chamber_box(k);
+        b.carve(p, Vec3::new(q.x, floor + 0.75, q.z));
+        b.lamp((p + q) * 0.5 + Vec3::Y * 1.0, kx.max(kz) * 2.0 + 4.0, strength(kx.max(kz) * 2.0 + 4.0) * 0.5);
+    }
     // The dome: stepped in, ring by ring, to an oculus, in the height left.
     let above = room - wall_h;
     let levels = ((above / 1.5).floor() as i32).clamp(0, 6);
@@ -182,11 +281,15 @@ pub(super) fn rotunda(spec: &Spec) -> Option<Room> {
     let oculus = (rad - (levels + 1) as f32 * dr).max(1.0);
     b.ring(cx, cz, (0.0, oculus), (floor + wall_h + levels as f32 * dh, spec.height), false);
     b.sky(Vec3::new(cx, spec.height, cz), oculus + 1.0, room + 12.0, strength(room + 12.0) * 6.0);
-    for &(d, extra) in &passages {
-        door(&mut b, spec, d, extra);
-    }
-    let extras: Vec<f32> = passages.iter().map(|p| p.1).collect();
-    b.note(format!("{}: a rotunda {:.0} m across, its wall {wall_h:.1} m high, a dome stepped {levels} times to an oculus; {} doors, each a passage in", spec.name, rad * 2.0, spec.doors.len()));
+    let extras: Vec<f32> = ways.iter().map(|w| w.1.map_or(0.0, |w| w.0)).collect();
+    b.note(format!(
+        "{}: a rotunda {:.0} m across, its wall {wall_h:.1} m high, a dome stepped {levels} times to an oculus; {} doors, {} into corner chambers ({} of them), the rest by passages to portals",
+        spec.name,
+        rad * 2.0,
+        spec.doors.len(),
+        ways.iter().filter(|w| w.1.is_none()).count(),
+        chambers.iter().filter(|c| **c).count()
+    ));
     light(&mut b, spec.size, floor, floor + wall_h);
     views(&mut b, spec, Vec3::new(cx, floor + wall_h * 0.6, cz), &extras);
     Some(b.finish(floor))
@@ -225,6 +328,25 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
     let vaulted = room >= arm * 1.2;
     let h = if vaulted { half(arm * 1.2).min(room) } else { room.min(half(arm * 1.2)) };
     let mut b = B::new(Vec3::new(sx, spec.height, sz), Detail { reveals: true, coffers: true, bands: true, pilasters: true, beams: !vaulted, screens: false });
+    // Doors: in an arm's end, straight in; else a passage to the other arm.
+    // (Cut first, then the arms: cut after, their arches' shapes reaching
+    // into an arm stood there as slivers in the open.)
+    let mut passages = 0;
+    let mut extras = Vec::new();
+    for &(wall_i, u, y) in &spec.doors {
+        let extra = match wall_i {
+            2 if (u - cx).abs() > arm * 0.5 - 1.2 => z0 - T + 0.5,
+            3 if (u - cx).abs() > arm * 0.5 - 1.2 => sz - T - z1 + 0.5,
+            0 if (u - cz).abs() > arm * 0.5 - 1.2 => x0 - T + 0.5,
+            1 if (u - cz).abs() > arm * 0.5 - 1.2 => sx - T - x1 + 0.5,
+            _ => 0.0,
+        };
+        if extra > 0.0 {
+            passages += 1;
+        }
+        extras.push(extra);
+        door(&mut b, spec, (wall_i, u, y), extra);
+    }
     // The arms: along z (x0..x1) and along x (z0..z1), wall to wall.
     let arms = [((x0, x1), (T, sz - T), 2usize), ((T, sx - T), (z0, z1), 0usize)];
     for &((a, c), (e, f), axis) in &arms {
@@ -257,22 +379,8 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
             b.bands((a, c), (e, f), (floor, floor + h));
         }
     }
-    // Doors: in an arm's end, straight in; else a passage to the other arm.
-    let mut passages = 0;
-    let mut extras = Vec::new();
-    for &(wall_i, u, y) in &spec.doors {
-        let extra = match wall_i {
-            2 if (u - cx).abs() > arm * 0.5 - 1.2 => z0 - T + 0.5,
-            3 if (u - cx).abs() > arm * 0.5 - 1.2 => sz - T - z1 + 0.5,
-            0 if (u - cz).abs() > arm * 0.5 - 1.2 => x0 - T + 0.5,
-            1 if (u - cz).abs() > arm * 0.5 - 1.2 => sx - T - x1 + 0.5,
-            _ => 0.0,
-        };
-        if extra > 0.0 {
-            passages += 1;
-        }
-        extras.push(extra);
-        door(&mut b, spec, (wall_i, u, y), extra);
+    for (&d, &extra) in spec.doors.iter().zip(&extras) {
+        sill(&mut b, spec, d, extra);
     }
     b.note(format!(
         "{}: two halls {arm:.0} m wide crossing, {h:.1} m high, {}, a tower {tower:.1} m over the crossing; {} doors, {passages} by a passage",
