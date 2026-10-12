@@ -539,6 +539,9 @@ pub(in crate::chasm) fn fitted(spec: &Spec, kind: Kind) -> Room {
     if let Some(seed) = painting(spec) {
         b.hang(vec![((T, sx - T), (T, sz - T))], (floor, ceiling), seed, Hang::Wall);
     }
+    if let Some(seed) = intrusion(spec) {
+        b.intrude(seed);
+    }
     let mut room = b.finish(floor);
     room.pool = pool;
     room.slopes = slopes;
@@ -725,6 +728,13 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 /// up, and light thrown back off the floor, strong enough to fill it.
 /// (Until review 87 the rooms were lit mostly by a sun 3 degrees up leaking
 /// in through their walls; by their own lamps alone they were near black.)
+/// Whether a place's room has an intrusion (a niche upside down: one in
+/// three, for now), and its seed.
+pub(super) fn intrusion(spec: &Spec) -> Option<u32> {
+    let h = spec.name.bytes().fold(2166136261u32 ^ 0x1b7d, |h, c| (h ^ c as u32).wrapping_mul(16777619));
+    (h % 3 == 0).then_some(h / 3)
+}
+
 /// Whether a place's room has a painting (seven in ten), and its seed.
 pub(super) fn painting(spec: &Spec) -> Option<u32> {
     let h = spec.name.bytes().fold(2166136261u32, |h, c| (h ^ c as u32).wrapping_mul(16777619));

@@ -56,6 +56,8 @@ pub(super) struct Room {
     /// A star projector (see `projector.rs`): where its light is, and how
     /// far it reaches.
     pub projector: Option<(Vec3, f32)>,
+    /// Shimmers behind its walls (see `shimmer.rs`, `B::intrude`).
+    pub shimmers: Vec<super::shimmer::Shimmer>,
 }
 
 /// Outer walls' thickness.
@@ -126,6 +128,10 @@ struct B {
     /// may hang instead.
     bays: Vec<Bay>,
     paintings: Vec<super::painting::Painting>,
+    /// An intrusion asked for (see `intrude`), laid at the end, by its
+    /// seed; and the shimmers laid.
+    intrusion: Option<u32>,
+    shimmers: Vec<super::shimmer::Shimmer>,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
     screens: Vec<Manifold>,
 }
@@ -168,7 +174,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), cables: Vec::new(), screens: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), intrusion: None, shimmers: Vec::new(), cables: Vec::new(), screens: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -634,6 +640,34 @@ impl B {
         self.note(format!("a painting {w:.1} by {h:.1} m, {place}"));
         self.view("painting", at(uc, -(w.max(h) + 3.0), yc - 0.3), at(uc, 0.0, yc));
     }
+    /// An intrusion (the user's): one of the room's niches upside down,
+    /// a shimmer on its back. Laid when the room is done (after its
+    /// painting, to keep clear of it), if it has a niche.
+    fn intrude(&mut self, seed: u32) {
+        self.intrusion = Some(seed);
+    }
+    /// One of the niches still open (a painting fills its own), by the
+    /// seed: filled again, and cut upside down in its outline, its half
+    /// circle hanging to the sill; on its back, a shimmer.
+    fn lay_inverted(&mut self, seed: u32) {
+        let open: Vec<Bay> = self.bays.iter().copied().filter(|b| self.is_empty((b.niche.0 + b.niche.1) * 0.5)).collect();
+        if open.is_empty() {
+            return;
+        }
+        let bay = open[seed as usize % open.len()];
+        let (lo, hi) = bay.niche;
+        self.solid(lo, hi);
+        let axis = if bay.along == 0 { 2 } else { 0 };
+        let (u0, n0) = if bay.along == 0 { (lo.x, lo.z) } else { (lo.z, lo.x) };
+        let (nw, depth) = if bay.along == 0 { (hi.x - lo.x, hi.z - lo.z) } else { (hi.z - lo.z, hi.x - lo.x) };
+        let spring = hi.y - lo.y - nw * 0.5;
+        self.g.arch_down(axis, u0, nw, lo.y, spring, n0, depth, &mut self.c);
+        let (uc, yc) = (u0 + nw * 0.5, (lo.y + hi.y) * 0.5);
+        let facing = (bay.at(uc, -1.0, yc) - bay.at(uc, 0.0, yc)).normalize();
+        self.shimmers.push(super::shimmer::Shimmer { at: bay.at(uc, depth - 0.01, yc), facing, size: Vec2::new(nw, hi.y - lo.y), seed });
+        self.note(format!("an intrusion: a niche upside down, {nw:.1} m wide, a shimmer behind it"));
+        self.view("intrusion", bay.at(uc, -(nw + 3.0), lo.y + 1.0), bay.at(uc, 0.0, yc));
+    }
     fn view(&mut self, name: &'static str, eye: Vec3, at: Vec3) {
         self.views.push((name, eye, at));
     }
@@ -647,9 +681,12 @@ impl B {
                 Hang::Wall => self.lay_painting_wall((rects, y, seed)),
             }
         }
+        if let Some(seed) = self.intrusion.take() {
+            self.lay_inverted(seed);
+        }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None, shimmers: self.shimmers }
     }
 }
 

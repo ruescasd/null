@@ -50,7 +50,7 @@ pub struct ChasmPlugin;
 
 impl Plugin for ChasmPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, build).add_systems(Update, (near_shadows, rooms::orb::animate, rooms::pool::animate, rooms::projector::animate));
+        app.add_systems(Startup, build).add_systems(Update, (near_shadows, rooms::orb::animate, rooms::pool::animate, rooms::projector::animate, rooms::shimmer::animate));
     }
 }
 
@@ -896,6 +896,7 @@ fn build(
     if args.opt("rooms") {
         let (mut parts, views, fixtures) = rooms::lab(args.seed, args.num("rooms", 12.0) as u32, rooms::Show::of(&args));
         rooms::painting::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &fixtures.paintings);
+        rooms::shimmer::spawn(&mut commands, &mut meshes, &mut materials, &mut images, &fixtures.shimmers);
         for (at, reach) in fixtures.projectors {
             rooms::projector::spawn(&mut commands, &mut images, at, reach);
         }

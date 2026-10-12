@@ -28,6 +28,7 @@ pub(super) mod orb;
 pub(super) mod pool;
 pub(super) mod painting;
 pub(super) mod projector;
+pub(super) mod shimmer;
 
 /// A cell's size (a power of two: its multiples are exact).
 pub(crate) const CELL: f32 = 0.25;
@@ -590,6 +591,19 @@ impl Grid {
         }
     }
 
+    /// An arch upside down (the user's intrusion): as `arch`, in the same
+    /// outline, but its half circle hanging below, down to `y`, the
+    /// straight sides above it, `spring` high, up to its head.
+    pub(super) fn arch_down(&mut self, axis: usize, x: f32, width: f32, y: f32, spring: f32, n: f32, depth: f32, cache: &mut Cache) {
+        let r = width * 0.5;
+        self.fill(self.frame(axis, x, y + r, n), self.frame(axis, x + width, y + r + spring, n + depth), Filler::Empty);
+        let swap = axis == 0;
+        for (at, flip) in [(x, true), (x + r, false)] {
+            let turn = Turn { flip_x: flip, flip_y: true, swap };
+            self.block(axis, Form::Arch { r: (r * PER_M).round() as u8 }, turn, self.frame(axis, at, y, n), depth, cache);
+        }
+    }
+
     /// A barrel vault: an arch as long as the room.
     pub(super) fn vault(&mut self, axis: usize, x: f32, width: f32, y: f32, spring: f32, n: f32, len: f32, cache: &mut Cache) {
         self.arch(axis, x, width, y, spring, n, len, cache);
@@ -777,6 +791,7 @@ pub(super) struct Fixtures {
     pub pools: Vec<(Vec3, f32)>,
     pub paintings: Vec<painting::Painting>,
     pub projectors: Vec<(Vec3, f32)>,
+    pub shimmers: Vec<shimmer::Shimmer>,
 }
 
 /// The lab: its rooms built, where to see them from, and what they hold
@@ -824,6 +839,7 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, F
         if let Some((at, reach)) = room.projector {
             fixtures.projectors.push((o + at, reach));
         }
+        fixtures.shimmers.extend(room.shimmers.iter().map(|s| shimmer::Shimmer { at: o + s.at, ..*s }));
         for m in &room.screens {
             let o = room.grid.origin;
             parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
