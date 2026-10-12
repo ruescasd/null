@@ -416,6 +416,15 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
                 if u < from + 0.6 || u > to - 0.6 || (u > skip.0 - 0.5 && u < skip.1 + 0.5) {
                     continue;
                 }
+                // (Each foot carried by a corbel out of the wall, two steps;
+                // with no wall under a foot, over an opening, no arch. Its
+                // feet stood in the air where no pilaster happened to be:
+                // the user.)
+                let y = floor + spring;
+                let feet: [(Vec3, Vec3); 2] = if axis == 2 { [(Vec3::new(a, y, u), Vec3::X), (Vec3::new(c, y, u), Vec3::NEG_X)] } else { [(Vec3::new(u, y, e), Vec3::Z), (Vec3::new(u, y, f), Vec3::NEG_Z)] };
+                if !feet.iter().all(|&(p, into)| [0.3, 0.8, 1.3].iter().all(|&dy| b.is_solid(p - into * 0.1 - Vec3::Y * dy))) {
+                    continue;
+                }
                 arches += 1;
                 let top = floor + spring + arm * 0.5;
                 if axis == 2 {
@@ -424,6 +433,15 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
                 } else {
                     b.solid(Vec3::new(u - 0.25, floor + spring, e), Vec3::new(u + 0.25, top, f));
                     b.vault(0, e + 0.4, f - e - 0.8, floor, spring, u - 0.25, 0.5);
+                }
+                let across = if axis == 2 { Vec3::Z } else { Vec3::X };
+                // (Its steps: 0.4 m out for the half metre under the foot,
+                // 0.2 m for the half metre under that.)
+                for &(p, into) in &feet {
+                    for (out, (below, above)) in [(0.4f32, (0.5f32, 0.0f32)), (0.2, (1.0, 0.5))] {
+                        let (q0, q1) = (p - across * 0.25 - Vec3::Y * below, p + across * 0.25 + into * out - Vec3::Y * above);
+                        b.solid(q0.min(q1), q0.max(q1));
+                    }
                 }
             }
         }
