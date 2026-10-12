@@ -340,26 +340,40 @@ impl B {
         // (Light screens in place of niches along one wall: the first side
         // wall with room for them.)
         let mut screened = !self.d.screens;
-        for (along, (a, b), out, face) in [(2usize, (z0, z1), -1.0, x0), (2, (z0, z1), 1.0, x1), (0, (x0, x1), -1.0, z0), (0, (x0, x1), 1.0, z1)] {
+        let walls = [(2usize, (z0, z1), -1.0, x0), (2, (z0, z1), 1.0, x1), (0, (x0, x1), -1.0, z0), (0, (x0, x1), 1.0, z1)];
+        let frame = |along: usize, out: f32, face: f32| move |u: f32, n_: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n_) } else { Vec3::new(face + out * n_, y, u) };
+        // Where each wall may have one: wall behind all the way up, across
+        // its width; room before half way and under the cornice, if any.
+        let mut candidates: Vec<Vec<f32>> = Vec::new();
+        for &(along, (a, b), out, face) in &walls {
             let n = ((b - a) / bay).floor() as i32;
             let start = phase.unwrap_or(half(((b - a) - n as f32 * bay) * 0.5));
-            let at = |u: f32, n_: f32, y: f32| if along == 0 { Vec3::new(u, y, face + out * n_) } else { Vec3::new(face + out * n_, y, u) };
+            let at = frame(along, out, face);
             let mut posts = Vec::new();
             for k in 0..=n {
                 let u = a + start + k as f32 * bay;
                 if u - pw * 0.5 < a + 0.5 || u + pw * 0.5 > b - 0.5 {
                     continue;
                 }
-                // (Wall behind all the way up, across its width; room
-                // before half way and under the cornice, if any.)
                 let ys: Vec<f32> = (0..=((y1 - y0) as i32)).map(|i| (y0 + 0.1 + i as f32).min(y1 - 0.1)).collect();
                 let behind = ys.iter().all(|&y| [-0.4, 0.0, 0.4].iter().all(|&du| self.is_solid(at(u + du * pw, 0.1, y))));
-                let clear = behind && [mid, y1 - 1.75].iter().all(|&y| self.is_empty(at(u, -0.6, y)));
-                if clear {
+                if behind && [mid, y1 - 1.75].iter().all(|&y| self.is_empty(at(u, -0.6, y))) {
                     posts.push(u);
-                    let (lo, hi) = (at(u - pw * 0.5, -0.5, y0), at(u + pw * 0.5, 0.0, y1));
-                    self.solid(lo.min(hi), lo.max(hi));
                 }
+            }
+            candidates.push(posts);
+        }
+        // Each only with its partner on the facing wall, and with a
+        // neighbour on its own a bay away: one standing alone, its partner
+        // dropped for an opening across from it, stood out of place.
+        let paired: Vec<Vec<f32>> = (0..4).map(|w| candidates[w].iter().copied().filter(|u| candidates[w ^ 1].iter().any(|v| (v - u).abs() < 0.01)).collect()).collect();
+        let kept: Vec<Vec<f32>> = paired.iter().map(|ps| ps.iter().copied().filter(|u| ps.iter().any(|v| (v - u).abs() > 0.01 && (v - u).abs() <= bay + 0.01)).collect()).collect();
+        for (wi, &(along, _, out, face)) in walls.iter().enumerate() {
+            let at = frame(along, out, face);
+            let posts = kept[wi].clone();
+            for &u in &posts {
+                let (lo, hi) = (at(u - pw * 0.5, -0.5, y0), at(u + pw * 0.5, 0.0, y1));
+                self.solid(lo.min(hi), lo.max(hi));
             }
             if !niches {
                 continue;
