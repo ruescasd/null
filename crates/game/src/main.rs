@@ -96,6 +96,7 @@ fn main() {
     // otherwise slows an unfocused window to 60 fps).
     let unattended = args.unattended();
     let mut app = App::new();
+
     if unattended {
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -121,7 +122,11 @@ fn main() {
         // meshes): with ours, each shadow view's passes were a fixed cost,
         // and with eight lamps casting shadows the region ran at 57-74
         // frames a second, 98-136 so. See `CpuBatching`.)
-        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() }))
+        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() })
+        // (Silent when nobody is playing, a bench or a bot or a capture, or
+        // with `--opt mute`: the hunters' cries sounded through the house
+        // while it was measured.)
+        .set(bevy::audio::AudioPlugin { global_volume: bevy::audio::GlobalVolume::new(bevy::audio::Volume::Linear(if unattended || args.opt("mute") { 0.0 } else { 1.0 })), ..default() }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default());
     if !args.opt("gpubatch") {
         app.add_plugins(CpuBatching);

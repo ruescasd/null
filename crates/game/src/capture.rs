@@ -54,7 +54,7 @@ fn bench(
     mut exit: MessageWriter<AppExit>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     entities: Query<()>,
-    hunters: Query<(), With<crate::combat::HunterMarker>>,
+    mut hunters: Query<&mut crate::combat::HunterMarker>,
 ) {
     if !args.opt("bench") {
         return;
@@ -71,6 +71,13 @@ fn bench(
         return;
     }
     if now - since < warmup + BENCH_TIME {
+        // (`--opt slay`: every hunter broken as the measuring starts, to
+        // see what their deaths cost.)
+        if state.frames.is_empty() && args.opt("slay") {
+            for mut h in &mut hunters {
+                h.health = 0.0;
+            }
+        }
         state.frames.push(time.delta_secs());
         return;
     }

@@ -81,7 +81,7 @@ pub(crate) struct Hunter {
     last_bones: Vec<crate::rig::Bone>,
     stance: Stance,
     timer: f32,
-    health: f32,
+    pub(crate) health: f32,
     stun: f32,
     /// Hits this frame: the bone struck and the shot's direction (the pieces
     /// on that bone are jolted).
