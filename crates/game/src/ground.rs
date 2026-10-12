@@ -34,6 +34,13 @@ impl Ground<'_, '_> {
         self.spatial.cast_ray(from, Dir3::NEG_Y, ABOVE + BELOW, true, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance)
     }
 
+    /// Whether nothing built stands between `a` and `b` (in sight, in
+    /// reach of a straight leap).
+    pub fn clear(&self, a: Vec3, b: Vec3) -> bool {
+        let to = b - a;
+        Dir3::new(to).map_or(true, |d| self.spatial.cast_ray(a, d, to.length(), true, &SpatialQueryFilter::default()).is_none())
+    }
+
     /// The ground's height under `p`, or far below it over the void (what
     /// stands there falls).
     pub fn at(&self, p: Vec3) -> f32 {

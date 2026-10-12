@@ -15,6 +15,10 @@ use bevy::prelude::*;
 /// How far apart the spots are, and how high a step between two may be.
 pub(crate) const SPACING: f32 = 0.5;
 const STEP: f32 = 0.6;
+/// How often a way is found afresh (s), and how far on along it to head
+/// for (m).
+const AGAIN: f32 = 0.5;
+const AHEAD: f32 = 3.0;
 
 #[derive(Resource)]
 pub(crate) struct Nav {
@@ -114,6 +118,38 @@ impl Nav {
             }
         }
         None
+    }
+
+    /// Where to head for on the way from `from` to `to`: a spot a few
+    /// metres on along it (the last, near the end), and how far is left to
+    /// go along it; `None` if there is no way. The way is kept in `way`,
+    /// found afresh every `AGAIN` seconds (`age` counting down), the spots
+    /// passed dropped.
+    pub fn steer(&self, from: Vec3, to: Vec3, way: &mut Vec<Vec3>, age: &mut f32, dt: f32) -> Option<(Vec3, f32)> {
+        let flat = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.z - b.z).length();
+        *age -= dt;
+        if *age <= 0.0 || way.is_empty() {
+            *age = AGAIN;
+            *way = self.path(from, to).unwrap_or_default();
+        }
+        while way.len() > 1 && flat(way[0], from) < 1.2 {
+            way.remove(0);
+        }
+        let last = *way.last()?;
+        let ahead = way.iter().copied().find(|&q| flat(q, from) >= AHEAD).unwrap_or(last);
+        let left = flat(from, way[0]) + way.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f32>();
+        Some((ahead, left))
+    }
+
+    /// A spot to come from: between `near` and `far` from `from` across,
+    /// not more than a few storeys above or below, that `hidden` says is
+    /// out of sight; `None` after `tries` tries. (`pick(k)`, 0..1, chooses.)
+    pub fn spot(&self, from: Vec3, (near, far): (f32, f32), hidden: &dyn Fn(Vec3) -> bool, pick: &dyn Fn(u32) -> f32, tries: u32) -> Option<Vec3> {
+        (0..tries).find_map(|k| {
+            let q = self.nodes[((pick(k) * self.nodes.len() as f32) as usize).min(self.nodes.len() - 1)];
+            let d = Vec2::new(q.x - from.x, q.z - from.z).length();
+            ((near..far).contains(&d) && (q.y - from.y).abs() < 20.0 && hidden(q)).then_some(q)
+        })
     }
 
     /// Of the spots reachable from `from`, the nearest to `to` (where the

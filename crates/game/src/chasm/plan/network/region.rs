@@ -163,11 +163,19 @@ pub fn route(seed: u32, spine: usize, side: bool) -> Vec<(Vec3, String)> {
     way
 }
 
-/// Where you start in the region.
-pub fn start(seed: u32, spine: usize, side: bool) -> [f32; 5] {
+/// Where you start in the region; `inside` (`--opt inside`), on the first
+/// path's floor a few cells in, looking along it.
+pub fn start(seed: u32, spine: usize, side: bool, inside: bool) -> [f32; 5] {
     let plan = tree(seed);
     let net = network(&plan, seed);
     let (_, paths) = chosen(&net, spine, side);
+    if inside && let Some((_, _, steps, _)) = paths.first().map(|&p| &net.paths[p]) {
+        let k = (steps.len() / 2).max(1).min(steps.len() - 2);
+        let (here, next) = (steps[k], steps[k + 1]);
+        let eye = middle(here.at) + Vec3::Y * (floor(here.storey) + 1.7);
+        let look = middle(next.at) + Vec3::Y * (floor(next.storey) + 1.5) - eye;
+        return [eye.x, eye.y, eye.z, (-look.x).atan2(-look.z).to_degrees(), look.y.atan2(Vec2::new(look.x, look.z).length()).to_degrees()];
+    }
     start_at(&net, &paths)
 }
 

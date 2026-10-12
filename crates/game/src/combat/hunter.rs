@@ -85,6 +85,10 @@ pub(crate) struct Hunter {
     stance: Stance,
     timer: f32,
     pub(crate) health: f32,
+    /// In a built place, its way to you (see `nav::steer`), and when to
+    /// find it afresh.
+    way: Vec<Vec3>,
+    way_age: f32,
     stun: f32,
     /// Hits this frame: the bone struck and the shot's direction (the pieces
     /// on that bone are jolted).
@@ -258,6 +262,7 @@ pub(super) fn gather(
     time: Res<Time>,
     args: Res<Args>,
     ground: crate::ground::Ground,
+    nav: Option<Res<crate::chasm::nav::Nav>>,
     assets: Res<Assets3>,
     heads: Res<Heads>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -295,7 +300,13 @@ pub(super) fn gather(
             for n in 0..crowd {
                 let k = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
                 let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
-                let at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
+                let mut at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
+                // (In a built place, on its floors, 15 to 40 m off.)
+                if let Some(nav) = nav.as_deref()
+                    && let Some(q) = nav.spot(player.translation, (15.0, 40.0), &|_| true, &|j| hash01(k as i32, j as i32, 2, 0x6b9), 400)
+                {
+                    at = q;
+                }
                 spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation);
             }
             director.next_gather = 4.0;
@@ -425,7 +436,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0 },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -693,6 +704,7 @@ pub(super) fn hunt(
     time: Res<Time>,
     args: Res<Args>,
     ground: crate::ground::Ground,
+    nav: Option<Res<crate::chasm::nav::Nav>>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
     mut feedback: ResMut<Feedback>,
@@ -701,9 +713,17 @@ pub(super) fn hunt(
     mut hunters: Query<(Entity, &mut Hunter, &mut Transform), Without<Player>>,
     parts: Query<(Entity, &Part, &Transform), (Without<Hunter>, Without<Player>)>,
     eyes: Query<(Entity, &Eye)>,
+    mut said: Local<f32>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let target = player.0.translation;
+    // (`--opt huntlog`: where each is, and how far it has to go to you, every
+    // second: to see them find their way.)
+    *said -= dt;
+    let log = args.opt("huntlog") && *said <= 0.0;
+    if log {
+        *said = 1.0;
+    }
     for (entity, mut h, mut transform) in &mut hunters {
         if h.health <= 0.0 {
             // Broken: the whole body bursts at once.
@@ -742,8 +762,29 @@ pub(super) fn hunt(
 
         let root = h.rig.root;
         let flat = Vec3::new(target.x - root.x, 0.0, target.z - root.z);
-        let distance = flat.length();
-        let toward = flat.normalize_or(Vec3::Z);
+        let mut distance = flat.length();
+        let mut toward = flat.normalize_or(Vec3::Z);
+        // (A straight run at you, a leap or a dash: only with you in sight
+        // and the way to you about straight; in a built place, a leap
+        // through a wall, or off a ledge, it fell into the void.)
+        let mut straight = true;
+        // In a built place: towards you by the way along its floors (a spot
+        // a few metres on along it), and as far as that way is.
+        if let Some(nav) = nav.as_deref() {
+            let mut way = std::mem::take(&mut h.way);
+            let mut age = h.way_age;
+            if let Some((ahead, left)) = nav.steer(root, target, &mut way, &mut age, dt) {
+                toward = Vec3::new(ahead.x - root.x, 0.0, ahead.z - root.z).normalize_or(toward);
+                straight = left < flat.length() * 1.2 + 1.5;
+                distance = left;
+            }
+            straight = straight && ground.clear(root + Vec3::Y * 1.0, target);
+            h.way = way;
+            h.way_age = age;
+        }
+        if log {
+            info!("huntlog: {} at {:.1}, {:.1} m to go{}", entity.index_u32(), h.rig.root, distance, if h.way.is_empty() { " (no way)" } else { "" });
+        }
         let beast = h.kind == Kind::Beast;
         h.timer -= dt;
         let stunned = h.stun > 0.0;
@@ -852,7 +893,7 @@ pub(super) fn hunt(
                     intent.velocity = toward * 14.0;
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
-                    if speed > 7.0 && distance < 5.0 + speed * 0.35 {
+                    if speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
                         // A quick gather, still running.
                         h.stance = Stance::Windup;
                         h.timer = 0.13;
@@ -903,7 +944,7 @@ pub(super) fn hunt(
                     if distance > 2.5 {
                         intent.velocity = toward * 4.5 * ((distance - 2.5) / 3.0).min(1.0);
                     }
-                    if distance < 9.0 && h.timer <= 0.0 {
+                    if distance < 9.0 && h.timer <= 0.0 && straight {
                         h.stance = Stance::Windup;
                         h.timer = 0.7;
                     }
@@ -953,6 +994,18 @@ pub(super) fn hunt(
             commands.spawn((AudioPlayer::new(assets.bite.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             if args.opt("hurtsound") {
                 commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
+            }
+        }
+        // In a built place, never on over an edge: where there is no floor
+        // a step below a metre and a half on, it stops.
+        if nav.is_some() {
+            let run = Vec3::new(intent.velocity.x, 0.0, intent.velocity.z);
+            if run.length() > 0.1 {
+                let probe = root + run.normalize() * 1.5;
+                if ground.under(probe).is_none_or(|g| g < root.y - 1.0) {
+                    intent.velocity.x = 0.0;
+                    intent.velocity.z = 0.0;
+                }
             }
         }
         // (Its ground under where it stands: in a built place, the floor it

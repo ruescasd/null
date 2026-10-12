@@ -208,6 +208,10 @@ struct Swarmer {
     /// Seconds left of its leap on waking, flung up and away before it
     /// stalks (or freezes under your gaze).
     leap: f32,
+    /// In a built place, its way to where it is going (see `nav::steer`),
+    /// and when to find it afresh.
+    way: Vec<Vec3>,
+    way_age: f32,
 }
 
 /// A piece flying off something broken, or a spark.
@@ -513,6 +517,8 @@ fn swarm(
     args: Res<Args>,
     streamer: Res<Streamer>,
     ground: crate::ground::Ground,
+    nav: Option<Res<crate::chasm::nav::Nav>>,
+    spatial: SpatialQuery,
     kit: Res<forms::Kit>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<Director>,
@@ -527,10 +533,13 @@ fn swarm(
     let capture = args.shot.is_some() && !args.opt("fight");
     // (Playing, it starts once the ground round you is in; measuring or
     // capturing, once everything is, so it happens in view.)
-    let ready = if args.unattended() { streamer.settled } else { streamer.near };
+    // (A region of the plan stands high over the terrain, which is never
+    // in round it: ready at once.)
+    let region = args.opt("chasm") && args.opt("region");
+    let ready = region || if args.unattended() { streamer.settled } else { streamer.near };
     // (The labs, the rooms' and the plan's, in peace: they are for looking
-    // at; a hound forming in one, the user.)
-    let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan") || args.opt("region"));
+    // at; a hound forming in one, the user. A region is fought in.)
+    let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan"));
     if args.opt("peace") || lab || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
         return;
     }
@@ -557,12 +566,24 @@ fn swarm(
             let f = ptransform.forward();
             away = Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::X);
         }
-        let base = target + away * dist;
+        let mut base = target + away * dist;
+        // (In a built place, on its floors, somewhere out of sight.)
+        if let Some(nav) = nav.as_deref() {
+            let hidden = |q: Vec3| {
+                let to = q + Vec3::Y * 1.5 - target;
+                Dir3::new(to).is_ok_and(|d| spatial.cast_ray(target, d, to.length(), true, &default()).is_some())
+            };
+            let Some(q) = nav.spot(target, (25.0, 60.0), &hidden, &|k| hash01(t as i32, k as i32, 7, 0x5a3), 400) else { return };
+            base = q;
+        }
         for k in 0..group {
             let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
-            let p = base + Vec3::new(r(0), 0.0, r(1)) * if grove { 14.0 } else { 8.0 };
+            let mut p = base + Vec3::new(r(0), 0.0, r(1)) * if grove { 14.0 } else { 8.0 };
+            if let Some(nav) = nav.as_deref() {
+                p = nav.nearest(base + Vec3::new(r(0), 0.0, r(1)) * 4.0, 6).map_or(base, |j| nav.nodes[j as usize]);
+            }
             let mode = if grove { Mode::Dormant } else { Mode::Free };
-            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0 };
+            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
             let root = if grove {
                 // Low on its roots, opening to the sky, leaning a little.
                 let p = Vec3::new(p.x, ground.at(p) + 0.55, p.z);
@@ -591,7 +612,7 @@ fn swarm(
             face(&mut transform, ptransform.translation, dt);
             continue;
         }
-        stalk(&ground, ptransform, &positions, &mut transform, &mut s, dt);
+        stalk(&ground, nav.as_deref(), ptransform, &positions, &mut transform, &mut s, dt);
         // Still, its darkness creeps in; moving, it fades.
         s.dark = if s.velocity.length() < STILL { (s.dark + dt / DARK_IN).min(1.0) } else { (s.dark - dt / DARK_OUT).max(0.0) };
     }
@@ -602,7 +623,7 @@ fn swarm(
 /// waits, dead still; looked at, it stops dead where it is. Turn round and
 /// they are all still; turn back and they have moved behind you again.
 /// Arriving in front of you, they swing wide round your side.
-fn stalk(ground: &crate::ground::Ground, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
+fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
     let p = transform.translation;
     let eye = player.translation;
     // (It turns to face you, even while it stands still.)
@@ -625,8 +646,26 @@ fn stalk(ground: &crate::ground::Ground, player: &Transform, positions: &[Vec3],
         let side = if rel.dot(right) < 0.0 { -1.0 } else { 1.0 };
         place = eye + right * side * 14.0 + back * 6.0 + Vec3::Y * (place.y - eye.y);
     }
-    let to = place - p;
-    let distance = to.length();
+    // In a built place: its place on the floors nearest it, at about head
+    // height over them, and there by the way along them, flying at about
+    // head height (not through the walls).
+    let mut aim = place;
+    let mut left = None;
+    if let Some(nav) = nav {
+        if let Some(j) = nav.nearest(place, 6) {
+            let f = nav.nodes[j as usize];
+            place = Vec3::new(f.x, f.y + 1.0 + h(2) * 1.5, f.z);
+            aim = place;
+        }
+        if let Some((ahead, l)) = nav.steer(p, place, &mut s.way, &mut s.way_age, dt) {
+            left = Some(l);
+            if l > 3.5 {
+                aim = ahead + Vec3::Y * 1.6;
+            }
+        }
+    }
+    let to = aim - p;
+    let distance = left.unwrap_or(to.length());
     let mut want = to.normalize_or(Vec3::ZERO) * SWARMER_SPEED * (distance / 3.0).min(1.0);
     for &q in positions {
         let d = p - q;
