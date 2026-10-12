@@ -526,7 +526,10 @@ fn swarm(
     // (Playing, it starts once the ground round you is in; measuring or
     // capturing, once everything is, so it happens in view.)
     let ready = if args.unattended() { streamer.settled } else { streamer.near };
-    if args.opt("peace") || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
+    // (The labs, the rooms' and the plan's, in peace: they are for looking
+    // at; a hound forming in one, the user.)
+    let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan"));
+    if args.opt("peace") || lab || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
         return;
     }
     director.alive += dt;
