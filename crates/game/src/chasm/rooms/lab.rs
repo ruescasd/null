@@ -58,8 +58,8 @@ pub(super) struct Room {
     pub projector: Option<(Vec3, f32)>,
     /// Shimmers behind its walls (see `shimmer.rs`, `B::intrude`).
     pub shimmers: Vec<super::shimmer::Shimmer>,
-    /// Its painting's bleeding (see `bleed.rs`, `B::bleed`).
-    pub bleeds: Vec<super::bleed::Bleed>,
+    /// Roots out of its painting (see `roots.rs`, `B::root`).
+    pub roots: Vec<super::roots::Root>,
 }
 
 /// Outer walls' thickness.
@@ -134,9 +134,9 @@ struct B {
     /// seed; and the shimmers laid.
     intrusion: Option<u32>,
     shimmers: Vec<super::shimmer::Shimmer>,
-    /// Whether its painting bleeds (see `bleed`); and its way.
-    bleeding: bool,
-    bleeds: Vec<super::bleed::Bleed>,
+    /// Whether roots grow out of its painting (see `root`); and they.
+    rooting: bool,
+    roots: Vec<super::roots::Root>,
     cables: Vec<(Vec<Vec3>, f32, f32)>,
     screens: Vec<Manifold>,
 }
@@ -179,7 +179,7 @@ type Rhythm = ((f32, f32), (f32, f32), (f32, f32), f32, Option<f32>, bool);
 
 impl B {
     fn new(size: Vec3, d: Detail) -> B {
-        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), intrusion: None, shimmers: Vec::new(), bleeding: false, bleeds: Vec::new(), cables: Vec::new(), screens: Vec::new() }
+        B { g: Grid::solid(Vec3::ZERO, size), c: Cache(HashMap::new()), lights: Vec::new(), fill: Vec::new(), glow: Vec::new(), recipe: Vec::new(), views: Vec::new(), d, rhythms: Vec::new(), round: false, hanging: None, bays: Vec::new(), paintings: Vec::new(), intrusion: None, shimmers: Vec::new(), rooting: false, roots: Vec::new(), cables: Vec::new(), screens: Vec::new() }
     }
     fn carve(&mut self, lo: Vec3, hi: Vec3) {
         self.g.fill(lo, hi, Filler::Empty);
@@ -645,28 +645,67 @@ impl B {
         self.note(format!("a painting {w:.1} by {h:.1} m, {place}"));
         self.view("painting", at(uc, -(w.max(h) + 3.0), yc - 0.3), at(uc, 0.0, yc));
     }
-    /// An intrusion (the user's): its painting bleeds, drops of ichor
-    /// falling from under it (see `bleed.rs`).
-    fn bleed(&mut self) {
-        self.bleeding = true;
+    /// An intrusion (the user's): roots growing out of its painting,
+    /// down to the floor (see `roots.rs`).
+    fn root(&mut self) {
+        self.rooting = true;
     }
-    /// Where the painting's drops hang: from the picture's bottom edge,
-    /// somewhere along it, falling to what is under it (the frame's ledge:
-    /// its marks lie there, in the frame, where the eye already is). (Hung
-    /// from the lowest edge they could fall to the floor from, they fell
-    /// out of sight, or a fifth of a metre off an inward frame's last step.)
-    fn lay_bleed(&mut self) {
+    /// The surface roots grow over from the painting, traced down the
+    /// middle of it: up its picture's lower part, down to the picture's
+    /// edge and the panel's; where a ledge is under it (a frame's step),
+    /// out along its top to its lip and down the face under that; off an
+    /// overhang (nothing behind it: a standing frame's front edge),
+    /// straight down through the air; to the floor (no lip within a metre),
+    /// and out across it.
+    fn lay_roots(&mut self) {
         let Some(p) = self.paintings.last().copied() else { return };
         let side = Vec3::Y.cross(p.facing).normalize();
-        let u = (hash01(p.seed as i32, 1, 0, 0xb1ed) - 0.5) * p.size.x * 0.6;
-        let lip = p.at + side * u - Vec3::Y * p.size.y * 0.5;
-        let mut floor = lip.y;
-        while self.is_empty(Vec3::new(lip.x, floor - 0.01, lip.z) + p.facing * 0.03) && lip.y - floor < 30.0 {
-            floor -= 0.01;
+        // (From the picture's middle: across it, into the wall, up it.)
+        let at = move |u: f32, n: f32, y: f32| p.at + side * u - p.facing * n + Vec3::Y * y;
+        let air = |n: f32, y: f32| self.is_empty(at(0.0, n, y));
+        const F: f32 = 0.01;
+        let bottom = -p.size.y * 0.5;
+        let mut face = 0.0;
+        while air(face + F, bottom - 0.05) && face < 1.0 {
+            face += F;
         }
-        self.note(format!("an intrusion: its painting bleeds, drops falling {:.2} m", lip.y - floor));
-        self.view("bleeding", lip + p.facing * 2.0 + side * 0.5 - Vec3::Y * 0.2, lip - Vec3::Y * 0.15);
-        self.bleeds.push(super::bleed::Bleed { lip, facing: p.facing, floor, seed: p.seed });
+        let mut profile = vec![(0.0, bottom + p.size.y * 0.3), (0.0, bottom), (face, bottom)];
+        let mut y = bottom;
+        let mut floor = None;
+        for _ in 0..12 {
+            while air(face - F, y - F) && !air(face + F, y - F) && y > -30.0 {
+                y -= F;
+            }
+            profile.push((face, y));
+            if !air(face - F, y - F) {
+                let mut n = face;
+                while !air(n - F, y - F) && face - n < 1.0 {
+                    n -= F;
+                }
+                if face - n >= 1.0 {
+                    floor = Some(y);
+                    break;
+                }
+                face = n;
+                profile.push((face, y));
+                continue;
+            }
+            let mut fy = y;
+            while air(face - F, fy - F) && y - fy < 30.0 {
+                fy -= F;
+            }
+            profile.push((face, fy));
+            floor = Some(fy);
+            break;
+        }
+        let Some(fy) = floor else { return };
+        profile.push((face - super::roots::FLOOR, fy));
+        let roots = super::roots::grow(&profile, p.size.x * 0.5 + 0.15, p.seed, &at);
+        self.note(format!("an intrusion: {} roots grow out of its painting, down {:.1} m to the floor", roots.len(), -fy));
+        let low = at(0.0, face, fy);
+        self.view("roots", low + p.facing * (2.5 - fy * 0.6) + side * 0.7 + Vec3::Y * 1.6, (p.at + low) * 0.5);
+        self.view("roots_floor", low + p.facing * 1.8 + side * 0.5 + Vec3::Y * 1.4, low + p.facing * 0.5);
+        self.roots.extend(roots);
     }
     /// An intrusion (the user's): one of the room's niches upside down,
     /// a shimmer on its back. Laid when the room is done (after its
@@ -737,15 +776,15 @@ impl B {
                 Hang::Wall => self.lay_painting_wall((rects, y, seed)),
             }
         }
-        if self.bleeding {
-            self.lay_bleed();
+        if self.rooting {
+            self.lay_roots();
         }
         if let Some(seed) = self.intrusion.take() {
             self.lay_inverted(seed);
         }
         let names = self.d.names();
         self.note(format!("detail: {}", if names.is_empty() { "none".into() } else { names }));
-        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None, shimmers: self.shimmers, bleeds: self.bleeds }
+        Room { grid: self.g, lights: self.lights, fill: self.fill, glow: self.glow, recipe: self.recipe, views: self.views, floor, orb: None, cables: self.cables, screens: self.screens, pool: None, slopes: Vec::new(), paintings: self.paintings, projector: None, shimmers: self.shimmers, roots: self.roots }
     }
 }
 

@@ -31,7 +31,7 @@ mod hunter;
 mod forms;
 mod grove;
 mod hair;
-pub(crate) mod ichor;
+mod ichor;
 mod leech;
 mod weapon;
 mod web;
