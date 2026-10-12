@@ -645,76 +645,28 @@ impl B {
         self.note(format!("a painting {w:.1} by {h:.1} m, {place}"));
         self.view("painting", at(uc, -(w.max(h) + 3.0), yc - 0.3), at(uc, 0.0, yc));
     }
-    /// An intrusion (the user's): its painting bleeds, ichor seeping out of
-    /// the picture and running down to the floor (see `bleed.rs`).
+    /// An intrusion (the user's): its painting bleeds, drops of ichor
+    /// falling from under it (see `bleed.rs`).
     fn bleed(&mut self) {
         self.bleeding = true;
     }
-    /// The way the ichor runs from a seep on the painting: down the
-    /// picture's face, then the panel's; where a ledge is under it (a
-    /// frame's step), out along its top to its lip, and down the face
-    /// under that; to the floor (no lip within a metre), or off an
-    /// overhang (nothing behind it), dripping to the floor below. Each
-    /// point just off what it runs on.
+    /// Where the painting's drops hang: from the picture's bottom edge,
+    /// somewhere along it, falling to what is under it (the frame's ledge:
+    /// its marks lie there, in the frame, where the eye already is). (Hung
+    /// from the lowest edge they could fall to the floor from, they fell
+    /// out of sight, or a fifth of a metre off an inward frame's last step.)
     fn lay_bleed(&mut self) {
         let Some(p) = self.paintings.last().copied() else { return };
-        let r = |k: i32| hash01(p.seed as i32, k, 0, 0xb1ed);
         let side = Vec3::Y.cross(p.facing).normalize();
-        // (From the picture's middle: across it, up it, into the wall.)
-        let at = move |u: f32, n: f32, y: f32| p.at + side * u - p.facing * n + Vec3::Y * y;
-        let air = |u: f32, n: f32, y: f32| self.is_empty(at(u, n, y));
-        const F: f32 = 0.01;
-        const OFF: f32 = 0.006;
-        let u = (r(1) - 0.5) * p.size.x * 0.6;
-        let bottom = -p.size.y * 0.5;
-        let y0 = bottom + p.size.y * (0.25 + 0.35 * r(2));
-        // Down the picture, then onto the panel behind its edge.
-        let mut face = 0.0;
-        while air(u, face + F, bottom - 0.05) && face < 1.0 {
-            face += F;
+        let u = (hash01(p.seed as i32, 1, 0, 0xb1ed) - 0.5) * p.size.x * 0.6;
+        let lip = p.at + side * u - Vec3::Y * p.size.y * 0.5;
+        let mut floor = lip.y;
+        while self.is_empty(Vec3::new(lip.x, floor - 0.01, lip.z) + p.facing * 0.03) && lip.y - floor < 30.0 {
+            floor -= 0.01;
         }
-        let mut path = vec![at(u, -OFF, y0), at(u, -OFF, bottom), at(u, face - OFF, bottom)];
-        let mut y = bottom;
-        let mut drip = None;
-        for _ in 0..12 {
-            while air(u, face - F, y - F) && !air(u, face + F, y - F) && y > -30.0 {
-                y -= F;
-            }
-            if !air(u, face - F, y - F) {
-                // A ledge under it: out along it to its lip; none within a
-                // metre, the floor.
-                let mut n = face;
-                while !air(u, n - F, y - F) && face - n < 1.0 {
-                    n -= F;
-                }
-                path.push(at(u, face - OFF, y + OFF));
-                if face - n >= 1.0 {
-                    break;
-                }
-                path.push(at(u, n - OFF, y + OFF));
-                face = n;
-                continue;
-            }
-            // Nothing behind it: it drips, to the floor below.
-            let lip = at(u, face - OFF, y);
-            path.push(lip);
-            let mut fy = y;
-            while air(u, face - OFF, fy - F) && y - fy < 30.0 {
-                fy -= F;
-            }
-            drip = Some(at(u, face, fy).y);
-            break;
-        }
-        let ending = if drip.is_some() { "drips" } else { "runs down to the floor" };
-        self.note(format!("an intrusion: its painting bleeds, a stream that {ending}"));
-        // (Seen whole: from where it seeps to the floor.)
-        let foot = *path.last().unwrap();
-        let floor = drip.unwrap_or(foot.y);
-        let (top, low) = (path[0], Vec3::new(foot.x, floor, foot.z));
-        let back = ((top.y - floor) * 1.3).max(3.0);
-        self.view("bleeding", Vec3::new(foot.x, floor + 1.6, foot.z) + p.facing * back + side * 0.8, (top + low) * 0.5);
-        self.view("bleeding_floor", low + p.facing * 1.4 + side * 0.4 + Vec3::Y * 1.3, low + p.facing * 0.1);
-        self.bleeds.push(super::bleed::Bleed { path, facing: p.facing, drip, seed: p.seed });
+        self.note(format!("an intrusion: its painting bleeds, drops falling {:.2} m", lip.y - floor));
+        self.view("bleeding", lip + p.facing * 2.0 + side * 0.5 - Vec3::Y * 0.2, lip - Vec3::Y * 0.15);
+        self.bleeds.push(super::bleed::Bleed { lip, facing: p.facing, floor, seed: p.seed });
     }
     /// An intrusion (the user's): one of the room's niches upside down,
     /// a shimmer on its back. Laid when the room is done (after its

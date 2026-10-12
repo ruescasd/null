@@ -842,7 +842,7 @@ fn built(seed: u32, count: u32, show: Show) -> (Parts, Vec<String>, RoomViews, F
             fixtures.projectors.push((o + at, reach));
         }
         fixtures.shimmers.extend(room.shimmers.iter().map(|s| shimmer::Shimmer { at: o + s.at, ..*s }));
-        fixtures.bleeds.extend(room.bleeds.iter().map(|b| bleed::Bleed { path: b.path.iter().map(|p| o + *p).collect(), drip: b.drip.map(|y| o.y + y), ..b.clone() }));
+        fixtures.bleeds.extend(room.bleeds.iter().map(|b| bleed::Bleed { lip: o + b.lip, floor: o.y + b.floor, ..*b }));
         for m in &room.screens {
             let o = room.grid.origin;
             parts.stone.solid(&m.translate(o.x as f64, o.y as f64, o.z as f64));
