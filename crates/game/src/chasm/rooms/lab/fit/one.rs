@@ -312,12 +312,15 @@ pub(super) fn crossing(spec: &Spec) -> Option<Room> {
         return None;
     }
     // (Each arm through the doors in the walls it ends at, the most it can
-    // take, the nearer the middle the better; along a side wall if that is
-    // where they are, the crossing then off its middle or a T. Through the
-    // middle alone, or kept off the side walls, nearly every door came in
-    // by a passage: doors are mostly in corner cells.)
+    // take, the nearer the middle the better, a metre from a side wall at
+    // least, the crossing then off its middle. Through the middle alone,
+    // nearly every door came in by a passage: doors are mostly in corner
+    // cells. Right along a side wall, its own side wall was in the plane of
+    // the other arm's end wall, and the two arms' rhythms of pilasters and
+    // niches, out of step, cut into each other: an arch left standing on
+    // its own.)
     let place = |side: f32, walls: [usize; 2]| {
-        let (lo, hi) = (T + arm * 0.5, side - T - arm * 0.5);
+        let (lo, hi) = (T + arm * 0.5 + 1.0, side - T - arm * 0.5 - 1.0);
         let mut at: Vec<f32> = spec.doors.iter().filter(|d| walls.contains(&d.0)).map(|d| d.1.clamp(lo, hi)).collect();
         at.push(side * 0.5);
         let takes = |c: f32| spec.doors.iter().filter(|d| walls.contains(&d.0) && (d.1 - c).abs() <= arm * 0.5 - 1.2).count();
