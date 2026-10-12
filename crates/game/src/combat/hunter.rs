@@ -72,6 +72,9 @@ enum Stance {
     Charge,
 }
 
+/// How many of a broken hunter's parts burst, flinging pieces and ichor.
+const BURSTS: usize = 12;
+
 #[derive(Component)]
 pub(crate) struct Hunter {
     kind: Kind,
@@ -712,14 +715,17 @@ pub(super) fn hunt(
                 Transform::from_translation(at),
             ));
             let knock = h.rig.knock;
-            for (e, part, t) in &parts {
-                if part.hunter != entity {
-                    continue;
-                }
-                let out = (t.translation - at).normalize_or(Vec3::Y) * 9.0 + knock;
-                if e.index_u32() % 3 == 0 {
-                    shatter_quiet(&mut commands, &assets, t.translation, out, e.index_u32());
-                    ichor::spray(&mut commands, &ichor, t.translation, out.normalize_or(Vec3::Y), 1.5, e.index_u32());
+            // (A dozen parts burst, spread over the body, each spraying
+            // more: a third of them all, a hound's some 80 bursts and 1700
+            // pieces flung in one frame, held a frame up twice as long as
+            // the others, a hitch at every kill.)
+            let mine: Vec<(Entity, Vec3)> = parts.iter().filter(|(_, part, _)| part.hunter == entity).map(|(e, _, t)| (e, t.translation)).collect();
+            let every = (mine.len() / BURSTS).max(1);
+            for (k, &(e, p)) in mine.iter().enumerate() {
+                if k % every == 0 && k / every < BURSTS {
+                    let out = (p - at).normalize_or(Vec3::Y) * 9.0 + knock;
+                    shatter_quiet(&mut commands, &assets, p, out, e.index_u32());
+                    ichor::spray(&mut commands, &ichor, p, out.normalize_or(Vec3::Y), 3.0, e.index_u32());
                 }
                 commands.entity(e).despawn();
             }
