@@ -10,3 +10,9 @@ bevy.workspace = true
 # and a C++ compiler).
 manifold-csg = "0.4.1"
 avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel"] }
+
+[features]
+# Per-system timings written as a Chrome trace (trace-*.json) on exit: build
+# it apart (`CARGO_TARGET_DIR=target/profile cargo build --profile fast
+# --features profile`), it recompiles Bevy.
+profile = ["bevy/trace_chrome"]

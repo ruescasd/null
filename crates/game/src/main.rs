@@ -116,10 +116,20 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }))
-        .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin)
-        .insert_resource(args)
+        // (Draws prepared on the CPU, not by compute passes on the GPU for
+        // every view (`--opt gpubatch`, Bevy's way): that is for scenes of
+        // very many meshes; with ours, each shadow view's passes were a
+        // fixed cost, and a hallway lit by eight lamps casting shadows ran
+        // at 72 frames a second, 170 so.)
+        }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() }))
+        .add_plugins(FrameTimeDiagnosticsPlugin::default());
+    // (Timings of the render passes only to measure (`--opt diag`, and the
+    // benches): they cost themselves, a millisecond, a query round each
+    // pass.)
+    if args.opt("diag") || args.opt("bench") || args.opt("viewbench") {
+        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+    }
+    app.insert_resource(args)
         .add_plugins((
             terrain::TerrainPlugin,
             camera::FlyCameraPlugin,
