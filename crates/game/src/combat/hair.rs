@@ -11,7 +11,7 @@ use super::{
     forms::{Asleep, Gazed},
     hunter::cables::{rope, tubes},
 };
-use crate::{Args, terrain::WorldGen};
+use crate::Args;
 
 /// Strands on each, how far out round its back they hang from (metres), and
 /// their length.
@@ -33,7 +33,7 @@ pub(super) fn hair(
     mut commands: Commands,
     args: Res<Args>,
     time: Res<Time>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut material: Local<Option<Handle<StandardMaterial>>>,
@@ -65,7 +65,7 @@ pub(super) fn hair(
             // (Black, as the roots are.)
             let shade = 0.012;
             let (mut points, mut previous) = (Vec::new(), Vec::new());
-            rope(&mut points, &mut previous, transform.transform_point(from), None, length, &world, dt);
+            rope(&mut points, &mut previous, transform.transform_point(from), None, length, &|p| ground.at(p), dt);
             strands.push((from, length, points, previous, shade));
         }
         // (Built whole from the start: the renderer does not take an empty
@@ -103,7 +103,7 @@ pub(super) fn hair(
                 }
                 previous.clone_from(points);
             } else {
-                rope(points, previous, start, None, *length, &world, dt);
+                rope(points, previous, start, None, *length, &|p| ground.at(p), dt);
             }
         }
         if let Some(mut m) = meshes.get_mut(&*mesh) {

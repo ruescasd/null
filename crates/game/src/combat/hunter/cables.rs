@@ -24,7 +24,7 @@ use worldgen::noise::hash01;
 
 use super::Hunter;
 pub(in crate::combat) use crate::rope::{rope, tubes};
-use crate::{Args, terrain::WorldGen};
+use crate::Args;
 
 /// Where on a bone: how far along it (0..1) and out from it, in its frame
 /// (x to the body's right, y along the bone, z its other side: below, for
@@ -85,7 +85,7 @@ pub(in crate::combat) fn run(
     mut commands: Commands,
     args: Res<Args>,
     time: Res<Time>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut material: Local<Option<Handle<StandardMaterial>>>,
@@ -105,7 +105,7 @@ pub(in crate::combat) fn run(
     for (entity, hunter) in &added {
         let mut strands = strands(variant, hunter, entity.index_u32());
         for s in &mut strands {
-            step(s, &hunter.rig.bones, &world, 1.0 / 60.0);
+            step(s, &hunter.rig.bones, &|p| ground.at(p), 1.0 / 60.0);
         }
         // (Built whole from the start: the renderer does not take an empty
         // mesh growing.)
@@ -130,7 +130,7 @@ pub(in crate::combat) fn run(
         };
         let bones = &hunter.rig.bones;
         for s in &mut c.strands {
-            step(s, bones, &world, dt);
+            step(s, bones, &|p| ground.at(p), dt);
         }
         if let Some(mut mesh) = meshes.get_mut(&c.mesh) {
             tubes(&mut mesh, c.strands.iter().map(|s| (&s.points[..], s.width, s.shade)));
@@ -244,7 +244,7 @@ pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
 
 /// One step: wound strands follow their bones; the others swing under
 /// gravity, kept at their length, their ends held.
-fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
+fn step(s: &mut Strand, bones: &[crate::rig::Bone], floor: &dyn Fn(Vec3) -> f32, dt: f32) {
     let (from, to, length) = match s.kind {
         Kind::Wound { first, last, phase, turns, out, slack, inset } => {
             if last >= bones.len() {
@@ -302,5 +302,5 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], world: &WorldGen, dt: f32) {
     };
     let Some(start) = from.at(bones) else { return };
     let end = to.and_then(|t| t.at(bones));
-    rope(&mut s.points, &mut s.previous, start, end, length, world, dt);
+    rope(&mut s.points, &mut s.previous, start, end, length, floor, dt);
 }

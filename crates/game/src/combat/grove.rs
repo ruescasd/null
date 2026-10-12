@@ -18,7 +18,6 @@ use super::{
 use crate::{
     Args,
     player::{Player, WALK_SPEED},
-    terrain::WorldGen,
 };
 
 /// How far a shot is heard, and running; running is anything faster than a
@@ -64,7 +63,7 @@ pub(super) fn grove(
     mut commands: Commands,
     args: Res<Args>,
     time: Res<Time>,
-    world: Res<WorldGen>,
+    terrain: crate::ground::Ground,
     gun: Res<Gun>,
     assets: Res<Assets3>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -97,10 +96,10 @@ pub(super) fn grove(
             let a = (k as f32 + r(0) * 0.7) / ROOTS as f32 * std::f32::consts::TAU;
             let reach = REACH.0 + (REACH.1 - REACH.0) * r(1);
             let (x, z) = (from.x + a.cos() * reach, from.z + a.sin() * reach);
-            let ground = Vec3::new(x, world.ground_height(x, z), z);
+            let ground = Vec3::new(x, terrain.at(Vec3::new(x, from.y, z)), z);
             let length = from.distance(ground) * 1.15;
             let (mut points, mut previous) = (Vec::new(), Vec::new());
-            rope(&mut points, &mut previous, from, Some(ground), length, &world, dt);
+            rope(&mut points, &mut previous, from, Some(ground), length, &|p| terrain.at(p), dt);
             strands.push((ground, length, points, previous));
         }
         // (Built whole from the start: the renderer does not take an empty
@@ -196,9 +195,9 @@ pub(super) fn grove(
         let Roots { strands, mesh, .. } = &mut *root;
         for (ground, length, points, previous) in strands.iter_mut() {
             if torn {
-                rope(points, previous, *ground, None, *length, &world, dt);
+                rope(points, previous, *ground, None, *length, &|p| terrain.at(p), dt);
             } else if let Some(from) = from {
-                rope(points, previous, from, Some(*ground), *length, &world, dt);
+                rope(points, previous, from, Some(*ground), *length, &|p| terrain.at(p), dt);
             }
         }
         if let Some(mut m) = meshes.get_mut(&*mesh) {

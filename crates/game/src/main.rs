@@ -6,6 +6,7 @@ mod chasm;
 mod check;
 mod console;
 mod combat;
+mod ground;
 mod figure;
 mod landmarks;
 mod look;

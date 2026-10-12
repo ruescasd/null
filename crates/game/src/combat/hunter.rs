@@ -257,7 +257,7 @@ pub(super) fn gather(
     mut commands: Commands,
     time: Res<Time>,
     args: Res<Args>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     assets: Res<Assets3>,
     heads: Res<Heads>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -284,7 +284,7 @@ pub(super) fn gather(
             let ahead = player.forward();
             let at = player.translation + Vec3::new(ahead.x, 0.0, ahead.z).normalize_or(Vec3::Z) * args.num("specimen_at", 3.5);
             let face = at + Quat::from_rotation_y(args.num("specimen_yaw", 0.0).to_radians()) * (player.translation - at);
-            spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, 7, at, face);
+            spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, 7, at, face);
             director.next_gather = f32::MAX;
         }
         return;
@@ -296,7 +296,7 @@ pub(super) fn gather(
                 let k = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
                 let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
                 let at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
-                spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, k, at, player.translation);
+                spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation);
             }
             director.next_gather = 4.0;
         }
@@ -320,7 +320,7 @@ pub(super) fn gather(
             if away.length() < GATHER_NEAREST {
                 centre = player.translation + away.normalize_or(Vec3::X) * GATHER_NEAREST;
             }
-            centre.y = world.ground_height(centre.x, centre.z) + 2.0;
+            centre.y = ground.at(centre) + 2.0;
             let assembly = commands.spawn((Assembly { centre, time: 0.0 }, Transform::from_translation(centre))).id();
             commands.spawn((
                 AudioPlayer::new(assets.assemble.clone()),
@@ -376,7 +376,7 @@ pub(super) fn gather(
             commands.entity(e).despawn();
         }
         commands.entity(entity).despawn();
-        spawn_hunter(&mut commands, &args, &world, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation);
+        spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation);
     }
 }
 
@@ -385,7 +385,7 @@ pub(super) fn gather(
 fn spawn_hunter(
     commands: &mut Commands,
     args: &Args,
-    world: &WorldGen,
+    ground: &crate::ground::Ground,
     assets: &Assets3,
     heads: &Heads,
     materials: &mut Assets<StandardMaterial>,
@@ -404,9 +404,9 @@ fn spawn_hunter(
         Kind::Beast
     };
     let angler = kind == Kind::Beast && (args.opt("angler") || (!args.opt("hound") && hash01(seed as i32, 1, 0, 0x6b1) < 0.5));
-    let feet = Vec3::new(centre.x, world.ground_height(centre.x, centre.z), centre.z);
+    let feet = Vec3::new(centre.x, ground.at(centre), centre.z);
     let to = player - feet;
-    let ground = |x: f32, z: f32| world.ground_height(x, z);
+    let floor = |x: f32, z: f32| ground.at(Vec3::new(x, centre.y, z));
     // (The angler's body is a size larger than the hound's; its head is the
     // same size, so smaller for the body.)
     let plan = if angler {
@@ -420,7 +420,7 @@ fn spawn_hunter(
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
-    let rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &ground);
+    let rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     let bones = rig.bones.clone();
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
@@ -692,7 +692,7 @@ pub(super) fn hunt(
     mut commands: Commands,
     time: Res<Time>,
     args: Res<Args>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
     mut feedback: ResMut<Feedback>,
@@ -704,7 +704,6 @@ pub(super) fn hunt(
 ) {
     let dt = time.delta_secs().min(0.05);
     let target = player.0.translation;
-    let ground = |x: f32, z: f32| world.ground_height(x, z);
     for (entity, mut h, mut transform) in &mut hunters {
         if h.health <= 0.0 {
             // Broken: the whole body bursts at once.
@@ -956,7 +955,10 @@ pub(super) fn hunt(
                 commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             }
         }
-        h.rig.update(dt, intent, &ground);
+        // (Its ground under where it stands: in a built place, the floor it
+        // is on, not one above or below.)
+        let y = h.rig.root.y;
+        h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)));
         transform.translation = h.rig.chest();
     }
 }

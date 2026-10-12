@@ -15,7 +15,6 @@ use super::{
         cables::{rope, tubes},
     },
 };
-use crate::terrain::WorldGen;
 
 /// Seconds a cable takes to shoot across, how much longer than the gap it
 /// stays, how hard a taut one trembles (metres), and how long a snapped one
@@ -46,7 +45,7 @@ pub(super) struct Thread {
 pub(super) fn web(
     mut commands: Commands,
     time: Res<Time>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut material: Local<Option<Handle<StandardMaterial>>>,
@@ -76,7 +75,7 @@ pub(super) fn web(
         for (a, b) in pairs {
             let p = members.iter().find(|(x, _)| *x == a).map_or(Vec3::ZERO, |m| m.1);
             let (mut points, mut previous) = (Vec::new(), Vec::new());
-            rope(&mut points, &mut previous, p, Some(p + Vec3::Y * 0.01), 0.1, &world, dt);
+            rope(&mut points, &mut previous, p, Some(p + Vec3::Y * 0.01), 0.1, &|p| ground.at(p), dt);
             // (Built whole from the start: the renderer does not take an
             // empty mesh growing.)
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -133,7 +132,7 @@ pub(super) fn web(
         let length = thread.length;
         let seed = entity.index_u32() as i32;
         let Thread { points, previous, mesh, snapped, .. } = &mut *thread;
-        rope(points, previous, start, end, length, &world, dt);
+        rope(points, previous, start, end, length, &|p| ground.at(p), dt);
         // Taut, it trembles.
         if snapped.is_none() {
             let n = points.len();

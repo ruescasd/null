@@ -24,7 +24,7 @@ use crate::{
     Args,
     camera::FlyCam,
     player::{HEALTH_MAX, MoveInput, Player, tether::shard_mesh},
-    terrain::{Streamer, WorldGen},
+    terrain::Streamer,
 };
 
 mod hunter;
@@ -512,7 +512,7 @@ fn swarm(
     time: Res<Time>,
     args: Res<Args>,
     streamer: Res<Streamer>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     kit: Res<forms::Kit>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<Director>,
@@ -565,12 +565,12 @@ fn swarm(
             let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0 };
             let root = if grove {
                 // Low on its roots, opening to the sky, leaning a little.
-                let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 0.55, p.z);
+                let p = Vec3::new(p.x, ground.at(p) + 0.55, p.z);
                 let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
                 let transform = Transform::from_translation(p).looking_to(lean * Vec3::Y, Vec3::Z);
                 commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id()
             } else {
-                let p = Vec3::new(p.x, world.ground_height(p.x, p.z) + 3.0 + r(2) * 2.0, p.z);
+                let p = Vec3::new(p.x, ground.at(p) + 3.0 + r(2) * 2.0, p.z);
                 commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id()
             };
             forms::build(&mut commands, &kit, &mut materials, root);
@@ -591,7 +591,7 @@ fn swarm(
             face(&mut transform, ptransform.translation, dt);
             continue;
         }
-        stalk(&world, ptransform, &positions, &mut transform, &mut s, dt);
+        stalk(&ground, ptransform, &positions, &mut transform, &mut s, dt);
         // Still, its darkness creeps in; moving, it fades.
         s.dark = if s.velocity.length() < STILL { (s.dark + dt / DARK_IN).min(1.0) } else { (s.dark - dt / DARK_OUT).max(0.0) };
     }
@@ -602,7 +602,7 @@ fn swarm(
 /// waits, dead still; looked at, it stops dead where it is. Turn round and
 /// they are all still; turn back and they have moved behind you again.
 /// Arriving in front of you, they swing wide round your side.
-fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
+fn stalk(ground: &crate::ground::Ground, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
     let p = transform.translation;
     let eye = player.translation;
     // (It turns to face you, even while it stands still.)
@@ -637,7 +637,7 @@ fn stalk(world: &WorldGen, player: &Transform, positions: &[Vec3], transform: &m
     }
     s.velocity += (want - s.velocity).clamp_length_max(20.0 * dt);
     let mut next = p + s.velocity * dt;
-    let ground = world.ground_height(next.x, next.z) + 0.8;
+    let ground = ground.at(next) + 0.8;
     if next.y < ground {
         next.y = ground;
         s.velocity.y = s.velocity.y.max(0.0);
@@ -796,7 +796,7 @@ fn shatter_quiet(commands: &mut Commands, assets: &Assets3, at: Vec3, velocity: 
 }
 
 /// Pieces fall, bounce off the ground and shrink away.
-fn debris(mut commands: Commands, time: Res<Time>, world: Res<WorldGen>, mut pieces: Query<(Entity, &mut Debris, &mut Transform)>) {
+fn debris(mut commands: Commands, time: Res<Time>, ground: crate::ground::Ground, mut pieces: Query<(Entity, &mut Debris, &mut Transform)>) {
     let dt = time.delta_secs().min(0.05);
     for (entity, mut d, mut transform) in &mut pieces {
         d.life -= dt;
@@ -806,7 +806,7 @@ fn debris(mut commands: Commands, time: Res<Time>, world: Res<WorldGen>, mut pie
         }
         d.velocity.y -= 18.0 * dt;
         let mut p = transform.translation + d.velocity * dt;
-        let ground = world.ground_height(p.x, p.z) + 0.05;
+        let ground = ground.at(p) + 0.05;
         if p.y < ground {
             p.y = ground;
             d.velocity = Vec3::new(d.velocity.x * 0.5, -d.velocity.y * 0.3, d.velocity.z * 0.5);

@@ -13,7 +13,7 @@ use super::{
     Mode, Swarmer,
     hunter::cables::{rope, tubes},
 };
-use crate::{Args, camera::FlyCam, player::Player, terrain::WorldGen};
+use crate::{Args, camera::FlyCam, player::Player};
 
 /// How near a bud must be to latch on, how often a waiting one does (about
 /// once in this many seconds), how many at once, and how far away its cable
@@ -87,7 +87,7 @@ pub(super) fn leech(
     mut commands: Commands,
     args: Res<Args>,
     time: Res<Time>,
-    world: Res<WorldGen>,
+    ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut materials_shared: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
@@ -126,7 +126,7 @@ pub(super) fn leech(
             }
             let from = transform.translation;
             let (mut points, mut previous) = (Vec::new(), Vec::new());
-            rope(&mut points, &mut previous, from, Some(from + Vec3::Y * 0.01), 0.1, &world, dt);
+            rope(&mut points, &mut previous, from, Some(from + Vec3::Y * 0.01), 0.1, &|p| ground.at(p), dt);
             // (Built whole from the start: the renderer does not take an
             // empty mesh growing.)
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -187,7 +187,7 @@ pub(super) fn leech(
         let drinking = l.snapped.is_none() && l.age >= SHOOT;
         let age = l.age;
         let Leech { points, previous, mesh, rings: rings_entity, rings_mesh, .. } = &mut *l;
-        rope(points, previous, start, end, length, &world, dt);
+        rope(points, previous, start, end, length, &|p| ground.at(p), dt);
         if let Some(mut m) = meshes.get_mut(&*mesh) {
             tubes(&mut m, [(&points[..], (WIDTH, WIDTH * 0.6), SHADE)]);
         }

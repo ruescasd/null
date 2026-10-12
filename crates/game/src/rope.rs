@@ -4,7 +4,6 @@
 
 use bevy::{mesh::Indices, prelude::*};
 
-use crate::terrain::WorldGen;
 
 /// Points along a rope at least (a long one gets one every half metre or
 /// so), and sides of every tube.
@@ -15,7 +14,7 @@ const SIDES: usize = 5;
 /// its length, held at `start` and (if given) `end`; a hanging one kept off
 /// the ground. Far from where it was (new, or after a jump), it starts again,
 /// still.
-pub fn rope(points: &mut Vec<Vec3>, previous: &mut Vec<Vec3>, start: Vec3, end: Option<Vec3>, length: f32, world: &WorldGen, dt: f32) {
+pub fn rope(points: &mut Vec<Vec3>, previous: &mut Vec<Vec3>, start: Vec3, end: Option<Vec3>, length: f32, floor: &dyn Fn(Vec3) -> f32, dt: f32) {
     if points.is_empty() || points[0].distance(start) > 3.0 {
         // (A hanging one a little off the vertical, by where it hangs from:
         // dead straight down onto the ground it would stand up in a column.)
@@ -54,8 +53,8 @@ pub fn rope(points: &mut Vec<Vec3>, previous: &mut Vec<Vec3>, start: Vec3, end: 
     }
     // Not through the ground (taken as running straight between the
     // ground under its ends, or level under a hanging one).
-    let floor = world.ground_height(start.x, start.z) + 0.02;
-    let far = end.map_or(floor, |e| world.ground_height(e.x, e.z) + 0.02);
+    let (near, far) = (floor(start) + 0.02, end.map_or(floor(start) + 0.02, |e| floor(e) + 0.02));
+    let floor = near;
     for (i, p) in points.iter_mut().enumerate().skip(1) {
         p.y = p.y.max(floor + (far - floor) * i as f32 / (n - 1) as f32);
     }
