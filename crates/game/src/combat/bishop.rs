@@ -728,7 +728,7 @@ pub(super) fn float(
         if b.health <= 0.0 && b.broken.is_none() {
             b.broken = Some(0.0);
             let chest = b.top - Vec3::Y * 0.5;
-            commands.spawn((AudioPlayer::new(assets.death.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)), Transform::from_translation(chest)));
+            commands.spawn((AudioPlayer::new(assets.bishop_death.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)), Transform::from_translation(chest)));
             for k in 0..4 {
                 let p = chest - Vec3::Y * 0.35 * k as f32;
                 shatter_quiet(&mut commands, &assets, p, b.velocity, entity.index_u32() * 7 + k);
@@ -896,14 +896,15 @@ pub(super) fn float(
                         let dir = (Quat::from_rotation_y(fan) * aim + Vec3::Y * 0.3).normalize();
                         commands.spawn((Mote { velocity: dir * MOTE_SPEED, life: MOTE_LIFE, popped: false }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(from).with_scale(Vec3::splat(MOTE_SIZE)), bevy::light::NotShadowCaster));
                     }
-                    commands.spawn((AudioPlayer::new(assets.pounce.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.2)).with_speed(1.6), Transform::from_translation(from)));
                     if args.opt("huntlog") {
                         info!("huntlog: bishop {} casts, {:.1} m from you", entity.index_u32(), far);
                     }
                 }
             } else if sees && b.time >= b.next_cast && (CAST_RANGE.0..CAST_RANGE.1).contains(&far) {
                 b.charge = Some(0.0);
-                commands.spawn((AudioPlayer::new(assets.assemble.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(0.8)).with_speed(1.3), Transform::from_translation(b.top)));
+                // (A swell, from the gathering to its peak as its motes are
+                // loosed, a second on, and fading.)
+                commands.spawn((AudioPlayer::new(assets.bishop_cast.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.6)), Transform::from_translation(b.top)));
             }
         }
         let place = Quat::from_rotation_y(b.heading);

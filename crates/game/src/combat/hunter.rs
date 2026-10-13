@@ -1447,6 +1447,8 @@ pub(super) fn hunt(
             }
             director.hurt = 1.0;
             commands.spawn((AudioPlayer::new(assets.bite.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
+            // You cry out.
+            commands.spawn((AudioPlayer::new(assets.player_pain.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             if args.opt("hurtsound") {
                 commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             }

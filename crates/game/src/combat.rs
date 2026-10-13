@@ -62,6 +62,9 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/shot.wav");
         embedded_asset!(app, "sounds/reload.wav");
         embedded_asset!(app, "sounds/bite.wav");
+        embedded_asset!(app, "sounds/bishop_cast.wav");
+        embedded_asset!(app, "sounds/bishop_death.wav");
+        embedded_asset!(app, "sounds/player_pain.wav");
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
@@ -170,6 +173,11 @@ struct Assets3 {
     growls: Vec<(Handle<AudioSource>, f32)>,
     pounce: Handle<AudioSource>,
     bite: Handle<AudioSource>,
+    /// The bishop's cast (a swell, its peak as its motes are loosed) and its
+    /// death; yours, in pain.
+    bishop_cast: Handle<AudioSource>,
+    bishop_death: Handle<AudioSource>,
+    player_pain: Handle<AudioSource>,
 }
 
 /// What landed this frame, for the feedback: how many shards hit something
@@ -326,6 +334,9 @@ fn setup(
         growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("growl{k}")), l)).collect(),
         pounce: load("pounce"),
         bite: load("bite"),
+        bishop_cast: load("bishop_cast"),
+        bishop_death: load("bishop_death"),
+        player_pain: load("player_pain"),
     };
 
     // The ear is the camera.
