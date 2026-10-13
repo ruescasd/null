@@ -19,8 +19,8 @@ use crate::cloth::Cloth;
 /// what it floats above, and the robe's length from them.
 const ROUND: usize = 28;
 const DOWN: usize = 20;
-const SHOULDERS: f32 = 2.49;
-const LENGTH: f32 = 2.14;
+const SHOULDERS: f32 = 2.36;
+const LENGTH: f32 = 2.01;
 /// How long its cloth hangs free before its drape is kept (s), and how
 /// firmly it is pulled back to it (per second): the robe, the hood and
 /// mantle, the sleeves.
@@ -37,7 +37,7 @@ const PALE: f32 = 0.5;
 /// wrist, the right arm's (the left's mirrored).
 const SLEEVE_ROUND: usize = 10;
 const SLEEVE_ALONG: usize = 9;
-const ARM: [Vec3; 3] = [Vec3::new(0.36, -0.16, -0.02), Vec3::new(0.42, -0.71, 0.04), Vec3::new(0.12, -0.76, 0.25)];
+const ARM: [Vec3; 3] = [Vec3::new(0.36, -0.15, -0.02), Vec3::new(0.42, -0.68, 0.04), Vec3::new(0.12, -0.73, 0.25)];
 
 #[derive(Component)]
 pub(super) struct Bishop {
@@ -350,7 +350,7 @@ pub(super) fn lab(
             dark(arm_at(0.0, side), arm_at(0.5, side), 0.07);
             dark(arm_at(0.5, side), arm_at(1.0, side), 0.07);
         }
-        dark(Vec3::Y * -0.12, Vec3::Y * -1.72, 0.15);
+        dark(Vec3::Y * -0.11, Vec3::Y * -1.65, 0.15);
         return;
     }
     let Ok(mut b) = bishops.single_mut() else { return };
@@ -402,9 +402,9 @@ pub(super) fn lab(
     // shoulders, its hips.
     let held: Vec<(u32, Vec3)> = (0..2 * ROUND).map(|i| (i as u32, top + place * robe_at(i % ROUND, i / ROUND))).collect();
     let bodies = [
-        (top + Vec3::Y * -0.14, top + Vec3::Y * -1.09, 0.17),
+        (top + Vec3::Y * -0.13, top + Vec3::Y * -1.05, 0.17),
         (top + place * Vec3::new(-0.22, -0.1, 0.0), top + place * Vec3::new(0.22, -0.1, 0.0), 0.1),
-        (top + Vec3::Y * -1.15, top + Vec3::Y * -1.67, 0.14),
+        (top + Vec3::Y * -1.1, top + Vec3::Y * -1.6, 0.14),
         // (Not its forearms: the robe at its sides, pushed out of them
         // through their middles, flipped and tangled, and in the end turned
         // up over its head, the user. The sleeves hide where they meet.)
@@ -446,7 +446,7 @@ pub(super) fn lab(
             (top + place * Vec3::new(-0.27, -0.1, 0.0), top + place * Vec3::new(0.27, -0.1, 0.0), 0.1),
             (top + place * arm_at(0.0, -1.0), top + place * arm_at(0.45, -1.0), 0.11),
             (top + place * arm_at(0.0, 1.0), top + place * arm_at(0.45, 1.0), 0.11),
-            (top + Vec3::Y * -0.12, top + Vec3::Y * -0.8, 0.19),
+            (top + Vec3::Y * -0.11, top + Vec3::Y * -0.77, 0.19),
         ];
         for _ in 0..steps {
             b.cape.step(&held, &bodies, floor + 0.02, top.y + 0.9, dt / steps as f32);
