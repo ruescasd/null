@@ -21,3 +21,4 @@ it became):
 - `bishop_call`: yodguard, "Dark magic 3" (378655), its first 1.6 s.
 - `bishop_blink`: yodguard, "Wind magic 5" (378630).
 - `bishop_pain`: a download (`bishop_pain`; its author not recorded), from 1.15 s (past its rising start) to 2.6 s.
+- `bishop_mote_burst`: yodguard, "Iced magic 6" (378606), from 0.22 s (just before its peak) to 1.4 s.

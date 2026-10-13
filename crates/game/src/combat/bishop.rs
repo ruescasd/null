@@ -230,12 +230,6 @@ pub(super) struct Mote {
     pub(super) popped: bool,
 }
 
-/// A mote's trail, shrinking away.
-#[derive(Component)]
-pub(super) struct Ember {
-    life: f32,
-}
-
 /// The motes' mesh and their glow.
 #[derive(Resource)]
 pub(super) struct MoteKit {
@@ -1045,12 +1039,10 @@ pub(super) fn motes(
     args: Res<Args>,
     ground: crate::ground::Ground,
     assets: Res<Assets3>,
-    kit: Res<MoteKit>,
     mut director: ResMut<Director>,
     mut gun: ResMut<Gun>,
     mut player: Single<(&Transform, &mut Player), Without<Mote>>,
-    mut motes: Query<(Entity, &mut Mote, &mut Transform), (Without<Player>, Without<Ember>)>,
-    mut embers: Query<(Entity, &mut Ember, &mut Transform), (Without<Player>, Without<Mote>)>,
+    mut motes: Query<(Entity, &mut Mote, &mut Transform), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let eye = player.0.translation;
@@ -1087,24 +1079,17 @@ pub(super) fn motes(
                 player.1.velocity += heading.with_y(0.0).normalize_or(Vec3::ZERO) * 4.0 + Vec3::Y * 1.5;
                 director.hurt = 1.0;
                 gun.jolt += Vec2::new(0.06, -heading.dot(*player.0.right()) * 0.08);
-                commands.spawn((AudioPlayer::new(assets.shatter.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.7)).with_speed(1.4)));
+                // It bursts on you, and you cry out (only a bite did).
+                commands.spawn((AudioPlayer::new(assets.mote_burst.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
+                commands.spawn((AudioPlayer::new(assets.player_pain.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             } else {
-                commands.spawn((AudioPlayer::new(assets.shatter.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(0.6)).with_speed(1.5), Transform::from_translation(p)));
+                commands.spawn((AudioPlayer::new(assets.mote_burst.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.2)), Transform::from_translation(p)));
             }
             commands.entity(entity).despawn();
             continue;
         }
+        // (No trail: a tail behind each, they read as sperm, the user.)
         transform.translation = next;
-        // Its trail.
-        commands.spawn((Ember { life: 0.25 }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(p).with_scale(Vec3::splat(MOTE_SIZE * 0.7)), bevy::light::NotShadowCaster));
-    }
-    for (entity, mut e, mut transform) in &mut embers {
-        e.life -= dt;
-        if e.life <= 0.0 {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        transform.scale = Vec3::splat(MOTE_SIZE * 0.7 * e.life / 0.25);
     }
 }
 

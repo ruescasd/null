@@ -66,6 +66,7 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/bishop_call.wav");
         embedded_asset!(app, "sounds/bishop_pain.wav");
         embedded_asset!(app, "sounds/bishop_blink.wav");
+        embedded_asset!(app, "sounds/bishop_mote_burst.wav");
         embedded_asset!(app, "sounds/player_step0.wav");
         embedded_asset!(app, "sounds/player_step1.wav");
         embedded_asset!(app, "sounds/player_step2.wav");
@@ -191,6 +192,8 @@ struct Assets3 {
     bishop_call: Handle<AudioSource>,
     bishop_pain: Handle<AudioSource>,
     bishop_blink: Handle<AudioSource>,
+    /// A bishop's mote bursting (on you, on what is built, shot down).
+    mote_burst: Handle<AudioSource>,
     /// Your footsteps (one of these, a step).
     steps: Vec<Handle<AudioSource>>,
 }
@@ -354,6 +357,7 @@ fn setup(
         bishop_call: load("bishop_call"),
         bishop_pain: load("bishop_pain"),
         bishop_blink: load("bishop_blink"),
+        mote_burst: load("bishop_mote_burst"),
         steps: (0..STEPS).map(|k| load(&format!("player_step{k}"))).collect(),
     };
 
