@@ -28,6 +28,8 @@ const SHOULDERS: f32 = 2.35;
 const LENGTH: f32 = 1.95;
 /// The cloth's shade and its markings' (sRGB).
 const DARK: f32 = 0.035;
+/// How far its head is bowed (radians).
+const BOW: f32 = 0.32;
 const PALE: f32 = 0.5;
 
 #[derive(Component)]
@@ -82,16 +84,17 @@ fn robe_shade(c: usize, r: usize) -> f32 {
 }
 
 /// A stiff shell: rings (height, half width, half depth, how far forward)
-/// round all but an opening at its front (`open`, radians each side), with
-/// pale edges (the opening's, and the rings `trim` names); its vertices'
-/// colours carry the shade. Its frame: y up, z forward.
-fn shell(rings: &[(f32, f32, f32, f32)], open: f32, trim: &[usize]) -> Mesh {
+/// round all but an opening at its front (`open`, radians each side), each
+/// point raised by `lift` (by its angle round, 0 at the front, and its ring),
+/// with pale edges (the opening's, and the rings `trim` names); its
+/// vertices' colours carry the shade. Its frame: y up, z forward.
+fn shell(rings: &[(f32, f32, f32, f32)], open: f32, trim: &[usize], lift: &dyn Fn(f32, usize) -> f32) -> Mesh {
     const ARC: usize = 18;
     let (mut positions, mut colors) = (Vec::new(), Vec::new());
     for (r, &(y, w, d, fwd)) in rings.iter().enumerate() {
         for k in 0..=ARC {
             let a = open + (std::f32::consts::TAU - 2.0 * open) * k as f32 / ARC as f32;
-            positions.push([a.sin() * w, y, a.cos() * d + fwd]);
+            positions.push([a.sin() * w, y + lift(a, r), a.cos() * d + fwd]);
             let pale = (open > 0.0 && (k == 0 || k == ARC)) || trim.contains(&r);
             let v = if pale { PALE } else { DARK };
             colors.push(Color::srgb(v, v, v).to_linear().to_f32_array());
@@ -161,21 +164,36 @@ pub(super) fn lab(
         };
         // The hood: deep, drawn back to a point (a narrow spike read as a
         // chess bishop's mitre), its opening's edge pale.
-        let hood = shell(&[(0.0, 0.25, 0.25, 0.02), (0.15, 0.26, 0.27, 0.0), (0.32, 0.23, 0.25, -0.04), (0.46, 0.16, 0.18, -0.1), (0.56, 0.08, 0.09, -0.17), (0.62, 0.01, 0.01, -0.24)], 0.75, &[]);
-        stiff_part(meshes.add(hood), cloth_material.clone(), Vec3::Y * 0.02, Quat::IDENTITY, Vec3::ONE);
+        let hood = shell(&[(0.0, 0.25, 0.25, 0.02), (0.15, 0.26, 0.27, 0.0), (0.32, 0.23, 0.25, -0.04), (0.46, 0.16, 0.18, -0.1), (0.56, 0.08, 0.09, -0.17), (0.62, 0.01, 0.01, -0.24)], 0.75, &[0], &|_, _| 0.0);
+        // Bowed a little, as in concentration (the Dark Bishop's: the
+        // user), turned at the neck, a little forward.
+        let bow = Quat::from_rotation_x(BOW);
+        stiff_part(meshes.add(hood), cloth_material.clone(), Vec3::new(0.0, 0.02, 0.04), bow, Vec3::ONE);
         // In the hood: darkness (unlit: no light gets in), no eyes (a void
         // for a face, as the Dark Bishop's).
         let void = materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() });
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, Vec3::new(0.0, 0.22, 0.03), Quat::IDENTITY, Vec3::new(0.19, 0.22, 0.17));
-        // The mantle: stiff, broad, falling over the shoulders like a cape's
-        // collar (stuck out flat, it was a hat's brim), its edge pale, a V
-        // open down its front.
-        let mantle = shell(&[(0.06, 0.22, 0.19, 0.0), (-0.04, 0.4, 0.28, 0.0), (-0.2, 0.56, 0.34, 0.02), (-0.36, 0.62, 0.37, 0.03), (-0.42, 0.64, 0.38, 0.03)], 0.45, &[3, 4]);
+        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, Vec3::new(0.0, 0.02, 0.04) + bow * Vec3::new(0.0, 0.2, 0.01), bow, Vec3::new(0.19, 0.22, 0.17));
+        // The mantle: a stiff yoke spreading from the neck, wide across and
+        // shallow front to back, flat on top, sagging a little at its front
+        // and back and rising to points at its sides, its thick edge pale,
+        // a V open down its front (the Dark Bishop's square shoulders: round,
+        // falling like a cape, it was a monk's; round and flat, a hat's
+        // brim).
+        let mantle = shell(
+            &[(0.06, 0.22, 0.19, 0.0), (-0.02, 0.45, 0.25, 0.0), (-0.08, 0.66, 0.29, 0.0), (-0.12, 0.8, 0.31, 0.0), (-0.21, 0.8, 0.31, 0.0)],
+            0.4,
+            &[0, 3, 4],
+            &|a, r| {
+                let t = (r.min(3) as f32 / 3.0).powi(2);
+                0.22 * a.sin().abs().powi(6) * t - 0.1 * a.cos().powi(2) * t
+            },
+        );
         stiff_part(meshes.add(mantle), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
         // Horns curving up off it, two to a shoulder.
         let horn = materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.6, ..default() });
         for side in [-1.0f32, 1.0] {
-            for (at, dir, length) in [(Vec3::new(0.48, -0.24, -0.06), Vec3::new(0.3, 1.0, -0.12), 0.6), (Vec3::new(0.6, -0.34, 0.05), Vec3::new(0.6, 0.8, 0.0), 0.45)] {
+            // (Out at the mantle's points.)
+            for (at, dir, length) in [(Vec3::new(0.62, 0.0, -0.08), Vec3::new(0.25, 1.0, -0.15), 0.6), (Vec3::new(0.74, 0.02, 0.04), Vec3::new(0.55, 0.85, 0.0), 0.42)] {
                 let at = Vec3::new(at.x * side, at.y, at.z);
                 let dir = Vec3::new(dir.x * side, dir.y, dir.z).normalize();
                 stiff_part(assets.shard.clone(), horn.clone(), at, Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(5.0, length / 0.7, 5.0));
