@@ -52,6 +52,10 @@ const SHOVE: f32 = 0.9;
 const ATTACK: f32 = 30.0;
 /// What it takes to break (two or three good shots at close range).
 const HUNTER_HEALTH: f32 = 45.0;
+/// How many of a blast's shards tear a beast's leg off (of 16: about point
+/// blank). Not what a leg has taken over a fight: aimed at the body, a
+/// shotgun's shards all but miss the legs (a few in each by its death).
+const SEVER: u32 = 10;
 /// The body's pieces: how stiffly they follow their bones (limbs stiffer,
 /// so they stay limbs), and how they settle.
 const STIFFNESS: f32 = 160.0;
@@ -179,6 +183,8 @@ impl Hunter {
             .bones
             .iter()
             .enumerate()
+            // (Not a leg it has lost.)
+            .filter(|&(i, _)| self.rig.leg_of(i).is_none_or(|l| !self.rig.is_lost(l)))
             .filter_map(|(i, b)| b.ray(origin, dir, max).map(|d| (d, i)))
             .min_by(|a, b| a.0.total_cmp(&b.0))
     }
@@ -498,7 +504,8 @@ fn spawn_hunter(
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
-    let rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
+    let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
+    rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
@@ -868,6 +875,16 @@ pub(super) fn hunt(
         }
 
         let beast = h.kind == Kind::Beast;
+        // A blast of `SEVER` shards or more tears off a beast's leg: the one
+        // nearest where they struck (one leg a blast).
+        let mut torn = None;
+        if beast && h.shards >= SEVER && !h.hits.is_empty() {
+            let struck = h.hits.iter().map(|&(b, _)| (h.rig.bones[b].a + h.rig.bones[b].b) * 0.5).sum::<Vec3>() / h.hits.len() as f32;
+            torn = (0..h.rig.plan.legs.len()).filter(|&l| !h.rig.is_lost(l)).min_by(|&a, &b| {
+                let at = |l: usize| h.rig.bones[5 + 2 * l].b.distance(struck);
+                at(a).total_cmp(&at(b))
+            });
+        }
         // Shot: the blast's shards together shove it, the more of them the
         // harder: its run at you stopped, and it thrown back, its body
         // reeling; enough of them stagger it, and knock it out of a pounce.
@@ -893,6 +910,31 @@ pub(super) fn hunt(
                 h.stance = Stance::Stagger;
                 h.timer = 0.25 + 0.04 * n;
                 h.gesture = Gesture::None;
+            }
+        }
+        // The leg torn off bursts at the joint, its hard pieces fall away,
+        // and the body sags at that corner.
+        if let Some(leg) = torn {
+            h.rig.lost[leg] = true;
+            let (upper, lower) = (5 + 2 * leg, 6 + 2 * leg);
+            let joint = h.rig.bones[upper].a;
+            let out = (joint - h.rig.chest()).with_y(0.0).normalize_or(Vec3::X);
+            shatter(&mut commands, &assets, joint, h.rig.knock + out * 3.0, entity.index_u32() * 13 + leg as u32);
+            ichor::spray(&mut commands, &ichor, joint, (out + Vec3::Y).normalize(), 2.5, entity.index_u32() * 17 + leg as u32);
+            for (e, part, t) in &parts {
+                if part.hunter == entity && (part.bone == upper || part.bone == lower) {
+                    let r = |j: i32| hash01(e.index_u32() as i32, j, 0, 0x6c5) - 0.5;
+                    commands.entity(e).remove::<Part>().insert(Debris {
+                        velocity: out * 3.0 + Vec3::Y * 3.5 + h.rig.knock * 0.5 + Vec3::new(r(0), r(1), r(2)) * 2.0,
+                        spin: Vec3::new(r(3), r(4), r(5)) * 6.0,
+                        life: 4.0,
+                        total: 4.0,
+                        size: t.scale,
+                    });
+                }
+            }
+            if args.opt("huntlog") {
+                info!("huntlog: {} lost a {} leg", entity.index_u32(), if h.rig.plan.legs[leg].root == crate::rig::Root::Chest { "fore" } else { "hind" });
             }
         }
         let root = h.rig.root;
@@ -1286,8 +1328,11 @@ pub(super) fn hunt(
             if footed && ground.under(to).is_none_or(|g| g < from.y - 1.0) { from } else { to }
         };
         let before = h.rig.root;
-        // (`huntpace` at the console: every hunter faster or slower.)
-        intent.velocity *= args.num("huntpace", 1.0);
+        // (`huntpace` at the console: every hunter faster or slower.) Its
+        // legs lost slow it: each forelimb to 0.6 of its pace, each hind leg
+        // to 0.8 (both forelimbs lost, it drags itself on at a third).
+        let crippled: f32 = (0..h.rig.plan.legs.len()).filter(|&i| h.rig.is_lost(i)).map(|i| if h.rig.plan.legs[i].root == crate::rig::Root::Chest { 0.6 } else { 0.8 }).product();
+        intent.velocity *= args.num("huntpace", 1.0) * crippled;
         h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
         // Your body stops it, as a wall does (what is built was all it
         // met: a pounce went through you): it comes no nearer than its reach,

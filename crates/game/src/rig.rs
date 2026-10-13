@@ -412,6 +412,9 @@ pub struct Rig {
     seed: u32,
     /// Strides taken (each draws its own variations: see `vary`).
     strides: u32,
+    /// Its legs lost (shot off): neither set down nor drawn, the body
+    /// sagging at their corner.
+    pub lost: Vec<bool>,
     pub bones: Vec<Bone>,
 }
 
@@ -466,6 +469,7 @@ impl Rig {
             crouch: 0.0,
             seed,
             strides: 0,
+            lost: Vec::new(),
             bones: Vec::new(),
         };
         let (offsets, swing, stride, _) = rig.plan.gait(0.0);
@@ -520,6 +524,10 @@ impl Rig {
         // they haul (the rump less).
         let heave = if self.plan.style == Style::Hauler { 0.15 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos() * if root == Root::Chest { 1.0 } else { 0.4 } } else { 0.0 };
         let height = h * (1.0 - low) + bob + rock + pitch + heave + if root == Root::Chest { breath } else { 0.0 };
+        // A leg lost, its corner sags and slumps towards it; both of a pair
+        // lost, that end drags on the ground.
+        let (gone, slump) = self.plan.legs.iter().enumerate().filter(|&(i, leg)| leg.root == root && self.lost.get(i).copied().unwrap_or(false)).fold((0, 0.0), |(n, s), (_, leg)| (n + 1, s + leg.side.signum()));
+        let height = (height - h * [0.0, 0.4, 0.75][gone.min(2)]).max(0.25);
         // Leaning into a turn: the body swings towards its inside.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
@@ -528,7 +536,7 @@ impl Rig {
         // Each stride lurches a little to one side or the other, the chest
         // more than the hips.
         let lurch = (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 };
-        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height + lurch) + reel
+        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -685,6 +693,9 @@ impl Rig {
             let home = self.home(i, ground);
             let local = (self.phase - self.offsets[i]).rem_euclid(1.0);
             self.local[i] = local;
+            if self.lost.get(i).copied().unwrap_or(false) {
+                continue;
+            }
             if self.airborne.is_some() {
                 continue;
             }
@@ -878,6 +889,18 @@ impl Rig {
     /// The middle of the chest.
     pub fn chest(&self) -> Vec3 {
         self.anchor(Root::Chest)
+    }
+
+    /// Which leg a bone is of (the bones: three of torso, the neck, the
+    /// head, then two to a leg), if any.
+    pub fn leg_of(&self, bone: usize) -> Option<usize> {
+        let k = bone.checked_sub(5)? / 2;
+        (k < self.plan.legs.len()).then_some(k)
+    }
+
+    /// Whether leg `i` is lost.
+    pub fn is_lost(&self, i: usize) -> bool {
+        self.lost.get(i).copied().unwrap_or(false)
     }
 
     /// This stride's variation `j` (0..1), easing into the next stride's
