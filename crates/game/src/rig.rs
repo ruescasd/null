@@ -214,7 +214,7 @@ impl Plan {
             decel: 24.0,
             bob: 0.05,
             lean: 0.06,
-            rock: 0.09,
+            rock: 0.14,
             shoulder: 0.06,
             sway: 0.08,
         }
@@ -442,7 +442,10 @@ impl Rig {
         let mid = (self.plan.hips.0 + self.plan.chest.0) * 0.5;
         let forward = self.forward_of(yaw);
         let moving = (self.velocity.length() / 3.0).min(1.0);
-        let bob = -self.plan.bob * moving * (1.0 - self.gallop) * (1.0 - (self.phase * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+        // (Galloping, a bound three times as deep, the body lowest as each
+        // pair of feet takes its weight: it glided at one height, on wheels,
+        // the user.)
+        let bob = -self.plan.bob * moving * (1.0 + 2.0 * self.gallop) * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
         // Galloping: the body rocks (chest up as the hips go down) and the
         // spine flexes, the hips reaching forward under the body.
         let wave = (self.phase * std::f32::consts::TAU).sin();
@@ -655,9 +658,14 @@ impl Rig {
         self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
         self.tilt += (intent.tilt - self.tilt) * (1.0 - (-dt * 3.0).exp());
         // The head's height follows the body's slowly: steady while it bobs.
-        let raw = self.neck_end().y;
+        // (Running, it follows the body, and pumps deeper still as the
+        // forefeet land: steadied, it ran as on rails.)
+        let moving = (self.velocity.length() / 3.0).min(1.0);
+        let pump = 0.1 * self.gallop * moving * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+        let raw = self.neck_end().y - pump;
+        let rate = 4.0 + 26.0 * self.gallop;
         self.head_y = Some(match self.head_y {
-            Some(y) => raw + (y + (raw - y) * (1.0 - (-dt * 4.0).exp()) - raw).clamp(-0.15, 0.15),
+            Some(y) => raw + (y + (raw - y) * (1.0 - (-dt * rate).exp()) - raw).clamp(-0.15, 0.15),
             None => raw,
         });
 
@@ -787,6 +795,12 @@ impl Rig {
     /// The middle of the chest.
     pub fn chest(&self) -> Vec3 {
         self.anchor(Root::Chest)
+    }
+
+    /// The gait's clock for the body's rise and fall: galloping, shifted so
+    /// it is lowest as the fore and the hind pairs bear its weight.
+    fn bound(&self) -> f32 {
+        self.phase + 0.3 * self.gallop
     }
 
     /// How fast it is moving over the ground.

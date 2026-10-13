@@ -1083,7 +1083,7 @@ pub(super) fn hunt(
                 // Building to a gallop, then a pounce out of the run, keeping
                 // its momentum.
                 Stance::Charge => {
-                    intent.velocity = toward * if chasing { 22.0 } else { 17.0 };
+                    intent.velocity = toward * if chasing { 18.0 } else { 14.0 };
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
                     if speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
@@ -1100,7 +1100,7 @@ pub(super) fn hunt(
                     }
                 }
                 Stance::Windup => {
-                    intent.velocity = toward * 22.0;
+                    intent.velocity = toward * 18.0;
                     intent.crouch = 1.0;
                     intent.stretch = 1.0;
                     if h.timer <= 0.0 {
