@@ -415,6 +415,12 @@ pub struct Rig {
     /// Its legs lost (shot off): neither set down nor drawn, the body
     /// sagging at their corner.
     pub lost: Vec<bool>,
+    /// Rearing (0..1, wanted; and as it is): the chest raised.
+    pub rear: f32,
+    reared: f32,
+    /// Where its forefeet are driven into the ground (left, right), held
+    /// there out of the gait: an attack's grab, the body hauled after them.
+    pub grab: Option<[Vec3; 2]>,
     pub bones: Vec<Bone>,
 }
 
@@ -470,6 +476,9 @@ impl Rig {
             seed,
             strides: 0,
             lost: Vec::new(),
+            rear: 0.0,
+            reared: 0.0,
+            grab: None,
             bones: Vec::new(),
         };
         let (offsets, swing, stride, _) = rig.plan.gait(0.0);
@@ -527,7 +536,7 @@ impl Rig {
         // A leg lost, its corner sags and slumps towards it; both of a pair
         // lost, that end drags on the ground.
         let (gone, slump) = self.plan.legs.iter().enumerate().filter(|&(i, leg)| leg.root == root && self.lost.get(i).copied().unwrap_or(false)).fold((0, 0.0), |(n, s), (_, leg)| (n + 1, s + leg.side.signum()));
-        let height = (height - h * [0.0, 0.4, 0.75][gone.min(2)]).max(0.25);
+        let height = (height - h * [0.0, 0.4, 0.75][gone.min(2)]).max(0.25) + self.reared * if root == Root::Chest { 0.6 } else { 0.1 };
         // Leaning into a turn: the body swings towards its inside.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
@@ -646,6 +655,7 @@ impl Rig {
             }
         }
         self.knock *= (-dt * 6.0).exp();
+        self.reared += (self.rear - self.reared) * (1.0 - (-dt * 10.0).exp());
         // (Sprung, a little under damped: thrown, it overshoots once.)
         self.reel_v += (-self.reel * 160.0 - self.reel_v * 14.0) * dt;
         self.reel += self.reel_v * dt;
@@ -694,6 +704,16 @@ impl Rig {
             let local = (self.phase - self.offsets[i]).rem_euclid(1.0);
             self.local[i] = local;
             if self.lost.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            // Grabbing: a forefoot shoots out to where it is driven in, and
+            // stays.
+            if let Some(grab) = self.grab
+                && self.plan.legs[i].root == Root::Chest
+            {
+                let foot = &mut self.feet[i];
+                foot.planted = foot.planted.lerp(grab[(self.plan.legs[i].side > 0.0) as usize], 1.0 - (-dt * 30.0).exp());
+                foot.swinging = false;
                 continue;
             }
             if self.airborne.is_some() {
@@ -917,7 +937,7 @@ impl Rig {
     /// hauling, almost still as the arms reach (a sixth), surging as they
     /// haul (nearly twice), its speed on the whole; else all of it.
     fn surge(&self) -> f32 {
-        if self.plan.style != Style::Hauler {
+        if self.plan.style != Style::Hauler || self.grab.is_some() {
             return 1.0;
         }
         let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 3.0).min(1.0);

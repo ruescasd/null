@@ -45,6 +45,9 @@ const GRACE: f32 = 1.0;
 const SEARCH: f32 = 10.0;
 /// How close a harrow is to you to snap rather than pounce (m).
 const SNAP: f32 = 2.5;
+/// How near it hauls itself onto you from (m), and how fast (m/s).
+const HAUL_FROM: f32 = 6.0;
+const HAUL: f32 = 24.0;
 /// How many of a blast's shards stagger it, and how hard each shoves it
 /// (m/s, a harrow's weight; a biped, lighter, further).
 const STAGGER: f32 = 4.0;
@@ -88,8 +91,14 @@ enum Stance {
     Recover,
     /// The beast: still, low, head locked on you.
     Freeze,
-    /// The beast: building to a gallop before it pounces.
+    /// The beast: building to a gallop before it pounces (or hauls).
     Charge,
+    /// The beast's haul: stopped dead, rearing, jaws open; its forelimbs
+    /// shooting out to spike into the ground either side of you; and its
+    /// body hauled along them onto you, faster than it runs.
+    Rear,
+    Reach,
+    Haul(Vec3),
     /// Thrown back by a blast, its run at you broken.
     Stagger,
 }
@@ -1064,7 +1073,7 @@ pub(super) fn hunt(
             info!("huntlog: {} {:?} -> {:?} (you {:.1} m off, {}; {:.1} m on to where it was going{})", entity.index_u32(), was, h.aware, root.distance(target), if sees { "in sight" } else if alarmed { "heard" } else { "unseen" }, distance, if lost { ", no way there" } else { "" });
         }
         if log {
-            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}, {} at {:.1} m/s", entity.index_u32(), h.rig.root, h.aware, distance, if h.way.is_empty() { " (no way)" } else { "" }, match h.stance { Stance::Stalk => "stalking", Stance::Freeze => "still", Stance::Charge => "charging", Stance::Windup => "gathering", Stance::Attack(_) => "attacking", Stance::Recover => "recovering", Stance::Stagger => "staggered" }, h.rig.speed());
+            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}, {} at {:.1} m/s", entity.index_u32(), h.rig.root, h.aware, distance, if h.way.is_empty() { " (no way)" } else { "" }, match h.stance { Stance::Stalk => "stalking", Stance::Freeze => "still", Stance::Charge => "charging", Stance::Windup => "gathering", Stance::Attack(_) => "attacking", Stance::Recover => "recovering", Stance::Stagger => "staggered", Stance::Rear => "rearing", Stance::Reach => "reaching", Stance::Haul(_) => "hauling" }, h.rig.speed());
         }
         // Seeing you, it looks at you; else where it is going.
         let look = if sees { target } else { root + toward * 6.0 + Vec3::Y * 1.3 };
@@ -1084,6 +1093,10 @@ pub(super) fn hunt(
         h.stun -= dt;
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
+        h.rig.rear = if matches!(h.stance, Stance::Rear | Stance::Reach) { 1.0 } else { 0.0 };
+        if !matches!(h.stance, Stance::Reach | Stance::Haul(_)) {
+            h.rig.grab = None;
+        }
         let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
         if args.opt("specimen") {
             // Straight ahead from its body (not its head, or each glance
@@ -1195,17 +1208,70 @@ pub(super) fn hunt(
                     intent.velocity = toward * if chasing { 18.0 } else { 14.0 };
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
-                    if speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
+                    // (`--opt pounce`: the hound's leap, kept; the user: it
+                    // sort of works for the harrow too.)
+                    let pounce = args.opt("pounce");
+                    if pounce && speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
                         // A quick gather, still running.
                         h.stance = Stance::Windup;
                         h.timer = 0.13;
-                    } else if distance < SNAP && straight {
+                    } else if pounce && distance < SNAP && straight {
                         // Up against you, too slow to pounce: a gather, jaws
                         // open, and a snap (it pushed at you, never biting).
                         h.stance = Stance::Windup;
                         h.timer = 0.25;
+                    } else if !pounce && distance < HAUL_FROM && straight {
+                        // Near: it stops dead and rears (up against you, only
+                        // a moment).
+                        h.stance = Stance::Rear;
+                        h.timer = if distance < SNAP { 0.15 } else { 0.35 };
                     } else if h.timer <= 0.0 {
                         h.timer = 4.0;
+                    }
+                }
+                Stance::Rear => {
+                    h.rig.velocity *= (-dt * 10.0).exp();
+                    intent.stretch = 0.4;
+                    if h.timer <= 0.0 {
+                        // Its forelimbs shoot out and spike into the ground
+                        // either side of you, a little past.
+                        let dir = (target - root).with_y(0.0).normalize_or(toward);
+                        let left = Vec3::new(-dir.z, 0.0, dir.x);
+                        let at = |s: f32| {
+                            let p = Vec3::new(target.x, root.y, target.z) + dir * 0.6 + left * s * 0.9;
+                            Vec3::new(p.x, ground.at(p), p.z)
+                        };
+                        h.rig.grab = Some([at(1.0), at(-1.0)]);
+                        commands.spawn((
+                            AudioPlayer::new(assets.pounce.clone()),
+                            PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
+                            Transform::from_translation(h.rig.head().0),
+                        ));
+                        h.stance = Stance::Reach;
+                        h.timer = 0.12;
+                    }
+                }
+                Stance::Reach => {
+                    h.rig.velocity *= (-dt * 10.0).exp();
+                    intent.stretch = 1.0;
+                    if h.timer <= 0.0 {
+                        h.stance = Stance::Haul((target - root).with_y(0.0).normalize_or(toward));
+                        h.timer = 0.4;
+                    }
+                }
+                // Hauled along its arms onto you, faster than it runs (each
+                // forelimb lost, slower; none, a lunge to bite); stopped by
+                // you (your body stops it), it bites.
+                Stance::Haul(dir) => {
+                    let arms = (0..h.rig.plan.legs.len()).filter(|&i| h.rig.is_lost(i) && h.rig.plan.legs[i].root == crate::rig::Root::Chest).count();
+                    let pace = HAUL * 0.6f32.powi(arms as i32);
+                    h.rig.velocity = dir * pace;
+                    intent.velocity = dir * pace;
+                    intent.stretch = 1.0;
+                    if h.timer <= 0.0 || h.struck {
+                        h.stance = Stance::Recover;
+                        h.timer = RECOVER;
+                        h.struck = false;
                     }
                 }
                 Stance::Windup => {
@@ -1252,6 +1318,7 @@ pub(super) fn hunt(
             }
         } else {
             match h.stance {
+                Stance::Rear | Stance::Reach | Stance::Haul(_) => {}
                 Stance::Stalk | Stance::Freeze | Stance::Charge => {
                     let (pace, stop) = match h.aware {
                         Aware::Chasing => (8.0, 2.5),
@@ -1300,6 +1367,9 @@ pub(super) fn hunt(
             Stance::Windup => if beast { 1.4 } else { 0.55 },
             Stance::Attack(_) => if beast { 1.9 } else { 0.8 },
             Stance::Stagger => if beast { 1.0 } else { 0.5 },
+            Stance::Rear => 1.2,
+            Stance::Reach => 1.6,
+            Stance::Haul(_) => 1.9,
             Stance::Charge => 0.3,
             Stance::Freeze => 0.15,
             _ => 0.06 + 0.04 * (time.elapsed_secs() * 1.3).sin(),
@@ -1307,7 +1377,7 @@ pub(super) fn hunt(
         let open = if args.opt("specimen") { args.num("jaw", 0.1) } else { open };
         h.jaw += (open - h.jaw) * (1.0 - (-dt * 10.0).exp());
         // An attack that reaches the player strikes once.
-        if matches!(h.stance, Stance::Attack(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
+        if matches!(h.stance, Stance::Attack(_) | Stance::Haul(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
             h.struck = true;
             player.1.health -= ATTACK;
             // It shoves you along its line, off your feet a little, harder
@@ -1466,8 +1536,8 @@ pub(super) fn voice(
         voice.next -= dt;
         // (volume, pitch, pause after a phrase), or silence.
         let style = match (h.stance, h.gesture) {
-            (_, Gesture::Tilt(..)) | (Stance::Freeze | Stance::Attack(_) | Stance::Stagger, _) => None,
-            (Stance::Charge | Stance::Windup, _) => Some((1.6, 1.08, 0.0..0.25)),
+            (_, Gesture::Tilt(..)) | (Stance::Freeze | Stance::Attack(_) | Stance::Haul(_) | Stance::Stagger, _) => None,
+            (Stance::Charge | Stance::Windup | Stance::Rear | Stance::Reach, _) => Some((1.6, 1.08, 0.0..0.25)),
             (Stance::Recover, _) => Some((1.0, 0.92, 0.3..1.0)),
             (_, Gesture::Creep(_)) => Some((0.55, 0.9, 2.0..4.5)),
             _ => Some((1.0, 1.0, 1.0..3.5)),
