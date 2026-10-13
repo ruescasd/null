@@ -416,8 +416,6 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
 #[derive(Component)]
 pub(super) struct Eye {
     hunter: Entity,
-    /// Its head's bone.
-    bone: usize,
     /// Where on the head: across and up (head radii), and along it (0..1).
     at: Vec3,
     material: Handle<StandardMaterial>,
@@ -619,7 +617,6 @@ fn spawn_hunter(
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
-    let rear_head = rig.rear_head();
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
@@ -637,7 +634,7 @@ fn spawn_hunter(
     let seed = seed;
     let pale = |commands: &mut Commands, bone: usize, along: f32, offset: Vec3, dir: Vec3, length: f32, width: f32| {
         commands.spawn((
-            Part { hunter, bone, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y)), velocity: Vec3::ZERO, stiffness: if bone == 4 || Some(bone) == rear_head { RIGID } else { STIFFNESS * 1.5 } },
+            Part { hunter, bone, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y)), velocity: Vec3::ZERO, stiffness: if bone == 4 { RIGID } else { STIFFNESS * 1.5 } },
             Mesh3d(assets.shard.clone()),
             MeshMaterial3d(assets.pale.clone()),
             Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
@@ -714,7 +711,7 @@ fn spawn_hunter(
             }
             continue;
         }
-        if i == 4 || Some(i) == rear_head {
+        if i == 4 {
             // The head: one skull, a hinged jaw beneath, a thin pale brow.
             let (skull, jaw) = if kind == Kind::Beast { &heads.beast[angler as usize] } else { &heads.biped };
             let (across, up, _) = HEAD_EYES[angler as usize];
@@ -850,7 +847,7 @@ fn spawn_hunter(
                 Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0)
             };
             // The neck thick at its base, tapering to the head.
-            let taper = if i == 3 || Some(i + 1) == rear_head { 1.25 - 0.6 * along } else { 1.0 };
+            let taper = if i == 3 { 1.25 - 0.6 * along } else { 1.0 };
             let size = bone.radius * (0.9 + 0.8 * (r(7) + 0.5)) * taper;
             let p = bone.a.lerp(bone.b, along) + bone.rotation() * offset;
             let (mesh, scale) = if blade { (assets.shard.clone(), Vec3::new(size * 3.0, size * 1.4, size * 3.0)) } else { (assets.swarmer.clone(), Vec3::splat(size * 1.6)) };
@@ -903,16 +900,13 @@ fn spawn_hunter(
         ..default()
     });
     let (across, up, along) = HEAD_EYES[angler as usize];
-    for head in std::iter::once(4).chain(rear_head) {
-        let eyes = if head == 4 { eyes.clone() } else { materials.add(materials.get(&eyes).cloned().unwrap_or_default()) };
-        for side in [-1.0f32, 1.0] {
-            commands.spawn((
-                Eye { hunter, bone: head, at: Vec3::new(side * across, up, along), material: eyes.clone() },
-                Mesh3d(assets.core.clone()),
-                MeshMaterial3d(eyes.clone()),
-                Transform::from_translation(feet).with_scale(Vec3::splat(0.13)),
-            ));
-        }
+    for side in [-1.0f32, 1.0] {
+        commands.spawn((
+            Eye { hunter, at: Vec3::new(side * across, up, along), material: eyes.clone() },
+            Mesh3d(assets.core.clone()),
+            MeshMaterial3d(eyes.clone()),
+            Transform::from_translation(feet).with_scale(Vec3::splat(0.13)),
+        ));
     }
 }
 
@@ -1701,9 +1695,9 @@ pub(super) fn flesh(
     }
     for (eye, mut transform) in &mut eyes {
         let Ok(h) = hunters.get(eye.hunter) else { continue };
-        // In the skull's sides, under the brow (its own head's).
-        let Some(&head) = h.rig.bones.get(eye.bone) else { continue };
-        let (tip, dir) = (head.b, (head.b - head.a).normalize_or(Vec3::Z));
+        let (tip, dir) = h.rig.head();
+        // In the skull's sides, under the brow.
+        let head = h.rig.bones[4];
         let rotation = head.rotation();
         transform.translation = head.a.lerp(head.b, eye.at.z) + rotation * Vec3::new(eye.at.x * head.radius, 0.0, -eye.at.y * head.radius);
         transform.rotation = rotation;

@@ -126,9 +126,6 @@ pub struct Plan {
     pub sway: f32,
     /// How it moves, and how fast it turns to face where it goes (rad/s).
     pub style: Style,
-    /// A head at each end (the sprawl's): whichever end is nearer where it
-    /// goes leads; it turns to line an end up, never about.
-    pub two_headed: bool,
     pub turn: f32,
 }
 
@@ -162,7 +159,6 @@ impl Plan {
             shoulder: 0.0,
             sway: 0.03,
             style: Style::Gallop,
-            two_headed: false,
             turn: 3.0,
         }
     }
@@ -242,7 +238,6 @@ impl Plan {
             shoulder: 0.1,
             sway: 0.0,
             style: Style::Hauler,
-            two_headed: false,
             turn: 3.0,
         }
     }
@@ -269,8 +264,6 @@ impl Plan {
             sway: 0.0,
             shoulder: 0.0,
             style: Style::Sprawl,
-            two_headed: true,
-            rump: 0.1,
             turn: 9.0,
             ..beast
         }
@@ -411,8 +404,6 @@ pub struct Rig {
     alive: f32,
     feet: Vec<Foot>,
     head_dir: Vec3,
-    /// Two-headed: where its other head (at its rump) looks.
-    rear_dir: Vec3,
     glance: Vec3,
     glance_in: f32,
     tail: Vec<Vec3>,
@@ -478,7 +469,6 @@ impl Rig {
             stretch: 0.0,
             alive: 1.0,
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
-            rear_dir: -Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
             time: 0.0,
@@ -645,9 +635,6 @@ impl Rig {
             self.velocity += along.clamp_length_max(rate * dt) + (change - along).clamp_length_max(rate * 1.5 * dt);
             self.velocity.y = 0.0;
             let face = if self.velocity.length() > 0.5 { self.velocity } else { intent.look - self.root };
-            // (Two-headed, its nearer end leads: going back, it does not turn
-            // about.)
-            let face = if self.plan.two_headed && face.dot(self.forward_of(self.heading)) < 0.0 { -face } else { face };
             if Vec2::new(face.x, face.z).length() > 0.01 {
                 let target = face.x.atan2(face.z);
                 let turn = (target - self.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -779,18 +766,9 @@ impl Rig {
         }
         let chest = self.anchor(Root::Chest);
         let want = ((intent.look - chest).normalize_or(self.forward_of(self.chest_yaw)) + self.glance * 0.35).normalize_or(Vec3::Z);
-        // (Two-headed, each head looks at what is on its own side, else
-        // straight out from its end, a little down.)
-        let fwd = self.forward_of(self.chest_yaw);
-        let ahead = (fwd - Vec3::Y * 0.2).normalize();
-        let want = if self.plan.two_headed && want.dot(fwd) < -0.1 { ahead } else { want };
-        let rump = self.anchor(Root::Hips) - self.forward_of(self.hips_yaw) * self.plan.rump;
-        let rear_want = (intent.look - rump).normalize_or(-fwd);
-        let rear_want = if rear_want.dot(-fwd) < -0.1 { (-fwd - Vec3::Y * 0.2).normalize() } else { rear_want };
         // In a leap the head is thrown at its prey.
         let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else { 7.0 };
         self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
-        self.rear_dir = self.rear_dir.lerp(rear_want, 1.0 - (-dt * rate).exp()).normalize_or(rear_want);
         self.tilt += (intent.tilt - self.tilt) * (1.0 - (-dt * 3.0).exp());
         // The head's height follows the body's slowly: steady while it bobs.
         // (Running, it follows the body, and pumps deeper still as the
@@ -905,18 +883,6 @@ impl Rig {
             let t = k as f32 / self.tail.len() as f32;
             bones.push(Bone { a: self.tail[k - 1], b: self.tail[k], radius: 0.09 * (1.0 - t * 0.7), side: right });
         }
-        // Two-headed: its other neck and head, from its rump, out the
-        // other way (its right the body's left).
-        if self.plan.two_headed {
-            let (neck_len, neck_fwd, neck_up) = self.plan.neck;
-            let base = Vec3::new(neck_fwd, neck_up, 0.0).normalize_or(Vec3::Y);
-            let back = -self.forward_of(self.hips_yaw);
-            let dir = (back * base.x + Vec3::Y * base.y).lerp(self.rear_dir, 0.4).normalize_or(back);
-            let dir = (dir - Vec3::Y * 0.5 * self.crouch).normalize_or(back);
-            let end = rump + dir * neck_len;
-            bones.push(Bone { a: rump, b: end, radius: self.plan.neck_radius, side: -right });
-            bones.push(Bone { a: end, b: end + self.rear_dir * self.plan.head.0, radius: self.plan.head.1, side: -right });
-        }
         self.bones = bones;
     }
 
@@ -938,11 +904,6 @@ impl Rig {
         // (Three torso segments, the neck, then the head.)
         let head = self.bones[4];
         (head.b, (head.b - head.a).normalize_or(Vec3::Z))
-    }
-
-    /// Two-headed: its other head's bone (the last).
-    pub fn rear_head(&self) -> Option<usize> {
-        self.plan.two_headed.then(|| self.bones.len() - 1)
     }
 
     /// The middle of the chest.
