@@ -143,6 +143,14 @@ impl Cloth {
         }
     }
 
+    /// All of it moved by `by` at once, as it is (a blink: no swing).
+    pub fn shift(&mut self, by: Vec3) {
+        for (p, q) in self.points.iter_mut().zip(self.previous.iter_mut()) {
+            *p += by;
+            *q += by;
+        }
+    }
+
     /// Each point pulled back towards where `to` puts it (`firm`: how fast,
     /// per second): a drape kept. (Hanging free it never quite settled: a
     /// flared hem buckling one way and another, as in a gust of wind.)

@@ -40,12 +40,10 @@ impl Plugin for ConsolePlugin {
     }
 }
 
-/// What `spawn` at the console asks for: creatures (their kind, and how
-/// many), and the bishop hung before you afresh.
+/// What `spawn` at the console asks for: creatures, their kind and how many.
 #[derive(Resource, Default)]
 pub struct Spawns {
     pub creatures: Vec<(String, u32)>,
-    pub bishop: bool,
 }
 
 /// The kinds `spawn` knows.
@@ -141,18 +139,10 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                 } else if line.trim() == "quit" || line.trim() == "exit" {
                     exit.write(AppExit::Success);
                 } else if line.trim().starts_with("spawn") {
-                    // `spawn KIND [N]`: N of them (1) a metre before you; the
-                    // bishop (one only), hung there afresh.
+                    // `spawn KIND [N]`: N of them (1) before you.
                     let words: Vec<&str> = line.split_whitespace().collect();
                     let count = words.get(2).and_then(|n| n.parse::<u32>().ok()).unwrap_or(1).clamp(1, 20);
                     match words.get(1) {
-                        Some(&"bishop") => {
-                            if !args.opt("bishop") {
-                                args.opts.push("bishop".into());
-                            }
-                            spawns.bishop = true;
-                            console.lines.push("a bishop before you".into());
-                        }
                         Some(kind) if KINDS.contains(kind) => {
                             spawns.creatures.push((kind.to_string(), count));
                             console.lines.push(format!("{count} {kind} before you"));
@@ -203,7 +193,7 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
 const SWITCHES: [(&str, &str); 7] = [
     ("mute", "no sound"),
     ("god", "nothing hurts you (for testing)"),
-    ("bishop", "the bishop lab: on, one hangs 6 m before you (off and on again: before you where you are now)"),
+    ("bishop", "the bishop lab: on, one hangs before you, moving in turn (off and on again: before you where you are now)"),
     ("fullbright", "an even light from everywhere, no shadows: to see the shapes"),
     ("nolampshadows", "no shadows from lamps"),
     ("nocontact", "no contact shadows (screen space)"),

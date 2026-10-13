@@ -232,6 +232,11 @@ pub(super) fn spawn(
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
     for (kind, count) in std::mem::take(&mut spawns.creatures) {
+        // (Bishops are the bishops' to make: see `bishop::arrive`.)
+        if kind == "bishop" {
+            spawns.creatures.push((kind, count));
+            continue;
+        }
         for n in 0..count {
             let aside = (n as f32 - (count - 1) as f32 * 0.5) * 1.6;
             let mut at = camera.translation + forward * AHEAD + across * aside;
@@ -1631,14 +1636,16 @@ pub(super) fn skeleton(args: Res<Args>, hunters: Query<&Hunter>, mut parts: Quer
 pub(super) fn watch(
     args: Res<Args>,
     hunters: Query<&Transform, (With<Hunter>, Without<FlyCam>)>,
+    bishops: Query<&super::bishop::Bishop>,
     mut camera: Single<(&Transform, &mut FlyCam)>,
 ) {
     if !args.opt("watch") {
         return;
     }
     let eye = camera.0.translation;
-    let Some(h) = hunters.iter().min_by(|a, b| a.translation.distance(eye).total_cmp(&b.translation.distance(eye))) else { return };
-    let to = h.translation - eye;
+    // (A hunter's chest, or a bishop's.)
+    let Some(at) = hunters.iter().map(|t| t.translation).chain(bishops.iter().filter_map(|b| b.chest())).min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye))) else { return };
+    let to = at - eye;
     camera.1.yaw = (-to.x).atan2(-to.z);
     camera.1.pitch = (to.y / Vec2::new(to.x, to.z).length().max(0.1)).atan().clamp(-0.6, 0.6);
 }

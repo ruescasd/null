@@ -77,7 +77,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk),
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, bishop::lab, hunter::spawn))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::ghosts).chain().before(hunter::spawn), hunter::spawn))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -401,6 +401,7 @@ fn fire(
     camera: Single<(&Transform, &FlyCam, &mut Player)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
+    mut bishops: Query<&mut bishop::Bishop>,
     ichor: Res<ichor::Ichor>,
     fx: Res<weapon::Fx>,
     viewmodel: Single<Entity, With<weapon::Viewmodel>>,
@@ -418,7 +419,7 @@ fn fire(
     light.intensity *= (-dt * 40.0).exp();
     let (transform, fly, mut player) = camera.into_inner();
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
-    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && !hunters.is_empty());
+    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|b| b.health > 0.0)));
     if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 {
         return;
     }
@@ -472,7 +473,14 @@ fn fire(
         }
         let mut end = best.map_or(wall, |(d, _)| d);
         let mut struck = None;
-        if let Some((d, entity, bone)) = body
+        // Or a bishop's, nearer than either.
+        let limit = body.map_or(end, |(b, ..)| b);
+        let robed = bishops.iter_mut().filter_map(|b| b.ray(eye, dir, limit).map(|d| (d, b))).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, mut b)) = robed {
+            b.hurt(dir, DAMAGE);
+            end = d;
+            struck = Some(eye + dir * d);
+        } else if let Some((d, entity, bone)) = body
             && let Ok((_, mut h)) = hunters.get_mut(entity)
         {
             h.hurt(bone, dir, DAMAGE);
