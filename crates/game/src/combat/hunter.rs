@@ -43,6 +43,8 @@ const HEAR: f32 = 45.0;
 const GRACE: f32 = 1.0;
 /// How long it casts about where it lost you before it gives up (s).
 const SEARCH: f32 = 10.0;
+/// How close a hound is to you to snap rather than pounce (m).
+const SNAP: f32 = 2.5;
 const ATTACK: f32 = 30.0;
 /// What it takes to break (two or three good shots at close range).
 const HUNTER_HEALTH: f32 = 45.0;
@@ -1043,6 +1045,11 @@ pub(super) fn hunt(
                         // A quick gather, still running.
                         h.stance = Stance::Windup;
                         h.timer = 0.13;
+                    } else if distance < SNAP && straight {
+                        // Up against you, too slow to pounce: a gather, jaws
+                        // open, and a snap (it pushed at you, never biting).
+                        h.stance = Stance::Windup;
+                        h.timer = 0.25;
                     } else if h.timer <= 0.0 {
                         h.timer = 4.0;
                     }
@@ -1056,7 +1063,12 @@ pub(super) fn hunt(
                         // of a second in the air.
                         let up = 4.5;
                         let flight = 2.0 * up / 25.0;
-                        h.rig.leap(toward, (distance / flight).clamp(12.0, 28.0), up);
+                        // (Close, a short low lunge into you.)
+                        if distance < SNAP {
+                            h.rig.leap(toward, 6.0, 2.0);
+                        } else {
+                            h.rig.leap(toward, (distance / flight).clamp(12.0, 28.0), up);
+                        }
                         commands.spawn((
                             AudioPlayer::new(assets.pounce.clone()),
                             PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
@@ -1141,6 +1153,9 @@ pub(super) fn hunt(
         if matches!(h.stance, Stance::Attack(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
             h.struck = true;
             player.1.health -= ATTACK;
+            if args.opt("huntlog") {
+                info!("huntlog: {} bit you ({:.0} left)", entity.index_u32(), player.1.health);
+            }
             director.hurt = 1.0;
             commands.spawn((AudioPlayer::new(assets.bite.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             if args.opt("hurtsound") {
@@ -1167,6 +1182,21 @@ pub(super) fn hunt(
         };
         let before = h.rig.root;
         h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
+        // Your body stops it, as a wall does (what is built was all it
+        // met: a pounce went through you): it comes no nearer than its reach,
+        // a hound's jaws in your face, not through it, and loses its speed at
+        // you; a pounce slams into you and drops.
+        let feet = target - Vec3::Y * crate::player::EYE;
+        let reach = crate::player::HALF_WIDTH + if beast { 0.9 } else { 0.4 };
+        let off = (h.rig.root - feet).with_y(0.0);
+        if off.length() < reach && h.rig.root.y < feet.y + 1.8 && h.rig.root.y + 1.5 > feet.y {
+            let out = off.normalize_or(-toward);
+            h.rig.root = sweep(h.rig.root, out * (reach - off.length()));
+            let into = h.rig.velocity.dot(-out);
+            if into > 0.0 {
+                h.rig.velocity += out * into;
+            }
+        }
         if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {
             info!("huntlog: {} went through something built, from {:.1} to {:.1}", entity.index_u32(), before, h.rig.root);
         }
