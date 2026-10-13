@@ -706,13 +706,18 @@ impl Rig {
             let target = match self.airborne {
                 // In a leap: forelimbs thrown forward and out wide to grab,
                 // dropping to land; hind legs kicked back, then swung under.
+                // Not as one, a pair mirrored (held all the way down a
+                // flight, the user): the side it leads with first, the other
+                // a beat behind and reaching less.
                 Some(_) => {
-                    let s = (self.air.0 / self.air.1.max(0.05)).clamp(0.0, 1.0);
+                    let leads = i % 2 == (self.seed % 2) as usize;
+                    let (lag, short) = if leads { (0.0, 1.0) } else { (0.2, 0.8) };
+                    let s = (self.air.0 / self.air.1.max(0.05) - lag).clamp(0.0, 1.0);
                     let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum();
                     if leg.root == Root::Chest {
-                        hip + fwd * reach * 0.85 + out * reach * 0.35 - Vec3::Y * reach * (0.15 + 0.45 * s)
+                        hip + fwd * reach * 0.85 * short + out * reach * 0.35 - Vec3::Y * reach * (0.15 + 0.45 * s)
                     } else {
-                        hip - fwd * reach * (0.85 * (1.0 - s) - 0.2 * s) - Vec3::Y * reach * (0.5 + 0.25 * s)
+                        hip - fwd * reach * (0.85 * (1.0 - s) * short - 0.2 * s) - Vec3::Y * reach * (0.5 + 0.25 * s)
                     }
                 }
                 None if self.paw.0 == i && self.paw.1 > 0.0 && !self.feet[i].swinging => {
