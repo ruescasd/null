@@ -216,6 +216,8 @@ pub(super) struct Heads {
     /// The beasts' heads: the hound's, the angler's.
     beast: Vec<(Handle<Mesh>, Handle<Mesh>)>,
     biped: (Handle<Mesh>, Handle<Mesh>),
+    /// A beast's leg segments: the upper, and the lower tapering to a prong.
+    legs: (Handle<Mesh>, Handle<Mesh>),
 }
 
 /// Where a beast head's eyes and brow sit: out from the bone and up, in
@@ -290,6 +292,12 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     commands.insert_resource(Heads {
         beast: vec![(meshes.add(beast), beast_jaw), (meshes.add(angler), meshes.add(angler_jaw))],
         biped: (meshes.add(biped), meshes.add(biped_jaw)),
+        // Hard and faceted, swelling just below the joint and narrowing
+        // down it; the lower down to a point that plants in the ground.
+        legs: (
+            meshes.add(rings_mesh(&[(0.0, 0.8, 0.8, 0.0), (0.12, 1.1, 1.25, 0.15), (0.55, 0.85, 0.95, 0.05), (1.0, 0.55, 0.6, 0.0)])),
+            meshes.add(rings_mesh(&[(0.0, 0.7, 0.7, 0.0), (0.15, 0.9, 1.05, 0.1), (0.65, 0.55, 0.6, 0.0), (0.92, 0.25, 0.25, 0.0), (1.0, 0.02, 0.02, 0.0)])),
+        ),
     });
 }
 
@@ -485,13 +493,8 @@ fn spawn_hunter(
     } else {
         Plan::biped()
     };
-    // (`--opt hauler`, `--opt sprawl`: a four-legged hunter that moves as
-    // no mammal does; the gallop read as a dog, the user.)
-    let plan = match kind {
-        Kind::Beast if args.opt("hauler") => Plan::hauler(),
-        Kind::Beast if args.opt("sprawl") => Plan::sprawl(),
-        _ => plan,
-    };
+    // (`--opt sprawl`: the beast moving another way.)
+    let plan = if kind == Kind::Beast && args.opt("sprawl") { Plan::sprawl() } else { plan };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
@@ -526,6 +529,35 @@ fn spawn_hunter(
             continue;
         }
         let length = bone.a.distance(bone.b);
+        if limbs.contains(&i) && kind == Kind::Beast {
+            // A beast's leg: hard, a spider's, one faceted piece a segment,
+            // the lower down to a prong that plants; a spur out past each
+            // knee, a pale band above the prong.
+            let lower = (i - limbs.start) % 2 == 1;
+            let rr = bone.radius;
+            let mesh = if lower { &heads.legs.1 } else { &heads.legs.0 };
+            commands.spawn((
+                Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(assets.dark.clone()),
+                Transform::from_translation(bone.a).with_scale(Vec3::new(rr, length, rr)),
+            ));
+            if lower {
+                let spur = 0.2 + length * 0.18;
+                commands.spawn((
+                    Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Y), velocity: Vec3::ZERO, stiffness: RIGID },
+                    Mesh3d(assets.shard.clone()),
+                    MeshMaterial3d(assets.dark.clone()),
+                    Transform::from_translation(bone.a).with_scale(Vec3::new(rr * 0.8 / 0.025, spur / 0.75, rr * 0.8 / 0.025)),
+                ));
+                for k in 0..3 {
+                    let a = k as f32 / 3.0 * std::f32::consts::TAU;
+                    let (c, sn) = (a.cos(), a.sin());
+                    pale(commands, i, 0.8, Vec3::new(c, 0.0, sn) * rr * 0.6, Vec3::new(-sn, 0.0, c), rr * 1.3, 0.015);
+                }
+            }
+            continue;
+        }
         if limbs.contains(&i) {
             // A limb: long blades laid along it, overlapping, so it reads
             // as one solid faceted limb; and a heavy paw at a foot.
@@ -923,12 +955,23 @@ pub(super) fn hunt(
             if way.last().is_some_and(|&end| end.distance(goal) > 4.0) {
                 age = 0.0;
             }
-            if let Some((ahead, left)) = nav.steer(root, goal, &mut way, &mut age, dt, &|a, b| ground.clear(a, b)) {
+            // (Heading for a spot its body gets to, not only one it sees: a
+            // line of sight past a corner aimed it into the corner, and it
+            // stuck there, pressed head on into the wall, the user.)
+            let body = if beast { 0.4 } else { 0.3 };
+            if let Some((ahead, left)) = nav.steer(root, goal, &mut way, &mut age, dt, &|a, b| ground.passes(a + Vec3::Y * 0.6, b + Vec3::Y * 0.6, body)) {
                 toward = Vec3::new(ahead.x - root.x, 0.0, ahead.z - root.z).normalize_or(toward);
                 straight = straight && left < flat.length() * 1.2 + 1.5;
                 distance = left;
             } else {
                 lost = true;
+                // Off the floors' spots (knocked into a corner, say): back
+                // onto the nearest first, not pressing at you through what
+                // is in the way.
+                if let Some(j) = nav.nearest(root, 8) {
+                    let q = nav.nodes[j as usize];
+                    toward = Vec3::new(q.x - root.x, 0.0, q.z - root.z).normalize_or(toward);
+                }
             }
             straight = straight && ground.clear(root + Vec3::Y * 1.0, target);
             h.way = way;
@@ -962,7 +1005,7 @@ pub(super) fn hunt(
             info!("huntlog: {} {:?} -> {:?} (you {:.1} m off, {}; {:.1} m on to where it was going{})", entity.index_u32(), was, h.aware, root.distance(target), if sees { "in sight" } else if alarmed { "heard" } else { "unseen" }, distance, if lost { ", no way there" } else { "" });
         }
         if log {
-            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}", entity.index_u32(), h.rig.root, h.aware, distance, if h.way.is_empty() { " (no way)" } else { "" });
+            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}, {} at {:.1} m/s", entity.index_u32(), h.rig.root, h.aware, distance, if h.way.is_empty() { " (no way)" } else { "" }, match h.stance { Stance::Stalk => "stalking", Stance::Freeze => "still", Stance::Charge => "charging", Stance::Windup => "gathering", Stance::Attack(_) => "attacking", Stance::Recover => "recovering", Stance::Stagger => "staggered" }, h.rig.speed());
         }
         // Seeing you, it looks at you; else where it is going.
         let look = if sees { target } else { root + toward * 6.0 + Vec3::Y * 1.3 };

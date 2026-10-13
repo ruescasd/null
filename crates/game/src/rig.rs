@@ -199,66 +199,28 @@ impl Plan {
         self
     }
 
-    /// A beast the size of a horse, built like a big cat: low long body,
-    /// heavy shoulders, a long tail.
+    /// A four-legged hunter that moves as no mammal does (a mammal's gallop,
+    /// however tuned, read as a dog running to its master, the user): long
+    /// forelimbs, elbows above the back, reaching far ahead and hauling the
+    /// body after them in surges; short hind legs, knees high, hopping up
+    /// behind; the chest high, the rump low, the head hung low between the
+    /// shoulders; no tail. Thin legs: hard, a spider's.
     pub fn beast() -> Self {
-        // (Long legs, bent under a body carried lower than they could
-        // hold it: room to reach fore and aft, a predator's, not a table's.)
-        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 1.0, lower: 1.0, knee: -1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.2, 0.13) };
-        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 1.05, lower: 1.05, knee: -1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.23, 0.12) };
+        let fore = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.15, upper: 1.3, lower: 1.4, knee: -0.6, knee_up: 1.0, knee_out: 0.6, spread: 0.35, radius: (0.14, 0.09) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.75, lower: 0.8, knee: 0.3, knee_up: 1.0, knee_out: 0.5, spread: 0.3, radius: (0.16, 0.09) };
         Plan {
-            hips: (-0.85, 1.75),
-            chest: (0.85, 1.8),
+            hips: (-0.8, 0.8),
+            chest: (0.8, 1.2),
             torso_radius: 0.33,
             torso_profile: [0.82, 0.72, 1.12],
             rump: 0.35,
             neck_radius: 0.32,
-            neck: (0.55, 0.25, 0.22),
+            neck: (0.55, 0.35, -0.05),
             head: (0.68, 0.25),
             // Front left, front right, hind left, hind right.
-            legs: vec![front(-0.3), front(0.3), hind(-0.28), hind(0.28)],
-            arms: vec![],
-            tail: (8, 0.22),
-            gaits: vec![
-                // A walk: one foot after another down each side.
-                Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 1.6 },
-                // A trot: diagonal pairs, the hind foot of each a little
-                // after the fore (not as one: a toy's).
-                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.56, 0.06], swing: 0.45, stride: 2.8 },
-                // A gallop: the front pair, then the hind pair, round the
-                // body (fore left, fore right, hind right, hind left), each
-                // foot plainly after the other; each foot down for under a
-                // third of the cycle. (Strides of 7.5 m, a big animal's,
-                // were too slow a beat, the user: the reach is in the legs,
-                // not the stride.)
-                Gait { speed: 11.0, offsets: vec![0.0, 0.18, 0.64, 0.5], swing: 0.7, stride: 5.5 },
-            ],
-            lift: 0.28,
-            accel: 20.0,
-            decel: 24.0,
-            bob: 0.05,
-            lean: 0.06,
-            rock: 0.14,
-            shoulder: 0.06,
-            sway: 0.08,
-            style: Style::Gallop,
-            turn: 3.0,
-        }
-    }
-
-    /// The hound's body moving another way: long forelimbs, elbows above
-    /// the back, reaching far ahead and hauling the body after them in
-    /// surges; short hind legs, knees high, hopping up behind; the chest
-    /// high, the rump low, the head hung low between the shoulders.
-    pub fn hauler() -> Self {
-        let fore = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.15, upper: 1.3, lower: 1.4, knee: -0.6, knee_up: 1.0, knee_out: 0.6, spread: 0.35, radius: (0.2, 0.12) };
-        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.75, lower: 0.8, knee: 0.3, knee_up: 1.0, knee_out: 0.5, spread: 0.3, radius: (0.22, 0.12) };
-        let beast = Plan::beast();
-        Plan {
-            hips: (-0.8, 0.8),
-            chest: (0.8, 1.2),
-            neck: (0.55, 0.35, -0.05),
             legs: vec![fore(-0.42), fore(0.42), hind(-0.3), hind(0.3)],
+            arms: vec![],
+            tail: (0, 0.0),
             gaits: vec![
                 // Slow, the arms one after the other.
                 Gait { speed: 0.0, offsets: vec![0.0, 0.5, 0.25, 0.75], swing: 0.3, stride: 2.0 },
@@ -268,18 +230,21 @@ impl Plan {
                 Gait { speed: 6.0, offsets: vec![0.0, 0.06, 0.45, 0.5], swing: 0.4, stride: 5.5 },
             ],
             lift: 0.45,
+            accel: 20.0,
+            decel: 24.0,
             bob: 0.0,
+            lean: 0.06,
             rock: 0.0,
-            sway: 0.0,
             shoulder: 0.1,
+            sway: 0.0,
             style: Style::Hauler,
-            ..beast
+            turn: 3.0,
         }
     }
 
-    /// The hound's body moving another way: legs out from its sides, knees
-    /// high over a body slung low between them, gliding level on quick
-    /// diagonal pairs of steps, turning short.
+    /// The beast moving another way (`--opt sprawl`): legs out from its
+    /// sides, knees high over a body slung low between them, gliding level
+    /// on quick diagonal pairs of steps, turning short.
     pub fn sprawl() -> Self {
         let leg = |root: Root, side: f32, forward: f32| LegPlan { root, side, forward, upper: 1.1, lower: 1.3, knee: 0.0, knee_up: 1.0, knee_out: 0.4, spread: 1.2, radius: (0.17, 0.1) };
         let beast = Plan::beast();

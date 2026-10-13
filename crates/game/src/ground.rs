@@ -49,6 +49,15 @@ impl Ground<'_, '_> {
         Dir3::new(to).map_or(true, |d| self.spatial.cast_ray(a, d, to.length(), true, &SpatialQueryFilter::default()).is_none())
     }
 
+    /// Whether a ball of `radius` gets from `a` to `b` with nothing built in
+    /// its way: a body's way past a corner, not only a line of sight.
+    pub fn passes(&self, a: Vec3, b: Vec3, radius: f32) -> bool {
+        let to = b - a;
+        let Ok(dir) = Dir3::new(to) else { return true };
+        let config = ShapeCastConfig { max_distance: to.length(), ignore_origin_penetration: true, ..default() };
+        self.spatial.cast_shape(&Collider::sphere(radius), a, Quat::IDENTITY, dir, &config, &SpatialQueryFilter::default()).is_none()
+    }
+
     /// Where a body of `shape`, its middle at `from`, gets to moved by
     /// `delta`: in a built place as far as what is built lets it, sliding
     /// along what stops it (as you do); elsewhere all the way.
