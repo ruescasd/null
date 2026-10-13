@@ -52,6 +52,9 @@ const FLANK_ANGLE: f32 = 2.1;
 const FLANK_OFF: f32 = 9.0;
 const FLANK_SPEED: f32 = 9.9;
 const DART_SPEED: f32 = 17.6;
+/// How long it hangs back with no way round you before it comes at you
+/// anyway, seen or not (s).
+const HUNG: f32 = 2.5;
 /// How near it hauls itself onto you from (m), and how fast (m/s).
 const HAUL_FROM: f32 = 6.0;
 const HAUL: f32 = 24.0;
@@ -156,6 +159,9 @@ pub(crate) struct Hunter {
     flank: f32,
     flank_spot: Vec3,
     flank_age: f32,
+    /// How long it has hung back with no way round to your back (a flight,
+    /// a narrow way): past a while it comes at you anyway.
+    hung: f32,
     /// Hit since it last thought.
     alarmed: bool,
     /// This frame's shards in it: how many, and their directions summed.
@@ -614,7 +620,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0 },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -1106,7 +1112,11 @@ pub(super) fn hunt(
                     };
                     let tries = [h.flank, -h.flank].into_iter().flat_map(|side| [(FLANK_ANGLE, FLANK_OFF), (2.6, FLANK_OFF), (1.6, FLANK_OFF), (FLANK_ANGLE, 6.0), (2.6, 6.0)].map(move |(a, d)| (side, a, d)));
                     let found = tries.filter_map(|(side, a, d)| on_floor(target + Quat::from_rotation_y(side * a) * ahead * d)).find(|&q| fits(q));
-                    let back = on_floor(target + (root - target).with_y(0.0).normalize_or(-ahead) * 8.0).unwrap_or(root);
+                    // (Hanging back, it creeps in, 8 m off to 4: it stood
+                    // still on a flight, you watching it, waiting forever,
+                    // the user.)
+                    h.hung = if found.is_some() { 0.0 } else { h.hung + 0.25 };
+                    let back = on_floor(target + (root - target).with_y(0.0).normalize_or(-ahead) * (8.0 - h.hung * 1.6).max(4.0)).unwrap_or(root);
                     h.flank_spot = found.unwrap_or(back);
                 }
                 h.flank_spot
@@ -1243,7 +1253,7 @@ pub(super) fn hunt(
                 Stance::Charge => {
                     intent.velocity = toward * DART_SPEED;
                     intent.crouch = 0.6;
-                    if seen_by_you > 25f32.to_radians().cos() && near > 5.0 {
+                    if seen_by_you > 25f32.to_radians().cos() && near > 5.0 && h.hung < HUNG {
                         h.stance = Stance::Stalk;
                         h.flank = -h.flank;
                         h.timer = 1.0;
@@ -1277,6 +1287,7 @@ pub(super) fn hunt(
                         h.timer = RECOVER * 0.6;
                         h.struck = false;
                         h.flank = -h.flank;
+                        h.hung = 0.0;
                     }
                 }
                 Stance::Recover => {
@@ -1298,7 +1309,9 @@ pub(super) fn hunt(
                     if h.stance == Stance::Freeze && h.timer <= 0.0 {
                         h.stance = Stance::Stalk;
                     }
-                    if chasing && h.stance == Stance::Stalk && h.timer <= 0.0 && seen_by_you < 55f32.to_radians().cos() && near < 14.0 && ground.clear(root + Vec3::Y, target) {
+                    // (Out of your sight; or, no way round you, having hung
+                    // back a while, even in it.)
+                    if chasing && h.stance == Stance::Stalk && h.timer <= 0.0 && (seen_by_you < 55f32.to_radians().cos() || h.hung >= HUNG) && near < 14.0 && ground.clear(root + Vec3::Y, target) {
                         h.stance = Stance::Charge;
                         h.timer = 2.5;
                         if args.opt("huntlog") {
