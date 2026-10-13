@@ -47,11 +47,11 @@ const SEARCH: f32 = 10.0;
 const SNAP: f32 = 2.5;
 /// The sprawl's flanking: how far round from where you look (radians, 120
 /// degrees: at your back, a little to one side), how far off (m), how fast
-/// it circles and darts (m/s).
+/// it circles and darts (m/s; 10% up, the user: a bit slow).
 const FLANK_ANGLE: f32 = 2.1;
 const FLANK_OFF: f32 = 9.0;
-const FLANK_SPEED: f32 = 9.0;
-const DART_SPEED: f32 = 16.0;
+const FLANK_SPEED: f32 = 9.9;
+const DART_SPEED: f32 = 17.6;
 /// How near it hauls itself onto you from (m), and how fast (m/s).
 const HAUL_FROM: f32 = 6.0;
 const HAUL: f32 = 24.0;
@@ -1083,7 +1083,11 @@ pub(super) fn hunt(
         let goal = match h.aware {
             // A sprawl hunting you, circling: to a spot at your back, to one
             // side or the other, 9 m off (sweeping round as you turn).
-            Aware::Chasing if sprawl && matches!(h.stance, Stance::Stalk | Stance::Freeze | Stance::Recover) => {
+            // (Only near you, you in its sight: running from it, the spot at
+            // your back was where it stood, and it held there, at the head of
+            // a flight above all, you out of its sight below, the user. Else
+            // it follows you along the floors.)
+            Aware::Chasing if sprawl && sees && Vec2::new(target.x - root.x, target.z - root.z).length() < FLANK_OFF + 3.0 && matches!(h.stance, Stance::Stalk | Stance::Freeze | Stance::Recover) => {
                 h.flank_age -= dt;
                 if h.flank_age <= 0.0 {
                     h.flank_age = 0.25;
@@ -1261,7 +1265,7 @@ pub(super) fn hunt(
                     if h.timer <= 0.0 {
                         // (Carrying the dart's speed: at 7 m/s a runner left it
                         // behind, never bitten.)
-                        h.rig.leap(toward, 13.0, 1.5);
+                        h.rig.leap(toward, 14.3, 1.5);
                         h.stance = Stance::Attack(toward);
                         h.timer = 1.0;
                     }
