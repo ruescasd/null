@@ -935,6 +935,7 @@ fn debris(mut commands: Commands, time: Res<Time>, ground: crate::ground::Ground
 /// The swarm is heard from the middle of the nearest ones, louder the more
 /// and the closer they are.
 fn swarm_sound(
+    global: Res<bevy::audio::GlobalVolume>,
     player: Single<&Transform, (With<Player>, Without<SwarmVoice>)>,
     swarm: Query<&Transform, (With<Swarmer>, Without<SwarmVoice>, Without<Player>)>,
     mut voice: Query<(&mut Transform, &mut SpatialAudioSink), With<SwarmVoice>>,
@@ -950,7 +951,9 @@ fn swarm_sound(
     if weight > 0.0 {
         transform.translation = sum / weight;
     }
-    sink.set_volume(Volume::Linear((weight * 0.5).min(1.2)));
+    // (Times the volume of everything: set outright every frame, it ignored
+    // it, heard at full in a muted test and with `volume 0.1`, the user.)
+    sink.set_volume(Volume::Linear((weight * 0.5).min(1.2) * global.volume.to_linear()));
 }
 
 fn hud(
