@@ -574,7 +574,8 @@ fn star_cubemap(images: &mut Assets<Image>) -> Handle<Image> {
 
 fn hud(
     keys: Res<ButtonInput<KeyCode>>,
-    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    real: Res<Time<Real>>,
+    mut second: Local<(f32, u32, f32)>,
     sky: Res<Sky>,
     camera: Single<(&Transform, &FlyCam)>,
     mut text: Single<(&mut Text, &mut Visibility), With<Hud>>,
@@ -583,17 +584,25 @@ fn hud(
     if keys.just_pressed(KeyCode::F1) {
         visibility.toggle_visible_hidden();
     }
-    let fps = diagnostics
-        .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
-        .and_then(|d| d.smoothed())
-        .unwrap_or(0.0);
+    // Frames a second, over the last whole second, and the time a frame
+    // takes (ms: what adds up; a frame rate falls faster the higher it is:
+    // 240 to 220 is 0.4 ms, as 100 to 96 is). (Smoothed frame by frame it
+    // never stood still long enough to read, the user.)
+    second.0 += real.delta_secs();
+    second.1 += 1;
+    if second.0 >= 1.0 {
+        second.2 = second.1 as f32 / second.0;
+        *second = (0.0, 0, second.2);
+    }
+    let fps = second.2;
+    let ms = if fps > 0.0 { 1000.0 / fps } else { 0.0 };
     let (t, fly) = *camera;
     let elevations: Vec<String> = SUNS
         .iter()
         .map(|s| format!("{:.0}", s.direction(sky.time).y.asin().to_degrees()))
         .collect();
     text.0 = format!(
-        "{fps:.0} fps\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}{}\n\n\
+        "{fps:.0} fps  {ms:.2} ms\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}{}\n\n\
          click: capture mouse  esc: release  f1: this help  f12: screenshot\n\
          wasd: move  space or mouse 2 (hold): jump / bunny hop  mouse 1: shard shotgun\n\
          e or mouse 4/5 (hold): tether - roots where you aim and pulls you in; let go to keep the momentum\n\
