@@ -68,8 +68,13 @@ pub(super) struct Bishop {
     last_top: Vec3,
 }
 
-/// A stiff part (the hood, the mantle, horns, hands) and what is in the
-/// hood: carried with its shoulders, where it is from them and turned how.
+/// Every part of a bishop (`bishop off` at the console takes them all away;
+/// `bishop on` hangs one before you again: placed by hand).
+#[derive(Component)]
+pub(super) struct OfBishop;
+
+/// A stiff part (the horns) and the darkness in it: carried with its
+/// shoulders, where it is from them and turned how.
 #[derive(Component)]
 pub(super) struct Stiff {
     offset: Vec3,
@@ -219,22 +224,44 @@ pub(super) fn lab(
     args: Res<Args>,
     assets: Res<Assets3>,
     ground: crate::ground::Ground,
-    camera: Single<&Transform, (With<FlyCam>, Without<Stiff>)>,
+    camera: Single<(&Transform, &Player, &FlyCam), Without<Stiff>>,
+    nav: Option<Res<crate::chasm::nav::Nav>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut bishops: Query<&mut Bishop>,
     mut stiff: Query<(&Stiff, &mut Transform), Without<FlyCam>>,
     mut started: Local<bool>,
+    parts: Query<Entity, With<OfBishop>>,
 ) {
+    // (Switched off at the console: gone, to be hung afresh before you when
+    // switched on again.)
     if !args.opt("bishop") {
+        if *started {
+            for e in &parts {
+                commands.entity(e).despawn();
+            }
+            *started = false;
+        }
         return;
     }
     let dt = time.delta_secs().min(1.0 / 30.0);
-    if !*started {
+    let (camera, player, fly) = *camera;
+    // (Once you are where you start: in a region of the plan you are put on
+    // its path a moment after it begins; flying, as in a capture, a second
+    // in.)
+    if !*started && (player.ready || (fly.noclip && time.elapsed_secs() > 1.0)) {
         *started = true;
         let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
         let home = camera.translation + forward * 6.0;
-        let home = Vec3::new(home.x, ground.at(home), home.z);
+        let mut home = Vec3::new(home.x, ground.at(home), home.z);
+        // In a built place, on the floor nearest there (not in the rock, nor
+        // over the void).
+        if let Some(nav) = nav.as_deref()
+            && let Some(j) = nav.nearest(camera.translation + forward * 6.0, 16)
+        {
+            home = nav.nodes[j as usize];
+        }
+        info!("a bishop hangs at {:.1}", home);
         let to = camera.translation - home;
         let heading = to.x.atan2(to.z);
         let place = Quat::from_rotation_y(heading);
@@ -264,7 +291,7 @@ pub(super) fn lab(
                 sleeve_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, shades);
             }
             let handle = meshes.add(sleeve_mesh);
-            commands.spawn((Mesh3d(handle.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
+            commands.spawn((OfBishop, Mesh3d(handle.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
             sleeves.push((sleeve, handle));
         }
         // The hood and mantle (see `CAPE`).
@@ -276,8 +303,9 @@ pub(super) fn lab(
             cape_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, shades);
         }
         let cape_mesh = meshes.add(cape_mesh);
-        commands.spawn((Mesh3d(cape_mesh.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
+        commands.spawn((OfBishop, Mesh3d(cape_mesh.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
         commands.spawn((
+            OfBishop,
             Bishop { cloth, mesh: mesh.clone(), sleeves, cape, cape_mesh, drape: None, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0, pace: 0.0, last_top: top },
             Mesh3d(mesh),
             MeshMaterial3d(cloth_material.clone()),
@@ -285,7 +313,7 @@ pub(super) fn lab(
             bevy::camera::visibility::NoFrustumCulling,
         ));
         let mut stiff_part = |mesh: Handle<Mesh>, material: Handle<StandardMaterial>, offset: Vec3, turn: Quat, scale: Vec3| {
-            commands.spawn((Stiff { offset, turn }, Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(scale)));
+            commands.spawn((OfBishop, Stiff { offset, turn }, Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(scale)));
         };
         // In the hood, its head: darkness (unlit: no light gets in), no eyes
         // (a void for a face, as the Dark Bishop's); the hood falls over it.

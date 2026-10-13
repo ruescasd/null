@@ -126,6 +126,11 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               head); --opt sprawl: a beast moving another way (legs out from its sides,
                                               knees high over a low body, gliding level)
     --opt bones                               a hunter's pieces hidden, its bones drawn as lines (to see its limbs move)
+    --opt bishop                              the bishop lab (with --opt peace): a robed thing of cloth hangs 6 m before you and
+                                              moves in turn, 8 s each (--set bishop_mode=N holds one: 0 still, 1 drifting, 2
+                                              jerking aside, 3 turning); bishop_yaw=D faces it D degrees off you; --opt bishopgrey
+                                              all of it flat grey (its outline); in a region, on the floor nearest; `bishop off`,
+                                              `bishop on` at the console hangs it before you afresh
     --opt specimen                            one hunter standing still in front of you, to look at: --set
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)

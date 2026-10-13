@@ -168,9 +168,10 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
 }
 
 /// The switches that take effect as the game runs, and what each does.
-const SWITCHES: [(&str, &str); 6] = [
+const SWITCHES: [(&str, &str); 7] = [
     ("mute", "no sound"),
     ("god", "nothing hurts you (for testing)"),
+    ("bishop", "the bishop lab: on, one hangs 6 m before you (off and on again: before you where you are now)"),
     ("fullbright", "an even light from everywhere, no shadows: to see the shapes"),
     ("nolampshadows", "no shadows from lamps"),
     ("nocontact", "no contact shadows (screen space)"),
