@@ -518,6 +518,12 @@ pub(super) fn float(
                     None => {}
                 }
             }
+            // (Limp: nothing holding it, it falls in a heap, not standing.)
+            b.cloth.limp = true;
+            b.cape.limp = true;
+            for (sleeve, _) in &mut b.sleeves {
+                sleeve.limp = true;
+            }
             director.kills += 1;
             info!("a bishop is broken");
         }

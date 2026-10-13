@@ -29,6 +29,10 @@ pub struct Cloth {
     /// The last step's length (s): a point's speed is how far it went in
     /// it, scaled to this one's.
     last_dt: f32,
+    /// Limp: its lengths kept only against stretching, never squashing (as
+    /// cloth is: it cannot bear its own weight). Kept both ways it holds its
+    /// shape; let go so, an empty robe stood up as a paper tube would.
+    pub limp: bool,
 }
 
 impl Cloth {
@@ -77,7 +81,7 @@ impl Cloth {
                 triangles.extend([a, d, b, b, d, e]);
             }
         }
-        Cloth { previous: points.clone(), points, links, triangles, last_dt: 0.0 }
+        Cloth { previous: points.clone(), points, links, triangles, last_dt: 0.0, limp: false }
     }
 
     /// One step: under gravity, kept at its lengths, the `held` points where
@@ -121,6 +125,9 @@ impl Cloth {
                 let (pa, pb) = (self.points[a as usize], self.points[b as usize]);
                 let d = pb - pa;
                 let l = d.length().max(1e-6);
+                if self.limp && l < rest {
+                    continue;
+                }
                 let fix = d * ((l - rest) / l) * 0.5 * firm;
                 self.points[a as usize] += fix;
                 self.points[b as usize] -= fix;
