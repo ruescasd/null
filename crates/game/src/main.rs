@@ -13,6 +13,7 @@ mod look;
 mod player;
 mod rig;
 mod rope;
+mod cloth;
 mod structures;
 mod terrain;
 

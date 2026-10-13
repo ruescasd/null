@@ -30,6 +30,7 @@ use crate::{
 mod hunter;
 /// A hunter, for what counts them from outside (the benches).
 pub(crate) use hunter::Hunter as HunterMarker;
+mod bishop;
 mod forms;
 mod grove;
 mod hair;
@@ -76,7 +77,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk),
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, bishop::lab))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
