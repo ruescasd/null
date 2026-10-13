@@ -90,6 +90,8 @@ const RANGE: f32 = 150.0;
 const SHARD_SPEED: f32 = 260.0;
 /// What a shard does to what it strikes.
 const DAMAGE: f32 = 1.8;
+/// How hard a shot pushes you back (m/s).
+const KICKBACK: f32 = 3.0;
 
 /// A swarmer: how many shards break it, its size, and how fast it flies
 /// (faster than a running player).
@@ -114,6 +116,8 @@ struct Gun {
     cooldown: f32,
     /// The view's kick, radians, decaying.
     kick: f32,
+    /// The view jolted by a blow (pitch, roll; radians, decaying).
+    jolt: Vec2,
     /// The viewmodel's recoil, metres back, decaying.
     recoil: f32,
     /// Shots fired, for the shards' pattern.
@@ -378,7 +382,7 @@ fn fire(
     spatial: SpatialQuery,
     mut gun: ResMut<Gun>,
     mut feedback: ResMut<Feedback>,
-    camera: Single<(&Transform, &FlyCam), With<Player>>,
+    camera: Single<(&Transform, &FlyCam, &mut Player)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
     ichor: Res<ichor::Ichor>,
@@ -396,7 +400,7 @@ fn fire(
         }
     }
     light.intensity *= (-dt * 40.0).exp();
-    let (transform, fly) = *camera;
+    let (transform, fly, mut player) = camera.into_inner();
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
     let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && !hunters.is_empty());
     if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 {
@@ -413,6 +417,8 @@ fn fire(
 
     let eye = transform.translation;
     let (right, up, forward) = (transform.right(), transform.up(), transform.forward());
+    // The gun pushes you back a little (in the air, it carries).
+    player.velocity -= *forward * KICKBACK;
     let muzzle = eye + right * weapon::MUZZLE_VIEW.x + up * weapon::MUZZLE_VIEW.y - forward * weapon::MUZZLE_VIEW.z;
     weapon::fire(&mut commands, &fx, *viewmodel, muzzle, *forward, *right, *up, gun.shots);
     for k in 0..SHARDS {
@@ -907,15 +913,16 @@ fn hud(
     };
 }
 
-/// The view kicks up with each shot and settles back.
 /// The view kicks up with each shot and settles back; it shakes for an
 /// instant, and its field of view punches out and back.
 fn kick(time: Res<Time>, mut gun: ResMut<Gun>, mut camera: Single<(&mut Transform, &mut Projection), (With<FlyCam>, Without<weapon::Viewmodel>)>) {
     let dt = time.delta_secs();
     gun.kick *= (-dt * 9.0).exp();
     gun.shake *= (-dt * 18.0).exp();
+    gun.jolt *= (-dt * 8.0).exp();
     let (transform, projection) = &mut *camera;
-    transform.rotate_local_x(gun.kick);
+    transform.rotate_local_x(gun.kick + gun.jolt.x);
+    transform.rotate_local_z(gun.jolt.y);
     let t = time.elapsed_secs();
     let s = gun.shake * 0.012;
     transform.rotate_local_y(s * (t * 83.0).sin());

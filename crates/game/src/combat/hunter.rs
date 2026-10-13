@@ -45,6 +45,10 @@ const GRACE: f32 = 1.0;
 const SEARCH: f32 = 10.0;
 /// How close a hound is to you to snap rather than pounce (m).
 const SNAP: f32 = 2.5;
+/// How many of a blast's shards stagger it, and how hard each shoves it
+/// (m/s, a hound's weight; a biped, lighter, further).
+const STAGGER: f32 = 4.0;
+const SHOVE: f32 = 0.9;
 const ATTACK: f32 = 30.0;
 /// What it takes to break (two or three good shots at close range).
 const HUNTER_HEALTH: f32 = 45.0;
@@ -82,6 +86,8 @@ enum Stance {
     Freeze,
     /// The beast: building to a gallop before it pounces.
     Charge,
+    /// Thrown back by a blast, its run at you broken.
+    Stagger,
 }
 
 /// What a hunter knows of you.
@@ -127,6 +133,9 @@ pub(crate) struct Hunter {
     search: Option<(Vec3, f32)>,
     /// Hit since it last thought.
     alarmed: bool,
+    /// This frame's shards in it: how many, and their directions summed.
+    shards: u32,
+    blast: Vec3,
     stun: f32,
     /// Hits this frame: the bone struck and the shot's direction (the pieces
     /// on that bone are jolted).
@@ -157,7 +166,8 @@ impl Hunter {
     /// A shard struck bone `bone`, flying along `dir`.
     pub(super) fn hurt(&mut self, bone: usize, dir: Vec3, damage: f32) {
         self.health -= damage;
-        self.rig.knock = (self.rig.knock + Vec3::new(dir.x, 0.0, dir.z) * 1.2).clamp_length_max(9.0);
+        self.shards += 1;
+        self.blast += dir;
         self.stun = self.stun.max(0.12);
         self.hits.push((bone, dir));
         self.alarmed = true;
@@ -483,7 +493,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -760,7 +770,7 @@ pub(super) fn hunt(
     mut hunters: Query<(Entity, &mut Hunter, &mut Transform), Without<Player>>,
     parts: Query<(Entity, &Part, &Transform), (Without<Hunter>, Without<Player>)>,
     eyes: Query<(Entity, &Eye)>,
-    gun: Res<Gun>,
+    mut gun: ResMut<Gun>,
     mut said: Local<f32>,
     mut heard: Local<(u32, Option<(Vec3, Vec3)>)>,
 ) {
@@ -791,7 +801,7 @@ pub(super) fn hunt(
                 PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
                 Transform::from_translation(at),
             ));
-            let knock = h.rig.knock;
+            let knock = h.rig.knock + h.blast.with_y(0.0) * SHOVE;
             // (A dozen parts burst, spread over the body, each spraying
             // more: a third of them all, a hound's some 80 bursts and 1700
             // pieces flung in one frame, held a frame up twice as long as
@@ -818,8 +828,35 @@ pub(super) fn hunt(
             continue;
         }
 
-        let root = h.rig.root;
         let beast = h.kind == Kind::Beast;
+        // Shot: the blast's shards together shove it, the more of them the
+        // harder: its run at you stopped, and it thrown back, its body
+        // reeling; enough of them stagger it, and knock it out of a pounce.
+        if h.shards > 0 {
+            let n = std::mem::take(&mut h.shards) as f32;
+            let away = std::mem::take(&mut h.blast).with_y(0.0).normalize_or(Vec3::ZERO);
+            let shove = (n * SHOVE / if beast { 1.0 } else { 0.8 }).min(12.0);
+            let into = h.rig.velocity.dot(-away);
+            if into > 0.0 {
+                h.rig.velocity += away * into * (n / 6.0).min(1.0);
+            }
+            if let Some(vy) = h.rig.airborne {
+                h.rig.velocity += away * shove;
+                h.rig.airborne = Some(vy.min(1.0));
+            } else {
+                h.rig.knock = (h.rig.knock + away * shove).clamp_length_max(12.0);
+            }
+            h.rig.reel(away * (n / 12.0).min(1.0));
+            if args.opt("huntlog") {
+                info!("huntlog: {} shot, {n} shards: shoved {shove:.1} m/s{}{}", entity.index_u32(), if h.rig.airborne.is_some() { ", out of the air" } else { "" }, if n >= STAGGER { ", staggered" } else { "" });
+            }
+            if n >= STAGGER {
+                h.stance = Stance::Stagger;
+                h.timer = 0.25 + 0.04 * n;
+                h.gesture = Gesture::None;
+            }
+        }
+        let root = h.rig.root;
         // What it knows of you. It sees you: in reach, nothing built between
         // its eyes and yours. It hears the gun, and knows where it was hit
         // from. Out of sight a moment it still knows where you went; then
@@ -946,6 +983,14 @@ pub(super) fn hunt(
             intent.stretch = args.num("stretch", 0.0);
             intent.still = true;
         } else if stunned {
+        } else if h.stance == Stance::Stagger {
+            // Low, sliding on with the shove; once down (and the time up), on
+            // again.
+            intent.crouch = 0.35;
+            if h.timer <= 0.0 && h.rig.airborne.is_none() {
+                h.stance = Stance::Stalk;
+                h.timer = 0.4;
+            }
         } else if args.opt("tame") {
             // (`--opt tame`, for captures: it circles at a distance, side on,
             // its pace changing every 8 s: prowl, trot, gallop.)
@@ -1087,6 +1132,7 @@ pub(super) fn hunt(
                     }
                 }
                 // Landed: it skids to a stop (its deceleration), low.
+                Stance::Stagger => {}
                 Stance::Recover => {
                     intent.crouch = 0.4 * (h.timer / RECOVER).max(0.0);
                     if h.timer <= 0.0 {
@@ -1130,6 +1176,7 @@ pub(super) fn hunt(
                         h.struck = false;
                     }
                 }
+                Stance::Stagger => {}
                 Stance::Recover => {
                     intent.crouch = 0.3 * (h.timer / RECOVER).max(0.0);
                     if h.timer <= 0.0 {
@@ -1143,6 +1190,7 @@ pub(super) fn hunt(
         let open = match h.stance {
             Stance::Windup => if beast { 1.4 } else { 0.55 },
             Stance::Attack(_) => if beast { 1.9 } else { 0.8 },
+            Stance::Stagger => if beast { 1.0 } else { 0.5 },
             Stance::Charge => 0.3,
             Stance::Freeze => 0.15,
             _ => 0.06 + 0.04 * (time.elapsed_secs() * 1.3).sin(),
@@ -1153,6 +1201,13 @@ pub(super) fn hunt(
         if matches!(h.stance, Stance::Attack(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
             h.struck = true;
             player.1.health -= ATTACK;
+            // It shoves you along its line, off your feet a little, harder
+            // the faster it came (a pounce, a dash, more than a snap); the
+            // view snaps back, rolled away from its side.
+            let along = (target - h.rig.root).with_y(0.0).normalize_or(toward);
+            let force = (3.0 + h.rig.speed() * 0.4).min(10.0);
+            player.1.velocity += along * force + Vec3::Y * (1.5 + force * 0.15);
+            gun.jolt += Vec2::new(0.05 + force * 0.008, -along.dot(*player.0.right()) * 0.12);
             if args.opt("huntlog") {
                 info!("huntlog: {} bit you ({:.0} left)", entity.index_u32(), player.1.health);
             }
@@ -1297,7 +1352,7 @@ pub(super) fn voice(
         voice.next -= dt;
         // (volume, pitch, pause after a phrase), or silence.
         let style = match (h.stance, h.gesture) {
-            (_, Gesture::Tilt(..)) | (Stance::Freeze | Stance::Attack(_), _) => None,
+            (_, Gesture::Tilt(..)) | (Stance::Freeze | Stance::Attack(_) | Stance::Stagger, _) => None,
             (Stance::Charge | Stance::Windup, _) => Some((1.6, 1.08, 0.0..0.25)),
             (Stance::Recover, _) => Some((1.0, 0.92, 0.3..1.0)),
             (_, Gesture::Creep(_)) => Some((0.55, 0.9, 2.0..4.5)),

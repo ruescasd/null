@@ -318,6 +318,10 @@ pub struct Rig {
     pub airborne: Option<f32>,
     /// Pushed by hits (m/s, decaying).
     pub knock: Vec3,
+    /// The body thrown back by a hit, chest more than hips (m), sprung
+    /// back, and how fast.
+    reel: Vec3,
+    reel_v: Vec3,
     chest_yaw: f32,
     hips_yaw: f32,
     turn_rate: f32,
@@ -379,6 +383,8 @@ impl Rig {
             velocity: Vec3::ZERO,
             airborne: None,
             knock: Vec3::ZERO,
+            reel: Vec3::ZERO,
+            reel_v: Vec3::ZERO,
             chest_yaw: heading,
             hips_yaw: heading,
             turn_rate: 0.0,
@@ -451,7 +457,8 @@ impl Rig {
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
-        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height)
+        let reel = self.reel * if root == Root::Chest { 1.0 } else { 0.4 };
+        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height) + reel
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -544,6 +551,9 @@ impl Rig {
             }
         }
         self.knock *= (-dt * 6.0).exp();
+        // (Sprung, a little under damped: thrown, it overshoots once.)
+        self.reel_v += (-self.reel * 160.0 - self.reel_v * 14.0) * dt;
+        self.reel += self.reel_v * dt;
         self.turn_rate += ((self.heading - old_heading) / dt.max(1e-4) - self.turn_rate) * (1.0 - (-dt * 6.0).exp());
         // The chest leads a turn, the hips follow.
         let lead = (self.turn_rate * 0.15).clamp(-0.4, 0.4);
@@ -751,6 +761,12 @@ impl Rig {
     /// How fast it is moving over the ground.
     pub fn speed(&self) -> f32 {
         Vec2::new(self.velocity.x, self.velocity.z).length()
+    }
+
+    /// A hit throws the body back along `kick` (its length up to 1, a
+    /// whole blast), the chest rearing a little.
+    pub fn reel(&mut self, kick: Vec3) {
+        self.reel_v += (kick + Vec3::Y * kick.length() * 0.4) * 6.0;
     }
 
     /// Leap towards `dir` (horizontal) with this speed and upward speed.
