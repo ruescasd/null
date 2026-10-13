@@ -37,7 +37,7 @@ const PALE: f32 = 0.5;
 /// wrist, the right arm's (the left's mirrored).
 const SLEEVE_ROUND: usize = 10;
 const SLEEVE_ALONG: usize = 9;
-const ARM: [Vec3; 3] = [Vec3::new(0.48, -0.16, -0.02), Vec3::new(0.56, -0.62, 0.04), Vec3::new(0.16, -0.58, 0.3)];
+const ARM: [Vec3; 3] = [Vec3::new(0.48, -0.16, -0.02), Vec3::new(0.56, -0.66, 0.04), Vec3::new(0.16, -0.68, 0.3)];
 
 #[derive(Component)]
 pub(super) struct Bishop {
@@ -233,12 +233,18 @@ pub(super) fn lab(
         // The mantle: a stiff cape on the shoulders, sloping down from the
         // neck to a corner and over it a little (the Dark Bishop's outline, a
         // house's: the user, marking it; its straight sides are the sleeves,
-        // falling from under it), its edge pale, a V open down its front.
+        // falling from under it), closed all round, covering the chest (the
+        // user: below it only the arms and the robe are seen), its edge pale.
         let mantle = shell(
             &[(0.08, 0.22, 0.2, 0.0), (-0.05, 0.45, 0.3, 0.0), (-0.18, 0.66, 0.36, 0.0), (-0.28, 0.68, 0.37, 0.0), (-0.31, 0.68, 0.37, 0.0)],
-            0.4,
-            &[0, 3, 4],
-            &|_, _| 0.0,
+            0.0,
+            // (Pale only at its lip: two rings of it made a broad band, a
+            // hat's brim.)
+            &[0, 4],
+            // (Longer at its front and back, over the chest; at its sides it
+            // ends at the shoulders' corners, the sleeves falling from under
+            // it.)
+            &|a, r| -0.24 * [0.0, 0.0, 0.5, 0.9, 1.0][r] * a.cos().powi(2),
         );
         stiff_part(meshes.add(flat(mantle)), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
         // Horns curving up off it, two to a shoulder.
@@ -254,13 +260,13 @@ pub(super) fn lab(
             for k in 0..3 {
                 let kk = k as f32 - 1.0;
                 let dir = Vec3::new(-side * 0.8, 0.15 + 0.15 * kk, 0.3).normalize();
-                stiff_part(assets.shard.clone(), horn.clone(), Vec3::new(side * 0.2, -0.55 + 0.04 * kk, 0.3), Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(2.2, 0.26 / 0.7, 2.2));
+                stiff_part(assets.shard.clone(), horn.clone(), Vec3::new(side * 0.2, -0.65 + 0.04 * kk, 0.3), Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(2.2, 0.26 / 0.7, 2.2));
             }
         }
         // What it holds: a dim light (the glow kept for the rare ones; a
         // caster is).
         let light = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(1.0, 1.0, 1.0) * 40.0, ..default() });
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), light, Vec3::new(0.0, -0.52, 0.34), Quat::IDENTITY, Vec3::splat(0.07));
+        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), light, Vec3::new(0.0, -0.62, 0.34), Quat::IDENTITY, Vec3::splat(0.07));
         return;
     }
     let Ok(mut b) = bishops.single_mut() else { return };
