@@ -45,6 +45,13 @@ const GRACE: f32 = 1.0;
 const SEARCH: f32 = 10.0;
 /// How close a harrow is to you to snap rather than pounce (m).
 const SNAP: f32 = 2.5;
+/// The sprawl's flanking: how far round from where you look (radians, 120
+/// degrees: at your back, a little to one side), how far off (m), how fast
+/// it circles and darts (m/s).
+const FLANK_ANGLE: f32 = 2.1;
+const FLANK_OFF: f32 = 9.0;
+const FLANK_SPEED: f32 = 9.0;
+const DART_SPEED: f32 = 16.0;
 /// How near it hauls itself onto you from (m), and how fast (m/s).
 const HAUL_FROM: f32 = 6.0;
 const HAUL: f32 = 24.0;
@@ -144,6 +151,11 @@ pub(crate) struct Hunter {
     went: Vec3,
     unseen: f32,
     search: Option<(Vec3, f32)>,
+    /// A sprawl: which side of you it flanks round (-1 left, 1 right); the
+    /// spot it runs to, and how long until it looks for another.
+    flank: f32,
+    flank_spot: Vec3,
+    flank_age: f32,
     /// Hit since it last thought.
     alarmed: bool,
     /// This frame's shards in it: how many, and their directions summed.
@@ -602,7 +614,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -913,6 +925,8 @@ pub(super) fn hunt(
 ) {
     let dt = time.delta_secs().min(0.05);
     let target = player.0.translation;
+    // Which way you look, across the ground (a sprawl keeps out of it).
+    let ahead = Vec3::new(player.0.forward().x, 0.0, player.0.forward().z).normalize_or(Vec3::Z);
     // A shot this frame (heard as far as `HEAR`); which way you are going
     // (your pace, smoothed; a jump, as on dying, ignored).
     let shot = gun.shots != heard.0;
@@ -965,6 +979,8 @@ pub(super) fn hunt(
         }
 
         let beast = h.kind == Kind::Beast;
+        // (The sprawl, a flanker: see its stances below.)
+        let sprawl = beast && h.rig.plan.style == crate::rig::Style::Sprawl;
         // A blast of `SEVER` shards or more tears off a beast's leg: the one
         // nearest where they struck (one leg a blast).
         let mut torn = None;
@@ -1065,6 +1081,32 @@ pub(super) fn hunt(
         // Where it heads: for you, seen (or prowling, by scent); for where
         // you were; for the spot it is searching.
         let goal = match h.aware {
+            // A sprawl hunting you, circling: to a spot at your back, to one
+            // side or the other, 9 m off (sweeping round as you turn).
+            Aware::Chasing if sprawl && matches!(h.stance, Stance::Stalk | Stance::Freeze | Stance::Recover) => {
+                h.flank_age -= dt;
+                if h.flank_age <= 0.0 {
+                    h.flank_age = 0.25;
+                    // The first of a few spots at your back, its side first,
+                    // on a floor near you (9 m behind you, in a corridor, was
+                    // as often in the rock: it stood still, the way there
+                    // none); failing all, hanging back where it is, 8 m off,
+                    // for you to look away.
+                    let on_floor = |spot: Vec3| match nav.as_deref() {
+                        Some(n) => n.nearest(spot, 6).map(|j| n.nodes[j as usize]),
+                        None => Some(spot),
+                    };
+                    let fits = |q: Vec3| {
+                        let far = Vec2::new(q.x - target.x, q.z - target.z).length();
+                        (4.0..14.0).contains(&far) && (q.y - target.y).abs() < 4.5
+                    };
+                    let tries = [h.flank, -h.flank].into_iter().flat_map(|side| [(FLANK_ANGLE, FLANK_OFF), (2.6, FLANK_OFF), (1.6, FLANK_OFF), (FLANK_ANGLE, 6.0), (2.6, 6.0)].map(move |(a, d)| (side, a, d)));
+                    let found = tries.filter_map(|(side, a, d)| on_floor(target + Quat::from_rotation_y(side * a) * ahead * d)).find(|&q| fits(q));
+                    let back = on_floor(target + (root - target).with_y(0.0).normalize_or(-ahead) * 8.0).unwrap_or(root);
+                    h.flank_spot = found.unwrap_or(back);
+                }
+                h.flank_spot
+            }
             Aware::Chasing | Aware::Unaware => target,
             Aware::Pursuing => h.known,
             Aware::Searching(_) => h.search.map_or(h.known, |s| s.0),
@@ -1143,12 +1185,12 @@ pub(super) fn hunt(
         let look = if sees { target } else { root + toward * 6.0 + Vec3::Y * 1.3 };
         // Hunting you, a beast does not prowl: it runs (and, the hunt over,
         // it slows to a prowl).
-        if beast && matches!(h.aware, Aware::Chasing | Aware::Pursuing) && h.stance == Stance::Stalk {
+        if beast && !sprawl && matches!(h.aware, Aware::Chasing | Aware::Pursuing) && h.stance == Stance::Stalk {
             h.stance = Stance::Charge;
             h.timer = 4.0;
             h.gesture = Gesture::None;
         }
-        if beast && matches!(h.aware, Aware::Unaware | Aware::Searching(_)) && h.stance == Stance::Charge {
+        if beast && !sprawl && matches!(h.aware, Aware::Unaware | Aware::Searching(_)) && h.stance == Stance::Charge {
             h.stance = Stance::Stalk;
             h.timer = 1.0;
         }
@@ -1185,6 +1227,82 @@ pub(super) fn hunt(
             let pace = if fixed > 0.0 { fixed } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
             intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
             intent.crouch = if pace < 3.0 { 0.35 } else { 0.0 };
+        } else if sprawl {
+            // The flanker: it never comes at you from before you. Hunting you,
+            // it runs low and fast round to your back and keeps there as you
+            // turn; out of your sight, near, the way clear, it darts in and
+            // snaps; seen as it comes (more than 5 m off), it breaks off and
+            // circles the other way; after a bite, it circles the other way.
+            let near = Vec2::new(target.x - root.x, target.z - root.z).length();
+            let seen_by_you = (root - target).with_y(0.0).normalize_or(Vec3::Z).dot(ahead);
+            match h.stance {
+                Stance::Charge => {
+                    intent.velocity = toward * DART_SPEED;
+                    intent.crouch = 0.6;
+                    if seen_by_you > 25f32.to_radians().cos() && near > 5.0 {
+                        h.stance = Stance::Stalk;
+                        h.flank = -h.flank;
+                        h.timer = 1.0;
+                        if args.opt("huntlog") {
+                            info!("huntlog: {} seen as it darts: breaks off", entity.index_u32());
+                        }
+                    } else if distance < SNAP && straight {
+                        h.stance = Stance::Windup;
+                        h.timer = 0.12;
+                    } else if h.timer <= 0.0 || !chasing {
+                        h.stance = Stance::Stalk;
+                        h.timer = 1.0;
+                    }
+                }
+                Stance::Windup => {
+                    intent.velocity = toward * DART_SPEED * 0.5;
+                    intent.crouch = 1.0;
+                    intent.stretch = 1.0;
+                    if h.timer <= 0.0 {
+                        // (Carrying the dart's speed: at 7 m/s a runner left it
+                        // behind, never bitten.)
+                        h.rig.leap(toward, 13.0, 1.5);
+                        h.stance = Stance::Attack(toward);
+                        h.timer = 1.0;
+                    }
+                }
+                Stance::Attack(_) => {
+                    intent.stretch = 1.0;
+                    if h.rig.airborne.is_none() && h.timer < 0.9 {
+                        h.stance = Stance::Recover;
+                        h.timer = RECOVER * 0.6;
+                        h.struck = false;
+                        h.flank = -h.flank;
+                    }
+                }
+                Stance::Recover => {
+                    intent.velocity = toward * FLANK_SPEED * 0.6;
+                    intent.crouch = 0.4;
+                    if h.timer <= 0.0 {
+                        // Round to your other side a while before it darts
+                        // again (every 1.5 s, a bite at a time, it was
+                        // relentless).
+                        h.stance = Stance::Stalk;
+                        h.timer = 2.5 + 1.5 * r(8);
+                    }
+                }
+                // Circling (or prowling, or casting about for you).
+                _ => {
+                    let pace = if matches!(h.aware, Aware::Chasing | Aware::Pursuing) { FLANK_SPEED } else { 3.5 };
+                    intent.velocity = toward * pace * (distance / 1.0).min(1.0);
+                    intent.crouch = 0.35;
+                    if h.stance == Stance::Freeze && h.timer <= 0.0 {
+                        h.stance = Stance::Stalk;
+                    }
+                    if chasing && h.stance == Stance::Stalk && h.timer <= 0.0 && seen_by_you < 55f32.to_radians().cos() && near < 14.0 && ground.clear(root + Vec3::Y, target) {
+                        h.stance = Stance::Charge;
+                        h.timer = 2.5;
+                        if args.opt("huntlog") {
+                            info!("huntlog: {} darts in from {:.1} m, {:.0} degrees off your look", entity.index_u32(), near, seen_by_you.clamp(-1.0, 1.0).acos().to_degrees());
+                        }
+                    }
+                }
+            }
         } else if beast {
             match h.stance {
                 // Prowling: low and slow, closing in; now and then it freezes,
@@ -1443,7 +1561,9 @@ pub(super) fn hunt(
         // An attack that reaches the player strikes once.
         if matches!(h.stance, Stance::Attack(_) | Stance::Haul(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {
             h.struck = true;
-            player.1.health -= ATTACK;
+            // (A sprawl's bite lighter: it comes often, from where you are not
+            // looking.)
+            player.1.health -= if sprawl { ATTACK * 0.5 } else { ATTACK };
             // It shoves you along its line, off your feet a little, harder
             // the faster it came (a pounce, a dash, more than a snap); the
             // view snaps back, rolled away from its side.
