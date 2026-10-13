@@ -33,6 +33,10 @@ const SLEEVE_ROUND: usize = 10;
 const SLEEVE_ALONG: usize = 9;
 const ARM: [Vec3; 3] = [Vec3::new(0.36, -0.15, -0.02), Vec3::new(0.42, -0.68, 0.04), Vec3::new(0.12, -0.73, 0.25)];
 
+/// Its needles beside a harrow's (too large on it, the user): 0.25 m long,
+/// 4 cm thick.
+const NEEDLE_SCALE: f32 = 0.6;
+
 /// How far from you it likes to float (m), how fast it drifts (m/s), and
 /// how far it blinks aside (m).
 const RANGE: (f32, f32) = (7.0, 14.0);
@@ -126,11 +130,11 @@ impl Bishop {
     /// hot a moment (see `Needle`), carried with it, as its horns are.
     pub(super) fn embed(&self, commands: &mut Commands, assets: &Assets3, owner: Entity, at: Vec3, dir: Vec3, delay: f32) {
         let to = self.place.inverse();
-        let base = at - dir * NEEDLE_OUT;
+        let base = at - dir * NEEDLE_OUT * NEEDLE_SCALE;
         commands.spawn((
             OfBishop(owner),
             Stiff { offset: to * (base - self.top - Vec3::Y * 0.06), turn: to * Quat::from_rotation_arc(Vec3::Y, dir), dark: true },
-            Needle { delay, life: NEEDLE_LIFE, size: NEEDLE_SIZE },
+            Needle { delay, life: NEEDLE_LIFE, size: NEEDLE_SIZE * NEEDLE_SCALE },
             Mesh3d(assets.shard.clone()),
             MeshMaterial3d(assets.bright.clone()),
             Transform::from_scale(Vec3::ZERO),
