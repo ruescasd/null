@@ -21,6 +21,11 @@ const ROUND: usize = 28;
 const DOWN: usize = 20;
 const SHOULDERS: f32 = 2.1;
 const LENGTH: f32 = 1.75;
+/// How long its cloth hangs free before its drape is kept (s), and how
+/// firmly it is pulled back to it (per second): the robe, the hood and
+/// mantle, the sleeves.
+const DRAPED: f32 = 1.5;
+const KEEP: [f32; 3] = [5.0, 8.0, 5.0];
 /// The cloth's shade and its markings' (sRGB).
 const DARK: f32 = 0.035;
 /// How far its head is bowed (radians).
@@ -43,6 +48,10 @@ pub(super) struct Bishop {
     /// Its hood and mantle, and their mesh.
     cape: Cloth,
     cape_mesh: Handle<Mesh>,
+    /// Its cloth's drape, settled, in its own frame (from its shoulders,
+    /// unturned): robe, hood and mantle, sleeves; once it has settled (see
+    /// `DRAPED`), each pulled back to it every step.
+    drape: Option<[Vec<Vec3>; 4]>,
     /// Where it hangs from (the lab's middle), the lab's sideways, how far
     /// aside it is and wants to be, which way it faces and wants to, the
     /// lab's clock and when it next moves.
@@ -260,7 +269,7 @@ pub(super) fn lab(
         }
         // The hood and mantle (see `CAPE`).
         let neck = top + Vec3::Y * 0.06;
-        let cape = Cloth::tube(CAPE_ROUND, CAPE.len(), |c, r| neck + place * cape_at(c, r), |r| if r < 10 { 0.5 } else { 0.35 }, |r| CAPE[r].4 > 0.0);
+        let cape = Cloth::tube(CAPE_ROUND, CAPE.len(), |c, r| neck + place * cape_at(c, r), |r| if r < 10 { 0.5 } else { 0.3 }, |r| CAPE[r].4 > 0.0);
         let mut cape_mesh = cape.mesh();
         if !grey {
             let shades: Vec<[f32; 4]> = (0..CAPE.len()).flat_map(|r| (0..CAPE_ROUND).map(move |c| cape_shade(c, r))).map(|v| Color::srgb(v, v, v).to_linear().to_f32_array()).collect();
@@ -269,7 +278,7 @@ pub(super) fn lab(
         let cape_mesh = meshes.add(cape_mesh);
         commands.spawn((Mesh3d(cape_mesh.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
         commands.spawn((
-            Bishop { cloth, mesh: mesh.clone(), sleeves, cape, cape_mesh, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0, pace: 0.0, last_top: top },
+            Bishop { cloth, mesh: mesh.clone(), sleeves, cape, cape_mesh, drape: None, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0, pace: 0.0, last_top: top },
             Mesh3d(mesh),
             MeshMaterial3d(cloth_material.clone()),
             Transform::default(),
@@ -363,10 +372,25 @@ pub(super) fn lab(
     // (Steps enough that its shoulders go no more than 3 cm a step: in a
     // sudden move it keeps up.)
     let steps = ((top.distance(b.last_top) / 0.03).ceil() as usize).clamp(2, 10);
+    // Its drape: once it has settled, where each point of its cloth hangs in
+    // its own frame; from then on where each is pulled back to.
+    let to_frame = |p: &Vec3| place.inverse() * (*p - top);
+    if b.drape.is_none() && b.time > DRAPED {
+        b.drape = Some([
+            b.cloth.points.iter().map(to_frame).collect(),
+            b.cape.points.iter().map(to_frame).collect(),
+            b.sleeves[0].0.points.iter().map(to_frame).collect(),
+            b.sleeves[1].0.points.iter().map(to_frame).collect(),
+        ]);
+    }
+    let drape: Option<[Vec<Vec3>; 4]> = b.drape.as_ref().map(|d| d.clone().map(|v| v.iter().map(|q| top + place * *q).collect()));
     b.last_top = top;
     for _ in 0..steps {
         b.cloth.step(&held, &bodies, floor + 0.02, top.y + 0.1, dt / steps as f32);
         keep_round(&mut b.cloth.points, ROUND, 2, top, place, &|c| c as f32 / ROUND as f32 * std::f32::consts::TAU);
+        if let Some(d) = &drape {
+            b.cloth.pull(&d[0], KEEP[0], dt / steps as f32);
+        }
     }
     if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
         b.cloth.draw(&mut mesh);
@@ -387,6 +411,9 @@ pub(super) fn lab(
         for _ in 0..steps {
             b.cape.step(&held, &bodies, floor + 0.02, top.y + 0.9, dt / steps as f32);
             keep_round(&mut b.cape.points, CAPE_ROUND, 12, top, place, &|c| c as f32 / CAPE_ROUND as f32 * std::f32::consts::TAU);
+            if let Some(d) = &drape {
+                b.cape.pull(&d[1], KEEP[1], dt / steps as f32);
+            }
         }
         if let Some(mut mesh) = meshes.get_mut(&b.cape_mesh) {
             b.cape.draw(&mut mesh);
@@ -408,6 +435,9 @@ pub(super) fn lab(
         ];
         for _ in 0..steps {
             sleeve.step(&held, &arm, floor + 0.02, top.y + 0.05, dt / steps as f32);
+            if let Some(d) = &drape {
+                sleeve.pull(&d[2 + k], KEEP[2], dt / steps as f32);
+            }
         }
         if let Some(mut mesh) = meshes.get_mut(&*handle) {
             sleeve.draw(&mut mesh);

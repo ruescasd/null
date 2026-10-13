@@ -11,10 +11,10 @@ use bevy::{
     prelude::*,
 };
 
-/// How much of its speed a point keeps a step (the air's drag), and how
+/// How fast a point loses its speed (the air's drag, per second), and how
 /// many times a step the lengths are put right (more: stiffer, less
 /// stretching in a sudden jerk).
-const DAMPING: f32 = 0.985;
+const DRAG: f32 = 5.0;
 const ITERATIONS: usize = 16;
 /// How far a point may go in a step (m): a body jerked hard flung its robe
 /// up over its head (the user: mangled).
@@ -26,6 +26,9 @@ pub struct Cloth {
     /// Two points, their length apart, and how firmly it is kept (0..1).
     links: Vec<(u32, u32, f32, f32)>,
     triangles: Vec<u32>,
+    /// The last step's length (s): a point's speed is how far it went in
+    /// it, scaled to this one's.
+    last_dt: f32,
 }
 
 impl Cloth {
@@ -74,7 +77,7 @@ impl Cloth {
                 triangles.extend([a, d, b, b, d, e]);
             }
         }
-        Cloth { previous: points.clone(), points, links, triangles }
+        Cloth { previous: points.clone(), points, links, triangles, last_dt: 0.0 }
     }
 
     /// One step: under gravity, kept at its lengths, the `held` points where
@@ -94,16 +97,27 @@ impl Cloth {
             }
         }
         let gravity = Vec3::NEG_Y * 9.8 * dt * dt;
+        // (A point's speed is where it went last step, scaled by this step's
+        // length to that one's, and damped by the time that passes: steps of
+        // a frame's length, never quite the same twice, read unscaled, it
+        // never settled, as if in a gust of wind, the user.)
+        let scale = if self.last_dt > 0.0 { (dt / self.last_dt).clamp(0.25, 4.0) } else { 1.0 };
+        self.last_dt = dt;
+        let keep = (-DRAG * dt).exp() * scale;
         for (p, q) in self.points.iter_mut().zip(self.previous.iter_mut()) {
-            let v = ((*p - *q) * DAMPING).clamp_length_max(FASTEST);
+            let v = ((*p - *q) * keep).clamp_length_max(FASTEST);
             *q = *p;
             *p += v + gravity;
         }
-        for _ in 0..ITERATIONS {
+        for pass in 0..ITERATIONS {
             for &(i, at) in held {
                 self.points[i as usize] = at;
             }
-            for &(a, b, rest, firm) in &self.links {
+            // (Every other pass the other way round: always in one order the
+            // corrections leaned one way, and the hem never settled.)
+            let n = self.links.len();
+            for k in 0..n {
+                let (a, b, rest, firm) = self.links[if pass % 2 == 0 { k } else { n - 1 - k }];
                 let (pa, pb) = (self.points[a as usize], self.points[b as usize]);
                 let d = pb - pa;
                 let l = d.length().max(1e-6);
@@ -126,6 +140,16 @@ impl Cloth {
         }
         for &(i, at) in held {
             self.points[i as usize] = at;
+        }
+    }
+
+    /// Each point pulled back towards where `to` puts it (`firm`: how fast,
+    /// per second): a drape kept. (Hanging free it never quite settled: a
+    /// flared hem buckling one way and another, as in a gust of wind.)
+    pub fn pull(&mut self, to: &[Vec3], firm: f32, dt: f32) {
+        let k = 1.0 - (-firm * dt).exp();
+        for (p, t) in self.points.iter_mut().zip(to) {
+            *p += (*t - *p) * k;
         }
     }
 
