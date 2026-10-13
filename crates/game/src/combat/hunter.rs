@@ -203,6 +203,25 @@ pub(super) struct Part {
     stiffness: f32,
 }
 
+/// A shard stuck in hunter `hunter` where it struck (`at`, on bone `bone`,
+/// flying along `dir`), white hot a moment (see `Needle`): a piece of it,
+/// carried with its bone, falling with a leg torn off.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn embed(commands: &mut Commands, assets: &Assets3, hunter: Entity, h: &Hunter, bone: usize, at: Vec3, dir: Vec3, delay: f32) {
+    let Some(b) = h.rig.bones.get(bone) else { return };
+    let axis = b.b - b.a;
+    let along = ((at - b.a).dot(axis) / axis.length_squared().max(1e-6)).clamp(0.0, 1.0);
+    let rotation = b.rotation();
+    let base = at - dir * NEEDLE_OUT;
+    commands.spawn((
+        Part { hunter, bone, along, offset: rotation.inverse() * (base - b.a.lerp(b.b, along)), rotation: rotation.inverse() * Quat::from_rotation_arc(Vec3::Y, dir), velocity: Vec3::ZERO, stiffness: RIGID },
+        Needle { delay, life: NEEDLE_LIFE, size: NEEDLE_SIZE },
+        Mesh3d(assets.shard.clone()),
+        MeshMaterial3d(assets.bright.clone()),
+        Transform::from_translation(base).with_scale(Vec3::ZERO),
+    ));
+}
+
 /// A hunter's voice, kept at its head.
 #[derive(Component)]
 pub(super) struct Voice {

@@ -76,7 +76,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk),
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
-            .add_systems(Update, hunter::skeleton.after(hunter::flesh))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -232,6 +232,42 @@ struct Debris {
 
 #[derive(Component)]
 struct MuzzleLight;
+
+/// A shard stuck in a creature where it struck, white hot a moment, then
+/// gone (seen from the moment its streak gets there): each hit seen, a full
+/// blast's sixteen counted at a glance, on a black body, in the dark (the
+/// user: the black ichor is not). It is carried with what it is in.
+#[derive(Component)]
+struct Needle {
+    delay: f32,
+    life: f32,
+    size: Vec3,
+}
+
+/// How long a needle glows, how far it stands out of what it is in (its
+/// tip a little in), and its size (the shard mesh, 0.7 m: 0.42 m, 7 cm; at
+/// 4 cm a speck at 10 m).
+const NEEDLE_LIFE: f32 = 0.9;
+const NEEDLE_OUT: f32 = 0.25;
+const NEEDLE_SIZE: Vec3 = Vec3::new(2.8, 0.6, 2.8);
+
+/// Needles show once their streak gets there, glow, and shrink away.
+fn needles(mut commands: Commands, time: Res<Time>, mut needles: Query<(Entity, &mut Needle, &mut Transform)>) {
+    let dt = time.delta_secs();
+    for (entity, mut n, mut transform) in &mut needles {
+        if n.delay > 0.0 {
+            n.delay -= dt;
+            transform.scale = Vec3::ZERO;
+            continue;
+        }
+        n.life -= dt;
+        if n.life <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.scale = n.size * (n.life / 0.25).min(1.0);
+    }
+}
 
 /// Where shards land on a body.
 #[derive(Component)]
@@ -463,11 +499,22 @@ fn fire(
             h.hurt(bone, dir, DAMAGE);
             end = d;
             struck = Some(eye + dir * d);
+            hunter::embed(&mut commands, &assets, entity, &h, bone, eye + dir * d, dir, d / SHARD_SPEED);
         } else if let Some((along, entity)) = best
             && let Ok((_, mut t, mut s)) = swarm.get_mut(entity)
         {
             s.health -= DAMAGE;
             s.velocity += dir * 4.0;
+            // Its needle, in its side towards you, carried with it.
+            let base = eye + dir * (along - SWARMER_RADIUS * t.scale.x * 0.8 - NEEDLE_OUT);
+            let inverse = t.compute_affine().inverse();
+            commands.spawn((
+                Needle { delay: along / SHARD_SPEED, life: NEEDLE_LIFE, size: NEEDLE_SIZE / t.scale },
+                Mesh3d(assets.shard.clone()),
+                MeshMaterial3d(assets.bright.clone()),
+                Transform::from_translation(inverse.transform_point3(base)).with_rotation(t.rotation.inverse() * Quat::from_rotation_arc(Vec3::Y, dir)).with_scale(Vec3::ZERO),
+                ChildOf(entity),
+            ));
             // It pops.
             t.scale *= 1.18;
             struck = Some(eye + dir * along);
