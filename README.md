@@ -29,7 +29,7 @@ again. F1 toggles the help overlay.
 | Up / Down | time speed |
 | P | soft / hard shadows |
 | F12 | screenshot to `screenshots/` |
-| ~ (the key under Esc) | console: reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
+| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures a metre before you, harrow, angler, biped, sprawl, bud, bishop): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
 
 Command-line options, mostly for tuning and capturing reference frames (a switch, `--opt name`, can
 also be given as at the console, `--set name on` or `--set name off`; a number `--set name=value` or
@@ -130,7 +130,7 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               moves in turn, 8 s each (--set bishop_mode=N holds one: 0 still, 1 drifting, 2
                                               jerking aside, 3 turning); bishop_yaw=D faces it D degrees off you; --opt bishopgrey
                                               all of it flat grey (its outline); in a region, on the floor nearest; `bishop off`,
-                                              `bishop on` at the console hangs it before you afresh
+                                              `spawn bishop` at the console hangs it before you afresh
     --opt specimen                            one hunter standing still in front of you, to look at: --set
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)

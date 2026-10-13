@@ -33,11 +33,23 @@ pub struct ConsolePlugin;
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Console>()
+            .init_resource::<Spawns>()
             .add_systems(Startup, spawn)
             .add_systems(PreUpdate, (type_in, swallow).chain().after(InputSystems))
             .add_systems(Update, (show, follow, loudness));
     }
 }
+
+/// What `spawn` at the console asks for: creatures (their kind, and how
+/// many), and the bishop hung before you afresh.
+#[derive(Resource, Default)]
+pub struct Spawns {
+    pub creatures: Vec<(String, u32)>,
+    pub bishop: bool,
+}
+
+/// The kinds `spawn` knows.
+pub const KINDS: [&str; 6] = ["harrow", "angler", "biped", "sprawl", "bud", "bishop"];
 
 /// The console: whether it is down, the line being typed, what it has
 /// said, the commands run (for Up), how far down it is (0 away, 1 down).
@@ -97,7 +109,8 @@ fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Con
 /// Typing: the key under Esc puts it down or away; down, characters go on
 /// the line, Backspace takes one off, Enter runs it, Up brings back the
 /// last command, Esc puts it away.
-fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>, mut exit: MessageWriter<AppExit>) {
+#[allow(clippy::too_many_arguments)]
+fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>, mut exit: MessageWriter<AppExit>) {
     for key in keys.read() {
         if key.state != ButtonState::Pressed {
             continue;
@@ -127,6 +140,25 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                     console.lines.clear();
                 } else if line.trim() == "quit" || line.trim() == "exit" {
                     exit.write(AppExit::Success);
+                } else if line.trim().starts_with("spawn") {
+                    // `spawn KIND [N]`: N of them (1) a metre before you; the
+                    // bishop (one only), hung there afresh.
+                    let words: Vec<&str> = line.split_whitespace().collect();
+                    let count = words.get(2).and_then(|n| n.parse::<u32>().ok()).unwrap_or(1).clamp(1, 20);
+                    match words.get(1) {
+                        Some(&"bishop") => {
+                            if !args.opt("bishop") {
+                                args.opts.push("bishop".into());
+                            }
+                            spawns.bishop = true;
+                            console.lines.push("a bishop before you".into());
+                        }
+                        Some(kind) if KINDS.contains(kind) => {
+                            spawns.creatures.push((kind.to_string(), count));
+                            console.lines.push(format!("{count} {kind} before you"));
+                        }
+                        _ => console.lines.push(format!("spawn what? {}", KINDS.join(", "))),
+                    }
                 } else if line.trim() == "where" {
                     let (t, fly) = *camera;
                     let p = t.translation;
@@ -227,6 +259,7 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "NAME VALUE           a number (--set NAME=VALUE); NAME default, back to its default".into(),
             "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
+            "spawn KIND [N]       N creatures a metre before you: harrow, angler, biped, sprawl, bud, bishop".into(),
             "clear                clears this".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),

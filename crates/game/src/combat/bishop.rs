@@ -232,9 +232,17 @@ pub(super) fn lab(
     mut stiff: Query<(&Stiff, &mut Transform), Without<FlyCam>>,
     mut started: Local<bool>,
     parts: Query<Entity, With<OfBishop>>,
+    mut spawns: ResMut<crate::console::Spawns>,
 ) {
     // (Switched off at the console: gone, to be hung afresh before you when
-    // switched on again.)
+    // switched on again; `spawn bishop`, hung afresh now.)
+    if std::mem::take(&mut spawns.bishop) && *started {
+        for e in &parts {
+            commands.entity(e).despawn();
+        }
+        *started = false;
+        return;
+    }
     if !args.opt("bishop") {
         if *started {
             for e in &parts {
@@ -252,12 +260,12 @@ pub(super) fn lab(
     if !*started && (player.ready || (fly.noclip && time.elapsed_secs() > 1.0)) {
         *started = true;
         let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
-        let home = camera.translation + forward * 6.0;
+        let home = camera.translation + forward * super::hunter::AHEAD;
         let mut home = Vec3::new(home.x, ground.at(home), home.z);
         // In a built place, on the floor nearest there (not in the rock, nor
         // over the void).
         if let Some(nav) = nav.as_deref()
-            && let Some(j) = nav.nearest(camera.translation + forward * 6.0, 16)
+            && let Some(j) = nav.nearest(camera.translation + forward * super::hunter::AHEAD, 16)
         {
             home = nav.nodes[j as usize];
         }

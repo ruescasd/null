@@ -212,6 +212,48 @@ pub(super) struct Part {
     stiffness: f32,
 }
 
+/// `spawn KIND [N]` at the console (see `console::Spawns`): hunters and buds
+/// a metre before you (several, side by side), in a built place on the floor
+/// nearest there.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn(
+    mut commands: Commands,
+    time: Res<Time>,
+    args: Res<Args>,
+    ground: crate::ground::Ground,
+    nav: Option<Res<crate::chasm::nav::Nav>>,
+    assets: Res<Assets3>,
+    heads: Res<Heads>,
+    kit: Res<forms::Kit>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut spawns: ResMut<crate::console::Spawns>,
+    camera: Single<&Transform, With<FlyCam>>,
+) {
+    let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
+    let across = Vec3::new(-forward.z, 0.0, forward.x);
+    for (kind, count) in std::mem::take(&mut spawns.creatures) {
+        for n in 0..count {
+            let aside = (n as f32 - (count - 1) as f32 * 0.5) * 1.6;
+            let mut at = camera.translation + forward * AHEAD + across * aside;
+            at = Vec3::new(at.x, ground.at(at), at.z);
+            if let Some(nav) = nav.as_deref()
+                && let Some(j) = nav.nearest(camera.translation + forward * AHEAD + across * aside, 8)
+            {
+                at = nav.nodes[j as usize];
+            }
+            let seed = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
+            if kind == "bud" {
+                super::spawn_bud(&mut commands, &kit, &mut materials, at + Vec3::Y * 1.6, seed);
+            } else {
+                spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some(&kind));
+            }
+        }
+    }
+}
+
+/// How far before you `spawn` puts what it makes (m): right before you.
+pub(super) const AHEAD: f32 = 1.0;
+
 /// A shard stuck in hunter `hunter` where it struck (`at`, on bone `bone`,
 /// flying along `dir`), white hot a moment (see `Needle`): a piece of it,
 /// carried with its bone, falling with a leg torn off.
@@ -380,7 +422,7 @@ pub(super) fn gather(
             let ahead = player.forward();
             let at = player.translation + Vec3::new(ahead.x, 0.0, ahead.z).normalize_or(Vec3::Z) * args.num("specimen_at", 3.5);
             let face = at + Quat::from_rotation_y(args.num("specimen_yaw", 0.0).to_radians()) * (player.translation - at);
-            spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, 7, at, face);
+            spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, 7, at, face, None);
             director.next_gather = f32::MAX;
         }
         return;
@@ -398,7 +440,7 @@ pub(super) fn gather(
                 {
                     at = q;
                 }
-                spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation);
+                spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation, None);
             }
             director.next_gather = 4.0;
         }
@@ -486,7 +528,7 @@ pub(super) fn gather(
             commands.entity(e).despawn();
         }
         commands.entity(entity).despawn();
-        spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation);
+        spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation, None);
     }
 }
 
@@ -502,18 +544,23 @@ fn spawn_hunter(
     seed: u32,
     centre: Vec3,
     player: Vec3,
+    want: Option<&str>,
 ) {
+    // (`want`: a kind asked for, at the console: harrow, angler, biped,
+    // sprawl.)
     // A biped, or a beast: a harrow (a narrow head, two rows of
     // needles) or an angler (a huge underbite jaw, uneven needles leaning
     // in). `--opt biped`, `harrow`, `angler`, or `beast` (either beast).
-    let kind = if args.opt("beast") || args.opt("harrow") || args.opt("angler") {
+    let kind = if let Some(want) = want {
+        if want == "biped" { Kind::Biped } else { Kind::Beast }
+    } else if args.opt("beast") || args.opt("harrow") || args.opt("angler") {
         Kind::Beast
     } else if args.opt("biped") || hash01(seed as i32, 0, 0, 0x6b1) < 1.0 / 3.0 {
         Kind::Biped
     } else {
         Kind::Beast
     };
-    let angler = kind == Kind::Beast && (args.opt("angler") || (!args.opt("harrow") && hash01(seed as i32, 1, 0, 0x6b1) < 0.5));
+    let angler = kind == Kind::Beast && want.map_or(args.opt("angler") || (!args.opt("harrow") && hash01(seed as i32, 1, 0, 0x6b1) < 0.5), |w| w == "angler");
     let feet = Vec3::new(centre.x, ground.at(centre), centre.z);
     let to = player - feet;
     let floor = |x: f32, z: f32| ground.at(Vec3::new(x, centre.y, z));
@@ -528,10 +575,11 @@ fn spawn_hunter(
         Plan::biped()
     };
     // (`--opt sprawl`: the beast moving another way.)
-    let plan = if kind == Kind::Beast && args.opt("sprawl") { Plan::sprawl() } else { plan };
+    let plan = if kind == Kind::Beast && want.map_or(args.opt("sprawl"), |w| w == "sprawl") { Plan::sprawl() } else { plan };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
+    let sprawl = plan.style == crate::rig::Style::Sprawl;
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
@@ -545,7 +593,7 @@ fn spawn_hunter(
         .id();
     // Its voice, at its head: growls now and then (see `voice`).
     commands.spawn((Voice { hunter, next: 1.0, count: 0 }, Transform::from_translation(centre), Visibility::default()));
-    info!("{} forms", if angler { "an angler" } else if kind == Kind::Beast { "a harrow" } else { "a biped" });
+    info!("{} forms", if angler { "an angler" } else if sprawl { "a sprawl" } else if kind == Kind::Beast { "a harrow" } else { "a biped" });
 
     // Its body: shards along every bone, thicker bones more and bigger,
     // with pale markings.

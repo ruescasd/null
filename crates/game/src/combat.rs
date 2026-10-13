@@ -77,7 +77,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk),
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, bishop::lab))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, bishop::lab, hunter::spawn))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -615,18 +615,17 @@ fn swarm(
             if let Some(nav) = nav.as_deref() {
                 p = nav.nearest(base + Vec3::new(r(0), 0.0, r(1)) * 4.0, 6).map_or(base, |j| nav.nodes[j as usize]);
             }
-            let mode = if grove { Mode::Dormant } else { Mode::Free };
-            let swarmer = Swarmer { mode, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
-            let root = if grove {
-                // Low on its roots, opening to the sky, leaning a little.
-                let p = Vec3::new(p.x, ground.at(p) + 0.55, p.z);
-                let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
-                let transform = Transform::from_translation(p).looking_to(lean * Vec3::Y, Vec3::Z);
-                commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id()
-            } else {
-                let p = Vec3::new(p.x, ground.at(p) + 3.0 + r(2) * 2.0, p.z);
-                commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(p), Visibility::default())).id()
-            };
+            // (A free one: see `spawn_bud`.)
+            if !grove {
+                spawn_bud(&mut commands, &kit, &mut materials, Vec3::new(p.x, ground.at(p) + 3.0 + r(2) * 2.0, p.z), (t as u32).wrapping_mul(31).wrapping_add(k as u32));
+                continue;
+            }
+            let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
+            // Low on its roots, opening to the sky, leaning a little.
+            let p = Vec3::new(p.x, ground.at(p) + 0.55, p.z);
+            let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
+            let transform = Transform::from_translation(p).looking_to(lean * Vec3::Y, Vec3::Z);
+            let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id();
             forms::build(&mut commands, &kit, &mut materials, root);
         }
     }
@@ -759,6 +758,14 @@ fn gloom(
     let target = 1.0 - (-args.num("gloom_each", 0.4) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
+}
+
+/// A free bud at `at`, stalking (a wave's, or `spawn bud` at the console).
+fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32) {
+    let phase = hash01(seed as i32, 4, 0, 0x5a2) * 50.0;
+    let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
+    let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(at), Visibility::default())).id();
+    forms::build(commands, kit, materials, root);
 }
 
 /// Broken swarmers shatter; a dead player starts again.
