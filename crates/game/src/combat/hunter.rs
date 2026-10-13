@@ -251,8 +251,10 @@ pub(super) fn spawn(
     }
 }
 
-/// How far before you `spawn` puts what it makes (m): right before you.
-pub(super) const AHEAD: f32 = 1.0;
+/// How far before you `spawn` puts what it makes (m): right before you,
+/// whole (at 1 m a harrow's body was round the camera; at 2 its jaws still
+/// in your face, it being long).
+pub(super) const AHEAD: f32 = 3.0;
 
 /// A shard stuck in hunter `hunter` where it struck (`at`, on bone `bone`,
 /// flying along `dir`), white hot a moment (see `Needle`): a piece of it,

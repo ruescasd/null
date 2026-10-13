@@ -259,7 +259,7 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "NAME VALUE           a number (--set NAME=VALUE); NAME default, back to its default".into(),
             "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
-            "spawn KIND [N]       N creatures a metre before you: harrow, angler, biped, sprawl, bud, bishop".into(),
+            "spawn KIND [N]       N creatures 3 m before you: harrow, angler, biped, sprawl, bud, bishop".into(),
             "clear                clears this".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),
