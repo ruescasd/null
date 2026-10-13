@@ -65,6 +65,15 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/bishop_cast.wav");
         embedded_asset!(app, "sounds/bishop_death.wav");
         embedded_asset!(app, "sounds/player_pain.wav");
+        embedded_asset!(app, "sounds/bishop_call.wav");
+        embedded_asset!(app, "sounds/bishop_pain.wav");
+        embedded_asset!(app, "sounds/bishop_blink.wav");
+        embedded_asset!(app, "sounds/step0.wav");
+        embedded_asset!(app, "sounds/step1.wav");
+        embedded_asset!(app, "sounds/step2.wav");
+        embedded_asset!(app, "sounds/step3.wav");
+        embedded_asset!(app, "sounds/step4.wav");
+        embedded_asset!(app, "sounds/step5.wav");
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
@@ -80,6 +89,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk),
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
+            .add_systems(Update, footsteps.after(crate::player::walk))
             .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::motes).chain().before(hunter::spawn), hunter::spawn))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
@@ -93,6 +103,9 @@ const SHARDS: usize = 16;
 const SPREAD: f32 = 0.085;
 const RANGE: f32 = 150.0;
 const SHARD_SPEED: f32 = 260.0;
+/// Your footsteps: how many recorded, and how far a stride (m).
+const STEPS: usize = 6;
+const STRIDE: f32 = 2.4;
 /// What a shard does to what it strikes.
 const DAMAGE: f32 = 1.8;
 /// How hard a shot pushes you back (m/s).
@@ -178,6 +191,12 @@ struct Assets3 {
     bishop_cast: Handle<AudioSource>,
     bishop_death: Handle<AudioSource>,
     player_pain: Handle<AudioSource>,
+    /// The bishop's call now and then, its pain, its blink.
+    bishop_call: Handle<AudioSource>,
+    bishop_pain: Handle<AudioSource>,
+    bishop_blink: Handle<AudioSource>,
+    /// Your footsteps (one of these, a step).
+    steps: Vec<Handle<AudioSource>>,
 }
 
 /// What landed this frame, for the feedback: how many shards hit something
@@ -337,6 +356,10 @@ fn setup(
         bishop_cast: load("bishop_cast"),
         bishop_death: load("bishop_death"),
         player_pain: load("player_pain"),
+        bishop_call: load("bishop_call"),
+        bishop_pain: load("bishop_pain"),
+        bishop_blink: load("bishop_blink"),
+        steps: (0..STEPS).map(|k| load(&format!("step{k}"))).collect(),
     };
 
     // The ear is the camera.
@@ -800,6 +823,32 @@ fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<S
     let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
     let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(at), Visibility::default())).id();
     forms::build(commands, kit, materials, root);
+}
+
+/// Your footsteps: on the ground and moving, a step every stride (one of
+/// them, a little higher or lower each time, never the same twice running),
+/// and one as you land.
+fn footsteps(time: Res<Time>, mut commands: Commands, assets: Res<Assets3>, player: Single<(&Player, &FlyCam)>, mut walked: Local<(f32, bool, u32, usize)>) {
+    let (player, fly) = *player;
+    let (walked_far, was_grounded, count, last) = &mut *walked;
+    let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
+    let landed = player.grounded && !*was_grounded;
+    *was_grounded = player.grounded;
+    if fly.noclip || !player.grounded {
+        return;
+    }
+    *walked_far += speed * time.delta_secs();
+    if landed || (speed > 1.0 && *walked_far >= STRIDE) {
+        *walked_far = 0.0;
+        *count += 1;
+        let r = |j: i32| hash01(*count as i32, j, 0, 0x5c1);
+        let mut k = (r(0) * STEPS as f32) as usize % STEPS;
+        if k == *last {
+            k = (k + 1) % STEPS;
+        }
+        *last = k;
+        commands.spawn((AudioPlayer::new(assets.steps[k].clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(if landed { 1.3 } else { 0.9 })).with_speed(0.92 + 0.16 * r(1))));
+    }
 }
 
 /// Broken swarmers shatter; a dead player starts again.

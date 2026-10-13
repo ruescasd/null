@@ -98,6 +98,11 @@ pub(super) struct Bishop {
     next_blink: f32,
     aimed: f32,
     struck: bool,
+    /// Hit since its pain was last heard; when it may cry out again; when it
+    /// next calls.
+    pained: bool,
+    pain_in: f32,
+    call_in: f32,
     pub(super) health: f32,
     /// Since it broke (s): its robes falling empty.
     broken: Option<f32>,
@@ -165,6 +170,7 @@ impl Bishop {
         self.health -= damage;
         self.velocity += Vec3::new(dir.x, 0.0, dir.z) * 0.6;
         self.struck = true;
+        self.pained = true;
     }
 }
 
@@ -602,6 +608,9 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         next_blink: 0.3,
         aimed: 0.0,
         struck: false,
+        pained: false,
+        pain_in: 0.0,
+        call_in: 2.0,
         health: BISHOP_HEALTH,
         broken: None,
         charge: None,
@@ -721,6 +730,21 @@ pub(super) fn float(
         let b = &mut *b;
         b.time += dt;
         let r = |k: i32| hash01(entity.index_u32() as i32, (b.time * 10.0) as i32, k, 0x8b2);
+        // Its voice, from its hood: in pain when hit (not again for half a
+        // second: a blast is one cry), and now and then a call.
+        if b.broken.is_none() && b.health > 0.0 {
+            b.pain_in -= dt;
+            b.call_in -= dt;
+            let hood = b.top + Vec3::Y * 0.3;
+            if std::mem::take(&mut b.pained) && b.pain_in <= 0.0 {
+                b.pain_in = 0.5;
+                b.call_in = b.call_in.max(1.5);
+                commands.spawn((AudioPlayer::new(assets.bishop_pain.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)), Transform::from_translation(hood)));
+            } else if b.call_in <= 0.0 {
+                b.call_in = 4.0 + 6.0 * r(60);
+                commands.spawn((AudioPlayer::new(assets.bishop_call.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)), Transform::from_translation(hood)));
+            }
+        }
         let to = eye - b.at;
         let facing = to.x.atan2(to.z);
         // Broken: the darkness in it bursts, its horns fall, its robes fall
@@ -839,6 +863,7 @@ pub(super) fn float(
                             }
                         }
                     }
+                    commands.spawn((AudioPlayer::new(assets.bishop_blink.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.6)), Transform::from_translation(to + Vec3::Y * SHOULDERS)));
                     b.at = to;
                     b.goal = to;
                     if args.opt("huntlog") {
