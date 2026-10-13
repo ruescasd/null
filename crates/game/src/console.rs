@@ -47,7 +47,7 @@ pub struct Spawns {
 }
 
 /// The kinds `spawn` knows.
-pub const KINDS: [&str; 6] = ["harrow", "angler", "biped", "sprawl", "bud", "bishop"];
+pub const KINDS: [&str; 7] = ["harrow", "angler", "biped", "sprawl", "bud", "grove", "bishop"];
 
 /// The console: whether it is down, the line being typed, what it has
 /// said, the commands run (for Up), how far down it is (0 away, 1 down).
@@ -249,7 +249,7 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "NAME VALUE           a number (--set NAME=VALUE); NAME default, back to its default".into(),
             "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
-            "spawn KIND [N]       N creatures 3 m before you: harrow, angler, biped, sprawl, bud, bishop".into(),
+            "spawn KIND [N]       N creatures 3 m before you: harrow, angler, biped, sprawl, bud, grove (7 asleep), bishop".into(),
             "clear                clears this".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),

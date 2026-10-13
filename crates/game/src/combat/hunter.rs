@@ -249,6 +249,15 @@ pub(super) fn spawn(
             let seed = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
             if kind == "bud" {
                 super::spawn_bud(&mut commands, &kit, &mut materials, at + Vec3::Y * 1.6, seed);
+            } else if kind == "grove" {
+                // Seven asleep, scattered over a few metres a little further
+                // on, each on the floor under it.
+                for k in 0..7 {
+                    let r = |j: i32| hash01(seed as i32, k, j, 0x5a4) - 0.5;
+                    let p = at + forward * 4.0 + Vec3::new(r(0), 0.0, r(1)) * 7.0;
+                    let p = nav.as_deref().and_then(|nav| nav.nearest(p, 8).map(|j| nav.nodes[j as usize])).unwrap_or(Vec3::new(p.x, ground.at(p), p.z));
+                    super::spawn_sleeper(&mut commands, &kit, &mut materials, p, seed.wrapping_mul(31).wrapping_add(k as u32));
+                }
             } else {
                 spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some(&kind));
             }

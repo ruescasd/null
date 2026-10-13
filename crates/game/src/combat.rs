@@ -146,13 +146,11 @@ struct Gun {
     reload_in: Option<f32>,
 }
 
-/// Sends the swarm: a group at a distance once the last one is gone (and
-/// whatever it made).
+/// Keeps the score, and when the swarm may next assemble.
 #[derive(Resource, Default)]
 struct Director {
     /// Seconds survived in this life (from when the ground has loaded).
     alive: f32,
-    next_wave: f32,
     /// Seconds until the swarm may assemble again.
     next_gather: f32,
     kills: u32,
@@ -376,7 +374,7 @@ fn setup(
         ));
     });
 
-    if !args.opt("peace") && args.shot.is_none() {
+    if args.shot.is_none() {
         // The ground's hum, and the swarm's voice (it follows the swarm).
         commands.spawn((
             AudioPlayer::new(load("ground_hum")),
@@ -595,27 +593,23 @@ fn fly_shards(mut commands: Commands, time: Res<Time>, assets: Res<Assets3>, mut
     }
 }
 
-/// The swarm: sent a group at a time from a distance, the next once the last
-/// is gone; each one stalks the player (see `stalk`).
+/// The swarm: each bud stalks the player (see `stalk`). None come by
+/// themselves (the user: waves of them were for testing them; creatures are
+/// placed by `spawn` at the console until they are placed properly).
+/// (Sets the clock you have lived by, which the weaving waits on.)
 #[allow(clippy::too_many_arguments)]
 fn swarm(
-    mut commands: Commands,
     time: Res<Time>,
     args: Res<Args>,
     streamer: Res<Streamer>,
     ground: crate::ground::Ground,
     nav: Option<Res<crate::chasm::nav::Nav>>,
-    spatial: SpatialQuery,
-    kit: Res<forms::Kit>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<Director>,
     player: Single<(&Transform, &Player, &FlyCam)>,
-    hunters: Query<(), Or<(With<hunter::Hunter>, With<hunter::Assembly>)>>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let (ptransform, _, fly) = *player;
-    let target = ptransform.translation - Vec3::Y * 0.3;
     // (`--opt fight` keeps it going in a capture, and fires the gun.)
     let capture = args.shot.is_some() && !args.opt("fight");
     // (Playing, it starts once the ground round you is in; measuring or
@@ -627,62 +621,10 @@ fn swarm(
     // (The labs, the rooms' and the plan's, in peace: they are for looking
     // at; a hound forming in one, the user. A region is fought in.)
     let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan"));
-    if args.opt("peace") || lab || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
+    if lab || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
         return;
     }
     director.alive += dt;
-    // The next group a while after the last is gone, and what it made.
-    // (`--set wave=N`, `wave_every=S`, `wave_at=M`: N at a time, S seconds
-    // after, M metres off.)
-    if !swarm.is_empty() || !hunters.is_empty() {
-        director.next_wave = director.next_wave.max(args.num("wave_every", 6.0));
-    } else {
-        director.next_wave -= dt;
-    }
-    if director.next_wave <= 0.0 && swarm.is_empty() && !args.opt("hunters") && !args.opt("specimen") {
-        let t = time.elapsed_secs();
-        // (`--opt grove`: a grove of them asleep on the ground, nearer; see
-        // `grove.rs`.)
-        let grove = args.opt("grove");
-        let group = args.num("wave", if grove { 7.0 } else { 3.0 }) as usize;
-        let a = hash01(t as i32, 1, 2, 0x5a1) * std::f32::consts::TAU;
-        let dist = args.num("wave_at", if grove { 30.0 } else { 50.0 }) + 15.0 * hash01(t as i32, 3, 2, 0x5a1);
-        let mut away = Vec3::new(a.cos(), 0.0, a.sin());
-        if args.opt("fight") {
-            // For captures: from straight ahead.
-            let f = ptransform.forward();
-            away = Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::X);
-        }
-        let mut base = target + away * dist;
-        // (In a built place, on its floors, somewhere out of sight.)
-        if let Some(nav) = nav.as_deref() {
-            let hidden = |q: Vec3| {
-                let to = q + Vec3::Y * 1.5 - target;
-                Dir3::new(to).is_ok_and(|d| spatial.cast_ray(target, d, to.length(), true, &default()).is_some())
-            };
-            let Some(q) = nav.spot(target, (25.0, 60.0), &hidden, &|k| hash01(t as i32, k as i32, 7, 0x5a3), 400) else { return };
-            base = q;
-        }
-        for k in 0..group {
-            let r = |j: i32| hash01(t as i32, k as i32, j, 0x5a2) - 0.5;
-            let mut p = base + Vec3::new(r(0), 0.0, r(1)) * if grove { 14.0 } else { 8.0 };
-            if let Some(nav) = nav.as_deref() {
-                p = nav.nearest(base + Vec3::new(r(0), 0.0, r(1)) * 4.0, 6).map_or(base, |j| nav.nodes[j as usize]);
-            }
-            // (A free one: see `spawn_bud`.)
-            if !grove {
-                spawn_bud(&mut commands, &kit, &mut materials, Vec3::new(p.x, ground.at(p) + 3.0 + r(2) * 2.0, p.z), (t as u32).wrapping_mul(31).wrapping_add(k as u32));
-                continue;
-            }
-            let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
-            // Low on its roots, opening to the sky, leaning a little.
-            let p = Vec3::new(p.x, ground.at(p) + 0.55, p.z);
-            let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
-            let transform = Transform::from_translation(p).looking_to(lean * Vec3::Y, Vec3::Z);
-            let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id();
-            forms::build(&mut commands, &kit, &mut materials, root);
-        }
-    }
 
     let positions: Vec<Vec3> = swarm.iter().map(|(_, t, _)| t.translation).collect();
     for (_, mut transform, mut s) in &mut swarm {
@@ -814,7 +756,18 @@ fn gloom(
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
 }
 
-/// A free bud at `at`, stalking (a wave's, or `spawn bud` at the console).
+/// A grove's bud at `at` (on the ground), asleep on its roots, opening to
+/// the sky, leaning a little (see `grove.rs`).
+fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32) {
+    let r = |j: i32| hash01(seed as i32, j, 0, 0x5a2) - 0.5;
+    let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
+    let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
+    let transform = Transform::from_translation(at + Vec3::Y * 0.55).looking_to(lean * Vec3::Y, Vec3::Z);
+    let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id();
+    forms::build(commands, kit, materials, root);
+}
+
+/// A free bud at `at`, stalking (`spawn bud` at the console).
 fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32) {
     let phase = hash01(seed as i32, 4, 0, 0x5a2) * 50.0;
     let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
@@ -883,7 +836,6 @@ fn die(
         director.notice = 4.0;
         director.alive = 0.0;
         director.kills = 0;
-        director.next_wave = 4.0;
         player.health = HEALTH_MAX;
         for (entity, ..) in &swarm {
             commands.entity(entity).despawn();

@@ -29,7 +29,7 @@ again. F1 toggles the help overlay.
 | Up / Down | time speed |
 | P | soft / hard shadows |
 | F12 | screenshot to `screenshots/` |
-| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, bud, bishop): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
+| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, bud, grove, bishop): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
 
 Command-line options, mostly for tuning and capturing reference frames (a switch, `--opt name`, can
 also be given as at the console, `--set name on` or `--set name off`; a number `--set name=value` or
@@ -97,22 +97,20 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
     --set paving=1|2                          paving on some of the ground (1 checkerboard, 2 fractal), each flat piece of
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)
-    --opt peace                               no swarm
     --opt swarm                               the swarm alone: it never assembles into hunters
     --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
                                               waist between a solid hips and chest
-    --opt grove                               buds grow in groves (7, about 30 m off), asleep and rooted, until a shot within
-                                              35 m or running within 12 m wakes them; one waking wakes those near it
-    --opt lonewake                            with --opt grove: now and then a bud wakes by itself, alone (within 15 m of
+    (no creatures come by themselves: `spawn KIND [N]` at the console places them; `spawn grove`: 7 buds asleep and
+                                              rooted, until a shot within 35 m or running within 12 m wakes them; one
+                                              waking wakes those near it)
+    --opt lonewake                            with a grove: now and then a bud wakes by itself, alone (within 15 m of
                                               you about once in 90 s, never beyond 30 m)
     --opt leech                               a bud waiting within 14 m (seen or not) may shoot a black cable
                                               into you and drink (1 health a second, short pale lengths of it running up)
                                               until it is destroyed or you get 15 m away
     --opt hair                                strands hanging from each bud, swinging and trailing
     --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
-                                              open, gloom=0..1 holds the darkness; with --opt peace)
-    --set wave=N --set wave_every=S           the swarm comes N at a time (3), S seconds after the last group and what it
-                                              made are gone (6), --set wave_at=M metres off (50, up to 15 more)
+                                              open, gloom=0..1 holds the darkness)
     --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (4), K how much one bud
                                               close by does (0.4); --set gloom_dim=S, how many stops the light dims (2.5)
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
@@ -126,7 +124,7 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               head); --opt sprawl: a beast moving another way (legs out from its sides,
                                               knees high over a low body, gliding level)
     --opt bones                               a hunter's pieces hidden, its bones drawn as lines (to see its limbs move)
-    --opt bishop                              the bishop lab (with --opt peace): a robed thing of cloth hangs 6 m before you and
+    --opt bishop                              the bishop lab: a robed thing of cloth hangs 3 m before you and
                                               moves in turn, 8 s each (--set bishop_mode=N holds one: 0 still, 1 drifting, 2
                                               jerking aside, 3 turning); bishop_yaw=D faces it D degrees off you; --opt bishopgrey
                                               all of it flat grey (its outline); in a region, on the floor nearest; `bishop off`,

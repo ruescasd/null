@@ -1,4 +1,4 @@
-//! Groves (`--opt grove`): the buds grow, asleep on the ground, rooted to it
+//! Groves (`spawn grove` at the console): the buds grow, asleep on the ground, rooted to it
 //! by cables sprawling out from under them, shut and dim whoever looks. Noise
 //! wakes them: a shot within 35 m, or running (not walking, Shift) within
 //! 12 m. A bud waking is thrown open, tears free of its roots (they fall
@@ -75,9 +75,6 @@ pub(super) fn grove(
     mut buds: Query<(Entity, &Transform, &mut Swarmer, &mut Gazed, Option<&mut Waking>, Has<Asleep>)>,
     mut roots: Query<(Entity, &mut Roots)>,
 ) {
-    if !args.opt("grove") {
-        return;
-    }
     let dt = time.delta_secs().clamp(0.001, 1.0 / 30.0);
     let material = material
         .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.4, reflectance: 0.5, ..default() }))

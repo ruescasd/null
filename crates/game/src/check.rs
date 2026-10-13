@@ -133,7 +133,7 @@ fn static_check(seed: u32, catalogue: bool) -> (bool, String, Vec<String>) {
 fn walk_check(kind: &str, seed: u32, catalogue: bool) -> (bool, String, Vec<String>) {
     let bot = if kind == "walk" { "walkbot" } else { "wallbot" };
     let args = Args {
-        opts: vec!["chasm".into(), "peace".into(), bot.into(), "headless".into()],
+        opts: vec!["chasm".into(), bot.into(), "headless".into()],
         sets: Vec::new(),
         cam: None,
         time: None,
