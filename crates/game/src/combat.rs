@@ -751,7 +751,8 @@ fn die(
         shatter(&mut commands, &assets, transform.translation, s.velocity, entity.index_u32());
         commands.entity(entity).despawn();
     }
-    // (`--opt god`: for watching the swarm without dying.)
+    // (`--opt god`, or `god on` at the console: for watching the swarm,
+    // or testing a fight, without dying.)
     if args.opt("god") {
         player.health = HEALTH_MAX;
     }
