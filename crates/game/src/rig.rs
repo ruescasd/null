@@ -180,11 +180,11 @@ impl Plan {
     pub fn beast() -> Self {
         // (Long legs, bent under a body carried lower than they could
         // hold it: room to reach fore and aft, a predator's, not a table's.)
-        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 0.8, lower: 0.8, knee: -1.0, radius: (0.2, 0.13) };
-        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 0.85, lower: 0.85, knee: -1.0, radius: (0.23, 0.12) };
+        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 1.0, lower: 1.0, knee: -1.0, radius: (0.2, 0.13) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 1.05, lower: 1.05, knee: -1.0, radius: (0.23, 0.12) };
         Plan {
-            hips: (-0.85, 1.45),
-            chest: (0.85, 1.5),
+            hips: (-0.85, 1.75),
+            chest: (0.85, 1.8),
             torso_radius: 0.33,
             torso_profile: [0.82, 0.72, 1.12],
             rump: 0.35,
