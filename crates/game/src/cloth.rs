@@ -150,11 +150,14 @@ impl Cloth {
         }
     }
 
-    /// All of it moved by `by` at once, as it is (a blink: no swing).
-    pub fn shift(&mut self, by: Vec3) {
-        for (p, q) in self.points.iter_mut().zip(self.previous.iter_mut()) {
-            *p += by;
-            *q += by;
+    /// All of it moved by `by` at once, each point left `lag` of the way
+    /// behind (by its index, 0..1: 0 moved all the way, still), to catch up
+    /// as it swings (a blink: the hem whipping after the body).
+    pub fn shift(&mut self, by: Vec3, lag: impl Fn(usize) -> f32) {
+        for (i, (p, q)) in self.points.iter_mut().zip(self.previous.iter_mut()).enumerate() {
+            let moved = by * (1.0 - lag(i));
+            *p += moved;
+            *q += moved;
         }
     }
 

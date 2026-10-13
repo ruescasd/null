@@ -22,9 +22,12 @@ const SHOULDERS: f32 = 2.36;
 const LENGTH: f32 = 2.01;
 /// How long its cloth hangs free before its drape is kept (s), and how
 /// firmly it is pulled back to it (per second): the robe, the hood and
-/// mantle, the sleeves.
+/// mantle, the sleeves (pulled twice as hard it barely moved, the user).
 const DRAPED: f32 = 1.5;
-const KEEP: [f32; 3] = [5.0, 8.0, 5.0];
+const KEEP: [f32; 3] = [2.5, 4.0, 3.0];
+/// How far behind its hem is left in a blink (of the way), its mantle's
+/// edge, its cuffs: they whip after it.
+const TRAIL: [f32; 3] = [0.35, 0.2, 0.3];
 /// The cloth's shade and its markings' (sRGB).
 const DARK: f32 = 0.035;
 /// How far its head is bowed (radians).
@@ -459,7 +462,7 @@ pub(super) fn arrive(
 
 /// Bishops float: the lab's moves in turn, eight seconds each (`--set
 /// bishop_mode=N` holds one: 0 still, 1 drifting, 2 jerking aside, 3
-/// turning; `bishop_yaw=D` faces it D degrees off you); the others hunt
+/// turning, 4 hunting; `bishop_yaw=D` faces it D degrees off you); the others hunt
 /// you: drifting, never quite steadily, from spot to spot a little way off
 /// where you are in sight, always facing you; and blinking aside, gone and
 /// there in an instant, afterimages left along the way, when you shoot, or
@@ -538,7 +541,10 @@ pub(super) fn float(
                 commands.entity(entity).despawn();
                 continue;
             }
-        } else if let Some(lab) = b.lab.as_mut() {
+        } else if let Some(lab) = b.lab.as_mut()
+            && args.num("bishop_mode", -1.0) != 4.0
+        {
+            // (`--set bishop_mode=4`: the lab's hunts, as a spawned one does.)
             let mode = if args.num("bishop_mode", -1.0) >= 0.0 { args.num("bishop_mode", 0.0) as u32 } else { (b.time / 8.0) as u32 % 4 };
             // (`--set bishop_yaw=D`: it faces D degrees off you, to see it
             // from the side.)
@@ -608,10 +614,13 @@ pub(super) fn float(
                     b.at = to;
                     b.goal = to;
                     b.last_top += by;
-                    b.cloth.shift(by);
-                    b.cape.shift(by);
+                    // (Its cloth left trailing, the more the further from its
+                    // shoulders, to whip after it: moved with it as it was,
+                    // the cloth did nothing to be seen, the user.)
+                    b.cloth.shift(by, |i| TRAIL[0] * ((i / ROUND) as f32 / (DOWN - 1) as f32).powf(1.5));
+                    b.cape.shift(by, |i| if i / CAPE_ROUND > THROAT[1] { TRAIL[1] * ((i / CAPE_ROUND - THROAT[1]) as f32 / (CAPE.len() - 1 - THROAT[1]) as f32) } else { 0.0 });
                     for (sleeve, _) in &mut b.sleeves {
-                        sleeve.shift(by);
+                        sleeve.shift(by, |i| TRAIL[2] * (i / SLEEVE_ROUND) as f32 / (SLEEVE_ALONG - 1) as f32);
                     }
                     if args.opt("huntlog") {
                         info!("huntlog: bishop {} blinks {:.1} m aside ({}), {:.1} m from you", entity.index_u32(), by.length(), if shot { "shot at" } else if b.struck { "hit" } else if b.aimed > 0.5 { "aimed at" } else { "of itself" }, Vec2::new(to.x - eye.x, to.z - eye.z).length());
