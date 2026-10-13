@@ -44,9 +44,27 @@ pub struct LegPlan {
     pub forward: f32,
     pub upper: f32,
     pub lower: f32,
-    /// Which way the knee points: +1 forward, -1 back.
+    /// Which way the knee points: +1 forward, -1 back; and how far up and
+    /// out to its side as well (a knee above the back).
     pub knee: f32,
+    pub knee_up: f32,
+    pub knee_out: f32,
+    /// How far out to its side from its hip the foot is set down.
+    pub spread: f32,
     pub radius: (f32, f32),
+}
+
+/// How a body moves.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Style {
+    /// As a mammal: walk, trot, gallop, the body carried over the feet.
+    Gallop,
+    /// Long forelimbs reach far ahead, plant, and haul the body after them
+    /// in a surge; the hind legs, short, knees high, hop up behind.
+    Hauler,
+    /// Legs out from its sides, knees high over a body slung low between
+    /// them, the body gliding level, turning short.
+    Sprawl,
 }
 
 /// A gait, used from `speed` up (blending into the next): when in the
@@ -106,12 +124,15 @@ pub struct Plan {
     pub shoulder: f32,
     /// How far the spine swings from side to side when walking.
     pub sway: f32,
+    /// How it moves, and how fast it turns to face where it goes (rad/s).
+    pub style: Style,
+    pub turn: f32,
 }
 
 impl Plan {
     /// A tall biped with long arms, about 3 m.
     pub fn biped() -> Self {
-        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, radius: (0.16, 0.1) };
+        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.16, 0.1) };
         let arm = |side: f32| ArmPlan { side, upper: 0.75, lower: 0.9, radius: (0.11, 0.07) };
         Plan {
             hips: (0.0, 1.5),
@@ -137,6 +158,8 @@ impl Plan {
             rock: 0.0,
             shoulder: 0.0,
             sway: 0.03,
+            style: Style::Gallop,
+            turn: 3.0,
         }
     }
 
@@ -155,6 +178,7 @@ impl Plan {
             leg.forward *= k;
             leg.upper *= k;
             leg.lower *= k;
+            leg.spread *= k;
             leg.radius = (leg.radius.0 * k, leg.radius.1 * k);
         }
         for arm in &mut self.arms {
@@ -180,8 +204,8 @@ impl Plan {
     pub fn beast() -> Self {
         // (Long legs, bent under a body carried lower than they could
         // hold it: room to reach fore and aft, a predator's, not a table's.)
-        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 1.0, lower: 1.0, knee: -1.0, radius: (0.2, 0.13) };
-        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 1.05, lower: 1.05, knee: -1.0, radius: (0.23, 0.12) };
+        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 1.0, lower: 1.0, knee: -1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.2, 0.13) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 1.05, lower: 1.05, knee: -1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.23, 0.12) };
         Plan {
             hips: (-0.85, 1.75),
             chest: (0.85, 1.8),
@@ -217,6 +241,66 @@ impl Plan {
             rock: 0.14,
             shoulder: 0.06,
             sway: 0.08,
+            style: Style::Gallop,
+            turn: 3.0,
+        }
+    }
+
+    /// The hound's body moving another way: long forelimbs, elbows above
+    /// the back, reaching far ahead and hauling the body after them in
+    /// surges; short hind legs, knees high, hopping up behind; the chest
+    /// high, the rump low, the head hung low between the shoulders.
+    pub fn hauler() -> Self {
+        let fore = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.15, upper: 1.3, lower: 1.4, knee: -0.6, knee_up: 1.0, knee_out: 0.6, spread: 0.35, radius: (0.2, 0.12) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.75, lower: 0.8, knee: 0.3, knee_up: 1.0, knee_out: 0.5, spread: 0.3, radius: (0.22, 0.12) };
+        let beast = Plan::beast();
+        Plan {
+            hips: (-0.8, 0.8),
+            chest: (0.8, 1.2),
+            neck: (0.55, 0.35, -0.05),
+            legs: vec![fore(-0.42), fore(0.42), hind(-0.3), hind(0.3)],
+            gaits: vec![
+                // Slow, the arms one after the other.
+                Gait { speed: 0.0, offsets: vec![0.0, 0.5, 0.25, 0.75], swing: 0.3, stride: 2.0 },
+                // Fast, both arms reaching together (one a little behind),
+                // the body hauled after them as they bear, the hind legs
+                // hopping up in the haul.
+                Gait { speed: 6.0, offsets: vec![0.0, 0.06, 0.45, 0.5], swing: 0.4, stride: 5.5 },
+            ],
+            lift: 0.45,
+            bob: 0.0,
+            rock: 0.0,
+            sway: 0.0,
+            shoulder: 0.1,
+            style: Style::Hauler,
+            ..beast
+        }
+    }
+
+    /// The hound's body moving another way: legs out from its sides, knees
+    /// high over a body slung low between them, gliding level on quick
+    /// diagonal pairs of steps, turning short.
+    pub fn sprawl() -> Self {
+        let leg = |root: Root, side: f32, forward: f32| LegPlan { root, side, forward, upper: 1.1, lower: 1.3, knee: 0.0, knee_up: 1.0, knee_out: 0.4, spread: 1.2, radius: (0.17, 0.1) };
+        let beast = Plan::beast();
+        Plan {
+            hips: (-0.8, 0.75),
+            chest: (0.8, 0.8),
+            neck: (0.55, 0.4, 0.05),
+            legs: vec![leg(Root::Chest, -0.3, 0.15), leg(Root::Chest, 0.3, 0.15), leg(Root::Hips, -0.3, -0.1), leg(Root::Hips, 0.3, -0.1)],
+            gaits: vec![
+                Gait { speed: 0.0, offsets: vec![0.0, 0.5, 0.53, 0.03], swing: 0.35, stride: 1.4 },
+                Gait { speed: 8.0, offsets: vec![0.0, 0.5, 0.53, 0.03], swing: 0.4, stride: 2.6 },
+            ],
+            lift: 0.15,
+            bob: 0.0,
+            lean: 0.0,
+            rock: 0.0,
+            sway: 0.0,
+            shoulder: 0.0,
+            style: Style::Sprawl,
+            turn: 9.0,
+            ..beast
         }
     }
 }
@@ -467,7 +551,10 @@ impl Rig {
         // In a leap the body pitches with its arc: nose up rising, down
         // falling.
         let pitch = (self.airborne.unwrap_or(0.0) * 0.04).clamp(-0.25, 0.25) * if root == Root::Chest { 1.0 } else { -1.0 };
-        let height = h * (1.0 - low) + bob + rock + pitch + if root == Root::Chest { breath } else { 0.0 };
+        // Hauling, the chest gathers low as the arms reach and heaves up as
+        // they haul (the rump less).
+        let heave = if self.plan.style == Style::Hauler { 0.15 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos() * if root == Root::Chest { 1.0 } else { 0.4 } } else { 0.0 };
+        let height = h * (1.0 - low) + bob + rock + pitch + heave + if root == Root::Chest { breath } else { 0.0 };
         // Leaning into a turn: the body swings towards its inside.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
@@ -501,7 +588,13 @@ impl Rig {
         // (Galloping, further: three quarters of the leg out before it,
         // as far behind as it leaves, the legs reaching, not under it.)
         let ahead = ((1.0 - self.swing) * self.stride * 0.5).min((leg.upper + leg.lower) * (0.6 + 0.15 * self.gallop)) * (speed / 1.5).min(1.0);
-        let lead = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero() * ahead;
+        // (Hauling, the forefeet set far out ahead, the body hauled up to
+        // them and on past.)
+        let ahead = if self.plan.style == Style::Hauler && leg.root == Root::Chest { (leg.upper + leg.lower) * 0.7 * (speed / 1.5).min(1.0) } else { ahead };
+        let yaw = if leg.root == Root::Hips { self.hips_yaw } else { self.chest_yaw };
+        let fwd = self.forward_of(yaw);
+        let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum() * leg.spread;
+        let lead = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero() * ahead + out;
         // Each step lands a little off its ideal place.
         let k = self.steps.get(i).copied().unwrap_or(0) as i32;
         let r = |j: i32| hash01(self.seed as i32 + i as i32 * 101, k, j, 0x61b) - 0.5;
@@ -563,17 +656,20 @@ impl Rig {
             if Vec2::new(face.x, face.z).length() > 0.01 {
                 let target = face.x.atan2(face.z);
                 let turn = (target - self.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                self.heading += turn.clamp(-3.0 * dt, 3.0 * dt);
+                self.heading += turn.clamp(-self.plan.turn * dt, self.plan.turn * dt);
             }
             let before = self.root;
-            self.root = sweep(self.root, (self.velocity + self.knock) * dt);
+            let want = self.velocity * self.surge();
+            self.root = sweep(self.root, (want + self.knock) * dt);
             self.root.y = ground(self.root.x, self.root.z);
             // (Stopped by a wall, it goes no faster than it gets: not running
             // on the spot against it.)
-            let got = (self.root - before) / dt.max(1e-4);
-            if Vec2::new(got.x, got.z).length() < Vec2::new(self.velocity.x, self.velocity.z).length() {
-                self.velocity.x = got.x;
-                self.velocity.z = got.z;
+            let got = Vec2::new(self.root.x - before.x, self.root.z - before.z).length() / dt.max(1e-4);
+            let wanted = Vec2::new(want.x, want.z).length();
+            if got < wanted && wanted > 1e-3 {
+                let k = got / wanted;
+                self.velocity.x *= k;
+                self.velocity.z *= k;
             }
         }
         self.knock *= (-dt * 6.0).exp();
@@ -595,6 +691,8 @@ impl Rig {
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let any_swinging = self.feet.iter().any(|f| f.swinging);
         let (mut offsets, swing, stride, gallop) = self.plan.gait(speed);
+        // (Only a mammal gallops: its bound, rock and reaching swing.)
+        let gallop = if self.plan.style == Style::Gallop { gallop } else { 0.0 };
         // Half lead with the other side.
         if offsets.len() == 4 && self.seed % 2 == 1 {
             offsets.swap(0, 1);
@@ -765,7 +863,8 @@ impl Rig {
                 }
                 None => self.feet[i].planted,
             };
-            let (knee, end) = ik(hip, target, leg.upper, leg.lower, fwd * leg.knee);
+            let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum();
+            let (knee, end) = ik(hip, target, leg.upper, leg.lower, fwd * leg.knee + Vec3::Y * leg.knee_up + out * leg.knee_out);
             bones.push(Bone { a: hip, b: knee, radius: leg.radius.0, side: right });
             bones.push(Bone { a: knee, b: end, radius: leg.radius.1, side: right });
         }
@@ -824,6 +923,17 @@ impl Rig {
         let s = self.phase;
         let (a, b) = (at(self.strides), at(self.strides + 1));
         a + (b - a) * s * s * (3.0 - 2.0 * s)
+    }
+
+    /// How much of its speed the body moves at this point in the stride:
+    /// hauling, almost still as the arms reach (a sixth), surging as they
+    /// haul (nearly twice), its speed on the whole; else all of it.
+    fn surge(&self) -> f32 {
+        if self.plan.style != Style::Hauler {
+            return 1.0;
+        }
+        let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 3.0).min(1.0);
+        1.0 + 0.85 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos()
     }
 
     /// The gait's clock for the body's rise and fall: galloping, shifted so

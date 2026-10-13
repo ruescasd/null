@@ -485,6 +485,13 @@ fn spawn_hunter(
     } else {
         Plan::biped()
     };
+    // (`--opt hauler`, `--opt sprawl`: a four-legged hunter that moves as
+    // no mammal does; the gallop read as a dog, the user.)
+    let plan = match kind {
+        Kind::Beast if args.opt("hauler") => Plan::hauler(),
+        Kind::Beast if args.opt("sprawl") => Plan::sprawl(),
+        _ => plan,
+    };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
@@ -1374,6 +1381,24 @@ pub(super) fn voice(
             Transform::default(),
         ));
         voice.next = length / speed + pause.start + (pause.end - pause.start) * r(2);
+    }
+}
+
+/// `--opt bones` (to see how a body moves, its pieces hiding its limbs):
+/// its pieces hidden, its bones drawn as lines, its joints as small balls.
+pub(super) fn skeleton(args: Res<Args>, hunters: Query<&Hunter>, mut parts: Query<&mut Visibility, With<Part>>, mut gizmos: Gizmos) {
+    if !args.opt("bones") {
+        return;
+    }
+    for mut v in &mut parts {
+        *v = Visibility::Hidden;
+    }
+    let colour = Color::srgb(1.0, 0.25, 0.05);
+    for h in &hunters {
+        for b in &h.rig.bones {
+            gizmos.line(b.a, b.b, colour);
+            gizmos.sphere(Isometry3d::from_translation(b.b), 0.06, colour);
+        }
     }
 }
 
