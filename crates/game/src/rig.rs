@@ -197,20 +197,21 @@ impl Plan {
             tail: (8, 0.22),
             gaits: vec![
                 // A walk: one foot after another down each side.
-                Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 2.0 },
+                Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 1.6 },
                 // A trot: diagonal pairs, the hind foot of each a little
                 // after the fore (not as one: a toy's).
-                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.56, 0.06], swing: 0.45, stride: 3.4 },
+                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.56, 0.06], swing: 0.45, stride: 2.8 },
                 // A gallop: the front pair, then the hind pair, round the
                 // body (fore left, fore right, hind right, hind left), each
-                // foot plainly after the other. Long and slow for its speed,
-                // a big animal's, not a dog's quick steps; each foot down
-                // for under a third of the cycle.
-                Gait { speed: 11.0, offsets: vec![0.0, 0.18, 0.64, 0.5], swing: 0.7, stride: 7.5 },
+                // foot plainly after the other; each foot down for under a
+                // third of the cycle. (Strides of 7.5 m, a big animal's,
+                // were too slow a beat, the user: the reach is in the legs,
+                // not the stride.)
+                Gait { speed: 11.0, offsets: vec![0.0, 0.18, 0.64, 0.5], swing: 0.7, stride: 5.5 },
             ],
             lift: 0.28,
-            accel: 14.0,
-            decel: 18.0,
+            accel: 20.0,
+            decel: 24.0,
             bob: 0.05,
             lean: 0.06,
             rock: 0.09,
@@ -229,7 +230,7 @@ impl Plan {
         let k = g.iter().rposition(|x| x.speed <= speed).unwrap_or(0);
         let fastest = if last > 0 { ((speed - g[last - 1].speed) / (g[last].speed - g[last - 1].speed)).clamp(0.0, 1.0) } else { 0.0 };
         if k >= last {
-            return (g[last].offsets.clone(), g[last].swing, g[last].stride * (speed / g[last].speed.max(0.1)).clamp(1.0, 1.4), fastest);
+            return (g[last].offsets.clone(), g[last].swing, g[last].stride * (speed / g[last].speed.max(0.1)).clamp(1.0, 1.15), fastest);
         }
         let (a, b) = (&g[k], &g[k + 1]);
         let t = ((speed - a.speed) / (b.speed - a.speed)).clamp(0.0, 1.0);
@@ -537,9 +538,15 @@ impl Rig {
         } else {
             // On the ground: accelerate towards the wanted velocity, turn to
             // face where it goes (or where it looks, standing).
-            let faster = intent.velocity.length() > self.velocity.length();
-            let change = (intent.velocity - self.velocity).clamp_length_max(if faster { self.plan.accel } else { self.plan.decel } * dt);
-            self.velocity += change;
+            // Faster or slower by its acceleration; turning by its grip, half
+            // as much again, about 3 g at a gallop: it swings wide round a
+            // corner and slams into the wall, not turning on the spot (the
+            // user: slamming into walls before toy physics).
+            let change = intent.velocity - self.velocity;
+            let dir = self.velocity.normalize_or_zero();
+            let along = dir * change.dot(dir);
+            let rate = if change.dot(dir) > 0.0 || dir == Vec3::ZERO { self.plan.accel } else { self.plan.decel };
+            self.velocity += along.clamp_length_max(rate * dt) + (change - along).clamp_length_max(rate * 1.5 * dt);
             self.velocity.y = 0.0;
             let face = if self.velocity.length() > 0.5 { self.velocity } else { intent.look - self.root };
             if Vec2::new(face.x, face.z).length() > 0.01 {

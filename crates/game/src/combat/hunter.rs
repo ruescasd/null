@@ -1014,7 +1014,7 @@ pub(super) fn hunt(
                     let base = if distance > 18.0 || searching { toward } else { (toward * 0.4 + around * 0.8).normalize_or(toward) };
                     let dir = Quat::from_rotation_y(if searching { wander * 0.3 } else { wander });
                     let dir = dir * base;
-                    intent.velocity = dir * if searching { 6.0 } else if distance > 30.0 { 5.5 } else if distance > 18.0 { 3.8 } else { 2.4 } * pace;
+                    intent.velocity = dir * if searching { 7.5 } else if distance > 30.0 { 6.5 } else if distance > 18.0 { 4.5 } else { 3.0 } * pace;
                     if searching {
                         intent.crouch = 0.2;
                     }
@@ -1058,7 +1058,7 @@ pub(super) fn hunt(
                             if t > dt { Gesture::Creep(t - dt) } else { Gesture::None }
                         }
                         Gesture::Burst(t) => {
-                            intent.velocity = intent.velocity.normalize_or(toward) * 7.0;
+                            intent.velocity = intent.velocity.normalize_or(toward) * 9.0;
                             intent.crouch = 0.1;
                             if t > dt { Gesture::Burst(t - dt) } else { Gesture::None }
                         }
@@ -1083,7 +1083,7 @@ pub(super) fn hunt(
                 // Building to a gallop, then a pounce out of the run, keeping
                 // its momentum.
                 Stance::Charge => {
-                    intent.velocity = toward * if chasing { 17.0 } else { 14.0 };
+                    intent.velocity = toward * if chasing { 22.0 } else { 17.0 };
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
                     if speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
@@ -1100,7 +1100,7 @@ pub(super) fn hunt(
                     }
                 }
                 Stance::Windup => {
-                    intent.velocity = toward * 17.0;
+                    intent.velocity = toward * 22.0;
                     intent.crouch = 1.0;
                     intent.stretch = 1.0;
                     if h.timer <= 0.0 {
@@ -1112,7 +1112,7 @@ pub(super) fn hunt(
                         if distance < SNAP {
                             h.rig.leap(toward, 6.0, 2.0);
                         } else {
-                            h.rig.leap(toward, (distance / flight).clamp(12.0, 28.0), up);
+                            h.rig.leap(toward, (distance / flight).clamp(12.0, 34.0), up);
                         }
                         commands.spawn((
                             AudioPlayer::new(assets.pounce.clone()),
@@ -1145,10 +1145,10 @@ pub(super) fn hunt(
             match h.stance {
                 Stance::Stalk | Stance::Freeze | Stance::Charge => {
                     let (pace, stop) = match h.aware {
-                        Aware::Chasing => (6.5, 2.5),
-                        Aware::Pursuing => (6.5, 0.5),
-                        Aware::Searching(_) => (4.0, 0.5),
-                        Aware::Unaware => (3.0, 2.5),
+                        Aware::Chasing => (8.0, 2.5),
+                        Aware::Pursuing => (8.0, 0.5),
+                        Aware::Searching(_) => (5.0, 0.5),
+                        Aware::Unaware => (3.5, 2.5),
                     };
                     if distance > stop {
                         intent.velocity = toward * pace * ((distance - stop) / 3.0).min(1.0);
