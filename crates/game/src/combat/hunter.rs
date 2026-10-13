@@ -416,6 +416,9 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
 #[derive(Component)]
 pub(super) struct Eye {
     hunter: Entity,
+    /// The bone it is on: its head (4), or a tripod's body (2: its eyes
+    /// round it, each seeing out its own way).
+    bone: usize,
     /// Where on the head: across and up (head radii), and along it (0..1).
     at: Vec3,
     material: Handle<StandardMaterial>,
@@ -614,6 +617,7 @@ fn spawn_hunter(
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
     let sprawl = plan.style == crate::rig::Style::Sprawl;
+    let radial = plan.radial;
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
@@ -643,6 +647,10 @@ fn spawn_hunter(
     for (i, bone) in bones.iter().enumerate() {
         // (Woven cable instead; see `cables.rs`.)
         if cables::replaces(args, i) {
+            continue;
+        }
+        // (A tripod: no neck nor head; its eyes are round its body.)
+        if radial && (i == 3 || i == 4) {
             continue;
         }
         let length = bone.a.distance(bone.b);
@@ -836,7 +844,7 @@ fn spawn_hunter(
             let mut offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
             // A beast's belly is lean: what hangs under the torso (+Z in
             // its frame) sits close in.
-            if kind == Kind::Beast && i < 3 && offset.z > 0.0 {
+            if kind == Kind::Beast && !radial && i < 3 && offset.z > 0.0 {
                 offset.z *= 0.45;
             }
             // Knots, and now and then a long blade swept back.
@@ -860,7 +868,7 @@ fn spawn_hunter(
         }
         // In a bone's frame Y runs along it, X to the body's right, and
         // -Z is the back (up on a beast's level torso).
-        if kind == Kind::Beast && (i == 2 || i == 3) {
+        if kind == Kind::Beast && !radial && (i == 2 || i == 3) {
             // Muscle over the shoulders and up the back of the neck: a
             // heavy hump of mass on top, where its strength is.
             let (from, to) = if i == 2 { (0.45, 1.0) } else { (0.0, 0.45) };
@@ -900,13 +908,27 @@ fn spawn_hunter(
         ..default()
     });
     let (across, up, along) = HEAD_EYES[angler as usize];
-    for side in [-1.0f32, 1.0] {
-        commands.spawn((
-            Eye { hunter, at: Vec3::new(side * across, up, along), material: eyes.clone() },
-            Mesh3d(assets.core.clone()),
-            MeshMaterial3d(eyes.clone()),
-            Transform::from_translation(feet).with_scale(Vec3::splat(0.13)),
-        ));
+    if radial {
+        // A tripod: three round its body, high up, a third of a turn apart.
+        for k in 0..3 {
+            let a = k as f32 / 3.0 * std::f32::consts::TAU;
+            let own = materials.add(materials.get(&eyes).cloned().unwrap_or_default());
+            commands.spawn((
+                Eye { hunter, bone: 2, at: Vec3::new(a.cos() * 0.95, a.sin() * 0.95, 0.75), material: own.clone() },
+                Mesh3d(assets.core.clone()),
+                MeshMaterial3d(own),
+                Transform::from_translation(feet).with_scale(Vec3::splat(0.17)),
+            ));
+        }
+    } else {
+        for side in [-1.0f32, 1.0] {
+            commands.spawn((
+                Eye { hunter, bone: 4, at: Vec3::new(side * across, up, along), material: eyes.clone() },
+                Mesh3d(assets.core.clone()),
+                MeshMaterial3d(eyes.clone()),
+                Transform::from_translation(feet).with_scale(Vec3::splat(0.13)),
+            ));
+        }
     }
 }
 
@@ -1695,14 +1717,20 @@ pub(super) fn flesh(
     }
     for (eye, mut transform) in &mut eyes {
         let Ok(h) = hunters.get(eye.hunter) else { continue };
-        let (tip, dir) = h.rig.head();
-        // In the skull's sides, under the brow.
-        let head = h.rig.bones[4];
+        // In the skull's sides, under the brow (or round a tripod's body).
+        let Some(&head) = h.rig.bones.get(eye.bone) else { continue };
         let rotation = head.rotation();
-        transform.translation = head.a.lerp(head.b, eye.at.z) + rotation * Vec3::new(eye.at.x * head.radius, 0.0, -eye.at.y * head.radius);
+        let out = rotation * Vec3::new(eye.at.x * head.radius, 0.0, -eye.at.y * head.radius);
+        transform.translation = head.a.lerp(head.b, eye.at.z) + out;
         transform.rotation = rotation;
-        // Eyeshine: bright only when it looks straight at you.
-        let facing = dir.dot((camera.translation - tip).normalize_or(Vec3::Y)).max(0.0).powi(8);
+        // Eyeshine: bright only when it looks straight at you (a tripod's
+        // each its own way out, broadly: two of the three see you).
+        let facing = if eye.bone == 4 {
+            let (tip, dir) = h.rig.head();
+            dir.dot((camera.translation - tip).normalize_or(Vec3::Y)).max(0.0).powi(8)
+        } else {
+            out.normalize_or(Vec3::X).dot((camera.translation - transform.translation).normalize_or(Vec3::Y)).max(0.0).powi(2)
+        };
         if let Some(mut m) = materials.get_mut(&eye.material) {
             m.emissive = LinearRgba::rgb(1.0, 1.0, 1.0) * 6000.0 * facing;
         }

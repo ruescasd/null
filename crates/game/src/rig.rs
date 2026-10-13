@@ -127,6 +127,9 @@ pub struct Plan {
     /// How it moves, and how fast it turns to face where it goes (rad/s).
     pub style: Style,
     pub turn: f32,
+    /// Its legs about its body, each set out from it the way it stands
+    /// from the body's middle (a tripod's), not to the left or the right.
+    pub radial: bool,
 }
 
 impl Plan {
@@ -160,6 +163,7 @@ impl Plan {
             sway: 0.03,
             style: Style::Gallop,
             turn: 3.0,
+            radial: false,
         }
     }
 
@@ -239,32 +243,44 @@ impl Plan {
             sway: 0.0,
             style: Style::Hauler,
             turn: 3.0,
+            radial: false,
         }
     }
 
-    /// The beast moving another way (`--opt sprawl`): legs out from its
-    /// sides, knees high over a body slung low between them, gliding level
-    /// on quick diagonal pairs of steps, turning short.
+    /// The sprawl (`--opt sprawl`): a tripod (the user's idea), three long
+    /// legs at a third of a turn about a central body, their knees up over
+    /// it and out, their feet set wide; no front, so it never turns, going
+    /// any way as it is (a flanker's: no turn to give it away). Its body
+    /// upright, of a mass with its legs (a small body on long legs read as a
+    /// cartoon spider); no head: three eyes round its body.
     pub fn sprawl() -> Self {
-        let leg = |root: Root, side: f32, forward: f32| LegPlan { root, side, forward, upper: 1.1, lower: 1.3, knee: 0.0, knee_up: 1.0, knee_out: 0.4, spread: 1.2, radius: (0.17, 0.1) };
+        let leg = |a: f32| LegPlan { root: Root::Chest, side: 0.3 * a.sin(), forward: 0.3 * a.cos(), upper: 1.4, lower: 1.7, knee: 0.0, knee_up: 1.0, knee_out: 0.7, spread: 1.6, radius: (0.18, 0.11) };
+        let third = std::f32::consts::TAU / 3.0;
         let beast = Plan::beast();
         Plan {
-            hips: (-0.8, 0.75),
-            chest: (0.8, 0.8),
-            neck: (0.55, 0.4, 0.05),
-            legs: vec![leg(Root::Chest, -0.3, 0.15), leg(Root::Chest, 0.3, 0.15), leg(Root::Hips, -0.3, -0.1), leg(Root::Hips, 0.3, -0.1)],
+            hips: (0.0, 1.3),
+            chest: (0.0, 2.3),
+            rump: 0.0,
+            torso_radius: 0.6,
+            torso_profile: [0.85, 1.1, 0.9],
+            neck: (0.15, 0.0, 1.0),
+            neck_radius: 0.12,
+            head: (0.15, 0.12),
+            legs: vec![leg(0.0), leg(third), leg(2.0 * third)],
             gaits: vec![
-                Gait { speed: 0.0, offsets: vec![0.0, 0.5, 0.53, 0.03], swing: 0.35, stride: 1.4 },
-                Gait { speed: 8.0, offsets: vec![0.0, 0.5, 0.53, 0.03], swing: 0.4, stride: 2.6 },
+                // One leg after another, round the body.
+                Gait { speed: 0.0, offsets: vec![0.0, 0.33, 0.67], swing: 0.3, stride: 1.6 },
+                Gait { speed: 8.0, offsets: vec![0.0, 0.33, 0.67], swing: 0.38, stride: 2.8 },
             ],
-            lift: 0.15,
+            lift: 0.25,
             bob: 0.0,
             lean: 0.0,
             rock: 0.0,
             sway: 0.0,
             shoulder: 0.0,
             style: Style::Sprawl,
-            turn: 9.0,
+            turn: 0.0,
+            radial: true,
             ..beast
         }
     }
@@ -575,7 +591,7 @@ impl Rig {
         let ahead = if self.plan.style == Style::Hauler && leg.root == Root::Chest { (leg.upper + leg.lower) * 0.7 * (speed / 1.5).min(1.0) } else { ahead };
         let yaw = if leg.root == Root::Hips { self.hips_yaw } else { self.chest_yaw };
         let fwd = self.forward_of(yaw);
-        let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum() * leg.spread;
+        let out = self.out_of(&leg, fwd) * leg.spread;
         let lead = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero() * ahead + out;
         // Each step lands a little off its ideal place.
         let k = self.steps.get(i).copied().unwrap_or(0) as i32;
@@ -845,7 +861,7 @@ impl Rig {
                     let leads = i % 2 == (self.seed % 2) as usize;
                     let (lag, short) = if leads { (0.0, 1.0) } else { (0.2, 0.8) };
                     let s = (self.air.0 / self.air.1.max(0.05) - lag).clamp(0.0, 1.0);
-                    let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum();
+                    let out = self.out_of(&leg, fwd);
                     if leg.root == Root::Chest {
                         hip + fwd * reach * 0.85 * short + out * reach * 0.35 - Vec3::Y * reach * (0.15 + 0.45 * s)
                     } else {
@@ -859,7 +875,7 @@ impl Rig {
                 }
                 None => self.feet[i].planted,
             };
-            let out = Vec3::new(fwd.z, 0.0, -fwd.x) * leg.side.signum();
+            let out = self.out_of(&leg, fwd);
             let (knee, end) = ik(hip, target, leg.upper, leg.lower, fwd * leg.knee + Vec3::Y * leg.knee_up + out * leg.knee_out);
             bones.push(Bone { a: hip, b: knee, radius: leg.radius.0, side: right });
             bones.push(Bone { a: knee, b: end, radius: leg.radius.1, side: right });
@@ -904,6 +920,17 @@ impl Rig {
         // (Three torso segments, the neck, then the head.)
         let head = self.bones[4];
         (head.b, (head.b - head.a).normalize_or(Vec3::Z))
+    }
+
+    /// Which way a leg is set out from the body: to its side; a tripod's,
+    /// the way it stands from the body's middle.
+    fn out_of(&self, leg: &LegPlan, fwd: Vec3) -> Vec3 {
+        let right = Vec3::new(fwd.z, 0.0, -fwd.x);
+        if self.plan.radial {
+            (right * leg.side + fwd * leg.forward).normalize_or(right)
+        } else {
+            right * leg.side.signum()
+        }
     }
 
     /// The middle of the chest.
