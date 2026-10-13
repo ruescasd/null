@@ -31,7 +31,9 @@ again. F1 toggles the help overlay.
 | F12 | screenshot to `screenshots/` |
 | ~ (the key under Esc) | console: reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
 
-Command-line options, mostly for tuning and capturing reference frames:
+Command-line options, mostly for tuning and capturing reference frames (a switch, `--opt name`, can
+also be given as at the console, `--set name on` or `--set name off`; a number `--set name=value` or
+`--set name value`):
 
     --cam x,height_above_ground,z,yaw,pitch   start position (degrees)
     --time seconds                            where the suns are
@@ -118,8 +120,12 @@ Command-line options, mostly for tuning and capturing reference frames:
                                               times tougher / hunters circle at a distance (--set tame_at=14,
                                               tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
                                               nearest hunter
-    --opt biped|hound|angler|beast            what the swarm assembles into (beast: either beast; otherwise any;
-                                              the angler's body is the hound's, 15% larger, with the same size head)
+    --opt biped|harrow|angler|beast           what the swarm assembles into (beast: either beast; otherwise any;
+                                              the harrow: four legs, hard, a spider's, the forelimbs hauling it on in
+                                              surges; the angler's body is the harrow's, 15% larger, with the same size
+                                              head); --opt sprawl: a beast moving another way (legs out from its sides,
+                                              knees high over a low body, gliding level)
+    --opt bones                               a hunter's pieces hidden, its bones drawn as lines (to see its limbs move)
     --opt specimen                            one hunter standing still in front of you, to look at: --set
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)

@@ -43,10 +43,10 @@ const HEAR: f32 = 45.0;
 const GRACE: f32 = 1.0;
 /// How long it casts about where it lost you before it gives up (s).
 const SEARCH: f32 = 10.0;
-/// How close a hound is to you to snap rather than pounce (m).
+/// How close a harrow is to you to snap rather than pounce (m).
 const SNAP: f32 = 2.5;
 /// How many of a blast's shards stagger it, and how hard each shoves it
-/// (m/s, a hound's weight; a biped, lighter, further).
+/// (m/s, a harrow's weight; a biped, lighter, further).
 const STAGGER: f32 = 4.0;
 const SHOVE: f32 = 0.9;
 const ATTACK: f32 = 30.0;
@@ -213,7 +213,7 @@ pub(super) struct Jaw;
 /// The skulls and jaws, built once.
 #[derive(Resource)]
 pub(super) struct Heads {
-    /// The beasts' heads: the hound's, the angler's.
+    /// The beasts' heads: the harrow's, the angler's.
     beast: Vec<(Handle<Mesh>, Handle<Mesh>)>,
     biped: (Handle<Mesh>, Handle<Mesh>),
     /// A beast's leg segments: the upper, and the lower tapering to a prong.
@@ -469,21 +469,21 @@ fn spawn_hunter(
     centre: Vec3,
     player: Vec3,
 ) {
-    // A biped, or a beast: a hound (lean, a narrow head, two rows of
+    // A biped, or a beast: a harrow (a narrow head, two rows of
     // needles) or an angler (a huge underbite jaw, uneven needles leaning
-    // in). `--opt biped`, `hound`, `angler`, or `beast` (either beast).
-    let kind = if args.opt("beast") || args.opt("hound") || args.opt("angler") {
+    // in). `--opt biped`, `harrow`, `angler`, or `beast` (either beast).
+    let kind = if args.opt("beast") || args.opt("harrow") || args.opt("angler") {
         Kind::Beast
     } else if args.opt("biped") || hash01(seed as i32, 0, 0, 0x6b1) < 1.0 / 3.0 {
         Kind::Biped
     } else {
         Kind::Beast
     };
-    let angler = kind == Kind::Beast && (args.opt("angler") || (!args.opt("hound") && hash01(seed as i32, 1, 0, 0x6b1) < 0.5));
+    let angler = kind == Kind::Beast && (args.opt("angler") || (!args.opt("harrow") && hash01(seed as i32, 1, 0, 0x6b1) < 0.5));
     let feet = Vec3::new(centre.x, ground.at(centre), centre.z);
     let to = player - feet;
     let floor = |x: f32, z: f32| ground.at(Vec3::new(x, centre.y, z));
-    // (The angler's body is a size larger than the hound's; its head is the
+    // (The angler's body is a size larger than the harrow's; its head is the
     // same size, so smaller for the body.)
     let plan = if angler {
         let head = Plan::beast().head;
@@ -510,7 +510,7 @@ fn spawn_hunter(
         .id();
     // Its voice, at its head: growls now and then (see `voice`).
     commands.spawn((Voice { hunter, next: 1.0, count: 0 }, Transform::from_translation(centre), Visibility::default()));
-    info!("{} forms", if angler { "an angler" } else if kind == Kind::Beast { "a hound" } else { "a biped" });
+    info!("{} forms", if angler { "an angler" } else if kind == Kind::Beast { "a harrow" } else { "a biped" });
 
     // Its body: shards along every bone, thicker bones more and bigger,
     // with pale markings.
@@ -1291,7 +1291,7 @@ pub(super) fn hunt(
         h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
         // Your body stops it, as a wall does (what is built was all it
         // met: a pounce went through you): it comes no nearer than its reach,
-        // a hound's jaws in your face, not through it, and loses its speed at
+        // a harrow's jaws in your face, not through it, and loses its speed at
         // you; a pounce slams into you and drops.
         let feet = target - Vec3::Y * crate::player::EYE;
         let reach = crate::player::HALF_WIDTH + if beast { 0.9 } else { 0.4 };

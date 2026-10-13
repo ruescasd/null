@@ -66,16 +66,21 @@ impl Args {
                 "--shot" => args.shot = it.next(),
                 "--focus" => args.focus = it.next(),
                 "--opt" => args.opts.extend(it.next()),
-                // `--set name=value`, or `--set name value`.
+                // `--set name=value`, or `--set name value`; a switch as at
+                // the console, `--set god on` (the same as `--opt god`), or
+                // off (the user: the command line's settings all one way).
                 "--set" => {
                     let first = it.next().unwrap_or_default();
                     let (k, v) = match first.split_once('=') {
                         Some((k, v)) => (k.to_string(), v.to_string()),
                         None => (first.clone(), it.next().unwrap_or_default()),
                     };
-                    match v.parse() {
-                        Ok(v) if !k.is_empty() => args.sets.push((k, v)),
-                        _ => eprintln!("--set {first}: expected name=value (or name value) with a number"),
+                    match (v.as_str(), v.parse()) {
+                        (_, _) if k.is_empty() => eprintln!("--set {first}: expected a name"),
+                        ("on", _) => args.opts.push(k),
+                        ("off", _) => args.opts.retain(|o| *o != k),
+                        (_, Ok(v)) => args.sets.push((k, v)),
+                        _ => eprintln!("--set {first}: expected name=value (or name value) with a number, or on or off"),
                     }
                 }
                 "--seed" => args.seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(1),
