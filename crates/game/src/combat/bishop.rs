@@ -24,18 +24,27 @@ use crate::cloth::Cloth;
 /// what it floats above, and the robe's length from them.
 const ROUND: usize = 28;
 const DOWN: usize = 20;
-const SHOULDERS: f32 = 2.35;
-const LENGTH: f32 = 1.95;
+const SHOULDERS: f32 = 2.1;
+const LENGTH: f32 = 1.75;
 /// The cloth's shade and its markings' (sRGB).
 const DARK: f32 = 0.035;
 /// How far its head is bowed (radians).
-const BOW: f32 = 0.32;
+const BOW: f32 = 0.55;
 const PALE: f32 = 0.5;
+
+/// Points round a sleeve and along it; where its hidden arm runs (from its
+/// shoulders' middle, its frame: x across, z forward): shoulder, elbow,
+/// wrist, the right arm's (the left's mirrored).
+const SLEEVE_ROUND: usize = 10;
+const SLEEVE_ALONG: usize = 9;
+const ARM: [Vec3; 3] = [Vec3::new(0.48, -0.16, -0.02), Vec3::new(0.56, -0.62, 0.04), Vec3::new(0.16, -0.58, 0.3)];
 
 #[derive(Component)]
 pub(super) struct Bishop {
     cloth: Cloth,
     mesh: Handle<Mesh>,
+    /// Its sleeves (left, right), and their meshes.
+    sleeves: Vec<(Cloth, Handle<Mesh>)>,
     /// Where it hangs from (the lab's middle), the lab's sideways, how far
     /// aside it is and wants to be, which way it faces and wants to, the
     /// lab's clock and when it next moves.
@@ -73,6 +82,28 @@ fn robe_at(c: usize, r: usize) -> Vec3 {
         }
     };
     Vec3::new(a.sin() * across, y, a.cos() * depth)
+}
+
+/// Where along the hidden arm (0 shoulder, 1 wrist), on side `side` (-1
+/// left, 1 right).
+fn arm_at(s: f32, side: f32) -> Vec3 {
+    let p = if s < 0.5 { ARM[0].lerp(ARM[1], s * 2.0) } else { ARM[1].lerp(ARM[2], s * 2.0 - 1.0) };
+    Vec3::new(p.x * side, p.y, p.z)
+}
+
+/// A sleeve's points where it starts (its frame as the robe's): rings round
+/// the arm, widening from the shoulder to the wrist, and past the wrist a
+/// bell, wide, the cuff.
+fn sleeve_at(c: usize, r: usize, side: f32) -> Vec3 {
+    let cuff = r + 1 == SLEEVE_ALONG;
+    let s = (r.min(SLEEVE_ALONG - 2)) as f32 / (SLEEVE_ALONG - 2) as f32;
+    let along = (arm_at((s + 0.02).min(1.0), side) - arm_at((s - 0.02).max(0.0), side)).normalize_or(Vec3::NEG_Y);
+    let across = along.cross(Vec3::Y).normalize_or(Vec3::X);
+    let up = across.cross(along);
+    let a = c as f32 / SLEEVE_ROUND as f32 * std::f32::consts::TAU;
+    let radius = if cuff { 0.27 } else { 0.13 + 0.09 * s };
+    let centre = arm_at(s, side) + if cuff { along * 0.14 - Vec3::Y * 0.05 } else { Vec3::ZERO };
+    centre + (across * a.cos() + up * a.sin()) * radius
 }
 
 /// What shade a point of the robe is: pale on the stole (two bands down its
@@ -145,15 +176,40 @@ pub(super) fn lab(
         let top = home + Vec3::Y * SHOULDERS;
         // (The hem's last rows keep their bell; the rest folds softly.)
         let cloth = Cloth::tube(ROUND, DOWN, |c, r| top + place * robe_at(c, r), |r| if r + 5 > DOWN { 0.7 } else { 0.3 });
+        // (`--opt bishopgrey`: all of it one flat grey, to see its outline.)
+        let grey = args.opt("bishopgrey");
         let mut robe_mesh = cloth.mesh();
         let shades: Vec<[f32; 4]> = (0..DOWN).flat_map(|r| (0..ROUND).map(move |c| robe_shade(c, r)).map(|v| Color::srgb(v, v, v).to_linear().to_f32_array())).collect();
-        robe_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, shades);
+        if !grey {
+            robe_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, shades);
+        }
         let mesh = meshes.add(robe_mesh);
         // Heavy cloth, matte (a sheen off the bright ground made it grey),
         // seen from both sides; its shade in its vertices (the markings).
-        let cloth_material = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.9, reflectance: 0.25, double_sided: true, cull_mode: None, ..default() });
+        let cloth_material = materials.add(StandardMaterial { base_color: if grey { Color::srgb(0.4, 0.4, 0.4) } else { Color::WHITE }, perceptual_roughness: 0.9, reflectance: 0.25, double_sided: true, cull_mode: None, ..default() });
+        let flat = |mut mesh: Mesh| {
+            if grey {
+                mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
+            }
+            mesh
+        };
+        // Its sleeves, hanging off hidden arms bent in to its hands, their
+        // cuffs drooping (the user: what makes the Dark Bishop's outline is
+        // its arms).
+        let mut sleeves = Vec::new();
+        for side in [-1.0f32, 1.0] {
+            let sleeve = Cloth::tube(SLEEVE_ROUND, SLEEVE_ALONG, |c, r| top + place * sleeve_at(c, r, side), |_| 0.35);
+            let mut sleeve_mesh = sleeve.mesh();
+            if !grey {
+                let shades: Vec<[f32; 4]> = (0..SLEEVE_ALONG).flat_map(|r| (0..SLEEVE_ROUND).map(move |_| if r + 1 == SLEEVE_ALONG { PALE } else { DARK })).map(|v| Color::srgb(v, v, v).to_linear().to_f32_array()).collect();
+                sleeve_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, shades);
+            }
+            let handle = meshes.add(sleeve_mesh);
+            commands.spawn((Mesh3d(handle.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
+            sleeves.push((sleeve, handle));
+        }
         commands.spawn((
-            Bishop { cloth, mesh: mesh.clone(), home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0 },
+            Bishop { cloth, mesh: mesh.clone(), sleeves, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0 },
             Mesh3d(mesh),
             MeshMaterial3d(cloth_material.clone()),
             Transform::default(),
@@ -162,38 +218,34 @@ pub(super) fn lab(
         let mut stiff_part = |mesh: Handle<Mesh>, material: Handle<StandardMaterial>, offset: Vec3, turn: Quat, scale: Vec3| {
             commands.spawn((Stiff { offset, turn }, Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(scale)));
         };
-        // The hood: deep, drawn back to a point (a narrow spike read as a
-        // chess bishop's mitre), its opening's edge pale.
-        let hood = shell(&[(0.0, 0.25, 0.25, 0.02), (0.15, 0.26, 0.27, 0.0), (0.32, 0.23, 0.25, -0.04), (0.46, 0.16, 0.18, -0.1), (0.56, 0.08, 0.09, -0.17), (0.62, 0.01, 0.01, -0.24)], 0.75, &[0], &|_, _| 0.0);
-        // Bowed a little, as in concentration (the Dark Bishop's: the
-        // user), turned at the neck, a little forward.
+        // The hood: a short wide triangle, broad at its base, to a low point
+        // barely drawn back (a tall narrow one read as a chess bishop's mitre;
+        // drawn well back, it undid the bow), its opening's edge pale.
+        let hood = shell(&[(0.0, 0.3, 0.28, 0.02), (0.14, 0.3, 0.29, 0.0), (0.28, 0.24, 0.24, -0.01), (0.4, 0.14, 0.15, -0.02), (0.48, 0.05, 0.05, -0.03), (0.52, 0.01, 0.01, -0.03)], 0.75, &[0], &|_, _| 0.0);
+        // Bowed, as in concentration (the Dark Bishop's: the user), turned
+        // at the neck, a little forward.
         let bow = Quat::from_rotation_x(BOW);
-        stiff_part(meshes.add(hood), cloth_material.clone(), Vec3::new(0.0, 0.02, 0.04), bow, Vec3::ONE);
+        stiff_part(meshes.add(flat(hood)), cloth_material.clone(), Vec3::new(0.0, 0.02, 0.04), bow, Vec3::ONE);
         // In the hood: darkness (unlit: no light gets in), no eyes (a void
         // for a face, as the Dark Bishop's).
-        let void = materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() });
+        let void = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() }) };
         stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, Vec3::new(0.0, 0.02, 0.04) + bow * Vec3::new(0.0, 0.2, 0.01), bow, Vec3::new(0.19, 0.22, 0.17));
-        // The mantle: a stiff yoke spreading from the neck, wide across and
-        // shallow front to back, flat on top, sagging a little at its front
-        // and back and rising to points at its sides, its thick edge pale,
-        // a V open down its front (the Dark Bishop's square shoulders: round,
-        // falling like a cape, it was a monk's; round and flat, a hat's
-        // brim).
+        // The mantle: a stiff cape on the shoulders, sloping down from the
+        // neck to a corner and over it a little (the Dark Bishop's outline, a
+        // house's: the user, marking it; its straight sides are the sleeves,
+        // falling from under it), its edge pale, a V open down its front.
         let mantle = shell(
-            &[(0.06, 0.22, 0.19, 0.0), (-0.02, 0.45, 0.25, 0.0), (-0.08, 0.66, 0.29, 0.0), (-0.12, 0.8, 0.31, 0.0), (-0.21, 0.8, 0.31, 0.0)],
+            &[(0.08, 0.22, 0.2, 0.0), (-0.05, 0.45, 0.3, 0.0), (-0.18, 0.66, 0.36, 0.0), (-0.28, 0.68, 0.37, 0.0), (-0.31, 0.68, 0.37, 0.0)],
             0.4,
             &[0, 3, 4],
-            &|a, r| {
-                let t = (r.min(3) as f32 / 3.0).powi(2);
-                0.22 * a.sin().abs().powi(6) * t - 0.1 * a.cos().powi(2) * t
-            },
+            &|_, _| 0.0,
         );
-        stiff_part(meshes.add(mantle), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
+        stiff_part(meshes.add(flat(mantle)), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
         // Horns curving up off it, two to a shoulder.
-        let horn = materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.6, ..default() });
+        let horn = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.6, ..default() }) };
         for side in [-1.0f32, 1.0] {
-            // (Out at the mantle's points.)
-            for (at, dir, length) in [(Vec3::new(0.62, 0.0, -0.08), Vec3::new(0.25, 1.0, -0.15), 0.6), (Vec3::new(0.74, 0.02, 0.04), Vec3::new(0.55, 0.85, 0.0), 0.42)] {
+            // (At the mantle's shoulder corners.)
+            for (at, dir, length) in [(Vec3::new(0.56, -0.12, -0.08), Vec3::new(0.2, 1.0, -0.15), 0.6), (Vec3::new(0.68, -0.18, 0.04), Vec3::new(0.45, 0.9, 0.0), 0.42)] {
                 let at = Vec3::new(at.x * side, at.y, at.z);
                 let dir = Vec3::new(dir.x * side, dir.y, dir.z).normalize();
                 stiff_part(assets.shard.clone(), horn.clone(), at, Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(5.0, length / 0.7, 5.0));
@@ -252,9 +304,10 @@ pub(super) fn lab(
         (top + Vec3::Y * -0.12, top + Vec3::Y * -0.95, 0.24),
         (top + place * Vec3::new(-0.3, -0.12, 0.0), top + place * Vec3::new(0.3, -0.12, 0.0), 0.12),
         (top + Vec3::Y * -1.0, top + Vec3::Y * -1.45, 0.2),
-        // (Its forearms, folded in to its hands: the robe falls over them.)
-        (top + place * Vec3::new(-0.3, -0.35, 0.05), top + place * Vec3::new(0.0, -0.55, 0.28), 0.1),
-        (top + place * Vec3::new(0.3, -0.35, 0.05), top + place * Vec3::new(0.0, -0.55, 0.28), 0.1),
+        // (Its forearms, folded in to its hands, in their sleeves: the robe
+        // behind them.)
+        (top + place * arm_at(0.5, -1.0), top + place * arm_at(1.0, -1.0), 0.2),
+        (top + place * arm_at(0.5, 1.0), top + place * arm_at(1.0, 1.0), 0.2),
     ];
     // (Two half steps: steadier in a sudden move.)
     for _ in 0..2 {
@@ -262,6 +315,27 @@ pub(super) fn lab(
     }
     if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
         b.cloth.draw(&mut mesh);
+    }
+    // The sleeves: held at the shoulder all round and at the wrist along
+    // its top (the cuff hangs), over the hidden arm.
+    for (k, (sleeve, handle)) in b.sleeves.iter_mut().enumerate() {
+        let side = if k == 0 { -1.0 } else { 1.0 };
+        let wrist = SLEEVE_ALONG - 2;
+        let held: Vec<(u32, Vec3)> = (0..SLEEVE_ROUND)
+            .map(|c| (c, 0))
+            .chain((0..SLEEVE_ROUND).filter(|&c| (c as f32 / SLEEVE_ROUND as f32 * std::f32::consts::TAU).sin() > 0.0).map(|c| (c, wrist)))
+            .map(|(c, r)| ((r * SLEEVE_ROUND + c) as u32, top + place * sleeve_at(c, r, side)))
+            .collect();
+        let arm = [
+            (top + place * arm_at(0.0, side), top + place * arm_at(0.5, side), 0.09),
+            (top + place * arm_at(0.5, side), top + place * arm_at(1.0, side), 0.08),
+        ];
+        for _ in 0..2 {
+            sleeve.step(&held, &arm, floor + 0.02, dt * 0.5);
+        }
+        if let Some(mut mesh) = meshes.get_mut(&*handle) {
+            sleeve.draw(&mut mesh);
+        }
     }
     let neck = top + Vec3::Y * 0.06;
     for (part, mut transform) in &mut stiff {
