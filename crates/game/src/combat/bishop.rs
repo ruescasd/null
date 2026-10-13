@@ -163,11 +163,20 @@ impl Bishop {
     /// hot a moment (see `Needle`), carried with it, as its horns are.
     pub(super) fn embed(&self, commands: &mut Commands, assets: &Assets3, owner: Entity, at: Vec3, dir: Vec3, delay: f32) {
         let to = self.place.inverse();
-        let base = at - dir * NEEDLE_OUT * NEEDLE_SCALE;
+        // Shrapnel: each at its own slant off the shard's line (up to 50
+        // degrees, any way round), its own length, its own depth in the
+        // cloth (all along the shot's line, alike, they read as the
+        // interface's marks, not the world's, the user).
+        let r = |j: i32| hash01((at.x * 97.0) as i32, (at.y * 89.0) as i32 ^ (at.z * 83.0) as i32, j, 0x8b4);
+        let across = dir.any_orthonormal_vector();
+        let tilt = Quat::from_axis_angle(dir, r(0) * std::f32::consts::TAU) * Quat::from_axis_angle(across, 0.87 * r(1).sqrt());
+        let dir = (tilt * dir).normalize();
+        let long = 0.6 + 0.7 * r(2);
+        let base = at - dir * NEEDLE_OUT * NEEDLE_SCALE * long * (0.5 + r(3));
         commands.spawn((
             OfBishop(owner),
             Stiff { offset: to * (base - self.top - Vec3::Y * 0.06), turn: to * Quat::from_rotation_arc(Vec3::Y, dir), dark: true },
-            Needle { delay, life: NEEDLE_LIFE, size: NEEDLE_SIZE * NEEDLE_SCALE },
+            Needle { delay, life: NEEDLE_LIFE, size: NEEDLE_SIZE * NEEDLE_SCALE * Vec3::new(1.0, long, 1.0) },
             Mesh3d(assets.shard.clone()),
             MeshMaterial3d(assets.bright.clone()),
             Transform::from_scale(Vec3::ZERO),
@@ -933,18 +942,17 @@ pub(super) fn float(
             // fanned out, to home in.
             let far = Vec2::new(to.x, to.z).length();
             if b.loosing > 0 {
-                // Its motes, one after another, each a third of a turn on
-                // round its way from the last (together, a corkscrew).
+                // Its motes, one after another, each on the same spiral (the
+                // user: each on its own, a third of a turn on from the last,
+                // read as three).
                 b.velocity *= (-dt * 8.0).exp();
                 b.next_mote -= dt;
                 if b.next_mote <= 0.0 {
-                    let k = MOTES - b.loosing;
                     b.loosing -= 1;
                     b.next_mote = MOTE_EVERY;
                     let from = b.top + Vec3::Y * 0.06 + Quat::from_rotation_y(b.heading) * LIGHT;
                     let dir = ((eye - Vec3::Y * 0.35 - from).normalize_or(Vec3::Z) + Vec3::Y * 0.15).normalize();
-                    let phase = k as f32 / MOTES as f32 * std::f32::consts::TAU;
-                    commands.spawn((Mote { centre: from, velocity: dir * MOTE_SPEED, phase, age: 0.0, life: MOTE_LIFE, popped: false }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(from).with_scale(Vec3::splat(MOTE_SIZE)), bevy::light::NotShadowCaster));
+                    commands.spawn((Mote { centre: from, velocity: dir * MOTE_SPEED, phase: 0.0, age: 0.0, life: MOTE_LIFE, popped: false }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(from).with_scale(Vec3::splat(MOTE_SIZE)), bevy::light::NotShadowCaster));
                 }
             } else if let Some(c) = b.charge.as_mut() {
                 *c += dt;
