@@ -829,7 +829,6 @@ pub(super) fn hunt(
     nav: Option<Res<crate::chasm::nav::Nav>>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
-    mut feedback: ResMut<Feedback>,
     ichor: Res<ichor::Ichor>,
     mut player: Single<(&Transform, &mut Player), Without<Hunter>>,
     mut hunters: Query<(Entity, &mut Hunter, &mut Transform), Without<Player>>,
@@ -887,7 +886,6 @@ pub(super) fn hunt(
                 }
             }
             director.kills += 1;
-            feedback.kill = 1.0;
             info!("a hunter is broken");
             commands.entity(entity).despawn();
             continue;

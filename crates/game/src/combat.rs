@@ -172,14 +172,12 @@ struct Assets3 {
 }
 
 /// What landed this frame, for the feedback: how many shards hit something
-/// and where (summed), and the hit marker and impact light, decaying.
+/// and where (summed). (No hit marker on the screen: the needles show what
+/// struck, in the world, the user.)
 #[derive(Resource, Default)]
 struct Feedback {
     hits: u32,
     at: Vec3,
-    marker: f32,
-    /// The marker is bigger after a kill.
-    kill: f32,
 }
 
 /// A shard in flight from the muzzle to where it hit.
@@ -274,9 +272,6 @@ fn needles(mut commands: Commands, time: Res<Time>, mut needles: Query<(Entity, 
 struct ImpactLight;
 
 #[derive(Component)]
-struct HitMarker;
-
-#[derive(Component)]
 struct SwarmVoice;
 
 #[derive(Component)]
@@ -368,23 +363,6 @@ fn setup(
         PointLight { intensity: 0.0, range: 12.0, shadow_maps_enabled: false, ..default() },
         Transform::default(),
     ));
-    // The hit marker: a small diamond round the crosshair.
-    commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            height: percent(100),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        })
-        .with_child((
-            HitMarker,
-            Node { width: px(18), height: px(18), border: UiRect::all(px(2)), ..default() },
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.0)),
-            UiTransform::from_rotation(Rot2::degrees(45.0)),
-        ));
-
     // A flash of black when bitten, and the score.
     commands.spawn((
         HurtFlash,
@@ -789,7 +767,6 @@ fn die(
     args: Res<Args>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
-    mut feedback: ResMut<Feedback>,
     ichor: Res<ichor::Ichor>,
     mut player: Single<&mut Player>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
@@ -800,7 +777,6 @@ fn die(
             continue;
         }
         director.kills += 1;
-        feedback.kill = feedback.kill.max(0.6);
         ichor::spray(&mut commands, &ichor, transform.translation, s.velocity.normalize_or(Vec3::Y), 2.5, entity.index_u32());
         shatter(&mut commands, &assets, transform.translation, s.velocity, entity.index_u32());
         commands.entity(entity).despawn();
@@ -842,7 +818,7 @@ fn sparks(commands: &mut Commands, assets: &Assets3, at: Vec3, back: Vec3, seed:
 }
 
 /// What landed this frame: one impact sound (louder and lower the more
-/// shards struck), a flash where they struck, and the hit marker.
+/// shards struck), and a flash where they struck.
 #[allow(clippy::type_complexity)]
 fn feedback(
     mut commands: Commands,
@@ -850,7 +826,6 @@ fn feedback(
     assets: Res<Assets3>,
     mut feedback: ResMut<Feedback>,
     mut light: Single<(&mut Transform, &mut PointLight), With<ImpactLight>>,
-    mut marker: Single<(&mut BorderColor, &mut Node), With<HitMarker>>,
 ) {
     let dt = time.delta_secs();
     let n = feedback.hits;
@@ -862,17 +837,10 @@ fn feedback(
         ));
         light.0.translation = feedback.at / n as f32;
         light.1.intensity = light.1.intensity.max(4.0e5 * k);
-        feedback.marker = feedback.marker.max(0.5 + 0.05 * k);
         feedback.hits = 0;
         feedback.at = Vec3::ZERO;
     }
     light.1.intensity *= (-dt * 30.0).exp();
-    feedback.marker = (feedback.marker - dt * 4.0).max(0.0);
-    feedback.kill = (feedback.kill - dt * 2.0).max(0.0);
-    let size = 18.0 + 14.0 * feedback.kill;
-    *marker.0 = BorderColor::all(Color::srgba(1.0, 1.0, 1.0, feedback.marker.max(feedback.kill).min(1.0)));
-    marker.1.width = px(size);
-    marker.1.height = px(size);
 }
 
 fn shatter(commands: &mut Commands, assets: &Assets3, at: Vec3, velocity: Vec3, seed: u32) {
