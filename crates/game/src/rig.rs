@@ -361,6 +361,8 @@ pub struct Rig {
     time: f32,
     crouch: f32,
     seed: u32,
+    /// Strides taken (each draws its own variations: see `vary`).
+    strides: u32,
     pub bones: Vec<Bone>,
 }
 
@@ -414,6 +416,7 @@ impl Rig {
             time: 0.0,
             crouch: 0.0,
             seed,
+            strides: 0,
             bones: Vec::new(),
         };
         let (offsets, swing, stride, _) = rig.plan.gait(0.0);
@@ -445,11 +448,13 @@ impl Rig {
         // (Galloping, a bound three times as deep, the body lowest as each
         // pair of feet takes its weight: it glided at one height, on wheels,
         // the user.)
-        let bob = -self.plan.bob * moving * (1.0 + 2.0 * self.gallop) * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+        // (Each stride its own depth, a half to half again: the same bound
+        // every stride was a machine's, the user.)
+        let bob = -self.plan.bob * moving * (1.0 + 2.0 * self.gallop) * (0.5 + self.vary(1)) * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
         // Galloping: the body rocks (chest up as the hips go down) and the
         // spine flexes, the hips reaching forward under the body.
         let wave = (self.phase * std::f32::consts::TAU).sin();
-        let rock = self.plan.rock * self.gallop * wave * if root == Root::Chest { 1.0 } else { -1.0 };
+        let rock = self.plan.rock * self.gallop * (0.6 + 0.8 * self.vary(2)) * wave * if root == Root::Chest { 1.0 } else { -1.0 };
         let flex = if root == Root::Hips { self.plan.rock * 2.5 * self.gallop * (self.phase * std::f32::consts::TAU + 1.6).sin() } else { 0.0 };
         // Walking, the spine swings from side to side, chest and hips in
         // opposition.
@@ -468,7 +473,10 @@ impl Rig {
         let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
         let reel = self.reel * if root == Root::Chest { 1.0 } else { 0.4 };
-        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height) + reel
+        // Each stride lurches a little to one side or the other, the chest
+        // more than the hips.
+        let lurch = (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 };
+        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height + lurch) + reel
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -592,12 +600,23 @@ impl Rig {
             offsets.swap(0, 1);
             offsets.swap(2, 3);
         }
+        // Each foot a little early or late, differently each stride: the
+        // footfalls never quite the same twice.
+        for (i, o) in offsets.iter_mut().enumerate() {
+            *o += (self.vary(10 + i as i32) - 0.5) * 0.1;
+        }
         (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
         if self.airborne.is_none() && (speed > 0.3 || any_swinging) {
             // The tempo drifts a little.
             let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
-            self.phase = (self.phase + speed.max(1.0) / self.stride * drift * dt).fract();
+            // (Each stride a little quicker or slower, by up to 15%.)
+            let tempo = 0.85 + 0.3 * self.vary(0);
+            let next = self.phase + speed.max(1.0) / self.stride * drift * tempo * dt;
+            if next >= 1.0 {
+                self.strides += 1;
+            }
+            self.phase = next.fract();
         }
         for i in 0..self.feet.len() {
             let home = self.home(i, ground);
@@ -661,7 +680,7 @@ impl Rig {
         // (Running, it follows the body, and pumps deeper still as the
         // forefeet land: steadied, it ran as on rails.)
         let moving = (self.velocity.length() / 3.0).min(1.0);
-        let pump = 0.1 * self.gallop * moving * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+        let pump = 0.1 * self.gallop * moving * (0.4 + 1.2 * self.vary(3)) * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
         let raw = self.neck_end().y - pump;
         let rate = 4.0 + 26.0 * self.gallop;
         self.head_y = Some(match self.head_y {
@@ -795,6 +814,16 @@ impl Rig {
     /// The middle of the chest.
     pub fn chest(&self) -> Vec3 {
         self.anchor(Root::Chest)
+    }
+
+    /// This stride's variation `j` (0..1), easing into the next stride's
+    /// over the cycle (so nothing jumps as one stride gives way to the
+    /// next): no two strides quite alike.
+    fn vary(&self, j: i32) -> f32 {
+        let at = |k: u32| hash01(self.seed as i32, k as i32, j, 0x61d);
+        let s = self.phase;
+        let (a, b) = (at(self.strides), at(self.strides + 1));
+        a + (b - a) * s * s * (3.0 - 2.0 * s)
     }
 
     /// The gait's clock for the body's rise and fall: galloping, shifted so
