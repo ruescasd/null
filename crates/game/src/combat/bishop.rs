@@ -888,7 +888,13 @@ pub(super) fn float(
                     let far = Vec2::new(q.x - eye.x, q.z - eye.z).length();
                     (q, far)
                 };
-                if let Some((q, _)) = (0..10).map(spot).find(|&(q, far)| (RANGE.0..RANGE.1).contains(&far) && passes(b.at, q) && ground.clear(q + Vec3::Y * 2.6, eye)).or_else(|| (0..10).map(|k| spot(50 + k)).find(|&(q, _)| passes(b.at, q))) {
+                // (Failing one in its range, you in sight from it, the one
+                // it gets to that is nearest its range: any it got to, it
+                // drifted off, 40 m and more.)
+                let off = |far: f32| (RANGE.0 - far).max(far - RANGE.1).max(0.0);
+                let ideal = (0..10).map(spot).find(|&(q, far)| (RANGE.0..RANGE.1).contains(&far) && passes(b.at, q) && ground.clear(q + Vec3::Y * 2.6, eye));
+                let nearest = || (0..10).map(|k| spot(50 + k)).filter(|&(q, _)| passes(b.at, q)).min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
+                if let Some((q, _)) = ideal.or_else(nearest) {
                     b.goal = q;
                 }
             }
