@@ -179,9 +179,10 @@ const SWITCHES: [(&str, &str); 6] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 5] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 6] {
     [
         ("volume", "how loud (1 as made, 0 silent)", 1.0),
+        ("huntpace", "how fast hunters move (1 as made)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
         ("fog", "how far the haze lets you see (m)", if args.opt("chasm") { 600.0 } else { 4500.0 }),
