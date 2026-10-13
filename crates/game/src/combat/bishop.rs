@@ -290,7 +290,7 @@ pub(super) fn lab(
         // In the hood, its head: darkness (unlit: no light gets in), no eyes
         // (a void for a face, as the Dark Bishop's); the hood falls over it.
         let void = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() }) };
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, head(), Quat::from_rotation_x(BOW), Vec3::new(0.14, 0.16, 0.13));
+        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void.clone(), head(), Quat::from_rotation_x(BOW), Vec3::new(0.14, 0.16, 0.13));
         // Horns curving up off it, two to a shoulder.
         let horn = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.6, ..default() }) };
         for side in [-1.0f32, 1.0] {
@@ -300,17 +300,21 @@ pub(super) fn lab(
                 let dir = Vec3::new(dir.x * side, dir.y, dir.z).normalize();
                 stiff_part(assets.shard.clone(), horn.clone(), at, Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(5.0, length / 0.7, 5.0));
             }
-            // A hand: hard claws reaching in to the light at the chest.
-            for k in 0..3 {
-                let kk = k as f32 - 1.0;
-                let dir = Vec3::new(-side * 0.8, 0.15 + 0.15 * kk, 0.3).normalize();
-                stiff_part(assets.shard.clone(), horn.clone(), Vec3::new(side * 0.15, -0.63 + 0.04 * kk, 0.25), Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(2.2, 0.26 / 0.7, 2.2));
-            }
         }
-        // What it holds: a dim light (the glow kept for the rare ones; a
-        // caster is).
-        let light = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(1.0, 1.0, 1.0) * 40.0, ..default() });
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), light, Vec3::new(0.0, -0.6, 0.29), Quat::IDENTITY, Vec3::splat(0.06));
+        // Inside its sleeves and its robe, darkness too (unlit, as in its
+        // hood): its arms and its body, never seen (looking into a cuff, or
+        // up under it, the cloth's hollow inside was, the user). No hands,
+        // and no light held (to come with its attack, the user).
+        let neck = Vec3::Y * 0.06;
+        let mut dark = |a: Vec3, b: Vec3, radius: f32| {
+            let mesh = meshes.add(Capsule3d::new(radius, a.distance(b)).mesh().rings(2).longitudes(10).latitudes(6));
+            stiff_part(mesh, void.clone(), (a + b) * 0.5 - neck, Quat::from_rotation_arc(Vec3::Y, (b - a).normalize_or(Vec3::Y)), Vec3::ONE);
+        };
+        for side in [-1.0f32, 1.0] {
+            dark(arm_at(0.0, side), arm_at(0.5, side), 0.07);
+            dark(arm_at(0.5, side), arm_at(1.0, side), 0.07);
+        }
+        dark(Vec3::Y * -0.1, Vec3::Y * -1.5, 0.15);
         return;
     }
     let Ok(mut b) = bishops.single_mut() else { return };
