@@ -27,8 +27,9 @@ pub struct Cloth {
 
 impl Cloth {
     /// A tube `cols` points round and `rows` down, each starting where `at`
-    /// puts it (its lengths those it starts with).
-    pub fn tube(cols: usize, rows: usize, at: impl Fn(usize, usize) -> Vec3) -> Cloth {
+    /// puts it (its lengths those it starts with), its folds kept by `bend`
+    /// (by row, 0..1: how firmly it keeps the shape it starts in; 0.3 soft).
+    pub fn tube(cols: usize, rows: usize, at: impl Fn(usize, usize) -> Vec3, bend: impl Fn(usize) -> f32) -> Cloth {
         let idx = |c: usize, r: usize| (r * cols + c % cols) as u32;
         let points: Vec<Vec3> = (0..rows).flat_map(|r| (0..cols).map(move |c| (c, r))).map(|(c, r)| at(c, r)).collect();
         let mut links = Vec::new();
@@ -38,14 +39,14 @@ impl Cloth {
                 for c in 0..cols {
                     let p = idx(c, r);
                     link(p, idx(c + 1, r), 1.0);
-                    link(p, idx(c + 2, r), 0.3);
+                    link(p, idx(c + 2, r), bend(r));
                     if r + 1 < rows {
                         link(p, idx(c, r + 1), 1.0);
                         link(p, idx(c + 1, r + 1), 0.5);
                         link(idx(c + 1, r), idx(c, r + 1), 0.5);
                     }
                     if r + 2 < rows {
-                        link(p, idx(c, r + 2), 0.3);
+                        link(p, idx(c, r + 2), bend(r));
                     }
                 }
             }
