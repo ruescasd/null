@@ -57,6 +57,13 @@ const MOTE_TURN: f32 = 1.8;
 const MOTE_LIFE: f32 = 5.0;
 const MOTE_HARM: f32 = 12.0;
 const MOTE_SIZE: f32 = 0.12;
+/// Its motes loosed one after another (s apart: the user), each circling its
+/// way to you (how far out, m; how fast, rad/s), the spiral closing on you
+/// over its last few metres.
+const MOTE_EVERY: f32 = 0.15;
+const SPIRAL: f32 = 0.6;
+const SPIN: f32 = 9.0;
+const CLOSING: f32 = 4.0;
 /// Where its light gathers, from its neck: where its hands would meet.
 const LIGHT: Vec3 = Vec3::new(0.0, -0.79, 0.32);
 /// How long its empty robes lie after it breaks (s).
@@ -106,9 +113,12 @@ pub(super) struct Bishop {
     pub(super) health: f32,
     /// Since it broke (s): its robes falling empty.
     broken: Option<f32>,
-    /// Gathering its light (s into it), and when it may cast again.
+    /// Gathering its light (s into it), and when it may cast again; its
+    /// motes still to be loosed, and when the next goes.
     charge: Option<f32>,
     next_cast: f32,
+    loosing: usize,
+    next_mote: f32,
 }
 
 /// The lab's bishop: where it hangs from, its sideways, how far aside it is
@@ -201,7 +211,12 @@ pub(super) struct Gleam;
 /// burst).
 #[derive(Component)]
 pub(super) struct Mote {
+    /// Where its way runs (homing on you) and how fast; how far round it
+    /// it is; how long it has flown.
+    centre: Vec3,
     velocity: Vec3,
+    phase: f32,
+    age: f32,
     life: f32,
     pub(super) popped: bool,
 }
@@ -615,6 +630,8 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         broken: None,
         charge: None,
         next_cast: 2.5,
+        loosing: 0,
+        next_mote: 0.0,
     };
     commands.entity(owner).insert((OfBishop(owner), bishop));
     owner
@@ -871,7 +888,8 @@ pub(super) fn float(
                     }
                     b.next_blink = b.time + 1.2 + 1.3 * r(5);
                     // (Startled, its gathering broken: shoot it as it gathers.)
-                    if b.charge.take().is_some() {
+                    if b.charge.take().is_some() || b.loosing > 0 {
+                        b.loosing = 0;
                         b.next_cast = b.time + 1.5;
                     }
                     b.aimed = 0.0;
@@ -914,19 +932,28 @@ pub(super) fn float(
             // gathering at its chest; then its motes are loosed at you,
             // fanned out, to home in.
             let far = Vec2::new(to.x, to.z).length();
-            if let Some(c) = b.charge.as_mut() {
+            if b.loosing > 0 {
+                // Its motes, one after another, each a third of a turn on
+                // round its way from the last (together, a corkscrew).
+                b.velocity *= (-dt * 8.0).exp();
+                b.next_mote -= dt;
+                if b.next_mote <= 0.0 {
+                    let k = MOTES - b.loosing;
+                    b.loosing -= 1;
+                    b.next_mote = MOTE_EVERY;
+                    let from = b.top + Vec3::Y * 0.06 + Quat::from_rotation_y(b.heading) * LIGHT;
+                    let dir = ((eye - Vec3::Y * 0.35 - from).normalize_or(Vec3::Z) + Vec3::Y * 0.15).normalize();
+                    let phase = k as f32 / MOTES as f32 * std::f32::consts::TAU;
+                    commands.spawn((Mote { centre: from, velocity: dir * MOTE_SPEED, phase, age: 0.0, life: MOTE_LIFE, popped: false }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(from).with_scale(Vec3::splat(MOTE_SIZE)), bevy::light::NotShadowCaster));
+                }
+            } else if let Some(c) = b.charge.as_mut() {
                 *c += dt;
                 b.velocity *= (-dt * 8.0).exp();
                 if *c >= GATHER {
                     b.charge = None;
+                    b.loosing = MOTES;
+                    b.next_mote = 0.0;
                     b.next_cast = b.time + BETWEEN.0 + (BETWEEN.1 - BETWEEN.0) * r(70);
-                    let from = b.top + Vec3::Y * 0.06 + Quat::from_rotation_y(b.heading) * LIGHT;
-                    let aim = (eye - Vec3::Y * 0.35 - from).normalize_or(Vec3::Z);
-                    for k in 0..MOTES {
-                        let fan = (k as f32 - (MOTES - 1) as f32 * 0.5) * 0.55;
-                        let dir = (Quat::from_rotation_y(fan) * aim + Vec3::Y * 0.3).normalize();
-                        commands.spawn((Mote { velocity: dir * MOTE_SPEED, life: MOTE_LIFE, popped: false }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(from).with_scale(Vec3::splat(MOTE_SIZE)), bevy::light::NotShadowCaster));
-                    }
                     if args.opt("huntlog") {
                         info!("huntlog: bishop {} casts, {:.1} m from you", entity.index_u32(), far);
                     }
@@ -994,7 +1021,7 @@ pub(super) fn carry(bishops: Query<&Bishop>, mut stiff: Query<(&OfBishop, &Stiff
 pub(super) fn gleam(time: Res<Time>, bishops: Query<&Bishop>, mut lights: Query<(&OfBishop, &mut Transform), With<Gleam>>) {
     for (of, mut transform) in &mut lights {
         let Ok(b) = bishops.get(of.0) else { continue };
-        let k = b.charge.map_or(0.0, |c| (c / GATHER).min(1.0));
+        let k = if b.loosing > 0 { b.loosing as f32 / MOTES as f32 } else { b.charge.map_or(0.0, |c| (c / GATHER).min(1.0)) };
         let flicker = 1.0 + 0.15 * (time.elapsed_secs() * 37.0).sin() * k;
         transform.scale = Vec3::splat(0.13 * k.powf(0.7) * flicker);
     }
@@ -1023,14 +1050,23 @@ pub(super) fn motes(
     for (entity, mut m, mut transform) in &mut motes {
         let p = transform.translation;
         m.life -= dt;
-        // Turning towards you, no faster than it can.
+        m.age += dt;
+        // Its way turning towards you, no faster than it can.
         let speed = m.velocity.length();
         let heading = m.velocity / speed.max(1e-4);
-        let want = (chest - p).normalize_or(heading);
+        let want = (chest - m.centre).normalize_or(heading);
         let angle = heading.angle_between(want);
         let turned = if angle > 1e-4 { Quat::IDENTITY.slerp(Quat::from_rotation_arc(heading, want), (MOTE_TURN * dt / angle).min(1.0)) * heading } else { heading };
         m.velocity = turned * MOTE_SPEED;
-        let next = p + m.velocity * dt;
+        let step = m.velocity * dt;
+        m.centre += step;
+        // It circles its way: out from the hands over its first metres, in
+        // again on you over its last.
+        let across = turned.cross(Vec3::Y).normalize_or(Vec3::X);
+        let up = across.cross(turned);
+        let a = m.phase + m.age * SPIN;
+        let radius = SPIRAL * (m.age / 0.3).min(1.0) * (m.centre.distance(chest) / CLOSING).min(1.0);
+        let next = m.centre + (across * a.cos() + up * a.sin()) * radius;
         let hit_you = p.distance(chest) < 0.6 || next.distance(chest) < 0.6;
         let blocked = !ground.clear(p, next) || next.y < ground.at(next);
         if hit_you || blocked || m.popped || m.life <= 0.0 {
