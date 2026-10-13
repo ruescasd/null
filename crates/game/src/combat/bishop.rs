@@ -98,9 +98,10 @@ struct Lab {
 }
 
 impl Bishop {
-    /// Its body, for a shard: from its head down most of its robe.
-    fn body(&self) -> crate::rig::Bone {
-        crate::rig::Bone { a: self.top + Vec3::Y * 0.4, b: self.top - Vec3::Y * LENGTH * 0.8, radius: 0.33, side: Vec3::X }
+    /// Round all of it: a shard missing this misses it (a first look,
+    /// before its cloth).
+    fn bounds(&self) -> crate::rig::Bone {
+        crate::rig::Bone { a: self.top + Vec3::Y * 0.6, b: self.top - Vec3::Y * (LENGTH + 0.1), radius: 0.8, side: Vec3::X }
     }
 
     /// Where its chest is, unbroken (to be watched, in captures).
@@ -108,12 +109,32 @@ impl Bishop {
         self.broken.is_none().then_some(self.top - Vec3::Y * 0.6)
     }
 
-    /// The nearest a ray from `origin` along `dir` strikes it, within `max`.
+    /// The nearest a ray from `origin` along `dir` strikes it, within `max`:
+    /// its cloth itself, frozen in its drape (a shard through a gap, between
+    /// a sleeve and its robe, misses; a capsule round it, its needles stood
+    /// off the robe where it is narrow and in it where it is wide).
     pub(super) fn ray(&self, origin: Vec3, dir: Vec3, max: f32) -> Option<f32> {
-        if self.broken.is_some() {
+        if self.broken.is_some() || self.bounds().ray(origin, dir, max).is_none() {
             return None;
         }
-        self.body().ray(origin, dir, max)
+        let to = self.place.inverse();
+        let (o, d) = (to * (origin - self.top), to * dir);
+        [&self.cloth, &self.cape, &self.sleeves[0].0, &self.sleeves[1].0].into_iter().filter_map(|c| c.ray(o, d, max)).min_by(f32::total_cmp)
+    }
+
+    /// A shard stuck in it where it struck (`at`, flying along `dir`), white
+    /// hot a moment (see `Needle`), carried with it, as its horns are.
+    pub(super) fn embed(&self, commands: &mut Commands, assets: &Assets3, owner: Entity, at: Vec3, dir: Vec3, delay: f32) {
+        let to = self.place.inverse();
+        let base = at - dir * NEEDLE_OUT;
+        commands.spawn((
+            OfBishop(owner),
+            Stiff { offset: to * (base - self.top - Vec3::Y * 0.06), turn: to * Quat::from_rotation_arc(Vec3::Y, dir), dark: true },
+            Needle { delay, life: NEEDLE_LIFE, size: NEEDLE_SIZE },
+            Mesh3d(assets.shard.clone()),
+            MeshMaterial3d(assets.bright.clone()),
+            Transform::from_scale(Vec3::ZERO),
+        ));
     }
 
     /// A shard struck it, flying along `dir`: hurt, and pushed a little

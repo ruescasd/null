@@ -401,7 +401,7 @@ fn fire(
     camera: Single<(&Transform, &FlyCam, &mut Player)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
-    mut bishops: Query<&mut bishop::Bishop>,
+    mut bishops: Query<(Entity, &mut bishop::Bishop)>,
     ichor: Res<ichor::Ichor>,
     fx: Res<weapon::Fx>,
     viewmodel: Single<Entity, With<weapon::Viewmodel>>,
@@ -419,7 +419,7 @@ fn fire(
     light.intensity *= (-dt * 40.0).exp();
     let (transform, fly, mut player) = camera.into_inner();
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
-    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|b| b.health > 0.0)));
+    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|(_, b)| b.health > 0.0)));
     if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 {
         return;
     }
@@ -475,9 +475,10 @@ fn fire(
         let mut struck = None;
         // Or a bishop's, nearer than either.
         let limit = body.map_or(end, |(b, ..)| b);
-        let robed = bishops.iter_mut().filter_map(|b| b.ray(eye, dir, limit).map(|d| (d, b))).min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((d, mut b)) = robed {
+        let robed = bishops.iter_mut().filter_map(|(e, b)| b.ray(eye, dir, limit).map(|d| (d, e, b))).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, owner, mut b)) = robed {
             b.hurt(dir, DAMAGE);
+            b.embed(&mut commands, &assets, owner, eye + dir * d, dir, d / SHARD_SPEED);
             end = d;
             struck = Some(eye + dir * d);
         } else if let Some((d, entity, bone)) = body

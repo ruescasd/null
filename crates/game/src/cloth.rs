@@ -158,6 +158,36 @@ impl Cloth {
         }
     }
 
+    /// The nearest a ray from `origin` along `dir` (in the frame its points
+    /// are in) strikes it, within `max`, either side.
+    pub fn ray(&self, origin: Vec3, dir: Vec3, max: f32) -> Option<f32> {
+        let mut best: Option<f32> = None;
+        for t in self.triangles.chunks(3) {
+            let (a, b, c) = (self.points[t[0] as usize], self.points[t[1] as usize], self.points[t[2] as usize]);
+            let (e1, e2) = (b - a, c - a);
+            let p = dir.cross(e2);
+            let det = e1.dot(p);
+            if det.abs() < 1e-8 {
+                continue;
+            }
+            let s = origin - a;
+            let u = s.dot(p) / det;
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let q = s.cross(e1);
+            let v = dir.dot(q) / det;
+            if v < 0.0 || u + v > 1.0 {
+                continue;
+            }
+            let d = e2.dot(q) / det;
+            if d > 0.0 && d < max && best.is_none_or(|b| d < b) {
+                best = Some(d);
+            }
+        }
+        best
+    }
+
     /// Its mesh (to be kept up with `draw`).
     pub fn mesh(&self) -> Mesh {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
