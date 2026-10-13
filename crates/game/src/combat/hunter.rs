@@ -834,12 +834,6 @@ fn spawn_hunter(
             let a = r(1) * std::f32::consts::TAU;
             let out = bone.radius * (0.35 + 0.6 * (r(2) + 0.5));
             let mut offset = Vec3::new(a.cos() * out, 0.0, a.sin() * out);
-            // A sprawl's body flat and wide (its shards close in above and
-            // below, out at its sides).
-            if sprawl && i < 3 {
-                offset.z *= 0.45;
-                offset.x *= 1.35;
-            }
             // A beast's belly is lean: what hangs under the torso (+Z in
             // its frame) sits close in.
             if kind == Kind::Beast && i < 3 && offset.z > 0.0 {
@@ -866,17 +860,7 @@ fn spawn_hunter(
         }
         // In a bone's frame Y runs along it, X to the body's right, and
         // -Z is the back (up on a beast's level torso).
-        // A sprawl: a ridge of pale spines along its back, raked back,
-        // longest in the middle (it known by them, half in shadow).
-        if sprawl && i < 3 {
-            for k in 0..3 {
-                let r = |j: i32| hash01(seed as i32, (i * 17 + k) as i32, j, 0x6c8) - 0.5;
-                let along = (k as f32 + 0.5) / 3.0 + r(0) * 0.08;
-                let middle = 1.0 - ((i * 3 + k) as f32 - 4.0).abs() / 5.0;
-                pale(commands, i, along, Vec3::new(r(1) * 0.03, 0.0, -bone.radius * 0.35), Vec3::new(r(2) * 0.2, -0.55, -1.0), 0.18 + 0.3 * middle, 0.05);
-            }
-        }
-        if kind == Kind::Beast && !sprawl && (i == 2 || i == 3) {
+        if kind == Kind::Beast && (i == 2 || i == 3) {
             // Muscle over the shoulders and up the back of the neck: a
             // heavy hump of mass on top, where its strength is.
             let (from, to) = if i == 2 { (0.45, 1.0) } else { (0.0, 0.45) };

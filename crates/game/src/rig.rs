@@ -242,21 +242,16 @@ impl Plan {
         }
     }
 
-    /// The sprawl, a flanker: legs out from its sides, knees high over a
-    /// body slung low and flat between them, gliding level on quick
-    /// diagonal pairs of steps, turning short; smaller than a harrow, its
-    /// head small, low and forward, almost of its body (its outline mostly
-    /// legs: a spider's, not a dog's).
+    /// The beast moving another way (`--opt sprawl`): legs out from its
+    /// sides, knees high over a body slung low between them, gliding level
+    /// on quick diagonal pairs of steps, turning short.
     pub fn sprawl() -> Self {
         let leg = |root: Root, side: f32, forward: f32| LegPlan { root, side, forward, upper: 1.1, lower: 1.3, knee: 0.0, knee_up: 1.0, knee_out: 0.4, spread: 1.2, radius: (0.17, 0.1) };
         let beast = Plan::beast();
         Plan {
-            hips: (-0.7, 0.62),
-            chest: (0.7, 0.66),
-            torso_profile: [1.0, 0.9, 1.0],
-            neck: (0.3, 1.0, -0.15),
-            neck_radius: 0.24,
-            head: (0.42, 0.2),
+            hips: (-0.8, 0.75),
+            chest: (0.8, 0.8),
+            neck: (0.55, 0.4, 0.05),
             legs: vec![leg(Root::Chest, -0.3, 0.15), leg(Root::Chest, 0.3, 0.15), leg(Root::Hips, -0.3, -0.1), leg(Root::Hips, 0.3, -0.1)],
             gaits: vec![
                 Gait { speed: 0.0, offsets: vec![0.0, 0.5, 0.53, 0.03], swing: 0.35, stride: 1.4 },
@@ -272,7 +267,6 @@ impl Plan {
             turn: 9.0,
             ..beast
         }
-        .scaled(0.8)
     }
 }
 
