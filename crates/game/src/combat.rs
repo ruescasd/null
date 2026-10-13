@@ -77,7 +77,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk),
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::ghosts).chain().before(hunter::spawn), hunter::spawn))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::motes).chain().before(hunter::spawn), hunter::spawn))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -401,7 +401,7 @@ fn fire(
     camera: Single<(&Transform, &FlyCam, &mut Player)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
-    mut bishops: Query<(Entity, &mut bishop::Bishop)>,
+    (mut bishops, mut motes): (Query<(Entity, &mut bishop::Bishop)>, Query<(&Transform, &mut bishop::Mote), (Without<FlyCam>, Without<Swarmer>)>),
     ichor: Res<ichor::Ichor>,
     fx: Res<weapon::Fx>,
     viewmodel: Single<Entity, With<weapon::Viewmodel>>,
@@ -476,7 +476,21 @@ fn fire(
         // Or a bishop's, nearer than either.
         let limit = body.map_or(end, |(b, ..)| b);
         let robed = bishops.iter_mut().filter_map(|(e, b)| b.ray(eye, dir, limit).map(|d| (d, e, b))).min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((d, owner, mut b)) = robed {
+        // Or one of its motes, nearer still: shot down.
+        let limit = robed.as_ref().map_or(limit, |r| r.0);
+        let mote = motes
+            .iter_mut()
+            .filter_map(|(t, m)| {
+                let to = t.translation - eye;
+                let along = to.dot(dir);
+                (along > 0.0 && along < limit && (to - dir * along).length() < 0.3).then_some((along, m))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, mut m)) = mote {
+            m.popped = true;
+            end = d;
+            struck = Some(eye + dir * d);
+        } else if let Some((d, owner, mut b)) = robed {
             b.hurt(dir, DAMAGE);
             b.embed(&mut commands, &assets, owner, eye + dir * d, dir, d / SHARD_SPEED);
             end = d;

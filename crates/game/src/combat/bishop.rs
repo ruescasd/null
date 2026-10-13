@@ -44,6 +44,21 @@ const DRIFT: f32 = 3.0;
 const BLINK: (f32, f32) = (3.0, 6.0);
 /// What it takes before it breaks (a harrow 45).
 const BISHOP_HEALTH: f32 = 40.0;
+/// Its cast: how long the light gathers (s), how long between casts, how
+/// near and far you may be; its motes: how many, how fast (m/s), how fast
+/// they turn towards you (rad/s), how long they fly (s), what each does to
+/// you, how big (m).
+const GATHER: f32 = 1.0;
+const BETWEEN: (f32, f32) = (4.0, 6.0);
+const CAST_RANGE: (f32, f32) = (4.0, 24.0);
+const MOTES: usize = 3;
+const MOTE_SPEED: f32 = 10.0;
+const MOTE_TURN: f32 = 1.8;
+const MOTE_LIFE: f32 = 5.0;
+const MOTE_HARM: f32 = 12.0;
+const MOTE_SIZE: f32 = 0.12;
+/// Where its light gathers, from its neck: where its hands would meet.
+const LIGHT: Vec3 = Vec3::new(0.0, -0.79, 0.32);
 /// How long its empty robes lie after it breaks (s).
 const LIES: f32 = 6.0;
 
@@ -86,6 +101,9 @@ pub(super) struct Bishop {
     pub(super) health: f32,
     /// Since it broke (s): its robes falling empty.
     broken: Option<f32>,
+    /// Gathering its light (s into it), and when it may cast again.
+    charge: Option<f32>,
+    next_cast: f32,
 }
 
 /// The lab's bishop: where it hangs from, its sideways, how far aside it is
@@ -168,6 +186,32 @@ pub(super) struct Stiff {
 /// and 3 the sleeves): carried with it while frozen.
 #[derive(Component)]
 pub(super) struct Drape;
+
+/// Its light, at its chest, grown as it gathers (else none).
+#[derive(Component)]
+pub(super) struct Gleam;
+
+/// A mote it loosed: how fast it flies, how long it has left; shot (to
+/// burst).
+#[derive(Component)]
+pub(super) struct Mote {
+    velocity: Vec3,
+    life: f32,
+    pub(super) popped: bool,
+}
+
+/// A mote's trail, shrinking away.
+#[derive(Component)]
+pub(super) struct Ember {
+    life: f32,
+}
+
+/// The motes' mesh and their glow.
+#[derive(Resource)]
+pub(super) struct MoteKit {
+    mesh: Handle<Mesh>,
+    glow: Handle<StandardMaterial>,
+}
 
 /// An afterimage of a blink, fading.
 #[derive(Component)]
@@ -440,7 +484,10 @@ fn decode(bytes: &[u8]) -> Option<[Vec<Vec3>; 4]> {
 
 /// The drape: kept as data (`data/bishop_drape.bin`, built into the game;
 /// made with `--opt bakedrape`, which settles it, writes it and leaves).
-pub(super) fn settle(mut commands: Commands, args: Res<Args>, mut exit: MessageWriter<AppExit>) {
+pub(super) fn settle(mut commands: Commands, args: Res<Args>, mut exit: MessageWriter<AppExit>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    // (Its motes' glow: the shards' white heat.)
+    let glow = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(60.0, 60.0, 60.0), ..default() });
+    commands.insert_resource(MoteKit { mesh: meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), glow });
     if args.opt("bakedrape") {
         let drape = settled();
         match std::fs::write(DRAPE_FILE, encode(&drape)) {
@@ -520,9 +567,12 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
             stiff_part(commands, assets.shard.clone(), horn.clone(), at, Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(5.0, length / 0.7, 5.0), false);
         }
     }
+    // Its light, where its hands would meet: none until it gathers (see
+    // `gleam`).
+    commands.spawn((OfBishop(owner), Gleam, Stiff { offset: LIGHT, turn: Quat::IDENTITY, dark: true }, Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap())), MeshMaterial3d(assets.bright.clone()), Transform::from_scale(Vec3::ZERO), bevy::light::NotShadowCaster));
     // Inside its sleeves and its robe, darkness too (as in its hood): its
     // arms and its body, never seen (looking into a cuff, or up under it,
-    // the cloth's hollow inside was, the user). No hands, no light held.
+    // the cloth's hollow inside was, the user). No hands.
     let from_neck = Vec3::Y * 0.06;
     let mut dark = |commands: &mut Commands, a: Vec3, b: Vec3, radius: f32| {
         let mesh = meshes.add(Capsule3d::new(radius, a.distance(b)).mesh().rings(2).longitudes(10).latitudes(6));
@@ -554,6 +604,8 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         struck: false,
         health: BISHOP_HEALTH,
         broken: None,
+        charge: None,
+        next_cast: 2.5,
     };
     commands.entity(owner).insert((OfBishop(owner), bishop));
     owner
@@ -659,6 +711,7 @@ pub(super) fn float(
     mut bishops: Query<(Entity, &mut Bishop)>,
     parts: Query<(Entity, &OfBishop, Option<&Stiff>, &Transform), Without<Bishop>>,
     mut heard: Local<u32>,
+    kit: Res<MoteKit>,
 ) {
     let dt = time.delta_secs().min(1.0 / 30.0);
     let shot = gun.shots != *heard;
@@ -792,6 +845,10 @@ pub(super) fn float(
                         info!("huntlog: bishop {} blinks {:.1} m aside ({}), {:.1} m from you", entity.index_u32(), by.length(), if shot { "shot at" } else if b.struck { "hit" } else if b.aimed > 0.5 { "aimed at" } else { "of itself" }, Vec2::new(to.x - eye.x, to.z - eye.z).length());
                     }
                     b.next_blink = b.time + 1.2 + 1.3 * r(5);
+                    // (Startled, its gathering broken: shoot it as it gathers.)
+                    if b.charge.take().is_some() {
+                        b.next_cast = b.time + 1.5;
+                    }
                     b.aimed = 0.0;
                 }
             }
@@ -822,6 +879,32 @@ pub(super) fn float(
             }
             let turn = (facing - b.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
             b.heading += turn.clamp(-3.0 * dt, 3.0 * dt);
+            // Its cast: seeing you, now and then, it stops still, its light
+            // gathering at its chest; then its motes are loosed at you,
+            // fanned out, to home in.
+            let far = Vec2::new(to.x, to.z).length();
+            if let Some(c) = b.charge.as_mut() {
+                *c += dt;
+                b.velocity *= (-dt * 8.0).exp();
+                if *c >= GATHER {
+                    b.charge = None;
+                    b.next_cast = b.time + BETWEEN.0 + (BETWEEN.1 - BETWEEN.0) * r(70);
+                    let from = b.top + Vec3::Y * 0.06 + Quat::from_rotation_y(b.heading) * LIGHT;
+                    let aim = (eye - Vec3::Y * 0.35 - from).normalize_or(Vec3::Z);
+                    for k in 0..MOTES {
+                        let fan = (k as f32 - (MOTES - 1) as f32 * 0.5) * 0.55;
+                        let dir = (Quat::from_rotation_y(fan) * aim + Vec3::Y * 0.3).normalize();
+                        commands.spawn((Mote { velocity: dir * MOTE_SPEED, life: MOTE_LIFE, popped: false }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(from).with_scale(Vec3::splat(MOTE_SIZE)), bevy::light::NotShadowCaster));
+                    }
+                    commands.spawn((AudioPlayer::new(assets.pounce.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.2)).with_speed(1.6), Transform::from_translation(from)));
+                    if args.opt("huntlog") {
+                        info!("huntlog: bishop {} casts, {:.1} m from you", entity.index_u32(), far);
+                    }
+                }
+            } else if sees && b.time >= b.next_cast && (CAST_RANGE.0..CAST_RANGE.1).contains(&far) {
+                b.charge = Some(0.0);
+                commands.spawn((AudioPlayer::new(assets.assemble.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(0.8)).with_speed(1.3), Transform::from_translation(b.top)));
+            }
         }
         let place = Quat::from_rotation_y(b.heading);
         let broken = b.broken.is_some();
@@ -872,6 +955,80 @@ pub(super) fn carry(bishops: Query<&Bishop>, mut stiff: Query<(&OfBishop, &Stiff
     for (of, mut transform) in &mut cloths {
         let Ok(b) = bishops.get(of.0) else { continue };
         *transform = if b.drape.is_some() { Transform::from_translation(b.top).with_rotation(b.place) } else { Transform::default() };
+    }
+}
+
+/// Its light grows as it gathers, flickering; none else.
+pub(super) fn gleam(time: Res<Time>, bishops: Query<&Bishop>, mut lights: Query<(&OfBishop, &mut Transform), With<Gleam>>) {
+    for (of, mut transform) in &mut lights {
+        let Ok(b) = bishops.get(of.0) else { continue };
+        let k = b.charge.map_or(0.0, |c| (c / GATHER).min(1.0));
+        let flicker = 1.0 + 0.15 * (time.elapsed_secs() * 37.0).sin() * k;
+        transform.scale = Vec3::splat(0.13 * k.powf(0.7) * flicker);
+    }
+}
+
+/// Motes fly, turning towards you (no faster than `MOTE_TURN`: step aside
+/// and they pass), leaving a trail; on what is built, or shot, or spent,
+/// they burst; on you, they hurt you (and shove, and jolt the view).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn motes(
+    mut commands: Commands,
+    time: Res<Time>,
+    args: Res<Args>,
+    ground: crate::ground::Ground,
+    assets: Res<Assets3>,
+    kit: Res<MoteKit>,
+    mut director: ResMut<Director>,
+    mut gun: ResMut<Gun>,
+    mut player: Single<(&Transform, &mut Player), Without<Mote>>,
+    mut motes: Query<(Entity, &mut Mote, &mut Transform), (Without<Player>, Without<Ember>)>,
+    mut embers: Query<(Entity, &mut Ember, &mut Transform), (Without<Player>, Without<Mote>)>,
+) {
+    let dt = time.delta_secs().min(0.05);
+    let eye = player.0.translation;
+    let chest = eye - Vec3::Y * 0.35;
+    for (entity, mut m, mut transform) in &mut motes {
+        let p = transform.translation;
+        m.life -= dt;
+        // Turning towards you, no faster than it can.
+        let speed = m.velocity.length();
+        let heading = m.velocity / speed.max(1e-4);
+        let want = (chest - p).normalize_or(heading);
+        let angle = heading.angle_between(want);
+        let turned = if angle > 1e-4 { Quat::IDENTITY.slerp(Quat::from_rotation_arc(heading, want), (MOTE_TURN * dt / angle).min(1.0)) * heading } else { heading };
+        m.velocity = turned * MOTE_SPEED;
+        let next = p + m.velocity * dt;
+        let hit_you = p.distance(chest) < 0.6 || next.distance(chest) < 0.6;
+        let blocked = !ground.clear(p, next) || next.y < ground.at(next);
+        if hit_you || blocked || m.popped || m.life <= 0.0 {
+            sparks(&mut commands, &assets, p, -heading, entity.index_u32());
+            if args.opt("huntlog") {
+                info!("huntlog: a mote {}", if hit_you { "strikes you" } else if m.popped { "shot down" } else if blocked { "bursts on what is built" } else { "spent" });
+            }
+            if hit_you {
+                player.1.health -= MOTE_HARM;
+                player.1.velocity += heading.with_y(0.0).normalize_or(Vec3::ZERO) * 4.0 + Vec3::Y * 1.5;
+                director.hurt = 1.0;
+                gun.jolt += Vec2::new(0.06, -heading.dot(*player.0.right()) * 0.08);
+                commands.spawn((AudioPlayer::new(assets.shatter.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.7)).with_speed(1.4)));
+            } else {
+                commands.spawn((AudioPlayer::new(assets.shatter.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(0.6)).with_speed(1.5), Transform::from_translation(p)));
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.translation = next;
+        // Its trail.
+        commands.spawn((Ember { life: 0.25 }, Mesh3d(kit.mesh.clone()), MeshMaterial3d(kit.glow.clone()), Transform::from_translation(p).with_scale(Vec3::splat(MOTE_SIZE * 0.7)), bevy::light::NotShadowCaster));
+    }
+    for (entity, mut e, mut transform) in &mut embers {
+        e.life -= dt;
+        if e.life <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.scale = Vec3::splat(MOTE_SIZE * 0.7 * e.life / 0.25);
     }
 }
 
