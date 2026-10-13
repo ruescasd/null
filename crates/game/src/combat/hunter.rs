@@ -1449,9 +1449,6 @@ pub(super) fn hunt(
             commands.spawn((AudioPlayer::new(assets.bite.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             // You cry out.
             commands.spawn((AudioPlayer::new(assets.player_pain.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
-            if args.opt("hurtsound") {
-                commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
-            }
         }
         // (Its ground under where it stands: in a built place, the floor it
         // is on, not one above or below.)

@@ -43,37 +43,35 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "sounds/gun.wav");
-        embedded_asset!(app, "sounds/shatter.wav");
-        embedded_asset!(app, "sounds/swarm.wav");
-        embedded_asset!(app, "sounds/drone.wav");
-        embedded_asset!(app, "sounds/hurt.wav");
-        embedded_asset!(app, "sounds/assemble.wav");
-        embedded_asset!(app, "sounds/hit.wav");
-        embedded_asset!(app, "sounds/death.wav");
-        embedded_asset!(app, "sounds/growl0.wav");
-        embedded_asset!(app, "sounds/growl1.wav");
-        embedded_asset!(app, "sounds/growl2.wav");
-        embedded_asset!(app, "sounds/growl3.wav");
-        embedded_asset!(app, "sounds/growl4.wav");
-        embedded_asset!(app, "sounds/growl5.wav");
-        embedded_asset!(app, "sounds/growl6.wav");
-        embedded_asset!(app, "sounds/pounce.wav");
-        embedded_asset!(app, "sounds/shot.wav");
-        embedded_asset!(app, "sounds/reload.wav");
-        embedded_asset!(app, "sounds/bite.wav");
+        embedded_asset!(app, "sounds/shard_break.wav");
+        embedded_asset!(app, "sounds/swarm_voice.wav");
+        embedded_asset!(app, "sounds/ground_hum.wav");
+        embedded_asset!(app, "sounds/swarm_assemble.wav");
+        embedded_asset!(app, "sounds/shard_hit.wav");
+        embedded_asset!(app, "sounds/hunter_death.wav");
+        embedded_asset!(app, "sounds/hunter_growl0.wav");
+        embedded_asset!(app, "sounds/hunter_growl1.wav");
+        embedded_asset!(app, "sounds/hunter_growl2.wav");
+        embedded_asset!(app, "sounds/hunter_growl3.wav");
+        embedded_asset!(app, "sounds/hunter_growl4.wav");
+        embedded_asset!(app, "sounds/hunter_growl5.wav");
+        embedded_asset!(app, "sounds/hunter_growl6.wav");
+        embedded_asset!(app, "sounds/hunter_pounce.wav");
+        embedded_asset!(app, "sounds/gun_shot.wav");
+        embedded_asset!(app, "sounds/gun_reload.wav");
+        embedded_asset!(app, "sounds/hunter_bite.wav");
         embedded_asset!(app, "sounds/bishop_cast.wav");
         embedded_asset!(app, "sounds/bishop_death.wav");
         embedded_asset!(app, "sounds/player_pain.wav");
         embedded_asset!(app, "sounds/bishop_call.wav");
         embedded_asset!(app, "sounds/bishop_pain.wav");
         embedded_asset!(app, "sounds/bishop_blink.wav");
-        embedded_asset!(app, "sounds/step0.wav");
-        embedded_asset!(app, "sounds/step1.wav");
-        embedded_asset!(app, "sounds/step2.wav");
-        embedded_asset!(app, "sounds/step3.wav");
-        embedded_asset!(app, "sounds/step4.wav");
-        embedded_asset!(app, "sounds/step5.wav");
+        embedded_asset!(app, "sounds/player_step0.wav");
+        embedded_asset!(app, "sounds/player_step1.wav");
+        embedded_asset!(app, "sounds/player_step2.wav");
+        embedded_asset!(app, "sounds/player_step3.wav");
+        embedded_asset!(app, "sounds/player_step4.wav");
+        embedded_asset!(app, "sounds/player_step5.wav");
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
@@ -173,12 +171,10 @@ struct Assets3 {
     dark: Handle<StandardMaterial>,
     /// Pale and matte: the markings on creatures that do not glow.
     pale: Handle<StandardMaterial>,
-    /// The shot (a recording; `--opt oldgun` for the synthesised one), and
-    /// the reload as the pump racks.
+    /// The shot, and the reload as the pump racks.
     gun: Handle<AudioSource>,
     reload: Handle<AudioSource>,
     shatter: Handle<AudioSource>,
-    hurt: Handle<AudioSource>,
     assemble: Handle<AudioSource>,
     hit: Handle<AudioSource>,
     death: Handle<AudioSource>,
@@ -343,23 +339,22 @@ fn setup(
         bright: bright.clone(),
         dark: dark.clone(),
         pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
-        gun: load(if args.opt("oldgun") { "gun" } else { "shot" }),
-        reload: load("reload"),
-        shatter: load("shatter"),
-        hurt: load("hurt"),
-        assemble: load("assemble"),
-        hit: load("hit"),
-        death: load("death"),
-        growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("growl{k}")), l)).collect(),
-        pounce: load("pounce"),
-        bite: load("bite"),
+        gun: load("gun_shot"),
+        reload: load("gun_reload"),
+        shatter: load("shard_break"),
+        assemble: load("swarm_assemble"),
+        hit: load("shard_hit"),
+        death: load("hunter_death"),
+        growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("hunter_growl{k}")), l)).collect(),
+        pounce: load("hunter_pounce"),
+        bite: load("hunter_bite"),
         bishop_cast: load("bishop_cast"),
         bishop_death: load("bishop_death"),
         player_pain: load("player_pain"),
         bishop_call: load("bishop_call"),
         bishop_pain: load("bishop_pain"),
         bishop_blink: load("bishop_blink"),
-        steps: (0..STEPS).map(|k| load(&format!("step{k}"))).collect(),
+        steps: (0..STEPS).map(|k| load(&format!("player_step{k}"))).collect(),
     };
 
     // The ear is the camera.
@@ -382,12 +377,12 @@ fn setup(
     if !args.opt("peace") && args.shot.is_none() {
         // The ground's hum, and the swarm's voice (it follows the swarm).
         commands.spawn((
-            AudioPlayer::new(load("drone")),
+            AudioPlayer::new(load("ground_hum")),
             PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(0.35), ..default() },
         ));
         commands.spawn((
             SwarmVoice,
-            AudioPlayer::new(load("swarm")),
+            AudioPlayer::new(load("swarm_voice")),
             PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(0.0), spatial: true, ..default() },
             Transform::default(),
         ));

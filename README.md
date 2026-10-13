@@ -134,8 +134,6 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
     --opt specimen                            one hunter standing still in front of you, to look at: --set
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)
-    --opt hurtsound                           the sound when you are hurt (off by default)
-    --opt oldgun                              the synthesised shot instead of the recorded one
     --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
                                               whenever there is none (with biped|beast to choose)
     --set crowd=N                             with --opt hunters: N of them at once, round you (for measuring their cost)
