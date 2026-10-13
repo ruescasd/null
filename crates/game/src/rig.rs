@@ -196,11 +196,15 @@ impl Plan {
             gaits: vec![
                 // A walk: one foot after another down each side.
                 Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 1.5 },
-                // A trot: diagonal pairs together.
-                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.5, 0.0], swing: 0.45, stride: 2.8 },
-                // A gallop: the front pair, then the hind pair.
-                // (Each foot is down for only about a third of the cycle.)
-                Gait { speed: 11.0, offsets: vec![0.0, 0.1, 0.6, 0.5], swing: 0.66, stride: 5.0 },
+                // A trot: diagonal pairs, the hind foot of each a little
+                // after the fore (not as one: a toy's).
+                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.56, 0.06], swing: 0.45, stride: 2.8 },
+                // A gallop: the front pair, then the hind pair, round the
+                // body (fore left, fore right, hind right, hind left), each
+                // foot plainly after the other. Long and slow for its speed,
+                // a big animal's, not a dog's quick steps; each foot down
+                // for under a third of the cycle.
+                Gait { speed: 11.0, offsets: vec![0.0, 0.18, 0.64, 0.5], swing: 0.7, stride: 6.5 },
             ],
             lift: 0.28,
             accel: 9.0,
@@ -447,7 +451,7 @@ impl Rig {
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving) * self.alive;
         // Crouched: lower, and the chest lower still (the head goes down).
         // Running, the body drops, so the legs can reach far fore and aft.
-        let run = 0.2 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
+        let run = 0.3 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
         let low = (self.crouch * if root == Root::Chest { 0.42 } else { 0.3 }).max(run);
         // In a leap the body pitches with its arc: nose up rising, down
         // falling.
@@ -480,7 +484,9 @@ impl Rig {
         // body passes over it), but never beyond the leg's reach.
         let leg = self.plan.legs[i];
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
-        let ahead = ((1.0 - self.swing) * self.stride * 0.5).min((leg.upper + leg.lower) * 0.6) * (speed / 1.5).min(1.0);
+        // (Galloping, further: three quarters of the leg out before it,
+        // as far behind as it leaves, the legs reaching, not under it.)
+        let ahead = ((1.0 - self.swing) * self.stride * 0.5).min((leg.upper + leg.lower) * (0.6 + 0.15 * self.gallop)) * (speed / 1.5).min(1.0);
         let lead = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero() * ahead;
         // Each step lands a little off its ideal place.
         let k = self.steps.get(i).copied().unwrap_or(0) as i32;
@@ -568,7 +574,12 @@ impl Rig {
         // every foot is down.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let any_swinging = self.feet.iter().any(|f| f.swinging);
-        let (offsets, swing, stride, gallop) = self.plan.gait(speed);
+        let (mut offsets, swing, stride, gallop) = self.plan.gait(speed);
+        // Half lead with the other side.
+        if offsets.len() == 4 && self.seed % 2 == 1 {
+            offsets.swap(0, 1);
+            offsets.swap(2, 3);
+        }
         (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
         if self.airborne.is_none() && (speed > 0.3 || any_swinging) {
@@ -595,8 +606,12 @@ impl Rig {
                 // Higher the faster: at a gallop the paw is tucked up high.
                 let reach = self.plan.legs[i].upper + self.plan.legs[i].lower;
                 let lift = (self.plan.lift * (1.0 + speed / 5.0)).min(reach * 0.5) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
-                let arc = (s * std::f32::consts::PI).sin() * lift;
-                foot.planted = foot.from.lerp(home, s * s * (3.0 - 2.0 * s)) + Vec3::Y * arc;
+                // Galloping, the paw goes forward early and high and comes
+                // down reaching (not an even arc: a trot's).
+                let even = s * s * (3.0 - 2.0 * s);
+                let across = even + (1.0 - (1.0 - s).powi(3) - even) * self.gallop;
+                let arc = (s.powf(1.0 - 0.25 * self.gallop) * std::f32::consts::PI).sin() * lift;
+                foot.planted = foot.from.lerp(home, across) + Vec3::Y * arc;
             } else if foot.swinging {
                 foot.swinging = false;
                 foot.planted = home;
