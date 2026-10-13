@@ -823,6 +823,18 @@ pub(super) struct Fixtures {
     pub roots: Vec<roots::Root>,
 }
 
+impl Fixtures {
+    /// Another's added.
+    pub(in crate::chasm) fn absorb(&mut self, other: Fixtures) {
+        self.orbs.extend(other.orbs);
+        self.pools.extend(other.pools);
+        self.paintings.extend(other.paintings);
+        self.projectors.extend(other.projectors);
+        self.shimmers.extend(other.shimmers);
+        self.roots.extend(other.roots);
+    }
+}
+
 /// The lab: its rooms built, where to see them from, and what they hold
 /// (`--opt orb`: the shrine alone).
 pub(super) fn lab(seed: u32, count: u32, show: Show) -> (Parts, RoomViews, Fixtures) {

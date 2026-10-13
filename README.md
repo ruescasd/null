@@ -44,6 +44,7 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
     --opt shotpair                            with --shot: a second capture 5 frames later (<path>_b.png), to compare for flicker
     --set burst=N                             with --shot: N captures 3 frames apart (<path>_1.png, _2...)
     --opt bench                               once everything in view has loaded: average and worst frame time, entity count, costliest render passes
+    --opt startlog                            from the process's start: when the first frame comes, then each half second the frame rate, the worst frame, whether the ground has settled
     --opt noclip|tether|spin                  start flying / force the tether on / turn the camera (for captures)
     --opt chasm                               the chasm: a standalone place, two walls 550 m high, 30-230 m apart and angled, rising out
                                               of the haze, a web of cables; a way down from the rim where you start (10-15 min at

@@ -163,6 +163,14 @@ impl Geometry {
         self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
+    /// Another's triangles added to these.
+    fn append(&mut self, other: Geometry) {
+        let base = self.positions.len() as u32;
+        self.positions.extend(other.positions);
+        self.normals.extend(other.normals);
+        self.indices.extend(other.indices.into_iter().map(|i| i + base));
+    }
+
     /// A box from its centre and three half-axes (any orientation).
     fn oriented(&mut self, c: Vec3, a: Vec3, b: Vec3, n: Vec3) {
         // (Kept right-handed so the faces wind outwards.)
@@ -418,6 +426,15 @@ impl Geometry {
     }
 }
 
+/// The colliders of many pieces, each built on a thread of its own (one
+/// after another, a region's took 0.4 s before its first frame).
+fn colliders_of(pieces: &[&Geometry]) -> Vec<Collider> {
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = pieces.iter().map(|g| scope.spawn(move || g.collider())).collect();
+        workers.into_iter().filter_map(|w| w.join().expect("a collider")).collect()
+    })
+}
+
 /// One face's frame: `at(u, v, n)` is the point `u` along the face from its
 /// start, `v` up and `n` out from it into the gap, the face standing
 /// `offset` out from its line (set back where negative).
@@ -551,7 +568,41 @@ struct Parts {
     routes: Option<Manifold>,
 }
 
+/// What a room built on a thread of its own adds to the parts (see
+/// `region::build`): only what a room builds, as plain data (the parts
+/// also hold solids, which stay on their thread).
+struct RoomParts {
+    chunks: Vec<Geometry>,
+    walkable: Vec<Vec3>,
+    glow: Geometry,
+    strands: Vec<(Vec<Vec3>, f32, f32)>,
+    lights: Vec<(Vec3, f32, f32)>,
+    fill: Vec<(Vec3, f32, f32)>,
+    slopes: Vec<Vec<Vec3>>,
+}
+
 impl Parts {
+    /// What a room built into these alone (and nothing else: it fails
+    /// loudly if a room ever builds more, rather than lose it).
+    fn into_room(self) -> RoomParts {
+        assert!(
+            self.stone.indices.is_empty() && self.dark.indices.is_empty() && self.dim.indices.is_empty() && self.glass.indices.is_empty() && self.steps.indices.is_empty() && self.ramps.indices.is_empty() && self.cables.is_empty() && self.shadowed.is_empty(),
+            "a room built apart built parts `RoomParts` does not carry: add them to it"
+        );
+        RoomParts { chunks: self.chunks, walkable: self.walkable, glow: self.glow, strands: self.strands, lights: self.lights, fill: self.fill, slopes: self.slopes }
+    }
+
+    /// A room built apart, added.
+    fn add_room(&mut self, room: RoomParts) {
+        self.chunks.extend(room.chunks);
+        self.walkable.extend(room.walkable);
+        self.glow.append(room.glow);
+        self.strands.extend(room.strands);
+        self.lights.extend(room.lights);
+        self.fill.extend(room.fill);
+        self.slopes.extend(room.slopes);
+    }
+
     fn mark(&mut self, what: &'static str) {
         self.marks.push((self.stone.indices.len() / 3, what));
     }
@@ -929,7 +980,8 @@ fn build(
             commands.insert_resource(Way(plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"))));
         }
         furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
-        let colliders = parts.stone.collider().into_iter().chain(parts.chunks.iter().filter_map(|g| g.collider())).chain(parts.glass.collider()).chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        let pieces: Vec<&Geometry> = std::iter::once(&parts.stone).chain(&parts.chunks).chain(std::iter::once(&parts.glass)).collect();
+        let colliders = colliders_of(&pieces).into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }

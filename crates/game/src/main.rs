@@ -92,7 +92,33 @@ impl Args {
     }
 }
 
+/// When the process started (`--opt startlog`).
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// `--opt startlog`: from the process's start, each half second
+/// the frames, the worst, whether the ground has settled.
+fn startlog(args: Res<Args>, time: Res<Time>, streamer: Res<terrain::Streamer>, mut state: Local<(f32, u32, f32, bool)>) {
+    if !args.opt("startlog") {
+        return;
+    }
+    let since = STARTED.get().unwrap().elapsed().as_secs_f32();
+    let dt = time.delta_secs();
+    if !state.3 {
+        state.3 = true;
+        state.0 = since;
+        info!("startlog: first frame at {since:.2} s");
+        return;
+    }
+    state.1 += 1;
+    state.2 = state.2.max(dt);
+    if since - state.0 >= 0.5 {
+        info!("startlog: {since:5.2} s  {:4.0} fps  worst {:6.1} ms  settled {}", state.1 as f32 / (since - state.0), state.2 * 1000.0, streamer.settled);
+        *state = (since, 0, 0.0, true);
+    }
+}
+
 fn main() {
+    STARTED.get_or_init(std::time::Instant::now);
     // `--check ...`: the chasm's checks over many seeds, nothing rendered.
     let argv: Vec<String> = std::env::args().collect();
     if argv.iter().any(|a| a == "--check") {
@@ -158,6 +184,7 @@ fn main() {
             chasm::ChasmPlugin,
             console::ConsolePlugin,
         ))
+        .add_systems(Update, startlog)
         .run();
 }
 

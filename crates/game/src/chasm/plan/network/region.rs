@@ -274,15 +274,38 @@ pub(in crate::chasm) fn build(seed: u32, spine: usize, side_links: bool) -> (Par
             i += 1;
         }
     }
-    // The places' rooms, each with the doors of the paths built.
+    // The places' rooms, each with the doors of the paths built: each on a
+    // thread of its own, joined in order (one after another, 0.95 s before
+    // the region's first frame, most of it two rotundas).
     let mut ps: Vec<usize> = places.iter().copied().filter(|&p| p != 0 && !doors[p].is_empty()).collect();
     ps.sort();
-    for p in ps {
-        let place = net.places[p];
-        let spec = spec(&place, &doors[p], format!("place{p}"));
-        let origin = corner(place.at) + Vec3::Y * (floor(place.storeys.1) - 1.0);
-        report.push(rooms::place(&spec, origin, p, None, &mut parts, &mut fixtures, &mut views));
-        boxes.push((format!("place{p}"), origin, origin + Vec3::new(spec.size.x, spec.height, spec.size.y)));
+    let specs: Vec<(usize, super::Spec, Vec3)> = ps
+        .iter()
+        .map(|&p| {
+            let place = net.places[p];
+            (p, spec(&place, &doors[p], format!("place{p}")), corner(place.at) + Vec3::Y * (floor(place.storeys.1) - 1.0))
+        })
+        .collect();
+    let built: Vec<_> = std::thread::scope(|scope| {
+        let workers: Vec<_> = specs
+            .iter()
+            .map(|(p, spec, origin)| {
+                scope.spawn(move || {
+                    let (mut parts, mut fixtures, mut views) = (Parts::default(), Fixtures::default(), RoomViews::default());
+                    let line = rooms::place(spec, *origin, *p, None, &mut parts, &mut fixtures, &mut views);
+                    (parts.into_room(), fixtures, views, line)
+                })
+            })
+            .collect();
+        workers.into_iter().map(|w| w.join().expect("a place's room")).collect()
+    });
+    for ((p, spec, origin), (room, room_fixtures, room_views, line)) in specs.iter().zip(built) {
+        parts.add_room(room);
+        fixtures.absorb(room_fixtures);
+        views.0.extend(room_views.0);
+        report.push(line);
+        boxes.push((format!("place{p}"), *origin, *origin + Vec3::new(spec.size.x, spec.height, spec.size.y)));
+        let place = net.places[*p];
         for c in place_cells(&place) {
             open(&mut holes, c, place.storeys);
         }

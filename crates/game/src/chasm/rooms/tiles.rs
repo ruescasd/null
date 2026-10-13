@@ -87,13 +87,48 @@ fn way(g: &mut Grid, cache: &mut Cache, side: usize, (t0, t1): (f32, f32), y: f3
 /// face on the chasm is its own), the slopes over their flights, their
 /// lamps.
 pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
-    let mut cache = Cache(Default::default());
-    // (In runs of a few, each run its own mesh: see `Parts::chunks`.)
-    let mut chunk = super::super::Geometry::default();
-    for (k, tile) in tiles.iter().enumerate() {
-        if k % RUN == 0 && !chunk.indices.is_empty() {
-            parts.chunks.push(std::mem::take(&mut chunk));
+    // (In runs of a few, each run its own mesh: see `Parts::chunks`. Each
+    // run built on its own thread, joined in order: one after another, they
+    // were 2.3 s of the region's 3.4 before its first frame.)
+    let runs: Vec<&[Tile]> = tiles.chunks(RUN).collect();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let mut built: Vec<(usize, Run)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads).map(|w| {
+            let runs = &runs;
+            scope.spawn(move || runs.iter().enumerate().skip(w).step_by(threads).map(|(i, r)| (i, run(r))).collect::<Vec<_>>())
+        }).collect();
+        workers.into_iter().flat_map(|w| w.join().expect("a run of tiles")).collect()
+    });
+    built.sort_by_key(|b| b.0);
+    for (_, r) in built {
+        if !r.chunk.indices.is_empty() {
+            parts.chunks.push(r.chunk);
         }
+        parts.walkable.extend(r.walkable);
+        parts.slopes.extend(r.slopes);
+        for p in r.lamps {
+            // (As strong as a room's main lamp for its size: weaker, the
+            // passage was black but round the lamp.)
+            let range = 16.0;
+            parts.lights.push((p, range, 0.0006 * (range / 14.0f32).powi(2) * 6.0));
+            parts.glow.oriented(p, Vec3::X * 0.15, Vec3::Y * 0.15, Vec3::Z * 0.15);
+        }
+    }
+}
+
+/// A run of tiles built: its mesh, where it is walked, its flights' slopes,
+/// its lamps.
+struct Run {
+    chunk: super::super::Geometry,
+    walkable: Vec<Vec3>,
+    slopes: Vec<Vec<Vec3>>,
+    lamps: Vec<Vec3>,
+}
+
+fn run(tiles: &[Tile]) -> Run {
+    let mut cache = Cache(Default::default());
+    let mut out = Run { chunk: super::super::Geometry::default(), walkable: Vec::new(), slopes: Vec::new(), lamps: Vec::new() };
+    for tile in tiles {
         let mut g = Grid::solid(Vec3::ZERO, Vec3::new(SIDE, tile.height, SIDE));
         let mut slopes: Vec<Vec<Vec3>> = Vec::new();
         let mut lamp_at = None;
@@ -147,21 +182,14 @@ pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
             lamp_at.get_or_insert(Vec3::new(SIDE * 0.5, arm.floor + 3.9, SIDE * 0.5));
         }
         let g = Grid { origin: tile.origin, ..g };
-        g.mesh(&mut chunk);
-        parts.walkable.extend(g.walkable(super::HEADROOM));
-        parts.slopes.extend(slopes);
+        g.mesh(&mut out.chunk);
+        out.walkable.extend(g.walkable(super::HEADROOM));
+        out.slopes.extend(slopes);
         if tile.lamp
             && let Some(p) = lamp_at
         {
-            let p = tile.origin + p;
-            // (As strong as a room's main lamp for its size: weaker, the
-            // passage was black but round the lamp.)
-            let range = 16.0;
-            parts.lights.push((p, range, 0.0006 * (range / 14.0f32).powi(2) * 6.0));
-            parts.glow.oriented(p, Vec3::X * 0.15, Vec3::Y * 0.15, Vec3::Z * 0.15);
+            out.lamps.push(tile.origin + p);
         }
     }
-    if !chunk.indices.is_empty() {
-        parts.chunks.push(chunk);
-    }
+    out
 }
