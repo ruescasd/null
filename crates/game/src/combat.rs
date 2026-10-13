@@ -104,6 +104,8 @@ const SHARD_SPEED: f32 = 260.0;
 /// Your footsteps: how many recorded, and how far a stride (m).
 const STEPS: usize = 6;
 const STRIDE: f32 = 2.4;
+/// How loud a step (30% up from 0.9, the user).
+const STEP_VOLUME: f32 = 1.17;
 /// What a shard does to what it strikes.
 const DAMAGE: f32 = 1.8;
 /// How hard a shot pushes you back (m/s).
@@ -822,14 +824,17 @@ fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<S
 
 /// Your footsteps: on the ground and moving, a step every stride (one of
 /// them, a little higher or lower each time, never the same twice running),
-/// and one as you land.
-fn footsteps(time: Res<Time>, mut commands: Commands, assets: Res<Assets3>, player: Single<(&Player, &FlyCam)>, mut walked: Local<(f32, bool, u32, usize)>) {
+/// and one as you land from a jump or a fall. None on a flight (its slope,
+/// 37 degrees, steeper than any ground walked: a step every tread's bump, the
+/// user), and none landing from a bump.
+fn footsteps(time: Res<Time>, mut commands: Commands, assets: Res<Assets3>, player: Single<(&Player, &FlyCam)>, mut walked: Local<(f32, f32, u32, usize)>) {
     let (player, fly) = *player;
-    let (walked_far, was_grounded, count, last) = &mut *walked;
+    let (walked_far, airborne, count, last) = &mut *walked;
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
-    let landed = player.grounded && !*was_grounded;
-    *was_grounded = player.grounded;
-    if fly.noclip || !player.grounded {
+    let landed = player.grounded && *airborne >= 0.3;
+    *airborne = if player.grounded { 0.0 } else { *airborne + time.delta_secs() };
+    let flight = player.ground_normal.y < 0.88;
+    if fly.noclip || !player.grounded || (flight && !landed) {
         return;
     }
     *walked_far += speed * time.delta_secs();
@@ -842,7 +847,7 @@ fn footsteps(time: Res<Time>, mut commands: Commands, assets: Res<Assets3>, play
             k = (k + 1) % STEPS;
         }
         *last = k;
-        commands.spawn((AudioPlayer::new(assets.steps[k].clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(if landed { 1.3 } else { 0.9 })).with_speed(0.92 + 0.16 * r(1))));
+        commands.spawn((AudioPlayer::new(assets.steps[k].clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(STEP_VOLUME * if landed { 1.4 } else { 1.0 })).with_speed(0.92 + 0.16 * r(1))));
     }
 }
 

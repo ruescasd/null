@@ -120,7 +120,7 @@ const TETHER_LIFT: f32 = 13.6;
 pub struct Player {
     pub velocity: Vec3,
     pub grounded: bool,
-    ground_normal: Vec3,
+    pub ground_normal: Vec3,
     /// Down to 0, and you start again (see `combat.rs`).
     pub health: f32,
     pub tether: Tether,
