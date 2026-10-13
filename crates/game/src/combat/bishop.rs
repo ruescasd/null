@@ -12,11 +12,6 @@
 //! seconds each (`--set bishop_mode=N` holds one): 0 still, 1 drifting from
 //! side to side, 2 jerking aside, dead still between, 3 turning sharply.
 
-use bevy::{
-    asset::RenderAssetUsages,
-    mesh::{Indices, PrimitiveTopology},
-};
-
 use super::*;
 use crate::cloth::Cloth;
 
@@ -45,6 +40,9 @@ pub(super) struct Bishop {
     mesh: Handle<Mesh>,
     /// Its sleeves (left, right), and their meshes.
     sleeves: Vec<(Cloth, Handle<Mesh>)>,
+    /// Its hood and mantle, and their mesh.
+    cape: Cloth,
+    cape_mesh: Handle<Mesh>,
     /// Where it hangs from (the lab's middle), the lab's sideways, how far
     /// aside it is and wants to be, which way it faces and wants to, the
     /// lab's clock and when it next moves.
@@ -120,64 +118,88 @@ fn robe_shade(c: usize, r: usize) -> f32 {
 /// Where the hood bows from (its frame: from the neck, y up, z forward).
 const PIVOT: Vec3 = Vec3::new(0.0, -0.02, 0.04);
 
-/// The hood and the mantle, one piece, as a hooded cape is: from the hood's
-/// crown down round a head, its opening narrowing to close under the chin,
-/// on round the throat and out over the shoulders, sloping to their
-/// corners, longer at the front and back over the chest; the hood bowed at
-/// the neck (`BOW`), easing into the mantle (a stiff hood bowed on its own
-/// did not show it, its point read as a triangle: hoods drape, the user).
-/// Pale at the hood's opening and the mantle's lip. Its frame: from the
-/// neck, y up, z forward.
-fn capelet() -> Mesh {
-    const ARC: usize = 22;
-    // (height, half width, half depth, how far forward, the opening each
-    // side of the front, radians)
-    let rings: [(f32, f32, f32, f32, f32); 14] = [
-        (0.42, 0.005, 0.01, 0.015, 0.75),
-        (0.41, 0.045, 0.06, 0.02, 0.75),
-        (0.385, 0.095, 0.115, 0.03, 0.75),
-        (0.34, 0.14, 0.165, 0.04, 0.75),
-        (0.28, 0.175, 0.2, 0.05, 0.75),
-        (0.2, 0.2, 0.22, 0.06, 0.75),
-        (0.1, 0.21, 0.22, 0.07, 0.72),
-        (0.02, 0.2, 0.2, 0.07, 0.55),
-        (-0.04, 0.18, 0.17, 0.05, 0.25),
-        (-0.08, 0.2, 0.17, 0.02, 0.0),
-        (-0.12, 0.33, 0.23, 0.0, 0.0),
-        (-0.2, 0.5, 0.28, 0.0, 0.0),
-        (-0.27, 0.52, 0.29, 0.0, 0.0),
-        (-0.3, 0.52, 0.29, 0.0, 0.0),
-    ];
-    let lip = rings.len() - 1;
-    let (mut positions, mut colors) = (Vec::new(), Vec::new());
-    for (r, &(y, w, d, fwd, open)) in rings.iter().enumerate() {
-        // The mantle longer at its front and back.
-        let droop = [0.0, 0.0, 0.5, 0.9, 1.0][r.saturating_sub(9).min(4)];
-        // The hood bowed, easing in from the throat.
-        let t = ((y + 0.06) / 0.14).clamp(0.0, 1.0);
-        let bow = Quat::from_rotation_x(BOW * t * t * (3.0 - 2.0 * t));
-        for k in 0..=ARC {
-            let a = open + (std::f32::consts::TAU - 2.0 * open) * k as f32 / ARC as f32;
-            let p = Vec3::new(a.sin() * w, y - 0.14 * droop * a.cos().powi(2), a.cos() * d + fwd);
-            positions.push((PIVOT + bow * (p - PIVOT)).to_array());
-            let pale = (open > 0.0 && (k == 0 || k == ARC)) || r == lip;
-            let v = if pale { PALE } else { DARK };
-            colors.push(Color::srgb(v, v, v).to_linear().to_f32_array());
+/// Points round the hood and mantle.
+const CAPE_ROUND: usize = 32;
+
+/// The hood and the mantle, one piece, cloth, as a hooded cape is (the user,
+/// with references: stiff, the hood's top read as a triangle; hoods drape,
+/// in swags off the shoulders): rings from the hood's crown down round a
+/// head, slit at the front for the face, the slit closing under the chin,
+/// round the throat (held there) and out over the shoulders. Each ring:
+/// height, half width, half depth, how far forward, and how wide the slit is
+/// each side of the front (radians). Its frame: from the neck, y up, z
+/// forward.
+const CAPE: [(f32, f32, f32, f32, f32); 15] = [
+    (0.43, 0.005, 0.01, -0.03, 0.0),
+    (0.42, 0.05, 0.07, -0.01, 0.0),
+    (0.395, 0.1, 0.13, 0.02, 0.0),
+    (0.375, 0.125, 0.16, 0.035, 0.25),
+    (0.35, 0.145, 0.185, 0.045, 0.42),
+    (0.29, 0.18, 0.225, 0.065, 0.6),
+    (0.21, 0.2, 0.245, 0.075, 0.68),
+    (0.11, 0.21, 0.24, 0.08, 0.7),
+    (0.02, 0.2, 0.21, 0.075, 0.58),
+    (-0.04, 0.18, 0.17, 0.05, 0.28),
+    (-0.08, 0.2, 0.17, 0.02, 0.0),
+    (-0.12, 0.33, 0.23, 0.0, 0.0),
+    (-0.2, 0.5, 0.28, 0.0, 0.0),
+    (-0.27, 0.52, 0.29, 0.0, 0.0),
+    (-0.3, 0.52, 0.29, 0.0, 0.0),
+];
+/// Its rings held round the throat and the collar.
+const THROAT: [usize; 2] = [10, 11];
+
+/// A point of the hood and mantle where it starts: the hood bowed (`BOW`),
+/// easing in from the throat; the mantle longer at its front and back.
+fn cape_at(c: usize, r: usize) -> Vec3 {
+    let (y, w, d, fwd, open) = CAPE[r];
+    let a = if open > 0.0 { open + (std::f32::consts::TAU - 2.0 * open) * c as f32 / (CAPE_ROUND - 1) as f32 } else { c as f32 / CAPE_ROUND as f32 * std::f32::consts::TAU };
+    let droop = [0.0, 0.0, 0.5, 0.9, 1.0][r.saturating_sub(10).min(4)];
+    let p = Vec3::new(a.sin() * w, y - 0.14 * droop * a.cos().powi(2), a.cos() * d + fwd);
+    let t = ((y + 0.06) / 0.14).clamp(0.0, 1.0);
+    PIVOT + Quat::from_rotation_x(BOW * t * t * (3.0 - 2.0 * t)) * (p - PIVOT)
+}
+
+/// What shade a point of the hood and mantle is: pale round the face's
+/// opening (down its sides, and across its top from the ring over it) and
+/// at the mantle's lip; dark else.
+fn cape_shade(c: usize, r: usize) -> f32 {
+    let open = CAPE[r].4;
+    let edge = open > 0.0 && (c == 0 || c + 1 == CAPE_ROUND);
+    let a = c as f32 / CAPE_ROUND as f32 * std::f32::consts::TAU;
+    let brow = open == 0.0 && r + 1 < CAPE.len() && CAPE[r + 1].4 > 0.0 && CAPE[r].0 > 0.0 && (a < 0.3 || a > std::f32::consts::TAU - 0.3);
+    if edge || brow || r + 1 == CAPE.len() { PALE } else { DARK }
+}
+
+/// Where its head is (the hood falls over it), from the neck: bowed.
+fn head() -> Vec3 {
+    PIVOT + Quat::from_rotation_x(BOW) * (Vec3::new(0.0, 0.17, 0.06) - PIVOT)
+}
+
+/// Keeps a tube of cloth round its body: each point (from row `from` on) no
+/// more than 75 degrees round from its own side of it (`angle`, by column:
+/// 0 its front, its frame turned by `place`, round the upright through
+/// `axis`). Swung far aside, a robe went over to the other side, inside out,
+/// and stayed so: inside out is as much at rest as right way round.
+fn keep_round(points: &mut [Vec3], cols: usize, from: usize, axis: Vec3, place: Quat, angle: &dyn Fn(usize) -> f32) {
+    let limit = 75f32.to_radians();
+    for (i, p) in points.iter_mut().enumerate().skip(from * cols) {
+        let a = angle(i % cols);
+        let side = place * Vec3::new(a.sin(), 0.0, a.cos());
+        let out = Vec3::new(p.x - axis.x, 0.0, p.z - axis.z);
+        let far = out.length();
+        if far < 0.05 {
+            continue;
         }
-    }
-    let mut indices = Vec::new();
-    for r in 0..rings.len() as u32 - 1 {
-        for k in 0..ARC as u32 {
-            let (a, b) = (r * (ARC as u32 + 1) + k, (r + 1) * (ARC as u32 + 1) + k);
-            indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+        let dir = out / far;
+        if dir.dot(side) >= limit.cos() {
+            continue;
         }
+        let across = (dir - side * dir.dot(side)).normalize_or(Vec3::Y.cross(side));
+        let kept = side * limit.cos() + across * limit.sin();
+        p.x = axis.x + kept.x * far;
+        p.z = axis.z + kept.z * far;
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh.compute_smooth_normals();
-    mesh
 }
 
 /// `--opt bishop`: one, hanging before you, moving in turn.
@@ -209,7 +231,7 @@ pub(super) fn lab(
         let place = Quat::from_rotation_y(heading);
         let top = home + Vec3::Y * SHOULDERS;
         // (The hem's last rows keep their bell; the rest folds softly.)
-        let cloth = Cloth::tube(ROUND, DOWN, |c, r| top + place * robe_at(c, r), |r| if r + 5 > DOWN { 0.7 } else { 0.3 });
+        let cloth = Cloth::tube(ROUND, DOWN, |c, r| top + place * robe_at(c, r), |r| if r + 5 > DOWN { 0.7 } else { 0.3 }, |_| false);
         // (`--opt bishopgrey`: all of it one flat grey, to see its outline.)
         let grey = args.opt("bishopgrey");
         let mut robe_mesh = cloth.mesh();
@@ -221,18 +243,12 @@ pub(super) fn lab(
         // Heavy cloth, matte (a sheen off the bright ground made it grey),
         // seen from both sides; its shade in its vertices (the markings).
         let cloth_material = materials.add(StandardMaterial { base_color: if grey { Color::srgb(0.4, 0.4, 0.4) } else { Color::WHITE }, perceptual_roughness: 0.9, reflectance: 0.25, double_sided: true, cull_mode: None, ..default() });
-        let flat = |mut mesh: Mesh| {
-            if grey {
-                mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
-            }
-            mesh
-        };
         // Its sleeves, hanging off hidden arms bent in to its hands, their
         // cuffs drooping (the user: what makes the Dark Bishop's outline is
         // its arms).
         let mut sleeves = Vec::new();
         for side in [-1.0f32, 1.0] {
-            let sleeve = Cloth::tube(SLEEVE_ROUND, SLEEVE_ALONG, |c, r| top + place * sleeve_at(c, r, side), |_| 0.35);
+            let sleeve = Cloth::tube(SLEEVE_ROUND, SLEEVE_ALONG, |c, r| top + place * sleeve_at(c, r, side), |_| 0.35, |_| false);
             let mut sleeve_mesh = sleeve.mesh();
             if !grey {
                 let shades: Vec<[f32; 4]> = (0..SLEEVE_ALONG).flat_map(|r| (0..SLEEVE_ROUND).map(move |_| if r + 1 == SLEEVE_ALONG { PALE } else { DARK })).map(|v| Color::srgb(v, v, v).to_linear().to_f32_array()).collect();
@@ -242,8 +258,18 @@ pub(super) fn lab(
             commands.spawn((Mesh3d(handle.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
             sleeves.push((sleeve, handle));
         }
+        // The hood and mantle (see `CAPE`).
+        let neck = top + Vec3::Y * 0.06;
+        let cape = Cloth::tube(CAPE_ROUND, CAPE.len(), |c, r| neck + place * cape_at(c, r), |r| if r < 10 { 0.5 } else { 0.35 }, |r| CAPE[r].4 > 0.0);
+        let mut cape_mesh = cape.mesh();
+        if !grey {
+            let shades: Vec<[f32; 4]> = (0..CAPE.len()).flat_map(|r| (0..CAPE_ROUND).map(move |c| cape_shade(c, r))).map(|v| Color::srgb(v, v, v).to_linear().to_f32_array()).collect();
+            cape_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, shades);
+        }
+        let cape_mesh = meshes.add(cape_mesh);
+        commands.spawn((Mesh3d(cape_mesh.clone()), MeshMaterial3d(cloth_material.clone()), Transform::default(), bevy::camera::visibility::NoFrustumCulling));
         commands.spawn((
-            Bishop { cloth, mesh: mesh.clone(), sleeves, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0, pace: 0.0, last_top: top },
+            Bishop { cloth, mesh: mesh.clone(), sleeves, cape, cape_mesh, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0, pace: 0.0, last_top: top },
             Mesh3d(mesh),
             MeshMaterial3d(cloth_material.clone()),
             Transform::default(),
@@ -252,14 +278,10 @@ pub(super) fn lab(
         let mut stiff_part = |mesh: Handle<Mesh>, material: Handle<StandardMaterial>, offset: Vec3, turn: Quat, scale: Vec3| {
             commands.spawn((Stiff { offset, turn }, Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(scale)));
         };
-        // The hood and the mantle: one piece (the user, with a hooded cape
-        // for reference), the hood bowed (see `capelet`); in the hood,
-        // darkness (unlit: no light gets in), no eyes (a void for a face, as
-        // the Dark Bishop's).
-        stiff_part(meshes.add(flat(capelet())), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
+        // In the hood, its head: darkness (unlit: no light gets in), no eyes
+        // (a void for a face, as the Dark Bishop's); the hood falls over it.
         let void = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() }) };
-        let bow = Quat::from_rotation_x(BOW);
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, PIVOT + bow * (Vec3::new(0.0, 0.19, 0.07) - PIVOT), bow, Vec3::new(0.15, 0.18, 0.13));
+        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, head(), Quat::from_rotation_x(BOW), Vec3::new(0.14, 0.16, 0.13));
         // Horns curving up off it, two to a shoulder.
         let horn = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.6, ..default() }) };
         for side in [-1.0f32, 1.0] {
@@ -344,9 +366,31 @@ pub(super) fn lab(
     b.last_top = top;
     for _ in 0..steps {
         b.cloth.step(&held, &bodies, floor + 0.02, top.y + 0.1, dt / steps as f32);
+        keep_round(&mut b.cloth.points, ROUND, 2, top, place, &|c| c as f32 / ROUND as f32 * std::f32::consts::TAU);
     }
     if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
         b.cloth.draw(&mut mesh);
+    }
+    // The hood and mantle: held round the throat and the collar, falling
+    // over its head, neck, shoulders and upper arms.
+    {
+        let neck = top + Vec3::Y * 0.06;
+        let held: Vec<(u32, Vec3)> = THROAT.iter().flat_map(|&r| (0..CAPE_ROUND).map(move |c| ((r * CAPE_ROUND + c) as u32, neck + place * cape_at(c, r)))).collect();
+        let bodies = [
+            (neck + place * head(), neck + place * head(), 0.17),
+            (neck + place * Vec3::new(0.0, -0.1, 0.0), neck + place * head(), 0.08),
+            (top + place * Vec3::new(-0.27, -0.1, 0.0), top + place * Vec3::new(0.27, -0.1, 0.0), 0.1),
+            (top + place * arm_at(0.0, -1.0), top + place * arm_at(0.45, -1.0), 0.11),
+            (top + place * arm_at(0.0, 1.0), top + place * arm_at(0.45, 1.0), 0.11),
+            (top + Vec3::Y * -0.1, top + Vec3::Y * -0.7, 0.19),
+        ];
+        for _ in 0..steps {
+            b.cape.step(&held, &bodies, floor + 0.02, top.y + 0.9, dt / steps as f32);
+            keep_round(&mut b.cape.points, CAPE_ROUND, 12, top, place, &|c| c as f32 / CAPE_ROUND as f32 * std::f32::consts::TAU);
+        }
+        if let Some(mut mesh) = meshes.get_mut(&b.cape_mesh) {
+            b.cape.draw(&mut mesh);
+        }
     }
     // The sleeves: held at the shoulder all round and at the wrist along
     // its top (the cuff hangs), over the hidden arm.

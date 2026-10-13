@@ -31,22 +31,32 @@ pub struct Cloth {
 impl Cloth {
     /// A tube `cols` points round and `rows` down, each starting where `at`
     /// puts it (its lengths those it starts with), its folds kept by `bend`
-    /// (by row, 0..1: how firmly it keeps the shape it starts in; 0.3 soft).
-    pub fn tube(cols: usize, rows: usize, at: impl Fn(usize, usize) -> Vec3, bend: impl Fn(usize) -> f32) -> Cloth {
+    /// (by row, 0..1: how firmly it keeps the shape it starts in; 0.3 soft),
+    /// slit down its seam (between its last column and its first) in the
+    /// rows `slit` names: a hood's opening.
+    pub fn tube(cols: usize, rows: usize, at: impl Fn(usize, usize) -> Vec3, bend: impl Fn(usize) -> f32, slit: impl Fn(usize) -> bool) -> Cloth {
         let idx = |c: usize, r: usize| (r * cols + c % cols) as u32;
         let points: Vec<Vec3> = (0..rows).flat_map(|r| (0..cols).map(move |c| (c, r))).map(|(c, r)| at(c, r)).collect();
+        // (Across the seam, in a slit row: not joined.)
+        let cut = |c: usize, r: usize, by: usize| c + by >= cols && slit(r);
         let mut links = Vec::new();
         {
             let mut link = |a: u32, b: u32, firm: f32| links.push((a, b, points[a as usize].distance(points[b as usize]), firm));
             for r in 0..rows {
                 for c in 0..cols {
                     let p = idx(c, r);
-                    link(p, idx(c + 1, r), 1.0);
-                    link(p, idx(c + 2, r), bend(r));
+                    if !cut(c, r, 1) {
+                        link(p, idx(c + 1, r), 1.0);
+                    }
+                    if !cut(c, r, 2) {
+                        link(p, idx(c + 2, r), bend(r));
+                    }
                     if r + 1 < rows {
                         link(p, idx(c, r + 1), 1.0);
-                        link(p, idx(c + 1, r + 1), 0.5);
-                        link(idx(c + 1, r), idx(c, r + 1), 0.5);
+                        if !cut(c, r, 1) && !cut(c, r + 1, 1) {
+                            link(p, idx(c + 1, r + 1), 0.5);
+                            link(idx(c + 1, r), idx(c, r + 1), 0.5);
+                        }
                     }
                     if r + 2 < rows {
                         link(p, idx(c, r + 2), bend(r));
@@ -57,6 +67,9 @@ impl Cloth {
         let mut triangles = Vec::new();
         for r in 0..rows - 1 {
             for c in 0..cols {
+                if cut(c, r, 1) || cut(c, r + 1, 1) {
+                    continue;
+                }
                 let (a, b, d, e) = (idx(c, r), idx(c + 1, r), idx(c, r + 1), idx(c + 1, r + 1));
                 triangles.extend([a, d, b, b, d, e]);
             }
