@@ -150,14 +150,6 @@ impl Cloth {
         }
     }
 
-    /// All of it moved by `by` at once, as it is.
-    pub fn shift(&mut self, by: Vec3) {
-        for (p, q) in self.points.iter_mut().zip(self.previous.iter_mut()) {
-            *p += by;
-            *q += by;
-        }
-    }
-
     /// Its points put where `at` says, still.
     pub fn set(&mut self, at: impl Fn(usize) -> Vec3) {
         for (i, (p, q)) in self.points.iter_mut().zip(self.previous.iter_mut()).enumerate() {

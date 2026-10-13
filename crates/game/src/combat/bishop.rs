@@ -20,8 +20,6 @@ const ROUND: usize = 28;
 const DOWN: usize = 20;
 const SHOULDERS: f32 = 2.36;
 const LENGTH: f32 = 2.01;
-/// How long its cloth hangs free before it is frozen in its drape (s).
-const DRAPED: f32 = 1.5;
 /// The cloth's shade and its markings' (sRGB).
 const DARK: f32 = 0.035;
 /// How far its head is bowed (radians).
@@ -63,12 +61,11 @@ pub(super) struct Bishop {
     /// nothing). Broken, it is simulated again, to fall.
     drape: Option<[Vec<Vec3>; 4]>,
     /// Where it floats over (on the floor under it), which way it faces,
-    /// how fast it drifts; its clock; where its shoulders were.
+    /// how fast it drifts; its clock.
     at: Vec3,
     heading: f32,
     velocity: Vec3,
     time: f32,
-    last_top: Vec3,
     /// Its shoulders and its turn this frame (its stiff parts follow).
     top: Vec3,
     place: Quat,
@@ -290,15 +287,166 @@ fn keep_round(points: &mut [Vec3], cols: usize, from: usize, axis: Vec3, place: 
     }
 }
 
+/// What holds a living bishop's cloth, and what it hangs over, from its
+/// shoulders `top` turned by `place`: the robe's held points and bodies, the
+/// hood and mantle's, each sleeve's.
+#[allow(clippy::type_complexity)]
+fn holds(top: Vec3, place: Quat) -> [(Vec<(u32, Vec3)>, Vec<(Vec3, Vec3, f32)>); 4] {
+    let neck = top + Vec3::Y * 0.06;
+    // The robe: held at its neck and shoulders, over its hidden torso,
+    // shoulders and hips (not its forearms: the robe at its sides, pushed out
+    // of them through their middles, flipped and tangled).
+    let robe = (
+        (0..2 * ROUND).map(|i| (i as u32, top + place * robe_at(i % ROUND, i / ROUND))).collect(),
+        vec![
+            (top + Vec3::Y * -0.13, top + Vec3::Y * -1.05, 0.17),
+            (top + place * Vec3::new(-0.22, -0.1, 0.0), top + place * Vec3::new(0.22, -0.1, 0.0), 0.1),
+            (top + Vec3::Y * -1.1, top + Vec3::Y * -1.6, 0.14),
+        ],
+    );
+    // The hood and mantle: held round the throat and the collar, over its
+    // head, neck, shoulders and upper arms.
+    let cape = (
+        THROAT.iter().flat_map(|&r| (0..CAPE_ROUND).map(move |c| ((r * CAPE_ROUND + c) as u32, neck + place * cape_at(c, r)))).collect(),
+        vec![
+            (neck + place * head(), neck + place * head(), 0.17),
+            (neck + place * Vec3::new(0.0, -0.1, 0.0), neck + place * head(), 0.08),
+            (top + place * Vec3::new(-0.27, -0.1, 0.0), top + place * Vec3::new(0.27, -0.1, 0.0), 0.1),
+            (top + place * arm_at(0.0, -1.0), top + place * arm_at(0.45, -1.0), 0.11),
+            (top + place * arm_at(0.0, 1.0), top + place * arm_at(0.45, 1.0), 0.11),
+            (top + Vec3::Y * -0.11, top + Vec3::Y * -0.77, 0.19),
+        ],
+    );
+    // The sleeves: held at the shoulder all round and at the wrist along its
+    // top (the cuff hangs), over the hidden arm.
+    let sleeve = |side: f32| {
+        (
+            (0..SLEEVE_ROUND)
+                .map(|c| (c, 0))
+                .chain((0..SLEEVE_ROUND).filter(|&c| (c as f32 / SLEEVE_ROUND as f32 * std::f32::consts::TAU).sin() > 0.0).map(|c| (c, SLEEVE_ALONG - 2)))
+                .map(|(c, r)| ((r * SLEEVE_ROUND + c) as u32, top + place * sleeve_at(c, r, side)))
+                .collect(),
+            vec![(top + place * arm_at(0.0, side), top + place * arm_at(0.5, side), 0.09), (top + place * arm_at(0.5, side), top + place * arm_at(1.0, side), 0.08)],
+        )
+    };
+    [robe, cape, sleeve(-1.0), sleeve(1.0)]
+}
+
+/// A bishop's cloth as it is made, hanging as cut: robe, hood and mantle,
+/// sleeves (in its own frame, from its shoulders, unturned, when `top` is 0
+/// and `place` none).
+fn cut(top: Vec3, place: Quat) -> [Cloth; 4] {
+    let neck = top + Vec3::Y * 0.06;
+    [
+        // (The hem's last rows keep their bell; the rest folds softly.)
+        Cloth::tube(ROUND, DOWN, |c, r| top + place * robe_at(c, r), |r| if r + 5 > DOWN { 0.7 } else { 0.3 }, |_| false),
+        Cloth::tube(CAPE_ROUND, CAPE.len(), |c, r| neck + place * cape_at(c, r), |r| if r < 10 { 0.5 } else { 0.3 }, |r| CAPE[r].4 > 0.0),
+        Cloth::tube(SLEEVE_ROUND, SLEEVE_ALONG, |c, r| top + place * sleeve_at(c, r, -1.0), |_| 0.35, |_| false),
+        Cloth::tube(SLEEVE_ROUND, SLEEVE_ALONG, |c, r| top + place * sleeve_at(c, r, 1.0), |_| 0.35, |_| false),
+    ]
+}
+
+/// The drape every bishop's cloth hangs in while it lives, in its own frame:
+/// settled once, at the start, still, in the open (the user: settled where
+/// each appeared, on a flight its floor rose into its hem and it formed
+/// crushed; and each paid for settling).
+#[derive(Resource)]
+pub(super) struct Drapes([Vec<Vec3>; 4]);
+
+/// Settles the drape: its cloth as cut, held as a living bishop holds it,
+/// 1.5 s of hanging (in steps of 1/240 s), nothing under it.
+fn settled() -> [Vec<Vec3>; 4] {
+    let mut cloth = cut(Vec3::ZERO, Quat::IDENTITY);
+    let holds = holds(Vec3::ZERO, Quat::IDENTITY);
+    for _ in 0..360 {
+        for (k, (held, bodies)) in holds.iter().enumerate() {
+            cloth[k].step(held, bodies, -100.0, 0.9, 1.0 / 240.0);
+        }
+        keep_round(&mut cloth[0].points, ROUND, 2, Vec3::ZERO, Quat::IDENTITY, &|c| c as f32 / ROUND as f32 * std::f32::consts::TAU);
+        keep_round(&mut cloth[1].points, CAPE_ROUND, 12, Vec3::ZERO, Quat::IDENTITY, &|c| c as f32 / CAPE_ROUND as f32 * std::f32::consts::TAU);
+    }
+    cloth.map(|c| c.points)
+}
+
+/// Where the settled drape is kept, as data (the user: settled once and
+/// kept, not settled again every start): each cloth's number of points, then
+/// its points, little-endian.
+const DRAPE_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/bishop_drape.bin");
+
+fn encode(drape: &[Vec<Vec3>; 4]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for cloth in drape {
+        out.extend((cloth.len() as u32).to_le_bytes());
+        for p in cloth {
+            for v in p.to_array() {
+                out.extend(v.to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
+/// The drape the data holds, if it is one for these cloths (as many points
+/// to each as they are cut with).
+fn decode(bytes: &[u8]) -> Option<[Vec<Vec3>; 4]> {
+    let counts = cut(Vec3::ZERO, Quat::IDENTITY).map(|c| c.points.len());
+    let mut at = 0;
+    let mut word = || {
+        let w = bytes.get(at..at + 4)?;
+        at += 4;
+        Some(<[u8; 4]>::try_from(w).ok()?)
+    };
+    let mut drape: [Vec<Vec3>; 4] = Default::default();
+    for (k, cloth) in drape.iter_mut().enumerate() {
+        let n = u32::from_le_bytes(word()?) as usize;
+        if n != counts[k] {
+            return None;
+        }
+        for _ in 0..n {
+            let mut v = [0.0; 3];
+            for x in &mut v {
+                *x = f32::from_le_bytes(word()?);
+            }
+            cloth.push(Vec3::from_array(v));
+        }
+    }
+    Some(drape)
+}
+
+/// The drape: kept as data (`data/bishop_drape.bin`, built into the game;
+/// made with `--opt bakedrape`, which settles it, writes it and leaves).
+pub(super) fn settle(mut commands: Commands, args: Res<Args>, mut exit: MessageWriter<AppExit>) {
+    if args.opt("bakedrape") {
+        let drape = settled();
+        match std::fs::write(DRAPE_FILE, encode(&drape)) {
+            Ok(()) => info!("bakedrape: the bishop's drape kept in {DRAPE_FILE}"),
+            Err(e) => error!("bakedrape: {DRAPE_FILE}: {e}"),
+        }
+        exit.write(AppExit::Success);
+        commands.insert_resource(Drapes(drape));
+        return;
+    }
+    // (Built into the game: nothing read or settled as it starts. Not for
+    // its cloth as cut, it fails, as a missing asset would: no settling it
+    // instead, the user.)
+    let drape = decode(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/bishop_drape.bin")))
+        .expect("data/bishop_drape.bin is not the drape of the bishop's cloth as it is cut (cut otherwise since?): keep it again with `--opt bakedrape`");
+    commands.insert_resource(Drapes(drape));
+}
+
 /// A bishop, floating over `at` (on the floor), facing `heading`: its cloth
 /// (robe, sleeves, hood and mantle), its horns, and the darkness in it.
 #[allow(clippy::too_many_arguments)]
-fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, assets: &Assets3, grey: bool, at: Vec3, heading: f32, lab: Option<Lab>) -> Entity {
+fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, assets: &Assets3, drapes: &Drapes, grey: bool, at: Vec3, heading: f32, lab: Option<Lab>) -> Entity {
     let place = Quat::from_rotation_y(heading);
     let top = at + Vec3::Y * SHOULDERS;
     let shade = |v: f32| Color::srgb(v, v, v).to_linear().to_f32_array();
-    // (The hem's last rows keep their bell; the rest folds softly.)
-    let cloth = Cloth::tube(ROUND, DOWN, |c, r| top + place * robe_at(c, r), |r| if r + 5 > DOWN { 0.7 } else { 0.3 }, |_| false);
+    // Its cloth in the drape, its meshes made in its own frame (carried with
+    // it: see `carry`).
+    let [mut cloth, mut cape, mut left, mut right] = cut(Vec3::ZERO, Quat::IDENTITY);
+    for (c, d) in [&mut cloth, &mut cape, &mut left, &mut right].into_iter().zip(&drapes.0) {
+        c.set(|i| d[i]);
+    }
     let mut robe_mesh = cloth.mesh();
     if !grey {
         robe_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, (0..DOWN).flat_map(|r| (0..ROUND).map(move |c| shade(robe_shade(c, r)))).collect::<Vec<_>>());
@@ -315,8 +463,7 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
     // be, their cuffs drooping (the user: what makes the Dark Bishop's
     // outline is its arms).
     let mut sleeves = Vec::new();
-    for side in [-1.0f32, 1.0] {
-        let sleeve = Cloth::tube(SLEEVE_ROUND, SLEEVE_ALONG, |c, r| top + place * sleeve_at(c, r, side), |_| 0.35, |_| false);
+    for sleeve in [left, right] {
         let mut sleeve_mesh = sleeve.mesh();
         if !grey {
             sleeve_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, (0..SLEEVE_ALONG).flat_map(|r| (0..SLEEVE_ROUND).map(move |_| shade(if r + 1 == SLEEVE_ALONG { PALE } else { DARK }))).collect::<Vec<_>>());
@@ -326,8 +473,6 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         sleeves.push((sleeve, handle));
     }
     // The hood and mantle (see `CAPE`).
-    let neck = top + Vec3::Y * 0.06;
-    let cape = Cloth::tube(CAPE_ROUND, CAPE.len(), |c, r| neck + place * cape_at(c, r), |r| if r < 10 { 0.5 } else { 0.3 }, |r| CAPE[r].4 > 0.0);
     let mut cape_mesh = cape.mesh();
     if !grey {
         cape_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, (0..CAPE.len()).flat_map(|r| (0..CAPE_ROUND).map(move |c| shade(cape_shade(c, r)))).collect::<Vec<_>>());
@@ -369,12 +514,11 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         sleeves,
         cape,
         cape_mesh,
-        drape: None,
+        drape: Some(drapes.0.clone()),
         at,
         heading,
         velocity: Vec3::ZERO,
         time: 0.0,
-        last_top: top,
         top,
         place,
         lab,
@@ -417,6 +561,7 @@ pub(super) fn arrive(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut spawns: ResMut<crate::console::Spawns>,
+    drapes: Res<Drapes>,
     bishops: Query<(Entity, &Bishop)>,
     parts: Query<(Entity, &OfBishop)>,
 ) {
@@ -436,7 +581,7 @@ pub(super) fn arrive(
     for n in 0..asked {
         let aside = (n as f32 - (asked - 1) as f32 * 0.5) * 1.8;
         let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD + across * aside);
-        make(&mut commands, &mut meshes, &mut materials, &assets, grey, at, face(at), None);
+        make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, grey, at, face(at), None);
         info!("a bishop hangs at {:.1}", at);
     }
     // The lab's.
@@ -458,7 +603,7 @@ pub(super) fn arrive(
         let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD);
         let heading = face(at);
         let lab = Lab { home: at, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, pace: 0.0, want_heading: heading, next: 1.0 };
-        make(&mut commands, &mut meshes, &mut materials, &assets, grey, at, heading, Some(lab));
+        make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, grey, at, heading, Some(lab));
         info!("a bishop hangs at {:.1}", at);
     }
 }
@@ -604,8 +749,8 @@ pub(super) fn float(
                     let by = to - b.at;
                     // Afterimages along the way, the nearest it left the
                     // longest.
-                    // (Frozen, its meshes are in its own frame, carried.)
-                    let frame = if b.drape.is_some() { Transform::from_translation(b.top).with_rotation(b.place) } else { Transform::default() };
+                    // (Its meshes are in its own frame, carried.)
+                    let frame = Transform::from_translation(b.top).with_rotation(b.place);
                     for k in 0..4 {
                         let f = (k as f32 + 0.5) / 4.0;
                         let material = materials.add(StandardMaterial { base_color: Color::srgba(0.03, 0.03, 0.03, 0.55), alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, unlit: true, ..default() });
@@ -618,17 +763,6 @@ pub(super) fn float(
                     }
                     b.at = to;
                     b.goal = to;
-                    b.last_top += by;
-                    // (Still hanging free, its cloth moved with it as it is.
-                    // Left trailing, to whip after it, it read as a stiff
-                    // thing twitching, the user.)
-                    if b.drape.is_none() {
-                        b.cloth.shift(by);
-                        b.cape.shift(by);
-                        for (sleeve, _) in &mut b.sleeves {
-                            sleeve.shift(by);
-                        }
-                    }
                     if args.opt("huntlog") {
                         info!("huntlog: bishop {} blinks {:.1} m aside ({}), {:.1} m from you", entity.index_u32(), by.length(), if shot { "shot at" } else if b.struck { "hit" } else if b.aimed > 0.5 { "aimed at" } else { "of itself" }, Vec2::new(to.x - eye.x, to.z - eye.z).length());
                     }
@@ -671,110 +805,29 @@ pub(super) fn float(
         let top = Vec3::new(b.at.x, floor + SHOULDERS + 0.04 * (b.time * 1.3).sin(), b.at.z);
         b.top = top;
         b.place = place;
-        // (Steps enough that its shoulders go no more than 3 cm a step: in a
-        // sudden move it keeps up.)
-        let steps = ((top.distance(b.last_top) / 0.03).ceil() as usize).clamp(2, 10);
-        b.last_top = top;
-        let step = dt / steps as f32;
-        // Settled: frozen in its drape, its meshes made in its own frame
-        // (carried with it: see `carry`). Broken: its cloth where its drape
-        // is now, simulated again, to fall.
-        let to_frame = |p: &Vec3| place.inverse() * (*p - top);
-        if b.drape.is_none() && b.time > DRAPED && !broken {
-            let drape = [
-                b.cloth.points.iter().map(to_frame).collect::<Vec<_>>(),
-                b.cape.points.iter().map(to_frame).collect(),
-                b.sleeves[0].0.points.iter().map(to_frame).collect(),
-                b.sleeves[1].0.points.iter().map(to_frame).collect(),
-            ];
-            b.cloth.set(|i| drape[0][i]);
-            b.cape.set(|i| drape[1][i]);
-            b.sleeves[0].0.set(|i| drape[2][i]);
-            b.sleeves[1].0.set(|i| drape[3][i]);
-            b.drape = Some(drape);
-            for (cloth, handle) in [(&b.cloth, &b.mesh), (&b.cape, &b.cape_mesh), (&b.sleeves[0].0, &b.sleeves[0].1), (&b.sleeves[1].0, &b.sleeves[1].1)] {
-                if let Some(mut mesh) = meshes.get_mut(handle) {
-                    cloth.draw(&mut mesh);
-                }
-            }
+        // Alive, its cloth frozen in its drape, carried (see `carry`).
+        // Broken: put where its drape is, simulated again, limp, to fall.
+        if !broken {
+            continue;
         }
-        if broken && let Some(drape) = b.drape.take() {
+        if let Some(drape) = b.drape.take() {
             b.cloth.set(|i| top + place * drape[0][i]);
             b.cape.set(|i| top + place * drape[1][i]);
             b.sleeves[0].0.set(|i| top + place * drape[2][i]);
             b.sleeves[1].0.set(|i| top + place * drape[3][i]);
         }
-        if b.drape.is_some() {
-            continue;
-        }
-        // The robe: held at its neck and shoulders, over its hidden torso,
-        // shoulders and hips (not its forearms: the robe at its sides, pushed
-        // out of them through their middles, flipped and tangled).
-        let held: Vec<(u32, Vec3)> = if broken { Vec::new() } else { (0..2 * ROUND).map(|i| (i as u32, top + place * robe_at(i % ROUND, i / ROUND))).collect() };
-        let bodies = if broken {
-            Vec::new()
-        } else {
-            vec![
-                (top + Vec3::Y * -0.13, top + Vec3::Y * -1.05, 0.17),
-                (top + place * Vec3::new(-0.22, -0.1, 0.0), top + place * Vec3::new(0.22, -0.1, 0.0), 0.1),
-                (top + Vec3::Y * -1.1, top + Vec3::Y * -1.6, 0.14),
-            ]
-        };
-        for _ in 0..steps {
-            b.cloth.step(&held, &bodies, floor + 0.02, top.y + 0.9, step);
-            if !broken {
-                keep_round(&mut b.cloth.points, ROUND, 2, top, place, &|c| c as f32 / ROUND as f32 * std::f32::consts::TAU);
+        let step = dt / 2.0;
+        for (cloth, handle) in [(&mut b.cloth, &b.mesh), (&mut b.cape, &b.cape_mesh)] {
+            for _ in 0..2 {
+                cloth.step(&[], &[], floor + 0.02, top.y + 0.9, step);
+            }
+            if let Some(mut mesh) = meshes.get_mut(handle) {
+                cloth.draw(&mut mesh);
             }
         }
-        if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
-            b.cloth.draw(&mut mesh);
-        }
-        // The hood and mantle: held round the throat and the collar, falling
-        // over its head, neck, shoulders and upper arms.
-        let neck = top + Vec3::Y * 0.06;
-        let held: Vec<(u32, Vec3)> = if broken { Vec::new() } else { THROAT.iter().flat_map(|&r| (0..CAPE_ROUND).map(move |c| ((r * CAPE_ROUND + c) as u32, neck + place * cape_at(c, r)))).collect() };
-        let bodies = if broken {
-            Vec::new()
-        } else {
-            vec![
-                (neck + place * head(), neck + place * head(), 0.17),
-                (neck + place * Vec3::new(0.0, -0.1, 0.0), neck + place * head(), 0.08),
-                (top + place * Vec3::new(-0.27, -0.1, 0.0), top + place * Vec3::new(0.27, -0.1, 0.0), 0.1),
-                (top + place * arm_at(0.0, -1.0), top + place * arm_at(0.45, -1.0), 0.11),
-                (top + place * arm_at(0.0, 1.0), top + place * arm_at(0.45, 1.0), 0.11),
-                (top + Vec3::Y * -0.11, top + Vec3::Y * -0.77, 0.19),
-            ]
-        };
-        for _ in 0..steps {
-            b.cape.step(&held, &bodies, floor + 0.02, top.y + 0.9, step);
-            if !broken {
-                keep_round(&mut b.cape.points, CAPE_ROUND, 12, top, place, &|c| c as f32 / CAPE_ROUND as f32 * std::f32::consts::TAU);
-            }
-        }
-        if let Some(mut mesh) = meshes.get_mut(&b.cape_mesh) {
-            b.cape.draw(&mut mesh);
-        }
-        // The sleeves: held at the shoulder all round and at the wrist along
-        // its top (the cuff hangs), over the hidden arm.
-        for (k, (sleeve, handle)) in b.sleeves.iter_mut().enumerate() {
-            let side = if k == 0 { -1.0 } else { 1.0 };
-            let wrist = SLEEVE_ALONG - 2;
-            let held: Vec<(u32, Vec3)> = if broken {
-                Vec::new()
-            } else {
-                (0..SLEEVE_ROUND)
-                    .map(|c| (c, 0))
-                    .chain((0..SLEEVE_ROUND).filter(|&c| (c as f32 / SLEEVE_ROUND as f32 * std::f32::consts::TAU).sin() > 0.0).map(|c| (c, wrist)))
-                    .map(|(c, r)| ((r * SLEEVE_ROUND + c) as u32, top + place * sleeve_at(c, r, side)))
-                    .collect()
-            };
-            let arm = if broken {
-                Vec::new()
-            } else {
-                vec![(top + place * arm_at(0.0, side), top + place * arm_at(0.5, side), 0.09), (top + place * arm_at(0.5, side), top + place * arm_at(1.0, side), 0.08)]
-            };
-            for _ in 0..steps {
-                sleeve.step(&held, &arm, floor + 0.02, top.y + 0.9, step);
+        for (sleeve, handle) in &mut b.sleeves {
+            for _ in 0..2 {
+                sleeve.step(&[], &[], floor + 0.02, top.y + 0.9, step);
             }
             if let Some(mut mesh) = meshes.get_mut(&*handle) {
                 sleeve.draw(&mut mesh);
@@ -808,5 +861,18 @@ pub(super) fn ghosts(mut commands: Commands, time: Res<Time>, mut materials: Res
         if let Some(mut m) = materials.get_mut(&ghost.material) {
             m.base_color.set_alpha(0.55 * ghost.life / ghost.total);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The drape kept as data fits the bishop's cloth as it is cut (else:
+    /// keep it again with `--opt bakedrape`), and reads back as it was kept.
+    #[test]
+    fn kept_drape_fits() {
+        let kept = decode(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/bishop_drape.bin"))).expect("data/bishop_drape.bin does not fit the cloth as cut");
+        assert_eq!(decode(&encode(&kept)), Some(kept));
     }
 }
