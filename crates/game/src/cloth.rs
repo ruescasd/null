@@ -16,6 +16,9 @@ use bevy::{
 /// stretching in a sudden jerk).
 const DAMPING: f32 = 0.985;
 const ITERATIONS: usize = 16;
+/// How far a point may go in a step (m): a body jerked hard flung its robe
+/// up over its head (the user: mangled).
+const FASTEST: f32 = 0.12;
 
 pub struct Cloth {
     pub points: Vec<Vec3>,
@@ -63,9 +66,11 @@ impl Cloth {
 
     /// One step: under gravity, kept at its lengths, the `held` points where
     /// they are put, out of the `bodies` (capsules: two ends and a radius),
-    /// above `floor`. Held points far from where they were (put somewhere
-    /// new) take the whole cloth with them, still.
-    pub fn step(&mut self, held: &[(u32, Vec3)], bodies: &[(Vec3, Vec3, f32)], floor: f32, dt: f32) {
+    /// above `floor` and below `ceiling` (a robe never over its shoulders:
+    /// swung far aside, again and again, one turned up over its head). Held
+    /// points far from where they were (put somewhere new) take the whole
+    /// cloth with them, still.
+    pub fn step(&mut self, held: &[(u32, Vec3)], bodies: &[(Vec3, Vec3, f32)], floor: f32, ceiling: f32, dt: f32) {
         if let Some(&(i, at)) = held.first() {
             let jump = at - self.points[i as usize];
             if jump.length() > 3.0 {
@@ -77,7 +82,7 @@ impl Cloth {
         }
         let gravity = Vec3::NEG_Y * 9.8 * dt * dt;
         for (p, q) in self.points.iter_mut().zip(self.previous.iter_mut()) {
-            let v = (*p - *q) * DAMPING;
+            let v = ((*p - *q) * DAMPING).clamp_length_max(FASTEST);
             *q = *p;
             *p += v + gravity;
         }
@@ -103,7 +108,7 @@ impl Cloth {
                         *p = c + d.normalize_or(Vec3::X) * r;
                     }
                 }
-                p.y = p.y.max(floor);
+                p.y = p.y.clamp(floor, ceiling.max(floor));
             }
         }
         for &(i, at) in held {

@@ -29,7 +29,7 @@ const LENGTH: f32 = 1.75;
 /// The cloth's shade and its markings' (sRGB).
 const DARK: f32 = 0.035;
 /// How far its head is bowed (radians).
-const BOW: f32 = 0.55;
+const BOW: f32 = 0.85;
 const PALE: f32 = 0.5;
 
 /// Points round a sleeve and along it; where its hidden arm runs (from its
@@ -37,7 +37,7 @@ const PALE: f32 = 0.5;
 /// wrist, the right arm's (the left's mirrored).
 const SLEEVE_ROUND: usize = 10;
 const SLEEVE_ALONG: usize = 9;
-const ARM: [Vec3; 3] = [Vec3::new(0.48, -0.16, -0.02), Vec3::new(0.56, -0.66, 0.04), Vec3::new(0.16, -0.68, 0.3)];
+const ARM: [Vec3; 3] = [Vec3::new(0.36, -0.14, -0.02), Vec3::new(0.42, -0.62, 0.04), Vec3::new(0.12, -0.66, 0.25)];
 
 #[derive(Component)]
 pub(super) struct Bishop {
@@ -56,6 +56,9 @@ pub(super) struct Bishop {
     want_heading: f32,
     time: f32,
     next: f32,
+    /// How fast it is moving aside (m/s), and where its shoulders were.
+    pace: f32,
+    last_top: Vec3,
 }
 
 /// A stiff part (the hood, the mantle, horns, hands) and what is in the
@@ -73,12 +76,12 @@ pub(super) struct Stiff {
 fn robe_at(c: usize, r: usize) -> Vec3 {
     let a = c as f32 / ROUND as f32 * std::f32::consts::TAU;
     let (across, depth, y) = match r {
-        0 => (0.17, 0.15, 0.08),
-        1 => (0.36, 0.22, -0.05),
+        0 => (0.13, 0.12, 0.08),
+        1 => (0.27, 0.17, -0.05),
         _ => {
             let t = (r - 1) as f32 / (DOWN - 2) as f32;
             let ragged = if r + 3 > DOWN { (hash01(c as i32, 0, 0, 0x8b1) - 0.5) * 0.12 * (r + 3 - DOWN) as f32 / 3.0 } else { 0.0 };
-            (0.36 + 0.04 * t + 0.5 * t.powi(3), 0.24 + 0.03 * t + 0.4 * t.powi(3), -0.05 - LENGTH * t - ragged)
+            (0.27 + 0.02 * t + 0.32 * t.powi(3), 0.18 + 0.02 * t + 0.27 * t.powi(3), -0.05 - LENGTH * t - ragged)
         }
     };
     Vec3::new(a.sin() * across, y, a.cos() * depth)
@@ -101,7 +104,7 @@ fn sleeve_at(c: usize, r: usize, side: f32) -> Vec3 {
     let across = along.cross(Vec3::Y).normalize_or(Vec3::X);
     let up = across.cross(along);
     let a = c as f32 / SLEEVE_ROUND as f32 * std::f32::consts::TAU;
-    let radius = if cuff { 0.27 } else { 0.13 + 0.09 * s };
+    let radius = if cuff { 0.19 } else { 0.09 + 0.06 * s };
     let centre = arm_at(s, side) + if cuff { along * 0.14 - Vec3::Y * 0.05 } else { Vec3::ZERO };
     centre + (across * a.cos() + up * a.sin()) * radius
 }
@@ -114,19 +117,50 @@ fn robe_shade(c: usize, r: usize) -> f32 {
     if stole || hem { PALE } else { DARK }
 }
 
-/// A stiff shell: rings (height, half width, half depth, how far forward)
-/// round all but an opening at its front (`open`, radians each side), each
-/// point raised by `lift` (by its angle round, 0 at the front, and its ring),
-/// with pale edges (the opening's, and the rings `trim` names); its
-/// vertices' colours carry the shade. Its frame: y up, z forward.
-fn shell(rings: &[(f32, f32, f32, f32)], open: f32, trim: &[usize], lift: &dyn Fn(f32, usize) -> f32) -> Mesh {
-    const ARC: usize = 18;
+/// Where the hood bows from (its frame: from the neck, y up, z forward).
+const PIVOT: Vec3 = Vec3::new(0.0, -0.02, 0.04);
+
+/// The hood and the mantle, one piece, as a hooded cape is: from the hood's
+/// crown down round a head, its opening narrowing to close under the chin,
+/// on round the throat and out over the shoulders, sloping to their
+/// corners, longer at the front and back over the chest; the hood bowed at
+/// the neck (`BOW`), easing into the mantle (a stiff hood bowed on its own
+/// did not show it, its point read as a triangle: hoods drape, the user).
+/// Pale at the hood's opening and the mantle's lip. Its frame: from the
+/// neck, y up, z forward.
+fn capelet() -> Mesh {
+    const ARC: usize = 22;
+    // (height, half width, half depth, how far forward, the opening each
+    // side of the front, radians)
+    let rings: [(f32, f32, f32, f32, f32); 14] = [
+        (0.42, 0.005, 0.01, 0.015, 0.75),
+        (0.41, 0.045, 0.06, 0.02, 0.75),
+        (0.385, 0.095, 0.115, 0.03, 0.75),
+        (0.34, 0.14, 0.165, 0.04, 0.75),
+        (0.28, 0.175, 0.2, 0.05, 0.75),
+        (0.2, 0.2, 0.22, 0.06, 0.75),
+        (0.1, 0.21, 0.22, 0.07, 0.72),
+        (0.02, 0.2, 0.2, 0.07, 0.55),
+        (-0.04, 0.18, 0.17, 0.05, 0.25),
+        (-0.08, 0.2, 0.17, 0.02, 0.0),
+        (-0.12, 0.33, 0.23, 0.0, 0.0),
+        (-0.2, 0.5, 0.28, 0.0, 0.0),
+        (-0.27, 0.52, 0.29, 0.0, 0.0),
+        (-0.3, 0.52, 0.29, 0.0, 0.0),
+    ];
+    let lip = rings.len() - 1;
     let (mut positions, mut colors) = (Vec::new(), Vec::new());
-    for (r, &(y, w, d, fwd)) in rings.iter().enumerate() {
+    for (r, &(y, w, d, fwd, open)) in rings.iter().enumerate() {
+        // The mantle longer at its front and back.
+        let droop = [0.0, 0.0, 0.5, 0.9, 1.0][r.saturating_sub(9).min(4)];
+        // The hood bowed, easing in from the throat.
+        let t = ((y + 0.06) / 0.14).clamp(0.0, 1.0);
+        let bow = Quat::from_rotation_x(BOW * t * t * (3.0 - 2.0 * t));
         for k in 0..=ARC {
             let a = open + (std::f32::consts::TAU - 2.0 * open) * k as f32 / ARC as f32;
-            positions.push([a.sin() * w, y + lift(a, r), a.cos() * d + fwd]);
-            let pale = (open > 0.0 && (k == 0 || k == ARC)) || trim.contains(&r);
+            let p = Vec3::new(a.sin() * w, y - 0.14 * droop * a.cos().powi(2), a.cos() * d + fwd);
+            positions.push((PIVOT + bow * (p - PIVOT)).to_array());
+            let pale = (open > 0.0 && (k == 0 || k == ARC)) || r == lip;
             let v = if pale { PALE } else { DARK };
             colors.push(Color::srgb(v, v, v).to_linear().to_f32_array());
         }
@@ -209,7 +243,7 @@ pub(super) fn lab(
             sleeves.push((sleeve, handle));
         }
         commands.spawn((
-            Bishop { cloth, mesh: mesh.clone(), sleeves, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0 },
+            Bishop { cloth, mesh: mesh.clone(), sleeves, home, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, heading, want_heading: heading, time: 0.0, next: 1.0, pace: 0.0, last_top: top },
             Mesh3d(mesh),
             MeshMaterial3d(cloth_material.clone()),
             Transform::default(),
@@ -218,40 +252,19 @@ pub(super) fn lab(
         let mut stiff_part = |mesh: Handle<Mesh>, material: Handle<StandardMaterial>, offset: Vec3, turn: Quat, scale: Vec3| {
             commands.spawn((Stiff { offset, turn }, Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(scale)));
         };
-        // The hood: a short wide triangle, broad at its base, to a low point
-        // barely drawn back (a tall narrow one read as a chess bishop's mitre;
-        // drawn well back, it undid the bow), its opening's edge pale.
-        let hood = shell(&[(0.0, 0.3, 0.28, 0.02), (0.14, 0.3, 0.29, 0.0), (0.28, 0.24, 0.24, -0.01), (0.4, 0.14, 0.15, -0.02), (0.48, 0.05, 0.05, -0.03), (0.52, 0.01, 0.01, -0.03)], 0.75, &[0], &|_, _| 0.0);
-        // Bowed, as in concentration (the Dark Bishop's: the user), turned
-        // at the neck, a little forward.
-        let bow = Quat::from_rotation_x(BOW);
-        stiff_part(meshes.add(flat(hood)), cloth_material.clone(), Vec3::new(0.0, 0.02, 0.04), bow, Vec3::ONE);
-        // In the hood: darkness (unlit: no light gets in), no eyes (a void
-        // for a face, as the Dark Bishop's).
+        // The hood and the mantle: one piece (the user, with a hooded cape
+        // for reference), the hood bowed (see `capelet`); in the hood,
+        // darkness (unlit: no light gets in), no eyes (a void for a face, as
+        // the Dark Bishop's).
+        stiff_part(meshes.add(flat(capelet())), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
         let void = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() }) };
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, Vec3::new(0.0, 0.02, 0.04) + bow * Vec3::new(0.0, 0.2, 0.01), bow, Vec3::new(0.19, 0.22, 0.17));
-        // The mantle: a stiff cape on the shoulders, sloping down from the
-        // neck to a corner and over it a little (the Dark Bishop's outline, a
-        // house's: the user, marking it; its straight sides are the sleeves,
-        // falling from under it), closed all round, covering the chest (the
-        // user: below it only the arms and the robe are seen), its edge pale.
-        let mantle = shell(
-            &[(0.08, 0.22, 0.2, 0.0), (-0.05, 0.45, 0.3, 0.0), (-0.18, 0.66, 0.36, 0.0), (-0.28, 0.68, 0.37, 0.0), (-0.31, 0.68, 0.37, 0.0)],
-            0.0,
-            // (Pale only at its lip: two rings of it made a broad band, a
-            // hat's brim.)
-            &[0, 4],
-            // (Longer at its front and back, over the chest; at its sides it
-            // ends at the shoulders' corners, the sleeves falling from under
-            // it.)
-            &|a, r| -0.24 * [0.0, 0.0, 0.5, 0.9, 1.0][r] * a.cos().powi(2),
-        );
-        stiff_part(meshes.add(flat(mantle)), cloth_material.clone(), Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
+        let bow = Quat::from_rotation_x(BOW);
+        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), void, PIVOT + bow * (Vec3::new(0.0, 0.19, 0.07) - PIVOT), bow, Vec3::new(0.15, 0.18, 0.13));
         // Horns curving up off it, two to a shoulder.
         let horn = if grey { cloth_material.clone() } else { materials.add(StandardMaterial { base_color: Color::srgb(0.03, 0.03, 0.03), perceptual_roughness: 0.6, ..default() }) };
         for side in [-1.0f32, 1.0] {
             // (At the mantle's shoulder corners.)
-            for (at, dir, length) in [(Vec3::new(0.56, -0.12, -0.08), Vec3::new(0.2, 1.0, -0.15), 0.6), (Vec3::new(0.68, -0.18, 0.04), Vec3::new(0.45, 0.9, 0.0), 0.42)] {
+            for (at, dir, length) in [(Vec3::new(0.42, -0.05, -0.06), Vec3::new(0.2, 1.0, -0.15), 0.55), (Vec3::new(0.52, -0.1, 0.03), Vec3::new(0.45, 0.9, 0.0), 0.38)] {
                 let at = Vec3::new(at.x * side, at.y, at.z);
                 let dir = Vec3::new(dir.x * side, dir.y, dir.z).normalize();
                 stiff_part(assets.shard.clone(), horn.clone(), at, Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(5.0, length / 0.7, 5.0));
@@ -260,13 +273,13 @@ pub(super) fn lab(
             for k in 0..3 {
                 let kk = k as f32 - 1.0;
                 let dir = Vec3::new(-side * 0.8, 0.15 + 0.15 * kk, 0.3).normalize();
-                stiff_part(assets.shard.clone(), horn.clone(), Vec3::new(side * 0.2, -0.65 + 0.04 * kk, 0.3), Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(2.2, 0.26 / 0.7, 2.2));
+                stiff_part(assets.shard.clone(), horn.clone(), Vec3::new(side * 0.15, -0.63 + 0.04 * kk, 0.25), Quat::from_rotation_arc(Vec3::Y, dir), Vec3::new(2.2, 0.26 / 0.7, 2.2));
             }
         }
         // What it holds: a dim light (the glow kept for the rare ones; a
         // caster is).
         let light = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(1.0, 1.0, 1.0) * 40.0, ..default() });
-        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), light, Vec3::new(0.0, -0.62, 0.34), Quat::IDENTITY, Vec3::splat(0.07));
+        stiff_part(meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()), light, Vec3::new(0.0, -0.6, 0.29), Quat::IDENTITY, Vec3::splat(0.06));
         return;
     }
     let Ok(mut b) = bishops.single_mut() else { return };
@@ -275,7 +288,9 @@ pub(super) fn lab(
     let mode = if args.num("bishop_mode", -1.0) >= 0.0 { args.num("bishop_mode", 0.0) as u32 } else { (b.time / 8.0) as u32 % 4 };
     let r = |k: i32| hash01((b.time * 10.0) as i32, k, 0, 0x8b2);
     let to = camera.translation - b.home;
-    let facing = to.x.atan2(to.z);
+    // (`--set bishop_yaw=D`: it faces D degrees off you, to see it from
+    // the side.)
+    let facing = to.x.atan2(to.z) + args.num("bishop_yaw", 0.0).to_radians();
     match mode {
         1 => b.want_aside = 2.2 * (b.time * 0.55).sin(),
         2 if b.time >= b.next => {
@@ -294,8 +309,17 @@ pub(super) fn lab(
     }
     // Drifting, it follows slowly; jerked aside, it is there in a blink, and
     // still; turning, it snaps round.
-    let rate = if mode == 2 { 22.0 } else { 3.0 };
-    b.aside += (b.want_aside - b.aside) * (1.0 - (-dt * rate).exp());
+    // (Jerked, a lunge at up to 18 m/s, sudden, braked hard: snapped there
+    // at once, 66 m/s at first, it flung its robe up over its head.)
+    if mode == 2 {
+        let to = b.want_aside - b.aside;
+        let want = (to * 12.0).clamp(-18.0, 18.0);
+        b.pace += (want - b.pace).clamp(-200.0 * dt, 200.0 * dt);
+        b.aside += b.pace * dt;
+    } else {
+        b.pace = 0.0;
+        b.aside += (b.want_aside - b.aside) * (1.0 - (-dt * 3.0).exp());
+    }
     let turn = (b.want_heading - b.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     b.heading += turn * (1.0 - (-dt * if mode == 3 { 14.0 } else { 4.0 }).exp());
     let place = Quat::from_rotation_y(b.heading);
@@ -307,17 +331,19 @@ pub(super) fn lab(
     // shoulders, its hips.
     let held: Vec<(u32, Vec3)> = (0..2 * ROUND).map(|i| (i as u32, top + place * robe_at(i % ROUND, i / ROUND))).collect();
     let bodies = [
-        (top + Vec3::Y * -0.12, top + Vec3::Y * -0.95, 0.24),
-        (top + place * Vec3::new(-0.3, -0.12, 0.0), top + place * Vec3::new(0.3, -0.12, 0.0), 0.12),
-        (top + Vec3::Y * -1.0, top + Vec3::Y * -1.45, 0.2),
-        // (Its forearms, folded in to its hands, in their sleeves: the robe
-        // behind them.)
-        (top + place * arm_at(0.5, -1.0), top + place * arm_at(1.0, -1.0), 0.2),
-        (top + place * arm_at(0.5, 1.0), top + place * arm_at(1.0, 1.0), 0.2),
+        (top + Vec3::Y * -0.12, top + Vec3::Y * -0.95, 0.17),
+        (top + place * Vec3::new(-0.22, -0.1, 0.0), top + place * Vec3::new(0.22, -0.1, 0.0), 0.1),
+        (top + Vec3::Y * -1.0, top + Vec3::Y * -1.45, 0.14),
+        // (Not its forearms: the robe at its sides, pushed out of them
+        // through their middles, flipped and tangled, and in the end turned
+        // up over its head, the user. The sleeves hide where they meet.)
     ];
-    // (Two half steps: steadier in a sudden move.)
-    for _ in 0..2 {
-        b.cloth.step(&held, &bodies, floor + 0.02, dt * 0.5);
+    // (Steps enough that its shoulders go no more than 3 cm a step: in a
+    // sudden move it keeps up.)
+    let steps = ((top.distance(b.last_top) / 0.03).ceil() as usize).clamp(2, 10);
+    b.last_top = top;
+    for _ in 0..steps {
+        b.cloth.step(&held, &bodies, floor + 0.02, top.y + 0.1, dt / steps as f32);
     }
     if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
         b.cloth.draw(&mut mesh);
@@ -336,8 +362,8 @@ pub(super) fn lab(
             (top + place * arm_at(0.0, side), top + place * arm_at(0.5, side), 0.09),
             (top + place * arm_at(0.5, side), top + place * arm_at(1.0, side), 0.08),
         ];
-        for _ in 0..2 {
-            sleeve.step(&held, &arm, floor + 0.02, dt * 0.5);
+        for _ in 0..steps {
+            sleeve.step(&held, &arm, floor + 0.02, top.y + 0.05, dt / steps as f32);
         }
         if let Some(mut mesh) = meshes.get_mut(&*handle) {
             sleeve.draw(&mut mesh);
