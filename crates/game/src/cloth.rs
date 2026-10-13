@@ -150,24 +150,19 @@ impl Cloth {
         }
     }
 
-    /// All of it moved by `by` at once, each point left `lag` of the way
-    /// behind (by its index, 0..1: 0 moved all the way, still), to catch up
-    /// as it swings (a blink: the hem whipping after the body).
-    pub fn shift(&mut self, by: Vec3, lag: impl Fn(usize) -> f32) {
-        for (i, (p, q)) in self.points.iter_mut().zip(self.previous.iter_mut()).enumerate() {
-            let moved = by * (1.0 - lag(i));
-            *p += moved;
-            *q += moved;
+    /// All of it moved by `by` at once, as it is.
+    pub fn shift(&mut self, by: Vec3) {
+        for (p, q) in self.points.iter_mut().zip(self.previous.iter_mut()) {
+            *p += by;
+            *q += by;
         }
     }
 
-    /// Each point pulled back towards where `to` puts it (`firm`: how fast,
-    /// per second): a drape kept. (Hanging free it never quite settled: a
-    /// flared hem buckling one way and another, as in a gust of wind.)
-    pub fn pull(&mut self, to: &[Vec3], firm: f32, dt: f32) {
-        let k = 1.0 - (-firm * dt).exp();
-        for (p, t) in self.points.iter_mut().zip(to) {
-            *p += (*t - *p) * k;
+    /// Its points put where `at` says, still.
+    pub fn set(&mut self, at: impl Fn(usize) -> Vec3) {
+        for (i, (p, q)) in self.points.iter_mut().zip(self.previous.iter_mut()).enumerate() {
+            *p = at(i);
+            *q = *p;
         }
     }
 
