@@ -178,11 +178,13 @@ impl Plan {
     /// A beast the size of a horse, built like a big cat: low long body,
     /// heavy shoulders, a long tail.
     pub fn beast() -> Self {
-        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 0.65, lower: 0.65, knee: -1.0, radius: (0.2, 0.13) };
-        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 0.7, lower: 0.7, knee: -1.0, radius: (0.23, 0.12) };
+        // (Long legs, bent under a body carried lower than they could
+        // hold it: room to reach fore and aft, a predator's, not a table's.)
+        let front = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.1, upper: 0.8, lower: 0.8, knee: -1.0, radius: (0.2, 0.13) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: -0.05, upper: 0.85, lower: 0.85, knee: -1.0, radius: (0.23, 0.12) };
         Plan {
-            hips: (-0.85, 1.25),
-            chest: (0.85, 1.3),
+            hips: (-0.85, 1.45),
+            chest: (0.85, 1.5),
             torso_radius: 0.33,
             torso_profile: [0.82, 0.72, 1.12],
             rump: 0.35,
@@ -195,16 +197,16 @@ impl Plan {
             tail: (8, 0.22),
             gaits: vec![
                 // A walk: one foot after another down each side.
-                Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 1.5 },
+                Gait { speed: 0.0, offsets: vec![0.25, 0.75, 0.0, 0.5], swing: 0.3, stride: 2.0 },
                 // A trot: diagonal pairs, the hind foot of each a little
                 // after the fore (not as one: a toy's).
-                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.56, 0.06], swing: 0.45, stride: 2.8 },
+                Gait { speed: 5.0, offsets: vec![0.0, 0.5, 0.56, 0.06], swing: 0.45, stride: 3.4 },
                 // A gallop: the front pair, then the hind pair, round the
                 // body (fore left, fore right, hind right, hind left), each
                 // foot plainly after the other. Long and slow for its speed,
                 // a big animal's, not a dog's quick steps; each foot down
                 // for under a third of the cycle.
-                Gait { speed: 11.0, offsets: vec![0.0, 0.18, 0.64, 0.5], swing: 0.7, stride: 6.5 },
+                Gait { speed: 11.0, offsets: vec![0.0, 0.18, 0.64, 0.5], swing: 0.7, stride: 7.5 },
             ],
             lift: 0.28,
             accel: 9.0,
@@ -603,14 +605,16 @@ impl Rig {
                     self.steps[i] += 1;
                 }
                 let s = local / self.swing;
-                // Higher the faster: at a gallop the paw is tucked up high.
+                // Higher the faster: slow, the paw all but drags (a high
+                // step at a prowl read as a small dog's trot, the user); at
+                // a gallop it is tucked up high.
                 let reach = self.plan.legs[i].upper + self.plan.legs[i].lower;
-                let lift = (self.plan.lift * (1.0 + speed / 5.0)).min(reach * 0.5) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
-                // Galloping, the paw goes forward early and high and comes
-                // down reaching (not an even arc: a trot's).
+                let lift = (self.plan.lift * (speed / 5.0).clamp(0.3, 2.5)).min(reach * 0.5) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
+                // The paw goes forward early and comes down reaching, not
+                // an even arc; galloping, more so.
                 let even = s * s * (3.0 - 2.0 * s);
-                let across = even + (1.0 - (1.0 - s).powi(3) - even) * self.gallop;
-                let arc = (s.powf(1.0 - 0.25 * self.gallop) * std::f32::consts::PI).sin() * lift;
+                let across = even + (1.0 - (1.0 - s).powi(3) - even) * (0.5 + 0.5 * self.gallop);
+                let arc = (s.powf(0.85 - 0.1 * self.gallop) * std::f32::consts::PI).sin() * lift;
                 foot.planted = foot.from.lerp(home, across) + Vec3::Y * arc;
             } else if foot.swinging {
                 foot.swinging = false;
