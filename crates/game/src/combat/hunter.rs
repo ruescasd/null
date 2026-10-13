@@ -33,6 +33,16 @@ const GATHER_NEAREST: f32 = 6.0;
 const GATHER_COOLDOWN: f32 = 8.0;
 
 const RECOVER: f32 = 1.1;
+/// How far it sees you (m), with nothing built between its eyes and yours,
+/// and hears the gun.
+const SIGHT: f32 = 50.0;
+const HEAR: f32 = 45.0;
+/// For how long after it loses sight of you it still knows where you are
+/// (s): it saw which way you went, so it follows you round the corner, not
+/// only to it.
+const GRACE: f32 = 1.0;
+/// How long it casts about where it lost you before it gives up (s).
+const SEARCH: f32 = 10.0;
 const ATTACK: f32 = 30.0;
 /// What it takes to break (two or three good shots at close range).
 const HUNTER_HEALTH: f32 = 45.0;
@@ -72,6 +82,21 @@ enum Stance {
     Charge,
 }
 
+/// What a hunter knows of you.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Aware {
+    /// It has not seen you: it prowls your way (it has your scent, not
+    /// where you are).
+    Unaware,
+    /// It sees you (or did a moment ago): it comes for you.
+    Chasing,
+    /// It lost sight of you (or heard you, or was hit): it runs to where you
+    /// were.
+    Pursuing,
+    /// It got there and you are not: it casts about, seconds left.
+    Searching(f32),
+}
+
 /// How many of a broken hunter's parts burst, flinging pieces and ichor.
 const BURSTS: usize = 12;
 
@@ -89,6 +114,17 @@ pub(crate) struct Hunter {
     /// find it afresh.
     way: Vec<Vec3>,
     way_age: f32,
+    /// What it knows of you: whether it hunts you, where it thinks you are
+    /// and which way you were going, how long since it saw (or heard) you,
+    /// and, searching, the spot it is looking in and how long it has been
+    /// heading there.
+    aware: Aware,
+    known: Vec3,
+    went: Vec3,
+    unseen: f32,
+    search: Option<(Vec3, f32)>,
+    /// Hit since it last thought.
+    alarmed: bool,
     stun: f32,
     /// Hits this frame: the bone struck and the shot's direction (the pieces
     /// on that bone are jolted).
@@ -122,6 +158,7 @@ impl Hunter {
         self.rig.knock = (self.rig.knock + Vec3::new(dir.x, 0.0, dir.z) * 1.2).clamp_length_max(9.0);
         self.stun = self.stun.max(0.12);
         self.hits.push((bone, dir));
+        self.alarmed = true;
     }
 
     /// The nearest bone a ray hits within `max`, and how far.
@@ -444,7 +481,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0 },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -721,10 +758,21 @@ pub(super) fn hunt(
     mut hunters: Query<(Entity, &mut Hunter, &mut Transform), Without<Player>>,
     parts: Query<(Entity, &Part, &Transform), (Without<Hunter>, Without<Player>)>,
     eyes: Query<(Entity, &Eye)>,
+    gun: Res<Gun>,
     mut said: Local<f32>,
+    mut heard: Local<(u32, Option<(Vec3, Vec3)>)>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let target = player.0.translation;
+    // A shot this frame (heard as far as `HEAR`); which way you are going
+    // (your pace, smoothed; a jump, as on dying, ignored).
+    let shot = gun.shots != heard.0;
+    heard.0 = gun.shots;
+    let (last, pace) = heard.1.unwrap_or((target, Vec3::ZERO));
+    let now = ((target - last) / dt.max(1e-4)).with_y(0.0);
+    let pace = if now.length() < 15.0 { pace.lerp(now, 1.0 - (-dt * 6.0).exp()) } else { pace };
+    heard.1 = Some((target, pace));
+    let went = pace.normalize_or(Vec3::ZERO);
     // (`--opt huntlog`: where each is, and how far it has to go to you, every
     // second: to see them find their way.)
     *said -= dt;
@@ -769,37 +817,126 @@ pub(super) fn hunt(
         }
 
         let root = h.rig.root;
-        let flat = Vec3::new(target.x - root.x, 0.0, target.z - root.z);
+        let beast = h.kind == Kind::Beast;
+        // What it knows of you. It sees you: in reach, nothing built between
+        // its eyes and yours. It hears the gun, and knows where it was hit
+        // from. Out of sight a moment it still knows where you went; then
+        // it runs to where that was, and casts about there, and in the end
+        // gives up and prowls (it has your scent, roughly).
+        let eye = h.rig.head().0;
+        let sees = eye.distance(target) < SIGHT && ground.clear(eye, target);
+        let alarmed = std::mem::take(&mut h.alarmed) || (shot && root.distance(target) < HEAR);
+        h.unseen = if sees || alarmed { 0.0 } else { h.unseen + dt };
+        if h.unseen < GRACE {
+            h.known = target;
+            h.went = went;
+        }
+        let was = h.aware;
+        h.aware = match h.aware {
+            _ if sees => Aware::Chasing,
+            Aware::Chasing if h.unseen < GRACE => Aware::Chasing,
+            _ if alarmed => Aware::Pursuing,
+            Aware::Chasing => Aware::Pursuing,
+            Aware::Searching(t) if t <= dt => Aware::Unaware,
+            Aware::Searching(t) => Aware::Searching(t - dt),
+            a => a,
+        };
+        // Roused (it sees or hears you, from prowling or searching): a beast
+        // stops dead a moment, staring, before it runs.
+        let roused = matches!(was, Aware::Unaware | Aware::Searching(_)) && matches!(h.aware, Aware::Chasing | Aware::Pursuing);
+        if roused && beast && matches!(h.stance, Stance::Stalk | Stance::Freeze) {
+            h.stance = Stance::Freeze;
+            h.timer = 0.35;
+            h.gesture = Gesture::None;
+        }
+        if let Some(s) = h.search.as_mut() {
+            s.1 += dt;
+        }
+        // Where it heads: for you, seen (or prowling, by scent); for where
+        // you were; for the spot it is searching.
+        let goal = match h.aware {
+            Aware::Chasing | Aware::Unaware => target,
+            Aware::Pursuing => h.known,
+            Aware::Searching(_) => h.search.map_or(h.known, |s| s.0),
+        };
+        let chasing = h.aware == Aware::Chasing;
+        let flat = Vec3::new(goal.x - root.x, 0.0, goal.z - root.z);
         let mut distance = flat.length();
         let mut toward = flat.normalize_or(Vec3::Z);
         // (A straight run at you, a leap or a dash: only with you in sight
         // and the way to you about straight; in a built place, a leap
         // through a wall, or off a ledge, it fell into the void.)
-        let mut straight = true;
-        // In a built place: towards you by the way along its floors (a spot
-        // a few metres on along it), and as far as that way is.
+        let mut straight = chasing;
+        let mut lost = false;
+        // In a built place: there by the way along its floors (the furthest
+        // spot on along it in sight), and as far as that way is.
         if let Some(nav) = nav.as_deref() {
             let mut way = std::mem::take(&mut h.way);
             let mut age = h.way_age;
-            if let Some((ahead, left)) = nav.steer(root, target, &mut way, &mut age, dt, &|a, b| ground.clear(a, b)) {
+            // (A new goal, a new way at once.)
+            if way.last().is_some_and(|&end| end.distance(goal) > 4.0) {
+                age = 0.0;
+            }
+            if let Some((ahead, left)) = nav.steer(root, goal, &mut way, &mut age, dt, &|a, b| ground.clear(a, b)) {
                 toward = Vec3::new(ahead.x - root.x, 0.0, ahead.z - root.z).normalize_or(toward);
-                straight = left < flat.length() * 1.2 + 1.5;
+                straight = straight && left < flat.length() * 1.2 + 1.5;
                 distance = left;
+            } else {
+                lost = true;
             }
             straight = straight && ground.clear(root + Vec3::Y * 1.0, target);
             h.way = way;
             h.way_age = age;
         }
-        if log {
-            info!("huntlog: {} at {:.1}, {:.1} m to go{}", entity.index_u32(), h.rig.root, distance, if h.way.is_empty() { " (no way)" } else { "" });
+        // There, and you are not (or there is no way there): it searches.
+        if h.aware == Aware::Pursuing && (distance < 2.0 || lost) {
+            h.aware = Aware::Searching(SEARCH);
+            h.search = None;
         }
-        let beast = h.kind == Kind::Beast;
+        // Searching: a spot near where it lost you, mostly on the way you
+        // were going, one it cannot see into from where it stands; another
+        // when it gets there (or cannot, or has been on its way too long).
+        if matches!(h.aware, Aware::Searching(_)) && (lost || h.search.is_none_or(|(s, age)| Vec2::new(s.x - root.x, s.z - root.z).length() < 1.5 || age > 5.0)) {
+            let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 13.0) as i32, k, 0x6c1);
+            let spot = (0..12).find_map(|k| {
+                let a = r(k * 2) * std::f32::consts::TAU;
+                let mut dir = Vec3::new(a.cos(), 0.0, a.sin());
+                if k < 8 && dir.dot(h.went) < 0.0 {
+                    dir = -dir;
+                }
+                let mut q = h.known + dir * (3.0 + 10.0 * r(k * 2 + 1));
+                if let Some(nav) = nav.as_deref() {
+                    q = nav.nodes[nav.nearest(q, 4)? as usize];
+                }
+                (k >= 8 || !ground.clear(eye, q + Vec3::Y * 1.2)).then_some(q)
+            });
+            h.search = Some((spot.unwrap_or(h.known), 0.0));
+        }
+        if args.opt("huntlog") && std::mem::discriminant(&was) != std::mem::discriminant(&h.aware) {
+            info!("huntlog: {} {:?} -> {:?} (you {:.1} m off, {}; {:.1} m on to where it was going{})", entity.index_u32(), was, h.aware, root.distance(target), if sees { "in sight" } else if alarmed { "heard" } else { "unseen" }, distance, if lost { ", no way there" } else { "" });
+        }
+        if log {
+            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}", entity.index_u32(), h.rig.root, h.aware, distance, if h.way.is_empty() { " (no way)" } else { "" });
+        }
+        // Seeing you, it looks at you; else where it is going.
+        let look = if sees { target } else { root + toward * 6.0 + Vec3::Y * 1.3 };
+        // Hunting you, a beast does not prowl: it runs (and, the hunt over,
+        // it slows to a prowl).
+        if beast && matches!(h.aware, Aware::Chasing | Aware::Pursuing) && h.stance == Stance::Stalk {
+            h.stance = Stance::Charge;
+            h.timer = 4.0;
+            h.gesture = Gesture::None;
+        }
+        if beast && matches!(h.aware, Aware::Unaware | Aware::Searching(_)) && h.stance == Stance::Charge {
+            h.stance = Stance::Stalk;
+            h.timer = 1.0;
+        }
         h.timer -= dt;
         let stunned = h.stun > 0.0;
         h.stun -= dt;
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
-        let mut intent = Intent { velocity: Vec3::ZERO, look: target, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
+        let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
         if args.opt("specimen") {
             // Straight ahead from its body (not its head, or each glance
             // would turn it), and dead still.
@@ -826,9 +963,14 @@ pub(super) fn hunt(
                     let t = time.elapsed_secs() + entity.index_u32() as f32 * 1.7;
                     let wander = (t * 0.55).sin() * 0.45 + (t * 1.3).sin() * 0.15;
                     let pace = 0.65 + 0.5 * (0.5 + 0.5 * (t * 0.37).sin());
-                    let base = if distance > 18.0 { toward } else { (toward * 0.4 + around * 0.8).normalize_or(toward) };
-                    let dir = Quat::from_rotation_y(wander) * base;
-                    intent.velocity = dir * if distance > 18.0 { 3.2 } else { 2.0 } * pace;
+                    let searching = matches!(h.aware, Aware::Searching(_));
+                    let base = if distance > 18.0 || searching { toward } else { (toward * 0.4 + around * 0.8).normalize_or(toward) };
+                    let dir = Quat::from_rotation_y(if searching { wander * 0.3 } else { wander });
+                    let dir = dir * base;
+                    intent.velocity = dir * if searching { 5.0 } else if distance > 30.0 { 4.5 } else if distance > 18.0 { 3.2 } else { 2.0 } * pace;
+                    if searching {
+                        intent.crouch = 0.2;
+                    }
                     // Now and then a gesture breaks the prowl.
                     h.gesture_in -= dt;
                     if h.gesture == Gesture::None && h.gesture_in <= 0.0 {
@@ -858,7 +1000,7 @@ pub(super) fn hunt(
                         Gesture::Twitch(t, side) => {
                             // A sudden snap of the head aside, and back.
                             let aside = Vec3::new(-forward.z, 0.0, forward.x) * side * 3.0 + forward;
-                            intent.look = if t > 0.12 { root + aside + Vec3::Y * 1.0 } else { target };
+                            intent.look = if t > 0.12 { root + aside + Vec3::Y * 1.0 } else { look };
                             intent.head_rate = 45.0;
                             intent.velocity *= 0.3;
                             if t > dt { Gesture::Twitch(t - dt, side) } else { Gesture::None }
@@ -875,15 +1017,11 @@ pub(super) fn hunt(
                         }
                         Gesture::None => Gesture::None,
                     };
+                    // Now and then it stops dead: listening, searching or
+                    // far off; longer, prowling near.
                     if h.timer <= 0.0 {
-                        if distance < 28.0 && r(0) < 0.6 {
-                            h.stance = Stance::Charge;
-                            h.timer = 4.0;
-                            h.gesture = Gesture::None;
-                        } else {
-                            h.stance = Stance::Freeze;
-                            h.timer = 2.0 + 2.5 * r(1);
-                        }
+                        h.stance = Stance::Freeze;
+                        h.timer = if searching || distance > 30.0 { 0.6 + 0.8 * r(1) } else { 2.0 + 2.5 * r(1) };
                     }
                 }
                 // Still, low, head locked on you.
@@ -898,7 +1036,7 @@ pub(super) fn hunt(
                 // Building to a gallop, then a pounce out of the run, keeping
                 // its momentum.
                 Stance::Charge => {
-                    intent.velocity = toward * 14.0;
+                    intent.velocity = toward * if chasing { 14.0 } else { 11.0 };
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
                     if speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
@@ -906,8 +1044,7 @@ pub(super) fn hunt(
                         h.stance = Stance::Windup;
                         h.timer = 0.13;
                     } else if h.timer <= 0.0 {
-                        h.stance = Stance::Stalk;
-                        h.timer = 2.0;
+                        h.timer = 4.0;
                     }
                 }
                 Stance::Windup => {
@@ -949,8 +1086,14 @@ pub(super) fn hunt(
         } else {
             match h.stance {
                 Stance::Stalk | Stance::Freeze | Stance::Charge => {
-                    if distance > 2.5 {
-                        intent.velocity = toward * 4.5 * ((distance - 2.5) / 3.0).min(1.0);
+                    let (pace, stop) = match h.aware {
+                        Aware::Chasing => (5.5, 2.5),
+                        Aware::Pursuing => (5.5, 0.5),
+                        Aware::Searching(_) => (3.5, 0.5),
+                        Aware::Unaware => (2.5, 2.5),
+                    };
+                    if distance > stop {
+                        intent.velocity = toward * pace * ((distance - stop) / 3.0).min(1.0);
                     }
                     if distance < 9.0 && h.timer <= 0.0 && straight {
                         h.stance = Stance::Windup;
@@ -1004,18 +1147,6 @@ pub(super) fn hunt(
                 commands.spawn((AudioPlayer::new(assets.hurt.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
             }
         }
-        // In a built place, never on over an edge: where there is no floor
-        // a step below a metre and a half on, it stops.
-        if nav.is_some() {
-            let run = Vec3::new(intent.velocity.x, 0.0, intent.velocity.z);
-            if run.length() > 0.1 {
-                let probe = root + run.normalize() * 1.5;
-                if ground.under(probe).is_none_or(|g| g < root.y - 1.0) {
-                    intent.velocity.x = 0.0;
-                    intent.velocity.z = 0.0;
-                }
-            }
-        }
         // (Its ground under where it stands: in a built place, the floor it
         // is on, not one above or below.)
         let y = h.rig.root.y;
@@ -1025,7 +1156,15 @@ pub(super) fn hunt(
         let (r, length) = if beast { (0.45, 0.6) } else { (0.35, 1.0) };
         let shape = Collider::capsule(r, length);
         let lift = Vec3::Y * (0.5 + r + length * 0.5);
-        let sweep = |from: Vec3, step: Vec3| ground.sweep(&shape, from + lift, Vec3::new(step.x, 0.0, step.z)) - lift + Vec3::Y * step.y;
+        // (On its feet in a built place, never on where there is no floor a
+        // step below: at a gallop it ran off a ledge before it could stop. A
+        // look a metre and a half ahead for the drop took a flight down for
+        // one, and stopped it there.)
+        let footed = h.rig.airborne.is_none() && nav.is_some();
+        let sweep = |from: Vec3, step: Vec3| {
+            let to = ground.sweep(&shape, from + lift, Vec3::new(step.x, 0.0, step.z)) - lift + Vec3::Y * step.y;
+            if footed && ground.under(to).is_none_or(|g| g < from.y - 1.0) { from } else { to }
+        };
         let before = h.rig.root;
         h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
         if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {

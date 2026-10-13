@@ -17,6 +17,8 @@ use crate::{Args, terrain::WorldGen};
 /// below it.
 const ABOVE: f32 = 1.5;
 const BELOW: f32 = 40.0;
+/// The ball the ground is felt for with (its radius).
+const PROBE: f32 = 0.1;
 
 #[derive(SystemParam)]
 pub struct Ground<'w, 's> {
@@ -33,8 +35,11 @@ impl Ground<'_, '_> {
         if !self.args.opt("chasm") {
             return Some(self.world.ground_height(p.x, p.z));
         }
+        // (A thin ball, not a ray: a ray found a hairline crack between a
+        // flight's slope and its landing, and the floor four storeys down.)
         let from = p + Vec3::Y * ABOVE;
-        self.spatial.cast_ray(from, Dir3::NEG_Y, ABOVE + BELOW, true, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance)
+        let config = ShapeCastConfig { max_distance: ABOVE + BELOW, ignore_origin_penetration: true, ..default() };
+        self.spatial.cast_shape(&Collider::sphere(PROBE), from, Quat::IDENTITY, Dir3::NEG_Y, &config, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance - PROBE)
     }
 
     /// Whether nothing built stands between `a` and `b` (in sight, in

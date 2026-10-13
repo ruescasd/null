@@ -84,7 +84,7 @@ pub fn drive(
     if args.opt("walkbot") {
         // (With nothing rendered, time is stepped by hand: no speeding up.)
         let real_dt = if args.opt("headless") { 0.0 } else { real.delta_secs() };
-        walk(&time, &mut clock, real_dt, way.as_deref(), &mut log, &mut state, &mut input, &mut exit, &mut transform, &mut fly, &mut player);
+        walk(&time, &mut clock, real_dt, args.num("walkspeed", 8.0), way.as_deref(), &mut log, &mut state, &mut input, &mut exit, &mut transform, &mut fly, &mut player);
         return;
     }
     if args.opt("pushbot") {
@@ -358,6 +358,7 @@ fn walk(
     time: &Time,
     clock: &mut Time<Virtual>,
     real_dt: f32,
+    fastest: f32,
     way: Option<&crate::chasm::Way>,
     log: &mut Option<ResMut<BotLog>>,
     state: &mut BotState,
@@ -376,10 +377,11 @@ fn walk(
         return;
     }
     let walklog = way.0.first().is_some() && std::env::args().any(|a| a == "walklog");
-    // (Up to eight times as fast, never more per frame than the movement
-    // simulates, 0.1 s: or time would run on without it under load.)
+    // (Up to eight times as fast, `--set walkspeed`, never more per frame
+    // than the movement simulates, 0.1 s: or time would run on without it
+    // under load.)
     if real_dt > 0.0 {
-        clock.set_relative_speed((0.095 / real_dt.max(1e-3)).min(8.0));
+        clock.set_relative_speed((0.095 / real_dt.max(1e-3)).min(fastest));
     }
     let now = time.elapsed_secs();
     let started = *state.walk_started.get_or_insert_with(|| {
