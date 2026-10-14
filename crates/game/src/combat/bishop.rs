@@ -42,6 +42,21 @@ const NEEDLE_SCALE: f32 = 0.6;
 const RANGE: (f32, f32) = (7.0, 14.0);
 const DRIFT: f32 = 3.0;
 const BLINK: (f32, f32) = (3.0, 6.0);
+/// Its pursuit (the user's idea: running from it was too easy): having lost
+/// sight of you this long (s), you within this far (m), it blinks to a spot
+/// that sees you, at its range, any way round you (ahead, cutting you off,
+/// as likely as behind: kept off ahead of you, the user, it would feel like
+/// the game cheating), then not again for a while (s). (A beat first, and
+/// its blink heard where it lands, to be fair.)
+const PURSUE: (f32, f32, f32) = (1.0, 30.0, 4.0);
+/// Its pursuit is seen (the user: as a teleport it must be much more obvious
+/// than its dodge, else you never see it come and do not know it can): it
+/// fades where it was, heard leaving; its shadow forms where it comes, over
+/// this long (s), it nowhere meanwhile (not to be hit); then there, a flash,
+/// heard. Somewhat more often behind you than not (the user: a slight bias;
+/// kept off ahead of you, it felt like cheating).
+const ARRIVE: f32 = 0.6;
+const BEHIND: f32 = 0.35;
 /// What it takes before it breaks (a harrow 45).
 const BISHOP_HEALTH: f32 = 40.0;
 /// Its cast: how long the light gathers (s), how long between casts, how
@@ -143,6 +158,11 @@ pub(super) struct Bishop {
     goal: Vec3,
     next_goal: f32,
     next_blink: f32,
+    /// Since it last saw you (s), and when it may pursue you again; on its
+    /// way to you (s into it, where to).
+    unseen: f32,
+    next_pursuit: f32,
+    transit: Option<(f32, Vec3)>,
     aimed: f32,
     struck: bool,
     /// Hit since its pain was last heard; when it may cry out again; when it
@@ -190,7 +210,7 @@ impl Bishop {
     /// a sleeve and its robe, misses; a capsule round it, its needles stood
     /// off the robe where it is narrow and in it where it is wide).
     pub(super) fn ray(&self, origin: Vec3, dir: Vec3, max: f32) -> Option<f32> {
-        if self.broken.is_some() || self.bounds().ray(origin, dir, max).is_none() {
+        if self.broken.is_some() || self.transit.is_some() || self.bounds().ray(origin, dir, max).is_none() {
             return None;
         }
         let to = self.place.inverse();
@@ -405,12 +425,13 @@ fn bolt_mesh(points: &[Vec3], eye: Vec3, seed: i32, width: f32, turn: f32) -> (M
     (mesh(strand), mesh(twin))
 }
 
-/// An afterimage of a blink, fading.
+/// An afterimage of a blink, fading; or its shadow forming where it comes.
 #[derive(Component)]
 pub(super) struct Ghost {
     life: f32,
     total: f32,
     material: Handle<StandardMaterial>,
+    forming: bool,
 }
 
 /// The robe's points where it starts, in its own frame (x across, z
@@ -800,6 +821,9 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         goal: at,
         next_goal: 1.0,
         next_blink: 0.3,
+        unseen: 0.0,
+        next_pursuit: 0.0,
+        transit: None,
         aimed: 0.0,
         struck: false,
         pained: false,
@@ -813,6 +837,49 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
     };
     commands.entity(owner).insert((OfBishop(owner), bishop));
     owner
+}
+
+impl Bishop {
+    /// Pursuing, it leaves (see `ARRIVE`): a dark copy where it was, fading,
+    /// heard; its shadow forming where it comes (facing `heading`).
+    #[allow(clippy::too_many_arguments)]
+    fn depart(&mut self, commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, assets: &Assets3, to: Vec3, heading: f32) {
+        let here = Transform::from_translation(self.top).with_rotation(self.place);
+        let there = Transform::from_translation(to + Vec3::Y * SHOULDERS).with_rotation(Quat::from_rotation_y(heading));
+        for (frame, life, forming) in [(here, 0.5, false), (there, ARRIVE, true)] {
+            let material = materials.add(StandardMaterial { base_color: Color::srgba(0.02, 0.02, 0.02, if forming { 0.0 } else { 0.55 }), alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, unlit: true, ..default() });
+            for handle in [&self.mesh, &self.cape_mesh, &self.sleeves[0].1, &self.sleeves[1].1] {
+                if let Some(mesh) = meshes.get(handle).cloned() {
+                    commands.spawn((Ghost { life, total: life, material: material.clone(), forming }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone()), frame, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
+                }
+            }
+        }
+        commands.spawn((AudioPlayer::new(assets.bishop_blink.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.2)), Transform::from_translation(self.top)));
+        self.transit = Some((0.0, to));
+        self.heading = heading;
+        self.velocity = Vec3::ZERO;
+    }
+
+    /// Gone and there at once: afterimages along the way (the nearest it
+    /// left the longest), its blink heard where it lands.
+    fn blink(&mut self, commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, assets: &Assets3, to: Vec3) {
+        let by = to - self.at;
+        // (Its meshes are in its own frame, carried.)
+        let frame = Transform::from_translation(self.top).with_rotation(self.place);
+        for k in 0..4 {
+            let f = (k as f32 + 0.5) / 4.0;
+            let material = materials.add(StandardMaterial { base_color: Color::srgba(0.03, 0.03, 0.03, 0.55), alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, unlit: true, ..default() });
+            let life = 0.18 + 0.3 * (1.0 - f);
+            for handle in [&self.mesh, &self.cape_mesh, &self.sleeves[0].1, &self.sleeves[1].1] {
+                if let Some(mesh) = meshes.get(handle).cloned() {
+                    commands.spawn((Ghost { life, total: life, material: material.clone(), forming: false }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone()), frame.with_translation(frame.translation + by * f), bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
+                }
+            }
+        }
+        commands.spawn((AudioPlayer::new(assets.bishop_blink.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.6)), Transform::from_translation(to + Vec3::Y * SHOULDERS)));
+        self.at = to;
+        self.goal = to;
+    }
 }
 
 /// Where a bishop may float, from `from` (the spot on the floor before you
@@ -923,7 +990,8 @@ pub(super) fn float(
     for (entity, mut b) in &mut bishops {
         let b = &mut *b;
         b.time += dt;
-        let r = |k: i32| hash01(entity.index_u32() as i32, (b.time * 10.0) as i32, k, 0x8b2);
+        let now = b.time;
+        let r = |k: i32| hash01(entity.index_u32() as i32, (now * 10.0) as i32, k, 0x8b2);
         // Its voice, from its hood: in pain when hit (not again for half a
         // second: a blast is one cry), and now and then a call.
         if b.broken.is_none() && b.health > 0.0 {
@@ -1024,6 +1092,20 @@ pub(super) fn float(
             b.heading += turn * (1.0 - (-dt * if mode == 3 { 14.0 } else { 4.0 }).exp());
             let base = lab.home + lab.side * lab.aside;
             b.at = Vec3::new(base.x, ground.at(base), base.z);
+        } else if let Some((t, to)) = b.transit.as_mut() {
+            // On its way to you: nowhere (its shadow forming there); then
+            // there, a flash, heard.
+            *t += dt;
+            let to = *to;
+            if *t >= ARRIVE {
+                b.transit = None;
+                b.at = to;
+                b.goal = to;
+                b.velocity = Vec3::ZERO;
+                let top = to + Vec3::Y * SHOULDERS;
+                commands.spawn((Flash { life: FLASH.2 }, PointLight { intensity: FLASH.0 * 0.5, range: FLASH.1, shadow_maps_enabled: false, ..default() }, Transform::from_translation(top)));
+                commands.spawn((AudioPlayer::new(assets.bishop_blink.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)), Transform::from_translation(top)));
+            }
         } else {
             // Hunting. It sees you (nothing built between its hood and your
             // eyes); you hold your aim on it (within 4 degrees), or shoot.
@@ -1046,23 +1128,7 @@ pub(super) fn float(
                 };
                 if let Some(to) = (0..6).map(to_spot).find(|&q| q.distance(b.at) > BLINK.0 * 0.7 && passes(b.at, q)) {
                     let by = to - b.at;
-                    // Afterimages along the way, the nearest it left the
-                    // longest.
-                    // (Its meshes are in its own frame, carried.)
-                    let frame = Transform::from_translation(b.top).with_rotation(b.place);
-                    for k in 0..4 {
-                        let f = (k as f32 + 0.5) / 4.0;
-                        let material = materials.add(StandardMaterial { base_color: Color::srgba(0.03, 0.03, 0.03, 0.55), alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, unlit: true, ..default() });
-                        let life = 0.18 + 0.3 * (1.0 - f);
-                        for handle in [&b.mesh, &b.cape_mesh, &b.sleeves[0].1, &b.sleeves[1].1] {
-                            if let Some(mesh) = meshes.get(handle).cloned() {
-                                commands.spawn((Ghost { life, total: life, material: material.clone() }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone()), frame.with_translation(frame.translation + by * f), bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
-                            }
-                        }
-                    }
-                    commands.spawn((AudioPlayer::new(assets.bishop_blink.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(1.6)), Transform::from_translation(to + Vec3::Y * SHOULDERS)));
-                    b.at = to;
-                    b.goal = to;
+                    b.blink(&mut commands, &mut meshes, &mut materials, &assets, to);
                     if args.opt("huntlog") {
                         info!("huntlog: bishop {} blinks {:.1} m aside ({}), {:.1} m from you", entity.index_u32(), by.length(), if shot { "shot at" } else if b.struck { "hit" } else if b.aimed > 0.5 { "aimed at" } else { "of itself" }, Vec2::new(to.x - eye.x, to.z - eye.z).length());
                     }
@@ -1075,6 +1141,46 @@ pub(super) fn float(
                 }
             }
             b.struck = false;
+            // Pursuing you: out of its sight a moment (a beat to be fair),
+            // you not too far, not casting, it blinks to a spot that sees
+            // you, at its range, any way round you.
+            b.unseen = if sees { 0.0 } else { b.unseen + dt };
+            if b.unseen > PURSUE.0 && Vec2::new(to.x, to.z).length() < PURSUE.1 && b.time >= b.next_pursuit && b.casting.is_none() && b.charge.is_none() {
+                let feet = eye - Vec3::Y * 1.7;
+                let spot = |k: i32| {
+                    let a = r(60 + k) * std::f32::consts::TAU;
+                    let far = RANGE.0 + (RANGE.1 - RANGE.0) * r(80 + k);
+                    floor_near(&ground, nav.as_deref(), feet + Vec3::new(a.cos(), 0.0, a.sin()) * far)
+                };
+                let ahead = camera.forward().with_y(0.0).normalize_or(Vec3::Z);
+                let seen = (0..16)
+                    .map(|k| (k, spot(k)))
+                    .filter(|&(_, q)| (RANGE.0 * 0.8..RANGE.1 * 1.2).contains(&(q - eye).with_y(0.0).length()) && (q.y - feet.y).abs() < 4.0 && ground.clear(q + Vec3::Y * 2.6, eye))
+                    .max_by(|&(j, p), &(k, q)| {
+                        let score = |k: i32, q: Vec3| r(100 + k) - BEHIND * (q - eye).with_y(0.0).normalize_or(Vec3::Z).dot(ahead);
+                        score(j, p).total_cmp(&score(k, q))
+                    })
+                    .map(|(_, q)| q);
+                if let Some(to) = seen {
+                    let heading = (eye - to).x.atan2((eye - to).z);
+                    b.depart(&mut commands, &mut meshes, &mut materials, &assets, to, heading);
+                    b.next_pursuit = b.time + PURSUE.2;
+                    b.next_blink = b.time + 1.2;
+                    // (Not casting at once: you hear it, you turn, it
+                    // gathers.)
+                    b.next_cast = b.next_cast.max(b.time + 0.8);
+                    b.unseen = 0.0;
+                    if args.opt("huntlog") {
+                        info!("huntlog: bishop {} pursues you, {:.1} m from you", entity.index_u32(), (to - eye).with_y(0.0).length());
+                    }
+                } else {
+                    // (No spot that sees you: it tries again soon.)
+                    b.next_pursuit = b.time + 0.5;
+                    if args.opt("huntlog") {
+                        info!("huntlog: bishop {} would pursue you, but no spot sees you", entity.index_u32());
+                    }
+                }
+            }
             // Drifting from spot to spot a little way off, you in sight from
             // there, its body getting there: suddenly another, now and then.
             if b.time >= b.next_goal || Vec2::new(b.goal.x - b.at.x, b.goal.z - b.at.z).length() < 0.6 {
@@ -1227,15 +1333,19 @@ pub(super) fn float(
 
 /// Its stiff parts follow its shoulders; so do its cloth meshes while its
 /// cloth is frozen (else they are where the cloth is: where they stand).
-pub(super) fn carry(bishops: Query<&Bishop>, mut stiff: Query<(&OfBishop, &Stiff, &mut Transform), Without<Drape>>, mut cloths: Query<(&OfBishop, &mut Transform), (With<Drape>, Without<Stiff>)>) {
-    for (of, part, mut transform) in &mut stiff {
+pub(super) fn carry(bishops: Query<&Bishop>, mut stiff: Query<(&OfBishop, &Stiff, &mut Transform, &mut Visibility), Without<Drape>>, mut cloths: Query<(&OfBishop, &mut Transform, &mut Visibility), (With<Drape>, Without<Stiff>)>) {
+    // (On its way to you, pursuing: nowhere, all of it hidden.)
+    let shown = |b: &Bishop| if b.transit.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+    for (of, part, mut transform, mut visible) in &mut stiff {
         let Ok(b) = bishops.get(of.0) else { continue };
         transform.translation = b.top + Vec3::Y * 0.06 + b.place * part.offset;
         transform.rotation = b.place * part.turn;
+        visible.set_if_neq(shown(b));
     }
-    for (of, mut transform) in &mut cloths {
+    for (of, mut transform, mut visible) in &mut cloths {
         let Ok(b) = bishops.get(of.0) else { continue };
         *transform = if b.drape.is_some() { Transform::from_translation(b.top).with_rotation(b.place) } else { Transform::default() };
+        visible.set_if_neq(shown(b));
     }
 }
 
@@ -1451,7 +1561,8 @@ pub(super) fn ghosts(mut commands: Commands, time: Res<Time>, mut materials: Res
             continue;
         }
         if let Some(mut m) = materials.get_mut(&ghost.material) {
-            m.base_color.set_alpha(0.55 * ghost.life / ghost.total);
+            let k = ghost.life / ghost.total;
+            m.base_color.set_alpha(if ghost.forming { 0.9 * (1.0 - k).powf(1.5) } else { 0.55 * k });
         }
     }
 }
