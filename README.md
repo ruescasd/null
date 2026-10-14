@@ -117,13 +117,19 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
     --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
                                               itself / don't fire / fire only at a hunter / never die / hunters ten
                                               times tougher / hunters circle at a distance (--set tame_at=14,
-                                              tame_pace: fixed speed, else prowl/trot/gallop in turn) / face the
+                                              tame_pace: fixed speed, else prowl/trot/gallop in turn, the porter
+                                              0.7; --opt tame_line: back and forth along a straight line before
+                                              you instead, tame_span=16 m long; all live at the console) / face the
                                               nearest hunter
     --opt biped|harrow|angler|beast           what the swarm assembles into (beast: either beast; otherwise any;
                                               the harrow: four legs, hard, a spider's, the forelimbs hauling it on in
                                               surges; the angler's body is the harrow's, 15% larger, with the same size
                                               head); --opt sprawl: a beast moving another way (legs out from its sides,
-                                              knees high over a low body, gliding level)
+                                              knees high over a low body, gliding level); with --opt biped, the biped
+                                              prototypes (motion only, silent): --opt stalker, a thin body on
+                                              stilts from the knee down, struggling; --opt porter, hunched under a
+                                              slab on its back, its legs' steps moving it (--set porter_step=2: how
+                                              long its steps take, live at the console)
     --opt bones                               a hunter's pieces hidden, its bones drawn as lines (to see its limbs move)
     --opt bishop                              the bishop lab: a robed thing of cloth hangs 3 m before you and
                                               moves in turn, 8 s each (--set bishop_mode=N holds one: 0 still, 1 drifting, 2
@@ -133,7 +139,7 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
     --opt specimen                            one hunter standing still in front of you, to look at: --set
                                               specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
                                               jaw (radians open), stretch (0..1)
-    --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away
+    --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away (--set hunters_at=M: M m)
                                               whenever there is none (with biped|beast to choose)
     --set crowd=N                             with --opt hunters: N of them at once, round you (for measuring their cost)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)

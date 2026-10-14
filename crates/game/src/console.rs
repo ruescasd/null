@@ -202,8 +202,11 @@ const SWITCHES: [(&str, &str); 7] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 6] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 9] {
     [
+        ("tame_pace", "with tame on: how fast it walks (m/s; 0, its own: the porter 0.7, else changing every 8 s)", 0.0),
+        ("tame_at", "with tame on: how far from you it keeps (m)", 14.0),
+        ("porter_step", "how long the porter's steps take (times its own: longer, slower and further at the same pace)", 2.0),
         ("volume", "how loud (1 as made, 0 silent)", 1.0),
         ("huntpace", "how fast hunters move (1 as made)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),

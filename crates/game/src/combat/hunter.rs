@@ -194,10 +194,10 @@ enum Gesture {
 }
 
 impl Hunter {
-    /// The biped candidates (the stalker, the puppet) make no sound till
+    /// The biped candidates (the stalker, the porter) make no sound till
     /// they have their own: the hunters' coloured how they read (the user).
     fn silent(&self) -> bool {
-        matches!(self.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Puppet)
+        matches!(self.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter)
     }
 
     /// A shard struck bone `bone`, flying along `dir`.
@@ -334,6 +334,25 @@ pub(super) struct Heads {
     biped: (Handle<Mesh>, Handle<Mesh>),
     /// A beast's leg segments: the upper, and the lower tapering to a prong.
     legs: (Handle<Mesh>, Handle<Mesh>),
+    /// The porter's load: a plain block (a unit cube, scaled), pale, matte.
+    load: (Handle<Mesh>, Handle<StandardMaterial>),
+}
+
+/// A porter's load, following its back (see `loads`).
+#[derive(Component)]
+pub(super) struct Load(Entity);
+
+/// Loads follow their porters' backs; a porter gone, its load is gone.
+pub(super) fn loads(mut commands: Commands, hunters: Query<&Hunter>, mut loads: Query<(Entity, &Load, &mut Transform)>) {
+    for (entity, load, mut transform) in &mut loads {
+        let Ok(h) = hunters.get(load.0) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if let Some((at, turn, size)) = h.rig.load() {
+            *transform = Transform::from_translation(at).with_rotation(turn).with_scale(size);
+        }
+    }
 }
 
 /// Where a beast head's eyes and brow sit: out from the bone and up, in
@@ -389,7 +408,7 @@ fn rings_mesh(rings: &[(f32, f32, f32, f32)]) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
 }
 
-pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     // A long, narrow, angular head: a ridge of cranium behind, the brow low
     // over the eyes, a long muzzle; nothing round about it.
     let beast = rings_mesh(&[(0.0, 0.5, 0.65, 0.1), (0.2, 0.68, 0.8, 0.22), (0.42, 0.55, 0.5, 0.06), (0.72, 0.38, 0.34, -0.04), (1.0, 0.16, 0.18, -0.1)]);
@@ -406,6 +425,7 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     let angler_jaw = rings_mesh(&[(-0.2, 0.7, 0.55, -0.35), (0.3, 1.0, 0.78, -0.48), (0.75, 1.1, 0.62, -0.32), (1.05, 1.05, 0.42, -0.08), (1.25, 0.9, 0.25, 0.25)]);
     let beast_jaw = meshes.add(beast_jaw);
     commands.insert_resource(Heads {
+        load: (meshes.add(Cuboid::new(1.0, 1.0, 1.0)), materials.add(StandardMaterial { base_color: Color::srgb(0.78, 0.77, 0.74), perceptual_roughness: 0.9, ..default() })),
         beast: vec![(meshes.add(beast), beast_jaw), (meshes.add(angler), meshes.add(angler_jaw))],
         biped: (meshes.add(biped), meshes.add(biped_jaw)),
         // Hard and faceted, swelling just below the joint and narrowing
@@ -622,14 +642,15 @@ fn spawn_hunter(
     // biped on stilts.)
     let plan = if kind == Kind::Beast && want.map_or(args.opt("sprawl"), |w| w == "sprawl") { Plan::sprawl() } else { plan };
     let plan = if kind == Kind::Biped && want.map_or(args.opt("stalker"), |w| w == "stalker") { Plan::stalker() } else { plan };
-    let plan = if kind == Kind::Biped && want.map_or(args.opt("puppet"), |w| w == "puppet") { Plan::puppet() } else { plan };
+    let plan = if kind == Kind::Biped && want.map_or(args.opt("porter"), |w| w == "porter") { Plan::porter() } else { plan };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
     let sprawl = plan.style == crate::rig::Style::Sprawl;
     let radial = plan.radial;
     // (The biped candidates: no voice; see `Hunter::silent`.)
-    let silent = matches!(plan.style, crate::rig::Style::Stilt | crate::rig::Style::Puppet);
+    let silent = matches!(plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter);
+    let porter = plan.style == crate::rig::Style::Porter;
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
@@ -641,6 +662,10 @@ fn spawn_hunter(
             Visibility::default(),
         ))
         .id();
+    // The porter's load: a plain slab on its back (see `loads`).
+    if porter {
+        commands.spawn((Load(hunter), Mesh3d(heads.load.0.clone()), MeshMaterial3d(heads.load.1.clone()), Transform::from_translation(feet + Vec3::Y * 2.0).with_scale(Vec3::splat(0.6))));
+    }
     // Its voice, at its head: growls now and then (see `voice`).
     if !silent {
         commands.spawn((Voice { hunter, next: 1.0, count: 0 }, Transform::from_translation(centre), Visibility::default()));
@@ -1250,6 +1275,10 @@ pub(super) fn hunt(
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
         h.rig.rear = if matches!(h.stance, Stance::Rear | Stance::Reach) { 1.0 } else { 0.0 };
+        // (`porter_step`: the porter's steps that many times as long, 2
+        // else: slower, and so further, at the same pace; live, at the
+        // console too.)
+        h.rig.step_scale = args.num("porter_step", 2.0);
         if !matches!(h.stance, Stance::Reach | Stance::Haul(_)) {
             h.rig.grab = None;
         }
@@ -1274,7 +1303,9 @@ pub(super) fn hunt(
             // its pace changing every 8 s: prowl, trot, gallop.)
             let keep = args.num("tame_at", 14.0);
             let fixed = args.num("tame_pace", 0.0);
-            let pace = if fixed > 0.0 { fixed } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
+            // (The porter at its own walking pace, the user's: 0.7 m/s.)
+            let porter = h.rig.plan.style == crate::rig::Style::Porter;
+            let pace = if fixed > 0.0 { fixed } else if porter { 0.7 } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
             intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
             // (`--opt tame_line`: back and forth along a straight line across
             // in front of you instead (along x, `tame_at` off in z), `tame_span`

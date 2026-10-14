@@ -89,7 +89,7 @@ impl Plugin for CombatPlugin {
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
             .add_systems(Update, footsteps.after(crate::player::walk))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }

@@ -71,12 +71,19 @@ pub enum Style {
     /// down; the swinging one folding at the knee to clear the ground. Slow,
     /// uncertain, its weight shifting over each, its arms out for balance.
     Stilt,
-    /// A human walk under wrong control (the puppet, `--opt puppet`): its
-    /// arms hang on strings (sprung, overshooting, a beat late, out of step
-    /// with its legs); its head snaps; its steps are uneven. (Stopping dead
-    /// now and then mid-stride got in the way of judging its walk, the
-    /// user: taken out.)
-    Puppet,
+    /// Bearing a load (the porter, `--opt porter`; the user's idea): a
+    /// heavy thing on its back (a plain slab for now), fixed to it, hunches
+    /// it forward to counter it, its chest ahead of its hips; its legs do not
+    /// stride but catch up, its feet dragged till they step (each step its
+    /// own); its body moving as the stalker's, heavier (a sprung chest, its
+    /// load's weight jolting it down at each footfall, a torso that hauls
+    /// each leg through, a head held in the world); its arms hanging dead
+    /// (gripping its load, they flailed); its head low, watching its way.
+    /// (It began as a puppet: a human walk under "wrong control",
+    /// decorations with no cause, the human trap; then towed from its
+    /// chest, workable, but a struggle like the stalker's: the load is its
+    /// own cause and its own shape.)
+    Porter,
 }
 
 /// A gait, used from `speed` up (blending into the next): when in the
@@ -159,6 +166,36 @@ const HEAD_HOLD: (f32, f32) = (0.06, 10.0);
 /// awkward; it is impaired but used to it, its arms long given up): its
 /// hands on springs (how stiff, how damped), swinging as weights.
 const STILT_HANDS: (f32, f32) = (20.0, 3.5);
+/// The porter, hunched under its load: the chest drawn ahead of its hips (m,
+/// at its pace); a foot dragged along the ground once the body has drawn it
+/// this far from its place (m), sliding after it (how fast), stepping once
+/// drawn this far (m, each step its own) and taking this long (s, each its
+/// own), lifted this little (m), landing this far ahead of its hip (m, at
+/// its pace); its head lolling (how fast it follows). (Each step alike,
+/// the same reach and time and an eased arc, its feet set fast till they
+/// lifted: robotic, the user.)
+const PORTER_TOW: f32 = 0.3;
+const PORTER_DRAG: (f32, f32) = (0.2, 3.0);
+const PORTER_STEP: ((f32, f32), (f32, f32), f32, f32) = ((0.35, 0.6), (0.24, 0.36), 0.05, 0.2);
+const PORTER_LOLL: f32 = 3.0;
+/// The porter's cadence: its legs' effort moves its body (gliding on over
+/// still legs, it moved without cause, the user). A step, the body pushed
+/// on with it, rising from its creep to most mid-step and settling as the
+/// foot lands (switched on and off, it lurched); then a rest (s, each its
+/// own, longer the slower it goes), the body all but still (of its pace);
+/// then the foot furthest behind steps. (Rests and steps of very different
+/// lengths made some surges lunge: narrower ranges. Rests of a fifth of a
+/// second, the body all but stopped, read as lunges, not a walk, the user:
+/// short, the body keeping some way on.)
+const PORTER_REST: ((f32, f32), f32) = ((0.06, 0.12), 0.35);
+/// Its load: a slab on its back, lying along it (a cube, upright, sat at
+/// the wrong angle and overspecified its shape: the user), how big (m:
+/// across, along the back, deep). Fixed to the back: it moves only as the
+/// back does (sprung, bobbing of itself, it did not fit a massive thing,
+/// the user); its weight in the body instead: at each footfall the chest
+/// is jolted down (m/s).
+const LOAD_SIZE: Vec3 = Vec3::new(0.55, 0.75, 0.3);
+const LOAD_JOLT: f32 = 0.5;
 /// On stilts, its body throws itself into each step (it leaned back as if
 /// dragged by its legs, the user): moving, its chest leads (m at its pace);
 /// as each leg swings, it pitches on a little further (m).
@@ -168,6 +205,14 @@ const STILT_HEAVE: (f32, f32) = (0.18, 0.08);
 /// stance (of the cycle), then turns on (rad) as it swings, pulling it:
 /// clockwise for the left, counter for the right.
 const STILT_HAUL: (f32, f32, f32) = (0.08, 0.15, 0.18);
+/// The porter's body, heavier under its load (the stalker's swayed too much
+/// for its mass, the user): its chest's spring (stiffer, more damped, a
+/// smaller lean), its heave (m), its haul (wound back, turned on: rad), its
+/// head held (m) and caught up (how fast).
+const PORTER_SWAY: (f32, f32, f32) = (220.0, 20.0, 0.015);
+const PORTER_HEAVE: (f32, f32) = (0.08, 0.03);
+const PORTER_HAUL: (f32, f32) = (0.04, 0.08);
+const PORTER_HOLD: (f32, f32) = (0.03, 14.0);
 
 impl Plan {
     /// The stalker (`--opt stalker`): a small, thin human body high on two
@@ -213,9 +258,9 @@ impl Plan {
         }
     }
 
-    /// The puppet: the biped's build at about 2.4 m (`Style::Puppet`).
-    pub fn puppet() -> Self {
-        Plan { style: Style::Puppet, sway: 0.0, bob: 0.03, ..Plan::biped().scaled(0.8) }
+    /// The porter: the biped's build at about 2.4 m (`Style::Porter`).
+    pub fn porter() -> Self {
+        Plan { style: Style::Porter, sway: 0.0, bob: 0.0, lean: 0.0, ..Plan::biped().scaled(0.8) }
     }
 
     /// A tall biped with long arms, about 3 m.
@@ -495,7 +540,7 @@ pub struct Rig {
     /// On stilts: the hips' height over the ground where it stands, as the
     /// stilts it stands on hold them (see `Style::Stilt`).
     stilt: f32,
-    /// The puppet: its hands on their strings (where, how fast); the last
+    /// Dangling or gripping hands, sprung (where, how fast); the last
     /// frame's length.
     hands: Vec<(Vec3, Vec3)>,
     /// On stilts: its chest swaying on its hips (where, how fast); its head
@@ -505,11 +550,18 @@ pub struct Rig {
     head_snap: bool,
     /// A beat after each foot lands, before the next step (s left): a
     /// creature that struggles to move gathers itself for each stride (the
-    /// user; the stalker and the puppet).
+    /// user; the stalker).
     beat: f32,
     dt: f32,
     /// Steps each foot has taken (to vary each one).
     steps: Vec<u32>,
+    /// The porter: how far through its step each foot is (0..1); its
+    /// cadence: the rest left before its next step, and the last step's rest
+    /// and length (s).
+    step_t: Vec<f32>,
+    rest: f32,
+    step_rest: f32,
+    step_time: f32,
     /// A raised paw: which leg, and how far up (0..1).
     paw: (usize, f32),
     /// In a leap: seconds since it left the ground, and how long it will be
@@ -538,6 +590,10 @@ pub struct Rig {
     /// Where its forefeet are driven into the ground (left, right), held
     /// there out of the gait: an attack's grab, the body hauled after them.
     pub grab: Option<[Vec3; 2]>,
+    /// How long the porter's steps take (times `PORTER_STEP`'s): slower
+    /// steps at the same pace are longer ones (the user: slower steps of
+    /// greater reach; slowing its pace only made them shorter).
+    pub step_scale: f32,
     pub bones: Vec<Bone>,
 }
 
@@ -587,6 +643,10 @@ impl Rig {
             head_snap: false,
             dt: 0.0,
             steps: Vec::new(),
+            step_t: Vec::new(),
+            rest: 0.0,
+            step_rest: 0.2,
+            step_time: 0.3,
             paw: (0, 0.0),
             air: (0.0, 1.0),
             tilt: 0.0,
@@ -603,6 +663,7 @@ impl Rig {
             rear: 0.0,
             reared: 0.0,
             grab: None,
+            step_scale: 1.0,
             bones: Vec::new(),
         };
         rig.stilt = rig.plan.hips.1;
@@ -610,6 +671,7 @@ impl Rig {
         rig.local = offsets.clone();
         (rig.offsets, rig.swing, rig.stride) = (offsets, swing, stride);
         rig.steps = vec![0; rig.plan.legs.len()];
+        rig.step_t = vec![0.0; rig.plan.legs.len()];
         let homes: Vec<Vec3> = (0..rig.plan.legs.len()).map(|i| rig.home(i, ground)).collect();
         rig.feet = homes.into_iter().map(|h| Foot { planted: h, from: h, swinging: false }).collect();
         let back = -rig.forward_of(heading);
@@ -671,8 +733,10 @@ impl Rig {
         let reel = self.reel * if root == Root::Chest { 1.0 } else { 0.4 };
         // Each stride lurches a little to one side or the other, the chest
         // more than the hips.
-        let lurch = (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 };
-        self.root + forward * (f - mid + flex) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel
+        let lurch = if self.plan.style == Style::Porter { 0.0 } else { (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 } };
+        // (The porter's chest ahead of its hips, countering its load.)
+        let tow = if self.plan.style == Style::Porter && root == Root::Chest { PORTER_TOW * (speed / 1.5).min(1.0) } else { 0.0 };
+        self.root + forward * (f - mid + flex + tow) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -700,6 +764,8 @@ impl Rig {
         // (Hauling, the forefeet set far out ahead, the body hauled up to
         // them and on past.)
         let ahead = if self.plan.style == Style::Hauler && leg.root == Root::Chest { (leg.upper + leg.lower) * 0.7 * (speed / 1.5).min(1.0) } else { ahead };
+        // (The porter's, a little ahead of the hip: caught up, not striding.)
+        let ahead = if self.plan.style == Style::Porter { PORTER_STEP.3 * (speed / 1.5).min(1.0) } else { ahead };
         let yaw = if leg.root == Root::Hips { self.hips_yaw } else { self.chest_yaw };
         let fwd = self.forward_of(yaw);
         let out = self.out_of(&leg, fwd) * leg.spread;
@@ -796,7 +862,23 @@ impl Rig {
             from + d * (1.0 - (-dt * rate).exp())
         };
         // (On stilts, turning to haul each leg through: see `STILT_HAUL`.)
-        let haul = if self.plan.style == Style::Stilt && Vec2::new(self.velocity.x, self.velocity.z).length() > 0.3 {
+        let haul = if self.plan.style == Style::Porter && Vec2::new(self.velocity.x, self.velocity.z).length() > 0.3 {
+            // (The porter's: turning on as a foot steps; wound back as one is
+            // dragged, the further the more.)
+            (0..self.plan.legs.len())
+                .map(|i| {
+                    let side = -self.plan.legs[i].side.signum();
+                    match self.stepping(i) {
+                        Some(s) => side * PORTER_HAUL.1 * (s * std::f32::consts::PI).sin(),
+                        None => {
+                            let hip = self.hip(i);
+                            let off = Vec2::new(self.feet[i].planted.x - hip.x, self.feet[i].planted.z - hip.z).length();
+                            -side * PORTER_HAUL.0 * ((off - PORTER_DRAG.0) / (PORTER_STEP.0.1 - PORTER_DRAG.0)).clamp(0.0, 1.0)
+                        }
+                    }
+                })
+                .sum::<f32>()
+        } else if self.plan.style == Style::Stilt && Vec2::new(self.velocity.x, self.velocity.z).length() > 0.3 {
             self.plan
                 .legs
                 .iter()
@@ -833,9 +915,8 @@ impl Rig {
         }
         // Each foot a little early or late, differently each stride: the
         // footfalls never quite the same twice.
-        let uneven = if self.plan.style == Style::Puppet { 0.3 } else { 0.1 };
         for (i, o) in offsets.iter_mut().enumerate() {
-            *o += (self.vary(10 + i as i32) - 0.5) * uneven;
+            *o += (self.vary(10 + i as i32) - 0.5) * 0.1;
         }
         (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
@@ -852,6 +933,13 @@ impl Rig {
             }
             self.phase = next.fract();
         }
+        // The porter's next step, after its rest: the foot furthest behind.
+        let porter_next = if self.plan.style == Style::Porter && !any_swinging && speed > 0.1 {
+            self.rest -= dt;
+            (self.rest <= 0.0).then(|| (0..self.feet.len()).max_by(|&a, &b| self.feet[a].planted.distance(self.home(a, ground)).total_cmp(&self.feet[b].planted.distance(self.home(b, ground))))).flatten()
+        } else {
+            None
+        };
         for i in 0..self.feet.len() {
             let home = self.home(i, ground);
             let local = (self.phase - self.offsets[i]).rem_euclid(1.0);
@@ -870,6 +958,54 @@ impl Rig {
                 continue;
             }
             if self.airborne.is_some() {
+                continue;
+            }
+            // The porter's feet only catch up: one at a time, a foot steps
+            // once the body has drawn it too far from its place, quick and
+            // low, scuffing.
+            if self.plan.style == Style::Porter {
+                let other = self.feet.iter().enumerate().any(|(j, f)| j != i && f.swinging);
+                let r = |j: i32| hash01(self.seed as i32 + i as i32 * 37, self.steps[i] as i32, j, 0x61f);
+                let (reach, time) = (PORTER_STEP.0.0 + (PORTER_STEP.0.1 - PORTER_STEP.0.0) * r(0), (PORTER_STEP.1.0 + (PORTER_STEP.1.1 - PORTER_STEP.1.0) * r(1)) * self.step_scale);
+                let foot = &mut self.feet[i];
+                if foot.swinging {
+                    // Swung as a dead weight: hanging back, then whipped on.
+                    self.step_t[i] += dt / time;
+                    let s = self.step_t[i].min(1.0);
+                    let e = s * s;
+                    foot.planted = foot.from.lerp(home, e) + Vec3::Y * PORTER_STEP.2 * (s * std::f32::consts::PI).sin();
+                    if s >= 1.0 {
+                        foot.swinging = false;
+                        foot.planted = home;
+                        // A rest before the next, longer the slower it goes.
+                        let slow = (1.4 / speed.max(0.2)).clamp(0.6, 2.0);
+                        self.step_rest = (PORTER_REST.0.0 + (PORTER_REST.0.1 - PORTER_REST.0.0) * r(2)) * slow;
+                        self.rest = self.step_rest;
+                        // (Its load's weight landing: the chest jolted down.)
+                        if let Some((_, v)) = self.sway.as_mut() {
+                            *v -= Vec3::Y * LOAD_JOLT;
+                        }
+                    }
+                } else {
+                    // Dragged: slid along the ground after the body, scuffing.
+                    let off = foot.planted.distance(home);
+                    if off > PORTER_DRAG.0 {
+                        // (Slower than the body, at most half its pace: at a slow
+                        // pace a foot slid fast enough to keep up, and never
+                        // stepped; one leg did all the stepping.)
+                        let want = foot.planted.lerp(home, (1.0 - (-dt * PORTER_DRAG.1).exp()) * ((off - PORTER_DRAG.0) / off));
+                        let to = foot.planted + (want - foot.planted).clamp_length_max(0.5 * speed * dt);
+                        foot.planted = Vec3::new(to.x, ground(to.x, to.z), to.z);
+                    }
+                    // Its turn after its rest (or, dragged too far, at once).
+                    if porter_next == Some(i) || (!other && off > reach + 0.25) {
+                        foot.swinging = true;
+                        foot.from = foot.planted;
+                        self.step_t[i] = 0.0;
+                        self.steps[i] += 1;
+                        self.step_time = time;
+                    }
+                }
                 continue;
             }
             let in_swing = local < self.swing && (speed > 0.3 || self.feet[i].swinging);
@@ -900,7 +1036,7 @@ impl Rig {
                 foot.planted = home;
                 // (A struggling walker: a beat once the foot is down, each
                 // its own length.)
-                if matches!(self.plan.style, Style::Stilt | Style::Puppet) && speed > 0.3 {
+                if self.plan.style == Style::Stilt && speed > 0.3 {
                     self.beat = 0.12 + 0.23 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61e);
                 }
             } else if speed <= 0.3 && foot.planted.distance(home) > self.stride * 0.3 {
@@ -948,36 +1084,40 @@ impl Rig {
             self.glance = if r(0) > 0.1 { Vec3::new(r(1), r(2) * 0.4, r(3)) * 1.6 } else { Vec3::ZERO };
             self.glance_in = 0.6 + 2.2 * (r(4) + 0.5);
         }
-        // On stilts: the chest sprung after where it would be, leaning away
-        // from a stilt swinging out, the torso its length (it tilts, not
-        // stretches).
-        if self.plan.style == Style::Stilt {
+        // The stalker's and the porter's chest sprung after where it would
+        // be, leading into its motion, leaning away from a leg swinging
+        // through and heaving on with it, the torso its length (it tilts,
+        // not stretches).
+        if self.sways() {
             let hips = self.anchor(Root::Hips);
             let mut target = self.anchor(Root::Chest);
             let fwd = self.forward_of(self.hips_yaw);
             let right = Vec3::new(fwd.z, 0.0, -fwd.x);
             let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 1.0).min(1.0);
-            target += fwd * STILT_HEAVE.0 * moving;
+            let porter = self.plan.style == Style::Porter;
+            let (sway, heave) = if porter { (PORTER_SWAY, PORTER_HEAVE) } else { (STILT_SWAY, STILT_HEAVE) };
+            target += fwd * heave.0 * moving;
             for (i, leg) in self.plan.legs.iter().enumerate() {
-                if self.feet[i].swinging {
-                    let s = (self.local[i] / self.swing.max(1e-3)).clamp(0.0, 1.0);
+                if let Some(s) = self.stepping(i) {
                     let lift = (s * std::f32::consts::PI).sin();
-                    target -= right * leg.side.signum() * STILT_SWAY.2 * lift;
-                    target += fwd * STILT_HEAVE.1 * lift;
+                    target -= right * leg.side.signum() * sway.2 * lift;
+                    target += fwd * heave.1 * lift;
                 }
             }
             let length = (target - hips).length();
             let (mut p, mut v) = self.sway.unwrap_or((target, Vec3::ZERO));
             let step = dt.min(0.05);
-            v += ((target - p) * STILT_SWAY.0 - v * STILT_SWAY.1) * step;
+            v += ((target - p) * sway.0 - v * sway.1) * step;
             p += v * step;
             p = hips + (p - hips).normalize_or(Vec3::Y) * length;
             self.sway = Some((p, v));
         }
         let chest = self.chest_now();
         let want = ((intent.look - chest).normalize_or(self.forward_of(self.chest_yaw)) + self.glance * 0.35).normalize_or(Vec3::Z);
+        // (The porter's head low, watching its way.)
+        let want = if self.plan.style == Style::Porter { (self.forward_of(self.chest_yaw) * 0.85 - Vec3::Y * 0.5).normalize() } else { want };
         // In a leap the head is thrown at its prey.
-        let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else if self.plan.style == Style::Puppet { 30.0 } else if self.plan.style == Style::Stilt { 12.0 } else { 7.0 };
+        let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else if self.plan.style == Style::Porter { PORTER_LOLL } else if self.plan.style == Style::Stilt { 12.0 } else { 7.0 };
         self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
         self.tilt += (intent.tilt - self.tilt) * (1.0 - (-dt * 3.0).exp());
         // The head's height follows the body's slowly: steady while it bobs.
@@ -991,17 +1131,18 @@ impl Rig {
             Some(y) => raw + (y + (raw - y) * (1.0 - (-dt * rate).exp()) - raw).clamp(-0.15, 0.15),
             None => raw,
         });
-        // On stilts: the head held where it is in the world, the body moving
-        // under it, till the neck has been carried too far; then it snaps to
-        // its new place, and holds again.
-        if self.plan.style == Style::Stilt {
+        // The stalker's and the porter's head held where it is in the world,
+        // the body moving under it, till the neck has been carried too far;
+        // then it catches up, and holds again.
+        if self.sways() {
             let natural = self.neck_end();
             let at = self.head_at.get_or_insert(natural);
-            if !self.head_snap && at.distance(natural) > HEAD_HOLD.0 {
+            let hold = if self.plan.style == Style::Porter { PORTER_HOLD } else { HEAD_HOLD };
+            if !self.head_snap && at.distance(natural) > hold.0 {
                 self.head_snap = true;
             }
             if self.head_snap {
-                *at = at.lerp(natural, 1.0 - (-dt * HEAD_HOLD.1).exp());
+                *at = at.lerp(natural, 1.0 - (-dt * hold.1).exp());
                 if at.distance(natural) < 0.02 {
                     self.head_snap = false;
                 }
@@ -1051,7 +1192,7 @@ impl Rig {
             neck_end.y = y;
         }
         // (On stilts, where it holds it.)
-        if let (Style::Stilt, Some(at)) = (self.plan.style, self.head_at) {
+        if let (true, Some(at)) = (self.sways(), self.head_at) {
             neck_end = at;
         }
         bones.push(Bone { a: chest, b: neck_end, radius: self.plan.neck_radius, side: right });
@@ -1105,16 +1246,17 @@ impl Rig {
             // (On stilts, straight down from the shoulder: dead, swung only
             // by the body, its springs below.)
             let hang = if self.plan.style == Style::Stilt { shoulder - Vec3::Y * reach * 0.97 } else { hang };
+            // (The porter's too: gripping its load over its shoulders, its
+            // arms flailed, the user.)
+            let hang = if self.plan.style == Style::Porter { shoulder - Vec3::Y * reach * 0.97 } else { hang };
             let lunge = shoulder + self.head_dir * reach * 0.95;
             let hand = hang.lerp(lunge, self.crouch);
-            // The puppet's hands on strings: sprung after where they would
-            // be, overshooting, swinging on (not counter to its steps).
-            // (On stilts, swinging as weights.)
-            let hand = if matches!(self.plan.style, Style::Puppet | Style::Stilt) {
+            // (Dangling, the stalker's and the porter's: sprung, weights.)
+            let hand = if matches!(self.plan.style, Style::Porter | Style::Stilt) {
                 if self.hands.len() <= k {
                     self.hands.push((hand, Vec3::ZERO));
                 }
-                let (stiff, damp) = if self.plan.style == Style::Stilt { STILT_HANDS } else { (40.0, 3.0) };
+                let (stiff, damp) = STILT_HANDS;
                 let (p, v) = &mut self.hands[k];
                 let dt = self.dt.min(0.05);
                 *v += ((hand - *p) * stiff - *v * damp) * dt;
@@ -1172,12 +1314,49 @@ impl Rig {
         self.chest_now()
     }
 
-    /// The chest as it is: on stilts, swaying on its hips; else as posed.
+    /// The porter's back, as it stands now: its middle, and which way is
+    /// up along it, out behind it, and across it.
+    fn back(&self) -> (Vec3, Vec3, Vec3, Vec3) {
+        let (hips, chest) = (self.anchor(Root::Hips), self.chest_now());
+        let up = (chest - hips).normalize_or(Vec3::Y);
+        let fwd = self.forward_of(self.chest_yaw);
+        let ahead = (fwd - up * fwd.dot(up)).normalize_or(fwd);
+        (hips.lerp(chest, 0.55), up, -ahead, up.cross(ahead))
+    }
+
+    /// The porter's load: where (against its back), turned how (lying
+    /// along it), and how big; fixed to it.
+    pub fn load(&self) -> Option<(Vec3, Quat, Vec3)> {
+        if self.plan.style != Style::Porter {
+            return None;
+        }
+        let (middle, up, behind, across) = self.back();
+        Some((middle + behind * (self.plan.torso_radius + LOAD_SIZE.z * 0.5), Quat::from_mat3(&Mat3::from_cols(across, up, -behind)), LOAD_SIZE))
+    }
+
+    /// The chest as it is: swaying on its hips (the stalker's, the
+    /// porter's); else as posed.
     fn chest_now(&self) -> Vec3 {
         match self.sway {
-            Some((p, _)) if self.plan.style == Style::Stilt => p,
+            Some((p, _)) if self.sways() => p,
             _ => self.anchor(Root::Chest),
         }
+    }
+
+    /// Whether its body moves as a creature's (the stalker's, the
+    /// porter's: a sprung chest, effort in each step, a torso that hauls
+    /// each leg through, a head held in the world): see `Style::Stilt`.
+    fn sways(&self) -> bool {
+        matches!(self.plan.style, Style::Stilt | Style::Porter)
+    }
+
+    /// How far through its step a leg is (0..1), swinging; the porter's
+    /// its own, the others' from the gait.
+    fn stepping(&self, i: usize) -> Option<f32> {
+        if !self.feet[i].swinging {
+            return None;
+        }
+        Some(if self.plan.style == Style::Porter { self.step_t[i].min(1.0) } else { (self.local[i] / self.swing.max(1e-3)).clamp(0.0, 1.0) })
     }
 
     /// Which leg a bone is of (the bones: three of torso, the neck, the
@@ -1206,6 +1385,18 @@ impl Rig {
     /// hauling, almost still as the arms reach (a sixth), surging as they
     /// haul (nearly twice), its speed on the whole; else all of it.
     fn surge(&self) -> f32 {
+        // (The porter: its body surging with each step, all but still as it
+        // rests; the same pace overall.)
+        if self.plan.style == Style::Porter {
+            // (A push shaped as a half sine over the step, from its creep: as
+            // far over a step and its rest as at its pace throughout.)
+            let s = (0..self.feet.len()).find(|&i| self.feet[i].swinging).map(|i| self.step_t[i].min(1.0));
+            let creep = PORTER_REST.1;
+            return match s {
+                Some(s) => creep + std::f32::consts::FRAC_PI_2 * (1.0 - creep) * (self.step_time + self.step_rest) / self.step_time.max(0.05) * (s * std::f32::consts::PI).sin(),
+                None => creep,
+            };
+        }
         if self.plan.style != Style::Hauler || self.grab.is_some() {
             return 1.0;
         }
