@@ -16,9 +16,9 @@ it became):
 - `gun_reload`: freesound_community, "Assault rifle manipulation 01" (102921), the first take.
 - `player_pain`: freesound_community, "Male hurt 7" (48124).
 - `player_step0`–`player_step5`: six steps cut from a download (`player_steps`; its author not recorded).
-- `bishop_cast`: yodguard, "Casting magic 4" (382380), its swell from 0.9 s to 2.9 s (its peak a second in, as the motes are loosed).
+- `bishop_cast`: rescopicsound, "Elemental magic spell cast D" (228349), from 1.1 s to 4.0 s (its peak 0.6 s in, as the lightning leaves; its tail under the strands).
 - `bishop_death`: universfield, "Horror scream" (131025).
-- `bishop_call`: yodguard, "Dark magic 3" (378655), its first 1.6 s.
+- `bishop_call`: yodguard, "Dark magic 2" (378654), all of it (1.6 s; the silence after cut).
 - `bishop_blink`: yodguard, "Wind magic 5" (378630).
 - `bishop_pain`: a download (`bishop_pain`; its author not recorded), from 1.15 s (past its rising start) to 2.6 s.
 - `bishop_mote_burst`: yodguard, "Iced magic 6" (378606), from 0.22 s (just before its peak) to 1.4 s.
