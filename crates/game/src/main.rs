@@ -10,6 +10,10 @@ mod ground;
 mod figure;
 mod landmarks;
 mod loading;
+/// Every option name the game reads, gathered from its source by `build.rs`.
+mod options {
+    include!(concat!(env!("OUT_DIR"), "/options.rs"));
+}
 mod look;
 mod player;
 mod rig;
@@ -52,6 +56,21 @@ impl Args {
     /// A tuning number, overridable with `--set name=value`.
     pub fn num(&self, name: &str, default: f32) -> f32 {
         self.sets.iter().rev().find(|(k, _)| k == name).map_or(default, |(_, v)| *v)
+    }
+
+    /// The names given (`--opt`, `--set`) that nothing reads, each with the
+    /// nearest that is (see `options::KNOWN`).
+    fn unknown(&self) -> Vec<(String, Option<&'static str>)> {
+        let given = self.opts.iter().chain(self.sets.iter().map(|(k, _)| k));
+        let mut out: Vec<(String, Option<&'static str>)> = given
+            .filter(|name| !options::KNOWN.contains(&name.as_str()))
+            .map(|name| {
+                let near = options::KNOWN.iter().map(|k| (console::distance(k, name), *k)).filter(|(d, _)| *d <= 3).min().map(|(_, k)| k);
+                (name.clone(), near)
+            })
+            .collect();
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
     }
 
     fn parse() -> Self {
@@ -126,6 +145,15 @@ fn main() {
         check::run(&argv);
     }
     let args = Args::parse();
+    // A name nothing reads is a mistake (the user: a mistyped `--set` did
+    // nothing, silently): said so, with the nearest, and stopped.
+    let unknown = args.unknown();
+    if !unknown.is_empty() {
+        for (name, near) in &unknown {
+            eprintln!("error: no option is called {name}{}", near.map_or(String::new(), |n| format!(" (did you mean {n}?)")));
+        }
+        std::process::exit(2);
+    }
     // Measurements and captures run flat out even without focus (Bevy
     // otherwise slows an unfocused window to 60 fps).
     let unattended = args.unattended();

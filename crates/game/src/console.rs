@@ -311,7 +311,7 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
 }
 
 /// How many letters must change to make one word the other (Levenshtein).
-fn distance(a: &str, b: &str) -> usize {
+pub(crate) fn distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
