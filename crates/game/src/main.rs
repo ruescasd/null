@@ -9,6 +9,7 @@ mod combat;
 mod ground;
 mod figure;
 mod landmarks;
+mod loading;
 mod look;
 mod player;
 mod rig;
@@ -93,7 +94,7 @@ impl Args {
 }
 
 /// When the process started (`--opt startlog`).
-static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+pub(crate) static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 /// `--opt startlog`: from the process's start, each half second
 /// the frames, the worst, whether the ground has settled.
@@ -130,12 +131,12 @@ fn main() {
     let unattended = args.unattended();
     let mut app = App::new();
 
-    if unattended {
-        app.insert_resource(bevy::winit::WinitSettings {
-            focused_mode: bevy::winit::UpdateMode::Continuous,
-            unfocused_mode: bevy::winit::UpdateMode::Continuous,
-        });
-    }
+    // (And flat out while hidden, before the window is shown: see
+    // `loading.rs`, which then slows it unfocused again.)
+    app.insert_resource(bevy::winit::WinitSettings {
+        focused_mode: bevy::winit::UpdateMode::Continuous,
+        unfocused_mode: bevy::winit::UpdateMode::Continuous,
+    });
     app
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -143,10 +144,11 @@ fn main() {
                 resolution: (1600, 900).into(),
                 position: bevy::window::WindowPosition::Centered(bevy::window::MonitorSelection::Primary),
                 present_mode: PresentMode::AutoNoVsync,
-                // (Unattended, it is never shown, so whoever is at the desk
-                // can work on: captures read what it renders, shown or not.)
-                visible: !unattended,
-                focused: !unattended,
+                // (Shown only once the view has settled (see `loading.rs`);
+                // unattended, never, so whoever is at the desk can work on:
+                // captures read what it renders, shown or not.)
+                visible: false,
+                focused: false,
                 ..default()
             }),
             ..default()
@@ -183,6 +185,7 @@ fn main() {
             structures::StructuresPlugin,
             chasm::ChasmPlugin,
             console::ConsolePlugin,
+            loading::LoadingPlugin,
         ))
         .add_systems(Update, startlog)
         .run();
