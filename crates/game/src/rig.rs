@@ -65,6 +65,18 @@ pub enum Style {
     /// Legs out from its sides, knees high over a body slung low between
     /// them, the body gliding level, turning short.
     Sprawl,
+    /// On stilts (the user's reference: Half-Life 2's stalker): stilts from
+    /// the knee down; the leg it stands on locked straight (a stilt does not
+    /// give), the body vaulting up over it and dipping as the other comes
+    /// down; the swinging one folding at the knee to clear the ground. Slow,
+    /// uncertain, its weight shifting over each, its arms out for balance.
+    Stilt,
+    /// A human walk under wrong control (the puppet, `--opt puppet`): its
+    /// arms hang on strings (sprung, overshooting, a beat late, out of step
+    /// with its legs); its head snaps; its steps are uneven. (Stopping dead
+    /// now and then mid-stride got in the way of judging its walk, the
+    /// user: taken out.)
+    Puppet,
 }
 
 /// A gait, used from `speed` up (blending into the next): when in the
@@ -132,7 +144,80 @@ pub struct Plan {
     pub radial: bool,
 }
 
+/// On stilts, its body sways on its hips (a creature's motion, neither a
+/// robot's nor a man's: every motion with a cause in the body): its chest
+/// sprung after where it would be (how stiff, how damped: a little under,
+/// so it overshoots), leaning away from a stilt swinging out (m); its head
+/// held still in the world, aimed at what it looks at, the body moving
+/// under it, till the neck has been carried this far (m) and it catches up
+/// to its new place (how fast). (Held 18 cm, caught up at 30/s, it seemed
+/// to teleport after the body, the user: now short holds, eased.)
+const STILT_SWAY: (f32, f32, f32) = (120.0, 10.0, 0.035);
+const HEAD_HOLD: (f32, f32) = (0.06, 10.0);
+/// On stilts, its arms hang dead from its shoulders, carried only by its
+/// body's motion (the user: held out for balance they read as a tightrope,
+/// awkward; it is impaired but used to it, its arms long given up): its
+/// hands on springs (how stiff, how damped), swinging as weights.
+const STILT_HANDS: (f32, f32) = (20.0, 3.5);
+/// On stilts, its body throws itself into each step (it leaned back as if
+/// dragged by its legs, the user): moving, its chest leads (m at its pace);
+/// as each leg swings, it pitches on a little further (m).
+const STILT_HEAVE: (f32, f32) = (0.18, 0.08);
+/// On stilts, its torso turns to haul each leg through (the user): before
+/// a leg swings it winds back on that side (rad), over the last of the leg's
+/// stance (of the cycle), then turns on (rad) as it swings, pulling it:
+/// clockwise for the left, counter for the right.
+const STILT_HAUL: (f32, f32, f32) = (0.08, 0.15, 0.18);
+
 impl Plan {
+    /// The stalker (`--opt stalker`): a small, thin human body high on two
+    /// long kneeless stilts, slow, its arms long and thin.
+    pub fn stalker() -> Self {
+        // (For judging its motion, the user: a longer body on shorter
+        // legs, 1.6 m, than first, 2.1, under a 0.55 m body.) Stilts from
+        // the knee down (as the reference's; kneeless, a stilt swinging
+        // through had to circle out to clear the ground, and read as a
+        // waddle, comic, the user): a short thigh folding a long thin stilt.
+        // (The knee a little lower, the user: 0.65 over 0.95, was 0.5 over
+        // 1.1.)
+        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.65, lower: 0.95, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.08, radius: (0.05, 0.022) };
+        let arm = |side: f32| ArmPlan { side, upper: 0.6, lower: 0.7, radius: (0.04, 0.03) };
+        Plan {
+            hips: (0.0, 1.55),
+            // (Hunched over its stilts: its chest well before its hips.)
+            chest: (0.28, 2.36),
+            torso_radius: 0.16,
+            torso_profile: [0.8, 0.85, 1.1],
+            rump: 0.0,
+            neck_radius: 0.05,
+            neck: (0.2, 0.2, 1.0),
+            head: (0.25, 0.11),
+            legs: vec![leg(-0.13), leg(0.13)],
+            arms: vec![arm(-0.21), arm(0.21)],
+            tail: (0, 0.0),
+            gaits: vec![
+                Gait { speed: 0.0, offsets: vec![0.0, 0.5], swing: 0.45, stride: 0.8 },
+                Gait { speed: 1.2, offsets: vec![0.0, 0.5], swing: 0.42, stride: 1.1 },
+            ],
+            lift: 0.28,
+            accel: 1.5,
+            decel: 3.0,
+            bob: 0.0,
+            lean: 0.0,
+            rock: 0.0,
+            shoulder: 0.0,
+            sway: 0.12,
+            style: Style::Stilt,
+            turn: 1.2,
+            radial: false,
+        }
+    }
+
+    /// The puppet: the biped's build at about 2.4 m (`Style::Puppet`).
+    pub fn puppet() -> Self {
+        Plan { style: Style::Puppet, sway: 0.0, bob: 0.03, ..Plan::biped().scaled(0.8) }
+    }
+
     /// A tall biped with long arms, about 3 m.
     pub fn biped() -> Self {
         let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.16, 0.1) };
@@ -407,6 +492,22 @@ pub struct Rig {
     gallop: f32,
     /// The head's height, held steady while the body bobs.
     head_y: Option<f32>,
+    /// On stilts: the hips' height over the ground where it stands, as the
+    /// stilts it stands on hold them (see `Style::Stilt`).
+    stilt: f32,
+    /// The puppet: its hands on their strings (where, how fast); the last
+    /// frame's length.
+    hands: Vec<(Vec3, Vec3)>,
+    /// On stilts: its chest swaying on its hips (where, how fast); its head
+    /// held in the world (where), and snapping to its new place.
+    sway: Option<(Vec3, Vec3)>,
+    head_at: Option<Vec3>,
+    head_snap: bool,
+    /// A beat after each foot lands, before the next step (s left): a
+    /// creature that struggles to move gathers itself for each stride (the
+    /// user; the stalker and the puppet).
+    beat: f32,
+    dt: f32,
     /// Steps each foot has taken (to vary each one).
     steps: Vec<u32>,
     /// A raised paw: which leg, and how far up (0..1).
@@ -478,6 +579,13 @@ impl Rig {
             stride: 2.0,
             gallop: 0.0,
             head_y: None,
+            stilt: 0.0,
+            hands: Vec::new(),
+            beat: 0.0,
+            sway: None,
+            head_at: None,
+            head_snap: false,
+            dt: 0.0,
             steps: Vec::new(),
             paw: (0, 0.0),
             air: (0.0, 1.0),
@@ -497,6 +605,7 @@ impl Rig {
             grab: None,
             bones: Vec::new(),
         };
+        rig.stilt = rig.plan.hips.1;
         let (offsets, swing, stride, _) = rig.plan.gait(0.0);
         rig.local = offsets.clone();
         (rig.offsets, rig.swing, rig.stride) = (offsets, swing, stride);
@@ -548,6 +657,8 @@ impl Rig {
         // Hauling, the chest gathers low as the arms reach and heaves up as
         // they haul (the rump less).
         let heave = if self.plan.style == Style::Hauler { 0.15 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos() * if root == Root::Chest { 1.0 } else { 0.4 } } else { 0.0 };
+        // (On stilts, as high as the stilts it stands on hold it.)
+        let h = if self.plan.style == Style::Stilt { self.stilt + if root == Root::Chest { self.plan.chest.1 - self.plan.hips.1 } else { 0.0 } } else { h };
         let height = h * (1.0 - low) + bob + rock + pitch + heave + if root == Root::Chest { breath } else { 0.0 };
         // A leg lost, its corner sags and slumps towards it; both of a pair
         // lost, that end drags on the ground.
@@ -606,6 +717,7 @@ impl Rig {
     /// what is built stops it.)
     pub fn update(&mut self, dt: f32, intent: Intent, ground: &impl Fn(f32, f32) -> f32, sweep: &impl Fn(Vec3, Vec3) -> Vec3) {
         self.time += dt;
+        self.dt = dt;
         self.crouch += (intent.crouch - self.crouch) * (1.0 - (-dt * 8.0).exp());
         // A raised paw goes up slowly, comes down quicker.
         let still = Vec2::new(self.velocity.x, self.velocity.z).length() < 0.4;
@@ -657,7 +769,8 @@ impl Rig {
                 self.heading += turn.clamp(-self.plan.turn * dt, self.plan.turn * dt);
             }
             let before = self.root;
-            let want = self.velocity * self.surge();
+            // (Gathering itself between steps, it holds where it is.)
+            let want = if self.beat > 0.0 { Vec3::ZERO } else { self.velocity * self.surge() };
             self.root = sweep(self.root, (want + self.knock) * dt);
             self.root.y = ground(self.root.x, self.root.z);
             // (Stopped by a wall, it goes no faster than it gets: not running
@@ -682,7 +795,28 @@ impl Rig {
             let d = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
             from + d * (1.0 - (-dt * rate).exp())
         };
-        self.chest_yaw = follow(self.chest_yaw, self.heading + lead, 10.0);
+        // (On stilts, turning to haul each leg through: see `STILT_HAUL`.)
+        let haul = if self.plan.style == Style::Stilt && Vec2::new(self.velocity.x, self.velocity.z).length() > 0.3 {
+            self.plan
+                .legs
+                .iter()
+                .enumerate()
+                .map(|(i, leg)| {
+                    let local = self.local.get(i).copied().unwrap_or(0.5);
+                    let side = -leg.side.signum();
+                    if local < self.swing {
+                        side * STILT_HAUL.2 * (local / self.swing * std::f32::consts::PI).sin()
+                    } else if local > 1.0 - STILT_HAUL.1 {
+                        -side * STILT_HAUL.0 * ((local - (1.0 - STILT_HAUL.1)) / STILT_HAUL.1 * std::f32::consts::PI).sin()
+                    } else {
+                        0.0
+                    }
+                })
+                .sum::<f32>()
+        } else {
+            0.0
+        };
+        self.chest_yaw = follow(self.chest_yaw, self.heading + lead + haul, 10.0);
         self.hips_yaw = follow(self.hips_yaw, self.heading - lead * 0.5, 5.0);
 
         // The gait clock runs with the speed; standing, it runs on only until
@@ -699,12 +833,15 @@ impl Rig {
         }
         // Each foot a little early or late, differently each stride: the
         // footfalls never quite the same twice.
+        let uneven = if self.plan.style == Style::Puppet { 0.3 } else { 0.1 };
         for (i, o) in offsets.iter_mut().enumerate() {
-            *o += (self.vary(10 + i as i32) - 0.5) * 0.1;
+            *o += (self.vary(10 + i as i32) - 0.5) * uneven;
         }
         (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
-        if self.airborne.is_none() && (speed > 0.3 || any_swinging) {
+        let held = self.beat > 0.0;
+        self.beat = (self.beat - dt).max(0.0);
+        if self.airborne.is_none() && (speed > 0.3 || any_swinging) && !held {
             // The tempo drifts a little.
             let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
             // (Each stride a little quicker or slower, by up to 15%.)
@@ -748,7 +885,10 @@ impl Rig {
                 // step at a prowl read as a small dog's trot, the user); at
                 // a gallop it is tucked up high.
                 let reach = self.plan.legs[i].upper + self.plan.legs[i].lower;
-                let lift = (self.plan.lift * (speed / 5.0).clamp(0.3, 2.5)).min(reach * 0.5) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
+                // (On stilts, the knee folding the stilt up clear, as high at
+                // any pace.)
+                let pace = if self.plan.style == Style::Stilt { 1.0 } else { (speed / 5.0).clamp(0.3, 2.5) };
+                let lift = (self.plan.lift * pace).min(reach * 0.5) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
                 // The paw goes forward early and comes down reaching, not
                 // an even arc; galloping, more so.
                 let even = s * s * (3.0 - 2.0 * s);
@@ -758,11 +898,39 @@ impl Rig {
             } else if foot.swinging {
                 foot.swinging = false;
                 foot.planted = home;
+                // (A struggling walker: a beat once the foot is down, each
+                // its own length.)
+                if matches!(self.plan.style, Style::Stilt | Style::Puppet) && speed > 0.3 {
+                    self.beat = 0.12 + 0.23 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61e);
+                }
             } else if speed <= 0.3 && foot.planted.distance(home) > self.stride * 0.3 {
                 // Standing with a foot out of place: a settling step.
                 foot.from = foot.planted;
                 foot.swinging = true;
                 self.phase = (self.offsets[i] + 0.01).fract();
+            }
+        }
+
+        // On stilts: the hips as high as the stilts it stands on reach (the
+        // lowest, standing on both), vaulting over each.
+        if self.plan.style == Style::Stilt {
+            let fwd = self.forward_of(self.hips_yaw);
+            let right = Vec3::new(fwd.z, 0.0, -fwd.x);
+            let held = self
+                .plan
+                .legs
+                .iter()
+                .zip(&self.feet)
+                .filter(|(_, f)| !f.swinging)
+                .map(|(leg, f)| {
+                    let hip = self.root + right * leg.side;
+                    let d = Vec2::new(f.planted.x - hip.x, f.planted.z - hip.z).length();
+                    let reach = leg.upper + leg.lower;
+                    f.planted.y - self.root.y + (reach * reach - d * d).max(0.0).sqrt()
+                })
+                .fold(f32::MAX, f32::min);
+            if held < f32::MAX {
+                self.stilt += (held - self.stilt) * (1.0 - (-dt * 20.0).exp());
             }
         }
 
@@ -780,10 +948,36 @@ impl Rig {
             self.glance = if r(0) > 0.1 { Vec3::new(r(1), r(2) * 0.4, r(3)) * 1.6 } else { Vec3::ZERO };
             self.glance_in = 0.6 + 2.2 * (r(4) + 0.5);
         }
-        let chest = self.anchor(Root::Chest);
+        // On stilts: the chest sprung after where it would be, leaning away
+        // from a stilt swinging out, the torso its length (it tilts, not
+        // stretches).
+        if self.plan.style == Style::Stilt {
+            let hips = self.anchor(Root::Hips);
+            let mut target = self.anchor(Root::Chest);
+            let fwd = self.forward_of(self.hips_yaw);
+            let right = Vec3::new(fwd.z, 0.0, -fwd.x);
+            let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 1.0).min(1.0);
+            target += fwd * STILT_HEAVE.0 * moving;
+            for (i, leg) in self.plan.legs.iter().enumerate() {
+                if self.feet[i].swinging {
+                    let s = (self.local[i] / self.swing.max(1e-3)).clamp(0.0, 1.0);
+                    let lift = (s * std::f32::consts::PI).sin();
+                    target -= right * leg.side.signum() * STILT_SWAY.2 * lift;
+                    target += fwd * STILT_HEAVE.1 * lift;
+                }
+            }
+            let length = (target - hips).length();
+            let (mut p, mut v) = self.sway.unwrap_or((target, Vec3::ZERO));
+            let step = dt.min(0.05);
+            v += ((target - p) * STILT_SWAY.0 - v * STILT_SWAY.1) * step;
+            p += v * step;
+            p = hips + (p - hips).normalize_or(Vec3::Y) * length;
+            self.sway = Some((p, v));
+        }
+        let chest = self.chest_now();
         let want = ((intent.look - chest).normalize_or(self.forward_of(self.chest_yaw)) + self.glance * 0.35).normalize_or(Vec3::Z);
         // In a leap the head is thrown at its prey.
-        let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else { 7.0 };
+        let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else if self.plan.style == Style::Puppet { 30.0 } else if self.plan.style == Style::Stilt { 12.0 } else { 7.0 };
         self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
         self.tilt += (intent.tilt - self.tilt) * (1.0 - (-dt * 3.0).exp());
         // The head's height follows the body's slowly: steady while it bobs.
@@ -797,6 +991,22 @@ impl Rig {
             Some(y) => raw + (y + (raw - y) * (1.0 - (-dt * rate).exp()) - raw).clamp(-0.15, 0.15),
             None => raw,
         });
+        // On stilts: the head held where it is in the world, the body moving
+        // under it, till the neck has been carried too far; then it snaps to
+        // its new place, and holds again.
+        if self.plan.style == Style::Stilt {
+            let natural = self.neck_end();
+            let at = self.head_at.get_or_insert(natural);
+            if !self.head_snap && at.distance(natural) > HEAD_HOLD.0 {
+                self.head_snap = true;
+            }
+            if self.head_snap {
+                *at = at.lerp(natural, 1.0 - (-dt * HEAD_HOLD.1).exp());
+                if at.distance(natural) < 0.02 {
+                    self.head_snap = false;
+                }
+            }
+        }
 
         // The tail: each link follows the last at its length, sagging, and
         // raised in a crouch.
@@ -822,7 +1032,7 @@ impl Rig {
     fn solve(&mut self) {
         let mut bones = Vec::new();
         let hips = self.anchor(Root::Hips);
-        let chest = self.anchor(Root::Chest);
+        let chest = self.chest_now();
         let forward = self.forward_of(self.chest_yaw);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
         // Torso: a few segments from the rump (behind the hips, rising a
@@ -839,6 +1049,10 @@ impl Rig {
         let mut neck_end = self.neck_end();
         if let Some(y) = self.head_y {
             neck_end.y = y;
+        }
+        // (On stilts, where it holds it.)
+        if let (Style::Stilt, Some(at)) = (self.plan.style, self.head_at) {
+            neck_end = at;
         }
         bones.push(Bone { a: chest, b: neck_end, radius: self.plan.neck_radius, side: right });
         let head_end = neck_end + self.head_dir * self.plan.head.0;
@@ -888,8 +1102,28 @@ impl Rig {
             let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 3.0).min(1.0);
             let reach = arm.upper + arm.lower;
             let hang = shoulder + Vec3::Y * -reach * 0.9 + forward * reach * 0.3 * swing * moving + right * arm.side.signum() * 0.1;
+            // (On stilts, straight down from the shoulder: dead, swung only
+            // by the body, its springs below.)
+            let hang = if self.plan.style == Style::Stilt { shoulder - Vec3::Y * reach * 0.97 } else { hang };
             let lunge = shoulder + self.head_dir * reach * 0.95;
             let hand = hang.lerp(lunge, self.crouch);
+            // The puppet's hands on strings: sprung after where they would
+            // be, overshooting, swinging on (not counter to its steps).
+            // (On stilts, swinging as weights.)
+            let hand = if matches!(self.plan.style, Style::Puppet | Style::Stilt) {
+                if self.hands.len() <= k {
+                    self.hands.push((hand, Vec3::ZERO));
+                }
+                let (stiff, damp) = if self.plan.style == Style::Stilt { STILT_HANDS } else { (40.0, 3.0) };
+                let (p, v) = &mut self.hands[k];
+                let dt = self.dt.min(0.05);
+                *v += ((hand - *p) * stiff - *v * damp) * dt;
+                *p += *v * dt;
+                *p = shoulder + (*p - shoulder).clamp_length_max(reach * 0.99);
+                *p
+            } else {
+                hand
+            };
             let (elbow, end) = ik(shoulder, hand, arm.upper, arm.lower, -forward + Vec3::Y * 0.2);
             bones.push(Bone { a: shoulder, b: elbow, radius: arm.radius.0, side: right });
             bones.push(Bone { a: elbow, b: end, radius: arm.radius.1, side: right });
@@ -904,7 +1138,7 @@ impl Rig {
 
     /// Where the neck ends (the head starts), from the pose.
     fn neck_end(&self) -> Vec3 {
-        let chest = self.anchor(Root::Chest);
+        let chest = self.chest_now();
         let forward = self.forward_of(self.chest_yaw);
         let (neck_len, neck_fwd, neck_up) = self.plan.neck;
         let base = Vec3::new(neck_fwd, neck_up, 0.0).normalize_or(Vec3::Y);
@@ -935,7 +1169,15 @@ impl Rig {
 
     /// The middle of the chest.
     pub fn chest(&self) -> Vec3 {
-        self.anchor(Root::Chest)
+        self.chest_now()
+    }
+
+    /// The chest as it is: on stilts, swaying on its hips; else as posed.
+    fn chest_now(&self) -> Vec3 {
+        match self.sway {
+            Some((p, _)) if self.plan.style == Style::Stilt => p,
+            _ => self.anchor(Root::Chest),
+        }
     }
 
     /// Which leg a bone is of (the bones: three of torso, the neck, the

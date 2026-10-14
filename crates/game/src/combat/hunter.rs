@@ -194,6 +194,12 @@ enum Gesture {
 }
 
 impl Hunter {
+    /// The biped candidates (the stalker, the puppet) make no sound till
+    /// they have their own: the hunters' coloured how they read (the user).
+    fn silent(&self) -> bool {
+        matches!(self.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Puppet)
+    }
+
     /// A shard struck bone `bone`, flying along `dir`.
     pub(super) fn hurt(&mut self, bone: usize, dir: Vec3, damage: f32) {
         self.health -= damage;
@@ -450,7 +456,8 @@ pub(super) fn gather(
 
     // `--opt hunters`: no swarm, no assembly; a hunter, already built,
     // appears a little way off whenever there is none (`--set crowd=N`: N of
-    // them at once, round you, for measuring their cost).
+    // them at once, round you, for measuring their cost; `--set
+    // hunters_at=M`, M metres off, 25 else).
     // `--opt specimen`: one hunter standing still in front of you, to look
     // at (`--set specimen_at` metres ahead, `specimen_yaw` degrees turned
     // from facing you, `jaw` radians open, `stretch` 0..1).
@@ -470,7 +477,7 @@ pub(super) fn gather(
             for n in 0..crowd {
                 let k = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
                 let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
-                let mut at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * 25.0;
+                let mut at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * args.num("hunters_at", 25.0);
                 // (In a built place, on its floors, 15 to 40 m off.)
                 if let Some(nav) = nav.as_deref()
                     && let Some(q) = nav.spot(player.translation, (15.0, 40.0), &|_| true, &|j| hash01(k as i32, j as i32, 2, 0x6b9), 400)
@@ -611,13 +618,18 @@ fn spawn_hunter(
     } else {
         Plan::biped()
     };
-    // (`--opt sprawl`: the beast moving another way.)
+    // (`--opt sprawl`: the beast moving another way; `--opt stalker`, the
+    // biped on stilts.)
     let plan = if kind == Kind::Beast && want.map_or(args.opt("sprawl"), |w| w == "sprawl") { Plan::sprawl() } else { plan };
+    let plan = if kind == Kind::Biped && want.map_or(args.opt("stalker"), |w| w == "stalker") { Plan::stalker() } else { plan };
+    let plan = if kind == Kind::Biped && want.map_or(args.opt("puppet"), |w| w == "puppet") { Plan::puppet() } else { plan };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
     let sprawl = plan.style == crate::rig::Style::Sprawl;
     let radial = plan.radial;
+    // (The biped candidates: no voice; see `Hunter::silent`.)
+    let silent = matches!(plan.style, crate::rig::Style::Stilt | crate::rig::Style::Puppet);
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
@@ -630,7 +642,9 @@ fn spawn_hunter(
         ))
         .id();
     // Its voice, at its head: growls now and then (see `voice`).
-    commands.spawn((Voice { hunter, next: 1.0, count: 0 }, Transform::from_translation(centre), Visibility::default()));
+    if !silent {
+        commands.spawn((Voice { hunter, next: 1.0, count: 0 }, Transform::from_translation(centre), Visibility::default()));
+    }
     info!("{} forms", if angler { "an angler" } else if sprawl { "a sprawl" } else if kind == Kind::Beast { "a harrow" } else { "a biped" });
 
     // Its body: shards along every bone, thicker bones more and bigger,
@@ -977,7 +991,7 @@ pub(super) fn hunt(
             let at = h.rig.chest();
             commands.spawn((
                 AudioPlayer::new(assets.death.clone()),
-                PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
+                PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
                 Transform::from_translation(at),
             ));
             let knock = h.rig.knock + h.blast.with_y(0.0) * SHOVE;
@@ -1262,6 +1276,17 @@ pub(super) fn hunt(
             let fixed = args.num("tame_pace", 0.0);
             let pace = if fixed > 0.0 { fixed } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
             intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
+            // (`--opt tame_line`: back and forth along a straight line across
+            // in front of you instead (along x, `tame_at` off in z), `tame_span`
+            // m long (16), turning
+            // at each end: to judge a walk straight on.)
+            if args.opt("tame_line") {
+                let span = args.num("tame_span", 16.0);
+                let leg = (time.elapsed_secs() * pace / span).rem_euclid(2.0);
+                let way = Vec3::X * if leg < 1.0 { 1.0 } else { -1.0 };
+                let off = Vec3::Z * ((target.z + keep - root.z) / 3.0).clamp(-1.0, 1.0);
+                intent.velocity = (way + off).normalize_or(way) * pace;
+            }
             intent.crouch = if pace < 3.0 { 0.35 } else { 0.0 };
         } else if sprawl {
             // The flanker: it never comes at you from before you. Hunting you,
@@ -1465,7 +1490,7 @@ pub(super) fn hunt(
                         h.rig.grab = Some([at(1.0), at(-1.0)]);
                         commands.spawn((
                             AudioPlayer::new(assets.pounce.clone()),
-                            PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
+                            PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
                             Transform::from_translation(h.rig.head().0),
                         ));
                         h.stance = Stance::Reach;
@@ -1512,7 +1537,7 @@ pub(super) fn hunt(
                         }
                         commands.spawn((
                             AudioPlayer::new(assets.pounce.clone()),
-                            PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(2.0)),
+                            PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
                             Transform::from_translation(h.rig.head().0),
                         ));
                         h.stance = Stance::Attack(toward);
@@ -1614,7 +1639,7 @@ pub(super) fn hunt(
                 info!("huntlog: {} bit you ({:.0} left)", entity.index_u32(), player.1.health);
             }
             director.hurt = 1.0;
-            commands.spawn((AudioPlayer::new(assets.bite.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
+            commands.spawn((AudioPlayer::new(assets.bite.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(if h.silent() { 0.0 } else { 1.0 }))));
             // You cry out.
             commands.spawn((AudioPlayer::new(assets.player_pain.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(1.0))));
         }
