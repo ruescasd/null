@@ -1,9 +1,11 @@
 //! The porter's leash (`--opt chained`; the user's idea: porters are
 //! enslaved by stalkers, each kept by one on a chain to its neck; both
 //! struggle as they walk, slave and guard, and the two struggles could be
-//! one). The porter goes its own way ahead, the chain fast at the back of
-//! its neck; its stalker follows behind on its track, the chain in its
-//! hand, watching it, controlling it (not pulling it: the user). The chain
+//! one). The porter goes its own way ahead, the chain fast to its ankle (at
+//! its neck, under its hunch and its cape, it was all but unseen, the
+//! user); its stalker follows behind on its track, the chain in its hand,
+//! its forearm level before it, watching it, controlling it (not pulling
+//! it: the user). The chain
 //! only seen, holding nothing (holding the porter back as it drew taut, it
 //! upset its walk: the user). The chain itself a rope (see
 //! `rope.rs`), drawn as heavy dark links, each turned square to the last:
@@ -24,19 +26,32 @@ const LINK: (f32, f32, f32) = (0.085, 0.032, 0.009);
 #[derive(Component)]
 pub(super) struct Keeps(pub(super) Entity);
 
+/// The point `far` m back along a way walked (`trail`, oldest first) from
+/// `at` where it now is, if it is that long.
+pub(super) fn back_along(at: Vec3, trail: &[Vec3], far: f32) -> Option<Vec3> {
+    let (mut left, mut from) = (far, at);
+    for &p in trail.iter().rev() {
+        let d = from.distance(p);
+        if d >= left {
+            return Some(from.lerp(p, left / d.max(1e-5)));
+        }
+        left -= d;
+        from = p;
+    }
+    None
+}
+
 /// Where a stalker holds the chain: in its first hand (else at its chest).
 fn hand(rig: &Rig) -> Vec3 {
     let arms = 5 + 2 * rig.plan.legs.len();
     if rig.plan.arms.is_empty() { rig.chest() } else { rig.bones[arms + 1].b }
 }
 
-/// Where the chain is fast to a porter: at the back of its neck, near its
-/// base (the side away from where it looks).
-fn nape(rig: &Rig) -> Vec3 {
-    let neck = rig.bones[3];
-    let along = (neck.b - neck.a).normalize_or(Vec3::Y);
-    let back = (Vec3::Y - along * along.y).normalize_or(Vec3::Y);
-    neck.a.lerp(neck.b, 0.35) + back * neck.radius
+/// Where the chain is fast to a porter: round its first ankle, a little up
+/// its shin.
+fn ankle(rig: &Rig) -> Vec3 {
+    let shin = rig.bones[6];
+    shin.b.lerp(shin.a, 0.08)
 }
 
 /// A chain between a stalker and its porter: its points (the rope), and
@@ -93,7 +108,7 @@ pub(super) fn chains(
             continue;
         };
         let chain = &mut *chain;
-        let (start, end) = (hand(a.rig()), nape(b.rig()));
+        let (start, end) = (hand(a.rig()), ankle(b.rig()));
         rope(&mut chain.points, &mut chain.previous, start, Some(end), LENGTH, &|p| ground.at(p), dt);
         // Its links along it, as far apart as they are long (or spread
         // out, drawn tighter than it is long), each square to the last.

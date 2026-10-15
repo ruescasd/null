@@ -30,7 +30,7 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(PhysicsPlugins::default())
-            .init_resource::<MoveInput>()
+            .init_resource::<MoveInput>().init_resource::<Bodies>()
             .add_systems(Startup, setup_hud)
             .add_systems(Update, update_hud)
             .add_systems(PostStartup, add_player)
@@ -92,6 +92,13 @@ const TETHER_SEVER_TIME: f32 = 0.15;
 
 /// Half the player's width (Quake: 15 units).
 pub const HALF_WIDTH: f32 = 0.45;
+
+/// Bodies that stop you as walls do (creatures': listed each frame by
+/// what moves them): each where it stands, how far round it reaches (m),
+/// how tall it is (m). (Walked into, the stalker and the porter let you
+/// through them, the user.)
+#[derive(Resource, Default)]
+pub struct Bodies(pub Vec<(Vec3, f32, f32)>);
 const HEIGHT: f32 = 1.8;
 pub const EYE: f32 = 1.6;
 
@@ -474,6 +481,7 @@ pub fn walk(
     streamer: Res<Streamer>,
     world: Res<WorldGen>,
     move_and_slide: MoveAndSlide,
+    bodies: Res<Bodies>,
     camera: Single<(&mut Transform, &mut FlyCam, Option<&mut Player>)>,
 ) {
     let (mut transform, mut fly, player) = camera.into_inner();
@@ -696,6 +704,26 @@ pub fn walk(
                 center.y -= down;
                 player.velocity.y = 0.0;
                 player.view_offset += down;
+            }
+        }
+    }
+    // Out of the creatures' bodies (on foot: in noclip you pass through),
+    // the way out slid along as a wall is, and what of your speed went into
+    // them lost.
+    if !fly.noclip {
+        for &(at, radius, tall) in &bodies.0 {
+            let off = Vec2::new(center.x - at.x, center.z - at.z);
+            let reach = radius + HALF_WIDTH;
+            let (low, high) = (center.y - HEIGHT * 0.5, center.y + HEIGHT * 0.5);
+            if off.length() < reach && high > at.y && low < at.y + tall {
+                let away = off.normalize_or(Vec2::X);
+                let push = Vec3::new(away.x, 0.0, away.y) * (reach - off.length());
+                center = mover.slide(center, push / total.max(1e-3), total.max(1e-3)).0;
+                let into = player.velocity.x * away.x + player.velocity.z * away.y;
+                if into < 0.0 {
+                    player.velocity.x -= away.x * into;
+                    player.velocity.z -= away.y * into;
+                }
             }
         }
     }

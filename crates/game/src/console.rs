@@ -36,7 +36,7 @@ impl Plugin for ConsolePlugin {
             .init_resource::<Spawns>()
             .add_systems(Startup, spawn)
             .add_systems(PreUpdate, (type_in, swallow).chain().after(InputSystems))
-            .add_systems(Update, (show, follow, loudness));
+            .add_systems(Update, (show, follow, loudness, clock));
     }
 }
 
@@ -202,7 +202,7 @@ const SWITCHES: [(&str, &str); 7] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 12] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 13] {
     [
         ("tame_pace", "with tame on: how fast it walks (m/s; 0, its own: the porter 0.7, else changing every 8 s)", 0.0),
         ("tame_at", "with tame on: how far from you it keeps (m)", 14.0),
@@ -212,6 +212,7 @@ fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 12] {
         ("stilt_beat", "how long the stalker's beat after each step (times its own: 0 none)", crate::rig::STILT_BEAT_SCALE),
         ("volume", "how loud (1 as made, 0 silent)", 1.0),
         ("huntpace", "how fast hunters move (1 as made)", 1.0),
+        ("timescale", "how fast the game's time runs (1 real time; 4 four times as fast, 0.25 slow)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
         ("fog", "how far the haze lets you see (m)", if args.opt("chasm") { 600.0 } else { 4500.0 }),
@@ -330,6 +331,22 @@ pub(crate) fn distance(a: &str, b: &str) -> usize {
         }
     }
     row[b.len()]
+}
+
+/// The game's time runs as fast as `timescale` says (the user: to wait less
+/// for what moves slowly, or watch it slowed). Not with the walk bot, which
+/// runs it as fast as it can (`walkspeed`). (A system that steps no more than
+/// so far in a frame, as the creatures and the cloth do, keeps to that: at
+/// a high scale and a low frame rate, it lags behind.)
+fn clock(args: Res<Args>, mut time: ResMut<Time<Virtual>>, mut last: Local<f32>) {
+    if args.opt("walkbot") {
+        return;
+    }
+    let scale = args.num("timescale", 1.0).max(0.01);
+    if scale != *last {
+        time.set_relative_speed(scale);
+        *last = scale;
+    }
 }
 
 /// The sound follows `volume` and `mute` (and is silent when nobody is

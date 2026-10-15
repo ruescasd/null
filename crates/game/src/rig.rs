@@ -619,6 +619,9 @@ pub struct Rig {
     /// how much of its pace it keeps through its beat, how long its beat,
     /// times its own): the user, to tell the one from the other.
     pub stilt_tune: (f32, f32, f32),
+    /// An arm holding something before it (the stalker's, its porter's
+    /// chain): its upper arm hanging, its forearm level, square to it.
+    pub holding: Option<usize>,
     pub bones: Vec<Bone>,
 }
 
@@ -692,6 +695,7 @@ impl Rig {
             grab: None,
             step_scale: 1.0,
             stilt_tune: (STILT_VAULT, STILT_GATHER.0, STILT_BEAT_SCALE),
+            holding: None,
             bones: Vec::new(),
         };
         rig.stilt = rig.plan.hips.1;
@@ -875,7 +879,13 @@ impl Rig {
             // on the spot against it.)
             let got = Vec2::new(self.root.x - before.x, self.root.z - before.z).length() / dt.max(1e-4);
             let wanted = Vec2::new(want.x, want.z).length();
-            if got < wanted && wanted > 1e-3 {
+            // (Short by more than a float can tell where it is: out at 1200
+            // m, at 360 frames a second, its steps of millimetres rounded
+            // short of what was asked a little, every frame, read as a
+            // wall, and its speed bled away to nothing; on the user's
+            // machine the stalker fell behind its porter, stepping small.)
+            let rounding = self.root.length() * f32::EPSILON * 4.0;
+            if got < wanted && wanted > 1e-3 && (wanted - got) * dt > rounding {
                 let k = got / wanted;
                 self.velocity.x *= k;
                 self.velocity.z *= k;
@@ -1312,6 +1322,11 @@ impl Rig {
             // (The porter's too: gripping its load over its shoulders, its
             // arms flailed, the user.)
             let hang = if self.plan.style == Style::Porter { shoulder - Vec3::Y * reach * 0.97 } else { hang };
+            // (Holding something: the forearm level before it, square to the
+            // upper arm hanging; holding, not held, the user: drawn out, the
+            // arm read as chained itself.)
+            let holds = self.holding == Some(k);
+            let hang = if holds { shoulder - Vec3::Y * arm.upper + forward * arm.lower * 0.98 } else { hang };
             let lunge = shoulder + self.head_dir * reach * 0.95;
             let hand = hang.lerp(lunge, self.crouch);
             // (Dangling, the stalker's and the porter's: sprung, weights.)
@@ -1329,7 +1344,7 @@ impl Rig {
             } else {
                 hand
             };
-            let (elbow, end) = ik(shoulder, hand, arm.upper, arm.lower, -forward + Vec3::Y * 0.2);
+            let (elbow, end) = ik(shoulder, hand, arm.upper, arm.lower, if holds { -forward - Vec3::Y * 0.5 } else { -forward + Vec3::Y * 0.2 });
             bones.push(Bone { a: shoulder, b: elbow, radius: arm.radius.0, side: right });
             bones.push(Bone { a: elbow, b: end, radius: arm.radius.1, side: right });
         }
@@ -1556,7 +1571,26 @@ mod stalker {
             }
         }
     }
+
+    /// Out in the world (1200 m from its middle), at a small time step (360
+    /// frames a second, or slowed time), the stalker goes as fast as it is
+    /// asked (its steps rounded short read as a wall, its speed bled away to
+    /// nothing, on the user's machine).
+    #[test]
+    fn keeps_its_pace_far_out() {
+        let mut rig = Rig::new(Plan::stalker(), Vec3::new(1200.0, 0.0, 900.0), std::f32::consts::FRAC_PI_2, 3, &|_, _| 0.0);
+        let start = rig.root;
+        for _ in 0..(360 * 20) {
+            let intent = Intent { velocity: Vec3::X * 1.6, look: rig.root + Vec3::new(5.0, 1.5, 0.0), ..Default::default() };
+            rig.update(1.0 / 360.0, intent, &|_, _| 0.0, &|from, step| from + step);
+        }
+        let pace = (rig.root - start).length() / 20.0;
+        assert!(pace > 1.0, "it went {pace} m/s, asked 1.6");
+    }
 }
+
+
+
 
 
 

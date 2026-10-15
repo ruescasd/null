@@ -162,6 +162,11 @@ pub(crate) struct Hunter {
     /// How long it has hung back with no way round to your back (a flight,
     /// a narrow way): past a while it comes at you anyway.
     hung: f32,
+    /// `--opt tame_line`: the line it walks (its z, where it first was).
+    line: Option<f32>,
+    /// Where it has walked, lately (each point a little on from the last,
+    /// the newest last): a kept porter's, for its stalker to follow.
+    trail: std::collections::VecDeque<Vec3>,
     /// Hit since it last thought.
     alarmed: bool,
     /// This frame's shards in it: how many, and their directions summed.
@@ -362,6 +367,21 @@ pub(super) struct Heads {
 pub(super) struct Load(Entity);
 
 /// Loads follow their porters' backs; a porter gone, its load is gone.
+/// The stalker's and the porter's bodies, listed for you to be stopped by
+/// (see `player::Bodies`): each a column round where it stands, the
+/// porter's wider, its load on its back (walked into, they let you
+/// through, the user).
+pub(super) fn bodies(hunters: Query<&Hunter>, mut bodies: ResMut<crate::player::Bodies>) {
+    bodies.0.clear();
+    for h in &hunters {
+        match h.rig.plan.style {
+            crate::rig::Style::Stilt => bodies.0.push((h.rig.root, 0.35, 2.6)),
+            crate::rig::Style::Porter => bodies.0.push((h.rig.root, 0.55, 2.4)),
+            _ => {}
+        }
+    }
+}
+
 pub(super) fn loads(mut commands: Commands, hunters: Query<&Hunter>, mut loads: Query<(Entity, &Load, &mut Transform)>) {
     for (entity, load, mut transform) in &mut loads {
         let Ok(h) = hunters.get(load.0) else {
@@ -691,7 +711,7 @@ fn spawn_hunter(
     let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0 },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, trail: std::collections::VecDeque::new() },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -1061,6 +1081,8 @@ pub(super) fn hunt(
     // (Where each is, and which way it faces: a chained pair's each walks
     // by where the other is.)
     let spots: std::collections::HashMap<Entity, (Vec3, f32)> = hunters.iter().map(|(e, h, ..)| (e, (h.rig.root, h.rig.heading))).collect();
+    // (And where a kept porter has walked: its stalker follows its steps.)
+    let trails: std::collections::HashMap<Entity, Vec<Vec3>> = hunters.iter().filter(|(.., k)| k.is_some()).filter_map(|(_, _, _, k)| k.map(|k| k.0)).filter_map(|p| hunters.get(p).ok().map(|(_, h, ..)| (p, h.trail.iter().copied().collect()))).collect();
     for (entity, mut h, mut transform, keeps) in &mut hunters {
         if h.health <= 0.0 {
             // Broken: the whole body bursts at once.
@@ -1371,10 +1393,14 @@ pub(super) fn hunt(
             // m long (16), turning
             // at each end: to judge a walk straight on.)
             if args.opt("tame_line") {
+                // (Its line through where it first was: kept to one `tame_at`
+                // off before you, it first went aslant to it, and seemed to
+                // keep turning, the user.)
+                let line = *h.line.get_or_insert(root.z);
                 let span = args.num("tame_span", 16.0);
                 let leg = (time.elapsed_secs() * pace / span).rem_euclid(2.0);
                 let way = Vec3::X * if leg < 1.0 { 1.0 } else { -1.0 };
-                let off = Vec3::Z * ((target.z + keep - root.z) / 3.0).clamp(-1.0, 1.0);
+                let off = Vec3::Z * ((line - root.z) / 3.0).clamp(-1.0, 1.0);
                 intent.velocity = (way + off).normalize_or(way) * pace;
             }
             intent.crouch = if pace < 3.0 && !stalker { 0.35 } else { 0.0 };
@@ -1759,13 +1785,30 @@ pub(super) fn hunt(
         // On a chain (see `chain.rs`): the porter goes its own way ahead;
         // its stalker keeps behind it on its track, `BEHIND` m back
         // (quicker the further it is from there, easing in), watching it.
+        // (Its first hand holding the chain, while it keeps its porter.)
+        h.rig.holding = keeps.and_then(|k| spots.get(&k.0)).map(|_| 0);
         if let Some(&(porter, heading)) = keeps.and_then(|k| spots.get(&k.0)) {
-            let spot = porter - Vec3::new(heading.sin(), 0.0, heading.cos()) * super::chain::BEHIND;
+            // (On its steps, `BEHIND` m back along the way it came: behind
+            // where it faced, it turned back on its line and the spot leapt
+            // to its far side, the stalker fell behind, the chain stretched,
+            // the user. On its steps, as it turns back the stalker waits for
+            // it to pass, then follows.)
+            let trail = keeps.and_then(|k| trails.get(&k.0));
+            let spot = trail.and_then(|t| super::chain::back_along(porter, t, super::chain::BEHIND)).unwrap_or(porter - Vec3::new(heading.sin(), 0.0, heading.cos()) * super::chain::BEHIND);
             let to = (spot - h.rig.root).with_y(0.0);
             let d = to.length();
             intent.velocity = if d < 0.25 { Vec3::ZERO } else { to / d * (d * 1.2).min(1.6) };
             intent.look = porter + Vec3::Y * 1.6;
             intent.crouch = 0.0;
+        }
+        if h.rig.plan.style == crate::rig::Style::Porter {
+            let root = h.rig.root;
+            if h.trail.back().is_none_or(|p| p.distance(root) > 0.15) {
+                h.trail.push_back(root);
+                if h.trail.len() > 80 {
+                    h.trail.pop_front();
+                }
+            }
         }
         intent.velocity *= args.num("huntpace", 1.0) * crippled;
         // (`--opt still`: its body frozen as it first stands, not a sway,
