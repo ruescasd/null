@@ -19,10 +19,10 @@ use crate::noise::hash01;
 
 /// Radius of the half-pipe, in metres.
 pub const PIPE_RADIUS: f64 = 7.0;
-/// Flat lip on each side of the pipe.
-const LIP: f64 = 3.0;
-/// Half the width of the corridor a canal occupies.
-pub const HALF_WIDTH: f64 = PIPE_RADIUS + LIP;
+/// Half the width of the corridor a canal occupies: the pipe's own (a flat
+/// dark lip along each side, 3 m wide, read as slabs laid beside it: gone,
+/// the user; the pipe's own outer facets dark instead, see `DARK_FACETS`).
+pub const HALF_WIDTH: f64 = PIPE_RADIUS;
 /// How far the canal's outer walls reach below its rim.
 const OUTER_DEPTH: f64 = 70.0;
 /// Facets across the half-pipe.
@@ -31,7 +31,9 @@ const FACETS: usize = 24;
 const SEGMENT: f64 = 8.0;
 
 const PIPE_ALBEDO: f32 = 0.27;
-const LIP_ALBEDO: f32 = 0.06;
+/// The pipe's outermost facets each side, up to its rim, dark.
+const DARK_FACETS: usize = 3;
+const DARK_ALBEDO: f32 = 0.06;
 const WALL_ALBEDO: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug)]
@@ -232,13 +234,15 @@ impl Canals {
     ) {
         let perp = self.lines[i].perp;
         // The profile across the canal: (offset, height above floor, albedo).
-        let mut profile = vec![(-HALF_WIDTH, PIPE_RADIUS, LIP_ALBEDO), (-PIPE_RADIUS, PIPE_RADIUS, LIP_ALBEDO)];
+        // (Each point's albedo is the facet's that starts at it: the
+        // outermost each side dark.)
+        let mut profile = vec![(-PIPE_RADIUS, PIPE_RADIUS, DARK_ALBEDO)];
         for f in 1..FACETS {
             let theta = std::f64::consts::PI * (1.0 + f as f64 / FACETS as f64);
-            profile.push((PIPE_RADIUS * theta.cos(), PIPE_RADIUS * (1.0 + theta.sin()), PIPE_ALBEDO));
+            let dark = f < DARK_FACETS || f >= FACETS - DARK_FACETS;
+            profile.push((PIPE_RADIUS * theta.cos(), PIPE_RADIUS * (1.0 + theta.sin()), if dark { DARK_ALBEDO } else { PIPE_ALBEDO }));
         }
-        profile.push((PIPE_RADIUS, PIPE_RADIUS, LIP_ALBEDO));
-        profile.push((HALF_WIDTH, PIPE_RADIUS, LIP_ALBEDO));
+        profile.push((PIPE_RADIUS, PIPE_RADIUS, DARK_ALBEDO));
 
         let world = |center: DVec2, f: f64, (o, h, _): (f64, f64, f32)| {
             let p = center + perp * o;
@@ -258,18 +262,13 @@ impl Canals {
         };
 
         // Smooth shading: each profile point gets the curved surface's
-        // normal there (towards the pipe's axis), the lips face straight up.
-        let profile_normal = |(o, h, _): (f64, f64, f32), on_lip: bool| {
-            if on_lip {
-                return Vec3::Y;
-            }
+        // normal there (towards the pipe's axis).
+        let profile_normal = |(o, h, _): (f64, f64, f32)| {
             let n = DVec2::new(-o, PIPE_RADIUS - h).normalize_or_zero();
             Vec3::new((perp.x * n.x) as f32, n.y as f32, (perp.y * n.x) as f32).normalize_or(Vec3::Y)
         };
-        let last = profile.len() - 1;
-        for (index, w) in profile.windows(2).enumerate() {
+        for w in profile.windows(2) {
             let (p0, p1) = (w[0], w[1]);
-            let lip = index == 0 || index + 1 == last;
             let quad = [world(a, floor_a, p0), world(a, floor_a, p1), world(b, floor_b, p1), world(b, floor_b, p0)];
             let mid_offset = (p0.0 + p1.0) * 0.5;
             let mid = (a + b) * 0.5 + perp * mid_offset;
@@ -286,7 +285,7 @@ impl Canals {
             }
             let bottom_ness = 1.0 - (p0.1 + p1.1) as f32 * 0.5 / PIPE_RADIUS as f32;
             let ao = 1.0 - 0.35 * bottom_ness.max(0.0);
-            let (n0, n1) = (profile_normal(p0, lip), profile_normal(p1, lip));
+            let (n0, n1) = (profile_normal(p0), profile_normal(p1));
             push_quad_smooth(mesh, quad, [n0, n1, n1, n0], normal, p0.2, [ao; 4]);
         }
 
