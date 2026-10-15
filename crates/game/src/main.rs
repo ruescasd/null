@@ -19,6 +19,7 @@ mod player;
 mod rig;
 mod rope;
 mod cloth;
+mod fabric;
 mod structures;
 mod terrain;
 

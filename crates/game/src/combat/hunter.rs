@@ -194,6 +194,11 @@ enum Gesture {
 }
 
 impl Hunter {
+    /// Its rig (for what it wears: see `clothlab.rs`).
+    pub(super) fn rig(&self) -> &Rig {
+        &self.rig
+    }
+
     /// The biped candidates (the stalker, the porter) make no sound till
     /// they have their own: the hunters' coloured how they read (the user).
     fn silent(&self) -> bool {
@@ -336,6 +341,13 @@ pub(super) struct Heads {
     legs: (Handle<Mesh>, Handle<Mesh>),
     /// The porter's load: a plain block (a unit cube, scaled), pale, matte.
     load: (Handle<Mesh>, Handle<StandardMaterial>),
+    /// The porter's body pieces, other than shards (`--set piece`): 4 rods,
+    /// 6 spheres (the two the user keeps for it, till one is settled on, or
+    /// two kinds of porter); each a blade the size of a shard and a knot (a
+    /// sphere's blade as round as the shard is wide: see `round`). (Blocks,
+    /// tiles, pebbles and wedges, tried for it, are in the notes on pieces.)
+    rods: (Handle<Mesh>, Handle<Mesh>),
+    spheres: (Handle<Mesh>, Handle<Mesh>),
 }
 
 /// A porter's load, following its back (see `loads`).
@@ -424,7 +436,14 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
     // teeth, reaching back under the skull.)
     let angler_jaw = rings_mesh(&[(-0.2, 0.7, 0.55, -0.35), (0.3, 1.0, 0.78, -0.48), (0.75, 1.1, 0.62, -0.32), (1.05, 1.05, 0.42, -0.08), (1.25, 0.9, 0.25, 0.25)]);
     let beast_jaw = meshes.add(beast_jaw);
+    // (Rods: thin and straight, taut, the shard's footprint, from just below
+    // its root to its length along +Y, so a shard's scaling fits them;
+    // spheres.)
+    let rods = (meshes.add(Cylinder::new(0.012, 0.75).mesh().resolution(6).build().translated_by(Vec3::Y * 0.325)), meshes.add(Cylinder::new(0.035, 0.5).mesh().resolution(6).build()));
+    let spheres = (meshes.add(Sphere::new(0.025).mesh().ico(2).unwrap()), meshes.add(Sphere::new(0.18).mesh().ico(2).unwrap()));
     commands.insert_resource(Heads {
+        rods,
+        spheres,
         load: (meshes.add(Cuboid::new(1.0, 1.0, 1.0)), materials.add(StandardMaterial { base_color: Color::srgb(0.78, 0.77, 0.74), perceptual_roughness: 0.9, ..default() })),
         beast: vec![(meshes.add(beast), beast_jaw), (meshes.add(angler), meshes.add(angler_jaw))],
         biped: (meshes.add(biped), meshes.add(biped_jaw)),
@@ -675,6 +694,23 @@ fn spawn_hunter(
     // Its body: shards along every bone, thicker bones more and bigger,
     // with pale markings.
     let seed = seed;
+    // (`--set piece=4` or 6: the porter built of rods or of spheres instead
+    // of shards: the shape of its pieces as its own (the user). Its
+    // markings stay shards.)
+    let piece = if porter { args.num("piece", 0.0) as i32 } else { 0 };
+    let (blade, knot) = match piece {
+        0 => (assets.shard.clone(), assets.swarmer.clone()),
+        4 => heads.rods.clone(),
+        6 => heads.spheres.clone(),
+        k => panic!("--set piece={k}: the porter's pieces are 0 (shards), 4 (rods) or 6 (spheres); the others were taken out (their recipes are in the notes)"),
+    };
+    // (Spheres stay round: a blade scaled as a shard would be squashed into
+    // a disc or drawn into a sausage; a sphere as wide as the shard.)
+    // (`--set sphere_size`: the spheres smaller than the parts they sit
+    // on, less bulky, the user: 0.85 of them.)
+    let round = piece == 6;
+    let shrink = if round { args.num("sphere_size", 0.85) } else { 1.0 };
+    let shape = |scale: Vec3| if round { Vec3::splat(scale.x * shrink) } else { scale };
     let pale = |commands: &mut Commands, bone: usize, along: f32, offset: Vec3, dir: Vec3, length: f32, width: f32| {
         commands.spawn((
             Part { hunter, bone, along, offset, rotation: Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y)), velocity: Vec3::ZERO, stiffness: if bone == 4 { RIGID } else { STIFFNESS * 1.5 } },
@@ -734,10 +770,10 @@ fn spawn_hunter(
                 let offset = Vec3::new(a.cos(), 0.0, a.sin()) * bone.radius * 0.3;
                 let rotation = Quat::from_euler(EulerRot::XYZ, r(2) * 0.3, r(3) * 6.0, r(4) * 0.3);
                 let width = bone.radius * (0.9 + 0.4 * (r(5) + 0.5)) / 0.025;
-                let scale = Vec3::new(width, length * 0.6 / 0.75, width);
+                let scale = shape(Vec3::new(width, length * 0.6 / 0.75, width));
                 commands.spawn((
                     Part { hunter, bone: i, along: along - 0.3 / count as f32, offset, rotation, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
-                    Mesh3d(assets.shard.clone()),
+                    Mesh3d(blade.clone()),
                     MeshMaterial3d(assets.dark.clone()),
                     Transform::from_translation(bone.a.lerp(bone.b, along)).with_scale(scale),
                 ));
@@ -751,7 +787,7 @@ fn spawn_hunter(
                 }
                 commands.spawn((
                     Part { hunter, bone: i, along: 1.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: LIMB_STIFFNESS },
-                    Mesh3d(assets.swarmer.clone()),
+                    Mesh3d(knot.clone()),
                     MeshMaterial3d(assets.dark.clone()),
                     Transform::from_translation(bone.b).with_scale(Vec3::splat(bone.radius * 3.2)),
                 ));
@@ -887,8 +923,8 @@ fn spawn_hunter(
                 offset.z *= 0.45;
             }
             // Knots, and now and then a long blade swept back.
-            let blade = r(3) > 0.3;
-            let rotation = if blade {
+            let long = r(3) > 0.3;
+            let rotation = if long {
                 Quat::from_rotation_arc(Vec3::Y, Vec3::new(a.cos() * 0.6, -0.8, a.sin() * 0.6).normalize())
             } else {
                 Quat::from_euler(EulerRot::XYZ, r(4) * 6.0, r(5) * 6.0, r(6) * 6.0)
@@ -897,7 +933,7 @@ fn spawn_hunter(
             let taper = if i == 3 { 1.25 - 0.6 * along } else { 1.0 };
             let size = bone.radius * (0.9 + 0.8 * (r(7) + 0.5)) * taper;
             let p = bone.a.lerp(bone.b, along) + bone.rotation() * offset;
-            let (mesh, scale) = if blade { (assets.shard.clone(), Vec3::new(size * 3.0, size * 1.4, size * 3.0)) } else { (assets.swarmer.clone(), Vec3::splat(size * 1.6)) };
+            let (mesh, scale) = if long { (blade.clone(), shape(Vec3::new(size * 3.0, size * 1.4, size * 3.0))) } else { (knot.clone(), Vec3::splat(size * 1.6 * shrink)) };
             commands.spawn((
                 Part { hunter, bone: i, along, offset, rotation, velocity: Vec3::ZERO, stiffness: STIFFNESS },
                 Mesh3d(mesh),
@@ -1698,7 +1734,11 @@ pub(super) fn hunt(
         // to 0.8 (both forelimbs lost, it drags itself on at a third).
         let crippled: f32 = (0..h.rig.plan.legs.len()).filter(|&i| h.rig.is_lost(i)).map(|i| if h.rig.plan.legs[i].root == crate::rig::Root::Chest { 0.6 } else { 0.8 }).product();
         intent.velocity *= args.num("huntpace", 1.0) * crippled;
-        h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
+        // (`--opt still`: its body frozen as it first stands, not a sway,
+        // to see what moves of its own on it: its cloak.)
+        if !(args.opt("still") && !h.rig.bones.is_empty()) {
+            h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
+        }
         // Your body stops it, as a wall does (what is built was all it
         // met: a pounce went through you): it comes no nearer than its reach,
         // a harrow's jaws in your face, not through it, and loses its speed at
