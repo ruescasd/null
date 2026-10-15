@@ -30,6 +30,7 @@ use crate::{
 mod hunter;
 mod clothlab;
 mod slab;
+mod chain;
 /// A hunter, for what counts them from outside (the benches).
 pub(crate) use hunter::Hunter as HunterMarker;
 mod bishop;
@@ -91,7 +92,7 @@ impl Plugin for CombatPlugin {
             )
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
             .add_systems(Update, footsteps.after(crate::player::walk))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }

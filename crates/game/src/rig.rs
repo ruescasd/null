@@ -205,6 +205,22 @@ const STILT_HEAVE: (f32, f32) = (0.18, 0.08);
 /// stance (of the cycle), then turns on (rad) as it swings, pulling it:
 /// clockwise for the left, counter for the right.
 const STILT_HAUL: (f32, f32, f32) = (0.08, 0.15, 0.18);
+/// The stalker through its beat: how much of its pace it keeps (creeping
+/// on, not stopped dead), and how quickly it eases to it and back (per s):
+/// stopped and started at once, it went in fits and starts (the user; the
+/// porter's lesson: motion switched on and off reads as a lurch).
+pub(crate) const STILT_GATHER: (f32, f32) = (0.45, 10.0);
+/// The stalker's beat after each footfall: at least, and up to how much
+/// more (s; 0.12 and 0.23 first, too erratic, the user), times how much
+/// (`stilt_beat`, the user's 0.9).
+const STILT_BEAT: (f32, f32) = (0.17, 0.12);
+pub(crate) const STILT_BEAT_SCALE: f32 = 0.9;
+/// How much of its swing a stilt takes to let go of the body (it rising
+/// smoothly over the stilt it stands on); and how far it rises over the
+/// stilt it stands on, from where it sank between them, of all the way (its
+/// knee bent the rest: `stilt_vault`, the user's 0.3).
+const STILT_LET_GO: f32 = 0.4;
+pub(crate) const STILT_VAULT: f32 = 0.3;
 /// The porter's body, heavier under its load (the stalker's swayed too much
 /// for its mass, the user): its chest's spring (stiffer, more damped, a
 /// smaller lean), its heave (m), its haul (wound back, turned on: rad), its
@@ -550,8 +566,12 @@ pub struct Rig {
     head_snap: bool,
     /// A beat after each foot lands, before the next step (s left): a
     /// creature that struggles to move gathers itself for each stride (the
-    /// user; the stalker).
+    /// user; the stalker); and how much of its pace its body keeps, easing
+    /// to the beat and out of it (see `STILT_GATHER`).
     beat: f32,
+    gather: f32,
+    /// How high the stalker's hips were last, standing on both stilts.
+    dip: f32,
     dt: f32,
     /// Steps each foot has taken (to vary each one).
     steps: Vec<u32>,
@@ -594,6 +614,11 @@ pub struct Rig {
     /// steps at the same pace are longer ones (the user: slower steps of
     /// greater reach; slowing its pace only made them shorter).
     pub step_scale: f32,
+    /// The stalker's walk, live (`stilt_vault`, `stilt_creep`,
+    /// `stilt_beat` at the console: how far it rises over the stilt it stands on,
+    /// how much of its pace it keeps through its beat, how long its beat,
+    /// times its own): the user, to tell the one from the other.
+    pub stilt_tune: (f32, f32, f32),
     pub bones: Vec<Bone>,
 }
 
@@ -638,6 +663,8 @@ impl Rig {
             stilt: 0.0,
             hands: Vec::new(),
             beat: 0.0,
+            gather: 1.0,
+            dip: 0.0,
             sway: None,
             head_at: None,
             head_snap: false,
@@ -664,9 +691,11 @@ impl Rig {
             reared: 0.0,
             grab: None,
             step_scale: 1.0,
+            stilt_tune: (STILT_VAULT, STILT_GATHER.0, STILT_BEAT_SCALE),
             bones: Vec::new(),
         };
         rig.stilt = rig.plan.hips.1;
+        rig.dip = rig.plan.hips.1;
         let (offsets, swing, stride, _) = rig.plan.gait(0.0);
         rig.local = offsets.clone();
         (rig.offsets, rig.swing, rig.stride) = (offsets, swing, stride);
@@ -835,8 +864,11 @@ impl Rig {
                 self.heading += turn.clamp(-self.plan.turn * dt, self.plan.turn * dt);
             }
             let before = self.root;
-            // (Gathering itself between steps, it holds where it is.)
-            let want = if self.beat > 0.0 { Vec3::ZERO } else { self.velocity * self.surge() };
+            // (Gathering itself between steps, it all but holds where it is,
+            // easing to it and out of it.)
+            let creep = if self.beat > 0.0 { self.stilt_tune.1 } else { 1.0 };
+            self.gather += (creep - self.gather) * (1.0 - (-STILT_GATHER.1 * dt).exp());
+            let want = self.velocity * self.surge() * self.gather;
             self.root = sweep(self.root, (want + self.knock) * dt);
             self.root.y = ground(self.root.x, self.root.z);
             // (Stopped by a wall, it goes no faster than it gets: not running
@@ -925,8 +957,10 @@ impl Rig {
         if self.airborne.is_none() && (speed > 0.3 || any_swinging) && !held {
             // The tempo drifts a little.
             let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
-            // (Each stride a little quicker or slower, by up to 15%.)
-            let tempo = 0.85 + 0.3 * self.vary(0);
+            // (Each stride a little quicker or slower, by up to 15%; the
+            // stalker's by up to 10%, less erratic, the user.)
+            let spread = if self.plan.style == Style::Stilt { 0.2 } else { 0.3 };
+            let tempo = 1.0 - spread * 0.5 + spread * self.vary(0);
             let next = self.phase + speed.max(1.0) / self.stride * drift * tempo * dt;
             if next >= 1.0 {
                 self.strides += 1;
@@ -1008,7 +1042,12 @@ impl Rig {
                 }
                 continue;
             }
-            let in_swing = local < self.swing && (speed > 0.3 || self.feet[i].swinging);
+            // (No step begun in a beat: its clock stopped, a foot just down
+            // on the edge of its swing, the pace wavering, lifted and landed
+            // again and again, each landing a new beat, the other foot's
+            // turn never coming: one stilt stepping in place, the body
+            // creeping off from the other, sinking to the ground, the user.)
+            let in_swing = local < self.swing && (speed > 0.3 || self.feet[i].swinging) && (self.feet[i].swinging || !held);
             let foot = &mut self.feet[i];
             if in_swing {
                 if !foot.swinging {
@@ -1037,7 +1076,7 @@ impl Rig {
                 // (A struggling walker: a beat once the foot is down, each
                 // its own length.)
                 if self.plan.style == Style::Stilt && speed > 0.3 {
-                    self.beat = 0.12 + 0.23 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61e);
+                    self.beat = (STILT_BEAT.0 + STILT_BEAT.1 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61e)) * self.stilt_tune.2;
                 }
             } else if speed <= 0.3 && foot.planted.distance(home) > self.stride * 0.3 {
                 // Standing with a foot out of place: a settling step.
@@ -1048,23 +1087,47 @@ impl Rig {
         }
 
         // On stilts: the hips as high as the stilts it stands on reach (the
-        // lowest, standing on both), vaulting over each.
+        // lowest, standing on both), vaulting over each. A stilt lifting lets
+        // go of it over the first of its swing (`STILT_LET_GO`): let go at
+        // once, the body sprang up at every step, as with hiccups (the user).
         if self.plan.style == Style::Stilt {
             let fwd = self.forward_of(self.hips_yaw);
             let right = Vec3::new(fwd.z, 0.0, -fwd.x);
-            let held = self
-                .plan
-                .legs
-                .iter()
-                .zip(&self.feet)
-                .filter(|(_, f)| !f.swinging)
-                .map(|(leg, f)| {
-                    let hip = self.root + right * leg.side;
-                    let d = Vec2::new(f.planted.x - hip.x, f.planted.z - hip.z).length();
-                    let reach = leg.upper + leg.lower;
-                    f.planted.y - self.root.y + (reach * reach - d * d).max(0.0).sqrt()
-                })
-                .fold(f32::MAX, f32::min);
+            // (Each stilt's reach: a lifting one's from where it lifted.)
+            let reach = |i: usize| {
+                let (leg, f) = (&self.plan.legs[i], &self.feet[i]);
+                let hip = self.root + right * leg.side;
+                let at = if f.swinging { f.from } else { f.planted };
+                let d = Vec2::new(at.x - hip.x, at.z - hip.z).length();
+                let reach = leg.upper + leg.lower;
+                at.y - self.root.y + (reach * reach - d * d).max(0.0).sqrt()
+            };
+            let standing = (0..self.plan.legs.len()).filter(|&i| !self.feet[i].swinging).map(reach).fold(f32::MAX, f32::min);
+            // (A lifting stilt holding it down eases up to the reach of the
+            // one it stands on, over the first of its swing.)
+            let lifting = (0..self.plan.legs.len()).filter_map(|i| self.stepping(i).map(|s| (i, s))).map(|(i, s)| {
+                let (h, t) = (reach(i), (s / STILT_LET_GO).min(1.0));
+                if standing == f32::MAX { f32::MAX } else { h + (standing - h).max(0.0) * t * t * (3.0 - 2.0 * t) }
+            });
+            let held = lifting.fold(standing, f32::min);
+            // (Rising only so far over the stilt it stands on, from where it
+            // sank between them, its knee bent: rising all the way, it rose
+            // too much at each step, the user. Sinking less instead held it
+            // higher than its trailing stilt could reach.)
+            let top = (0..self.plan.legs.len()).filter(|&i| !self.feet[i].swinging).map(reach).fold(f32::MIN, f32::max);
+            // (On both stilts it never rises, only sinks as they make it:
+            // recomputing its height from both as a foot came down, it rose
+            // a second time at each landing, the user. It rises only on one,
+            // over it, from where it was as it lifted the other.)
+            let held = if self.feet.iter().all(|f| !f.swinging) {
+                let held = held.min(self.stilt);
+                self.dip = held;
+                held
+            } else if top > f32::MIN {
+                held.min(self.dip + (top - self.dip).max(0.0) * self.stilt_tune.0)
+            } else {
+                held
+            };
             if held < f32::MAX {
                 self.stilt += (held - self.stilt) * (1.0 - (-dt * 20.0).exp());
             }
@@ -1429,3 +1492,72 @@ impl Rig {
         self.root.y += 0.05;
     }
 }
+
+
+
+
+
+
+
+#[cfg(test)]
+mod stalker {
+    use super::*;
+
+    /// Walking on flat ground, the stalker's planted stilts stay on the
+    /// ground and within their reach, its hips high (held higher than its
+    /// trailing stilt could reach, it fell into the splits, the user).
+    #[test]
+    fn stilts_hold() {
+        for (seed, pace) in [(1, 1.0), (3, 1.0), (7, 1.0), (11, 1.6), (13, 1.6)] {
+            let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, seed, &|_, _| 0.0);
+            for k in 0..1000 {
+                let intent = Intent { velocity: Vec3::Z * pace, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
+                rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
+                for i in 0..rig.plan.legs.len() {
+                    if rig.feet[i].swinging {
+                        continue;
+                    }
+                    let (leg, foot) = (rig.plan.legs[i], rig.feet[i].planted);
+                    assert!(foot.y.abs() < 1e-3, "seed {seed}: a planted foot {} m off the ground", foot.y);
+                    let reach = rig.bones[5 + 2 * i].a.distance(foot) / (leg.upper + leg.lower);
+                    assert!(reach < 1.01, "seed {seed}: a stilt at {reach} of its reach");
+                }
+                let hips = rig.anchor(Root::Hips).y;
+                assert!(k < 300 || hips > 1.1, "seed {seed}, at {pace} m/s: its hips sank to {hips} m");
+            }
+        }
+    }
+
+    /// Circling, its pace wavering a little, the stalker steps with each
+    /// stilt in turn (its clock stopped in a beat, a foot on the edge of its
+    /// swing lifted and landed again and again, the other's turn never
+    /// coming, and it sank to the ground: the user, with a log).
+    #[test]
+    fn stilts_take_turns() {
+        for seed in 1..20u32 {
+            let mut rig = Rig::new(Plan::stalker(), Vec3::new(6.0, 0.0, 0.0), 0.0, seed, &|_, _| 0.0);
+            let (mut last, mut run) = (usize::MAX, 0);
+            let mut was = [false, false];
+            for k in 0..3000 {
+                let out = Vec3::new(rig.root.x, 0.0, rig.root.z).normalize_or(Vec3::X);
+                let around = Vec3::new(-out.z, 0.0, out.x);
+                let wobble = 1.0 + 0.04 * (hash01(seed as i32, k, 0, 0x777) - 0.5);
+                let intent = Intent { velocity: (around + out * ((6.0 - rig.root.length()) / 3.0).clamp(-1.0, 1.0)).normalize() * wobble, look: Vec3::Y * 1.5, ..Default::default() };
+                rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
+                for i in 0..2 {
+                    let s = rig.feet[i].swinging;
+                    if s && !was[i] {
+                        run = if i == last { run + 1 } else { 1 };
+                        last = i;
+                        assert!(run <= 2, "seed {seed}: one stilt stepped {run} times running");
+                    }
+                    was[i] = s;
+                }
+            }
+        }
+    }
+}
+
+
+
+

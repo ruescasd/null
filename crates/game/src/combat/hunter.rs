@@ -528,7 +528,17 @@ pub(super) fn gather(
                 {
                     at = q;
                 }
-                spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation, None);
+                // (`--opt chained`: a porter kept on a chain by a stalker,
+                // beside it to start, behind it once they walk: see
+                // `chain.rs`.)
+                if args.opt("chained") {
+                    let porter = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation, Some("porter"));
+                    let ahead = (player.translation - at).with_y(0.0).normalize_or(Vec3::Z).cross(Vec3::Y);
+                    let stalker = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k + 1, at + ahead * 2.0, player.translation, Some("stalker"));
+                    commands.entity(stalker).insert(super::chain::Keeps(porter));
+                } else {
+                    spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation, None);
+                }
             }
             director.next_gather = 4.0;
         }
@@ -633,14 +643,14 @@ fn spawn_hunter(
     centre: Vec3,
     player: Vec3,
     want: Option<&str>,
-) {
+) -> Entity {
     // (`want`: a kind asked for, at the console: harrow, angler, biped,
-    // sprawl.)
+    // sprawl; or for a pair: stalker, porter.)
     // A biped, or a beast: a harrow (a narrow head, two rows of
     // needles) or an angler (a huge underbite jaw, uneven needles leaning
     // in). `--opt biped`, `harrow`, `angler`, or `beast` (either beast).
     let kind = if let Some(want) = want {
-        if want == "biped" { Kind::Biped } else { Kind::Beast }
+        if matches!(want, "biped" | "stalker" | "porter") { Kind::Biped } else { Kind::Beast }
     } else if args.opt("beast") || args.opt("harrow") || args.opt("angler") {
         Kind::Beast
     } else if args.opt("biped") || hash01(seed as i32, 0, 0, 0x6b1) < 1.0 / 3.0 {
@@ -1006,6 +1016,7 @@ fn spawn_hunter(
             ));
         }
     }
+    hunter
 }
 
 /// Hunters stalk and attack; a broken one bursts.
@@ -1020,7 +1031,7 @@ pub(super) fn hunt(
     mut director: ResMut<Director>,
     ichor: Res<ichor::Ichor>,
     mut player: Single<(&Transform, &mut Player), Without<Hunter>>,
-    mut hunters: Query<(Entity, &mut Hunter, &mut Transform), Without<Player>>,
+    mut hunters: Query<(Entity, &mut Hunter, &mut Transform, Option<&super::chain::Keeps>), Without<Player>>,
     parts: Query<(Entity, &Part, &Transform), (Without<Hunter>, Without<Player>)>,
     eyes: Query<(Entity, &Eye)>,
     mut gun: ResMut<Gun>,
@@ -1047,7 +1058,10 @@ pub(super) fn hunt(
     if log {
         *said = 1.0;
     }
-    for (entity, mut h, mut transform) in &mut hunters {
+    // (Where each is, and which way it faces: a chained pair's each walks
+    // by where the other is.)
+    let spots: std::collections::HashMap<Entity, (Vec3, f32)> = hunters.iter().map(|(e, h, ..)| (e, (h.rig.root, h.rig.heading))).collect();
+    for (entity, mut h, mut transform, keeps) in &mut hunters {
         if h.health <= 0.0 {
             // Broken: the whole body bursts at once.
             let at = h.rig.chest();
@@ -1316,6 +1330,9 @@ pub(super) fn hunt(
         // else: slower, and so further, at the same pace; live, at the
         // console too.)
         h.rig.step_scale = args.num("porter_step", 2.0);
+        // (`stilt_vault`, `stilt_creep`, `stilt_beat`: the stalker's walk,
+        // live: see `Rig::stilt_tune`.)
+        h.rig.stilt_tune = (args.num("stilt_vault", crate::rig::STILT_VAULT), args.num("stilt_creep", crate::rig::STILT_GATHER.0), args.num("stilt_beat", crate::rig::STILT_BEAT_SCALE));
         if !matches!(h.stance, Stance::Reach | Stance::Haul(_)) {
             h.rig.grab = None;
         }
@@ -1335,14 +1352,19 @@ pub(super) fn hunt(
                 h.stance = Stance::Stalk;
                 h.timer = 0.4;
             }
-        } else if args.opt("tame") {
+        } else if args.opt("tame") || matches!(h.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter) {
+            // (The stalker and the porter never hunt: their only motion, for
+            // now, what has been tuned in tame mode, the user.)
             // (`--opt tame`, for captures: it circles at a distance, side on,
             // its pace changing every 8 s: prowl, trot, gallop.)
             let keep = args.num("tame_at", 14.0);
             let fixed = args.num("tame_pace", 0.0);
-            // (The porter at its own walking pace, the user's: 0.7 m/s.)
+            // (The porter at its own walking pace, the user's: 0.7 m/s; the
+            // stalker at its own, 1 m/s, upright: at the hounds' paces,
+            // crouched, its gait was wrong, the user.)
             let porter = h.rig.plan.style == crate::rig::Style::Porter;
-            let pace = if fixed > 0.0 { fixed } else if porter { 0.7 } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
+            let stalker = h.rig.plan.style == crate::rig::Style::Stilt;
+            let pace = if fixed > 0.0 { fixed } else if porter { 0.7 } else if stalker { 1.0 } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
             intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
             // (`--opt tame_line`: back and forth along a straight line across
             // in front of you instead (along x, `tame_at` off in z), `tame_span`
@@ -1355,7 +1377,7 @@ pub(super) fn hunt(
                 let off = Vec3::Z * ((target.z + keep - root.z) / 3.0).clamp(-1.0, 1.0);
                 intent.velocity = (way + off).normalize_or(way) * pace;
             }
-            intent.crouch = if pace < 3.0 { 0.35 } else { 0.0 };
+            intent.crouch = if pace < 3.0 && !stalker { 0.35 } else { 0.0 };
         } else if sprawl {
             // The flanker: it never comes at you from before you. Hunting you,
             // it runs low and fast round to your back and keeps there as you
@@ -1734,26 +1756,22 @@ pub(super) fn hunt(
         // legs lost slow it: each forelimb to 0.6 of its pace, each hind leg
         // to 0.8 (both forelimbs lost, it drags itself on at a third).
         let crippled: f32 = (0..h.rig.plan.legs.len()).filter(|&i| h.rig.is_lost(i)).map(|i| if h.rig.plan.legs[i].root == crate::rig::Root::Chest { 0.6 } else { 0.8 }).product();
+        // On a chain (see `chain.rs`): the porter goes its own way ahead;
+        // its stalker keeps behind it on its track, `BEHIND` m back
+        // (quicker the further it is from there, easing in), watching it.
+        if let Some(&(porter, heading)) = keeps.and_then(|k| spots.get(&k.0)) {
+            let spot = porter - Vec3::new(heading.sin(), 0.0, heading.cos()) * super::chain::BEHIND;
+            let to = (spot - h.rig.root).with_y(0.0);
+            let d = to.length();
+            intent.velocity = if d < 0.25 { Vec3::ZERO } else { to / d * (d * 1.2).min(1.6) };
+            intent.look = porter + Vec3::Y * 1.6;
+            intent.crouch = 0.0;
+        }
         intent.velocity *= args.num("huntpace", 1.0) * crippled;
         // (`--opt still`: its body frozen as it first stands, not a sway,
         // to see what moves of its own on it: its cloak.)
         if !(args.opt("still") && !h.rig.bones.is_empty()) {
             h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
-        }
-        // Your body stops it, as a wall does (what is built was all it
-        // met: a pounce went through you): it comes no nearer than its reach,
-        // a harrow's jaws in your face, not through it, and loses its speed at
-        // you; a pounce slams into you and drops.
-        let feet = target - Vec3::Y * crate::player::EYE;
-        let reach = crate::player::HALF_WIDTH + if beast { 0.9 } else { 0.4 };
-        let off = (h.rig.root - feet).with_y(0.0);
-        if off.length() < reach && h.rig.root.y < feet.y + 1.8 && h.rig.root.y + 1.5 > feet.y {
-            let out = off.normalize_or(-toward);
-            h.rig.root = sweep(h.rig.root, out * (reach - off.length()));
-            let into = h.rig.velocity.dot(-out);
-            if into > 0.0 {
-                h.rig.velocity += out * into;
-            }
         }
         if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {
             info!("huntlog: {} went through something built, from {:.1} to {:.1}", entity.index_u32(), before, h.rig.root);

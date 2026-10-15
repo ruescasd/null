@@ -202,11 +202,14 @@ const SWITCHES: [(&str, &str); 7] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 9] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 12] {
     [
         ("tame_pace", "with tame on: how fast it walks (m/s; 0, its own: the porter 0.7, else changing every 8 s)", 0.0),
         ("tame_at", "with tame on: how far from you it keeps (m)", 14.0),
         ("porter_step", "how long the porter's steps take (times its own: longer, slower and further at the same pace)", 2.0),
+        ("stilt_vault", "how far the stalker rises over the stilt it stands on (of all the way: 0 level, 1 all of it)", crate::rig::STILT_VAULT),
+        ("stilt_creep", "how much of its pace the stalker keeps through its beat after each step (0 stopped, 1 all)", crate::rig::STILT_GATHER.0),
+        ("stilt_beat", "how long the stalker's beat after each step (times its own: 0 none)", crate::rig::STILT_BEAT_SCALE),
         ("volume", "how loud (1 as made, 0 silent)", 1.0),
         ("huntpace", "how fast hunters move (1 as made)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),
