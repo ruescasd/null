@@ -194,7 +194,7 @@ const PORTER_REST: ((f32, f32), f32) = ((0.06, 0.12), 0.35);
 /// back does (sprung, bobbing of itself, it did not fit a massive thing,
 /// the user); its weight in the body instead: at each footfall the chest
 /// is jolted down (m/s).
-const LOAD_SIZE: Vec3 = Vec3::new(0.55, 0.75, 0.3);
+pub(crate) const LOAD_SIZE: Vec3 = Vec3::new(0.55, 0.75, 0.3);
 const LOAD_JOLT: f32 = 0.5;
 /// On stilts, its body throws itself into each step (it leaned back as if
 /// dragged by its legs, the user): moving, its chest leads (m at its pace);
