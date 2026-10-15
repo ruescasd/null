@@ -129,8 +129,8 @@ pub(super) fn sheets(
 /// round the body it goes (radians, each side of its back: at its throat,
 /// all but its clasp's gap at the front; at its hem, open wider); how much
 /// further out than the body's pieces it is made, and how much wider at its
-/// hem; how many rows it takes to widen from round its neck to round its
-/// shoulders; how far its collar stands off the neck, and how far up it;
+/// hem; how far down it widens from round its neck to round its shoulders
+/// (m); how far its collar stands off the neck, and how far up it;
 /// how far under its load is off the load (m); how long it hangs, still,
 /// before it is shown (frames of 1/60 s).
 const ACROSS: usize = 28;
@@ -139,7 +139,7 @@ const LENGTH: f32 = 1.45;
 const SPAN: (f32, f32) = (3.04, 2.3);
 const LOOSE: f32 = 0.04;
 const BELL: f32 = 0.5;
-const YOKE: f32 = 3.0;
+const YOKE: f32 = 0.207;
 const COLLAR: f32 = 0.03;
 const NAPE: f32 = 0.06;
 const UNDER: f32 = 0.015;
@@ -235,7 +235,7 @@ fn cut(rig: &Rig) -> Option<(Fabric, Vec<(u32, Hold, Vec3)>)> {
         let a = std::f32::consts::PI + span * (2.0 * c as f32 / (ACROSS - 1) as f32 - 1.0);
         let radius = girth * (1.0 + BELL * r as f32 / DOWN as f32);
         let body = chest + down * r as f32 * row + front * a.cos() * radius + side * a.sin() * radius;
-        let t = (r as f32 / YOKE).min(1.0);
+        let t = (r as f32 * row / YOKE).min(1.0);
         (nape + throat * a.cos() * collar + round * a.sin() * collar).lerp(body, t * (2.0 - t))
     };
     // Under its load: on the load's underside, between it and the back,
@@ -254,7 +254,10 @@ fn cut(rig: &Rig) -> Option<(Fabric, Vec<(u32, Hold, Vec3)>)> {
             Vec3::new(p.x, p.y.max(floor + 0.05), p.z)
         })
         .collect();
-    let mut fabric = Fabric::sheet(ACROSS, DOWN, |c, r| points[r * ACROSS + c], Weave { thickness: 0.05, ..Weave::default() });
+    // (A tenth of the frame for one cape was too much, the user: 450 steps
+    // a second, not 900, it still rests and keeps under its load; and not
+    // kept clear of itself: hung off a back, it hardly folds onto itself.)
+    let mut fabric = Fabric::sheet(ACROSS, DOWN, |c, r| points[r * ACROSS + c], Weave { thickness: 0.05, self_collide: false, rate: 450.0, ..Weave::default() });
     // (Cut flat, as cloth is: made round, it kept itself a tube, the user.)
     fabric.cut_flat();
     // Held: round its throat (by its chest), and under its load.
@@ -491,3 +494,4 @@ mod tests {
         assert_eq!(decode(&encode(&as_cut, &kept)), Some(kept));
     }
 }
+

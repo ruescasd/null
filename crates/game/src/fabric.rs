@@ -60,6 +60,9 @@ impl Default for Weave {
 /// time is lost, not caught up).
 const BEND_EVERY: u64 = 3;
 const MOST: usize = 45;
+/// How much further than they could go in a frame its points are looked
+/// for round each body (m).
+const MARGIN: f64 = 0.1;
 
 /// What it hangs on: a capsule (two ends, a radius), or a box (centre,
 /// turn, half its size).
@@ -87,6 +90,14 @@ enum Solid {
 }
 
 impl Solid {
+    /// A sphere round it: its middle, its radius.
+    fn bounds(&self) -> (DVec3, f64) {
+        match *self {
+            Solid::Capsule(a, b, r) => ((a + b) * 0.5, a.distance(b) * 0.5 + r),
+            Solid::Box(c, _, h) => (c, h.length()),
+        }
+    }
+
     /// Partway (`t`) from `self` to `to` (the same kind of body).
     fn lerp(&self, to: &Solid, t: f64) -> Solid {
         match (*self, *to) {
@@ -224,6 +235,10 @@ pub struct Fabric {
     /// far its points went in the last frame that stepped, on average (m/s).
     owed: f64,
     steps: u64,
+    /// The bodies each point may meet this frame (see `step`), from where
+    /// in `meets` each point's start.
+    meets: Vec<u16>,
+    meets_at: Vec<u32>,
     stir: f32,
     was: Vec<DVec3>,
     pub weave: Weave,
@@ -271,6 +286,8 @@ impl Fabric {
             hash: Hash { size: 1.0, starts: vec![0; (2 * n).next_power_of_two() + 1], order: Vec::new() },
             owed: 0.0,
             steps: 0,
+            meets: Vec::new(),
+            meets_at: Vec::new(),
             stir: 0.0,
             was: Vec::new(),
             weave,
@@ -403,6 +420,26 @@ impl Fabric {
         let (friction, fastest) = (w.friction as f64, w.fastest as f64);
         let skin = w.thickness as f64 * 0.5;
         self.was.clone_from(&self.points);
+        // Which bodies each point may meet this frame: those whose bounds
+        // (over the frame, and as far again as it could go) it is in (each
+        // point against every body every step cost more than its lengths).
+        let quickest = self.velocity.iter().map(|v| v.length_squared()).fold(0.0, f64::max).sqrt();
+        let reach = quickest * count as f64 * h + skin + MARGIN;
+        let bounds: Vec<(DVec3, f64)> = solids_from.iter().zip(&solids).map(|(a, b)| {
+            let (ca, ra) = a.bounds();
+            let (cb, rb) = b.bounds();
+            ((ca + cb) * 0.5, ra.max(rb) + ca.distance(cb) * 0.5 + reach)
+        }).collect();
+        self.meets.clear();
+        self.meets_at.clear();
+        for i in 0..n {
+            self.meets_at.push(self.meets.len() as u32);
+            if inv[i] > 0.0 {
+                let p = self.points[i];
+                self.meets.extend(bounds.iter().enumerate().filter(|(_, (c, r))| p.distance_squared(*c) < r * r).map(|(k, _)| k as u16));
+            }
+        }
+        self.meets_at.push(self.meets.len() as u32);
         let mut now = solids_from.clone();
         let mut was = solids_from.clone();
         for s in 1..=count {
@@ -428,7 +465,8 @@ impl Fabric {
                 if inv[i] == 0.0 {
                     continue;
                 }
-                for (k, solid) in now.iter().enumerate() {
+                for &k in &self.meets[self.meets_at[i] as usize..self.meets_at[i + 1] as usize] {
+                    let (k, solid) = (k as usize, &now[k as usize]);
                     if let Some((out, normal)) = solid.push(self.points[i], skin) {
                         // (Friction: its motion along the surface, relative
                         // to the body's there, reduced.)
