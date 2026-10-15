@@ -124,8 +124,8 @@ pub(super) fn sheets(
 }
 
 /// The cape: points across it and down it; how long it is, down its back
-/// from its collar (m; `--set cape_length`: short enough to show its legs
-/// at their struggle, the user: 1.45 m; 1.575 first); how far
+/// from its collar (m: short enough to show its legs at their struggle, the
+/// user: 1.45 m; 1.575 first); how far
 /// round the body it goes (radians, each side of its back: at its throat,
 /// all but its clasp's gap at the front; at its hem, open wider); how much
 /// further out than the body's pieces it is made, and how much wider at its
@@ -196,8 +196,19 @@ pub(super) struct Cloak {
 /// its top round the shoulders, it stood off the body, a hollow half
 /// cylinder; pinned where it started under the load, inside it, it went
 /// through it.)
-fn make(rig: &Rig, length: f32) -> Option<(Fabric, Vec<(u32, Hold, Vec3)>)> {
-    let row = length / (DOWN - 1) as f32;
+fn make(rig: &Rig) -> Option<(Fabric, Vec<(u32, Hold, Vec3)>)> {
+    let (mut fabric, held) = cut(rig)?;
+    let targets = targets(rig, &held);
+    let bodies = bodies(rig);
+    for _ in 0..SETTLE {
+        fabric.step(&targets, &bodies, rig.root.y, 1.0 / 60.0);
+    }
+    Some((fabric, held))
+}
+
+/// The cape as cut, on the porter as it stands, held, not yet hung.
+fn cut(rig: &Rig) -> Option<(Fabric, Vec<(u32, Hold, Vec3)>)> {
+    let row = LENGTH / (DOWN - 1) as f32;
     let (load_at, load_turn, load_size) = rig.load()?;
     let b = &rig.bones;
     let (chest, rump) = (b[2].b, b[0].a);
@@ -261,12 +272,77 @@ fn make(rig: &Rig, length: f32) -> Option<(Fabric, Vec<(u32, Hold, Vec3)>)> {
         })
         .collect();
     fabric.tether(&held.iter().map(|h| h.0).collect::<Vec<_>>(), 1.02);
-    let targets = targets(rig, &held);
-    let bodies = bodies(rig);
-    for _ in 0..SETTLE {
-        fabric.step(&targets, &bodies, rig.root.y, 1.0 / 60.0);
-    }
     Some((fabric, held))
+}
+
+/// A porter as every porter first stands (at the origin, facing +z): the
+/// cape is hung on it, once, and kept.
+fn standing() -> Rig {
+    Rig::new(crate::rig::Plan::porter(), Vec3::ZERO, 0.0, 1, &|_, _| 0.0)
+}
+
+/// The cape, in the frame of a standing porter's chest: as cut, and hung
+/// (settled on each porter as it came, it held the frame up 170 ms, a
+/// hitch at each new porter, at every kill, the user).
+fn hung() -> (Vec<Vec3>, Vec<Vec3>) {
+    let rig = standing();
+    let (at, turn) = frame(&rig, Hold::Bone(2));
+    let local = |f: &Fabric| (0..f.len()).map(|i| turn.inverse() * (f.point(i) - at)).collect();
+    let as_cut = local(&cut(&rig).expect("the porter has a load").0);
+    (as_cut, local(&make(&rig).expect("the porter has a load").0))
+}
+
+/// The cape hung, kept as data, as the bishop's drape is (the user: least
+/// surprise): its number of points, then its points as cut, then as hung
+/// (each in the frame of a standing porter's chest), little-endian floats.
+/// (Its points as cut, not only their number: cut longer, it has as many.)
+const CAPE_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/porter_cape.bin");
+
+fn encode(as_cut: &[Vec3], hung: &[Vec3]) -> Vec<u8> {
+    let mut out = (as_cut.len() as u32).to_le_bytes().to_vec();
+    for p in as_cut.iter().chain(hung) {
+        for v in p.to_array() {
+            out.extend(v.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// The cape the data holds as hung, if it is the cape as it is cut now.
+fn decode(bytes: &[u8]) -> Option<Vec<Vec3>> {
+    let n = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
+    let floats: Vec<f32> = bytes.get(4..4 + n * 24)?.chunks(4).map(|w| f32::from_le_bytes(w.try_into().unwrap())).collect();
+    let points: Vec<Vec3> = floats.chunks(3).map(|v| Vec3::new(v[0], v[1], v[2])).collect();
+    let (as_cut, hung) = points.split_at(n);
+    let rig = standing();
+    let (fabric, _) = cut(&rig)?;
+    let (at, turn) = frame(&rig, Hold::Bone(2));
+    let fits = fabric.len() == n && (0..n).all(|i| (turn.inverse() * (fabric.point(i) - at)).distance(as_cut[i]) < 1e-3);
+    fits.then(|| hung.to_vec())
+}
+
+/// The cape hung, in the frame of a standing porter's chest.
+#[derive(Resource)]
+pub(super) struct Cape(Vec<Vec3>);
+
+/// The cape: kept as data (`data/porter_cape.bin`, built into the game;
+/// made with `--opt bakecape`, which hangs it, writes it and leaves).
+pub(super) fn hang(mut commands: Commands, args: Res<Args>, mut exit: MessageWriter<AppExit>) {
+    if args.opt("bakecape") {
+        let (as_cut, hung) = hung();
+        match std::fs::write(CAPE_FILE, encode(&as_cut, &hung)) {
+            Ok(()) => info!("bakecape: the porter's cape kept in {CAPE_FILE}"),
+            Err(e) => error!("bakecape: {CAPE_FILE}: {e}"),
+        }
+        exit.write(AppExit::Success);
+        commands.insert_resource(Cape(hung));
+        return;
+    }
+    // (Built into the game. Not for the cape as it is cut, it fails, as a
+    // missing asset would.)
+    let hung = decode(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/porter_cape.bin")))
+        .expect("data/porter_cape.bin is not the porter's cape as it is cut (cut otherwise since?): keep it again with `--opt bakecape`");
+    commands.insert_resource(Cape(hung));
 }
 
 /// Where its held points are held now.
@@ -279,8 +355,9 @@ fn targets(rig: &Rig, held: &[(u32, Hold, Vec3)]) -> Vec<(u32, Vec3)> {
         .collect()
 }
 
-/// With `--opt cape`, each porter wears a cape (made as it first stands),
-/// stepped with it every frame; a porter gone, its cape is gone.
+/// With `--opt cape`, each porter wears a cape (put on it as it first
+/// stands, as the cape is kept hung: see `hang`), stepped with it every
+/// frame; a porter gone, its cape is gone.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cloaks(
     mut commands: Commands,
@@ -292,6 +369,7 @@ pub(super) fn cloaks(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut worn: Local<Vec<Entity>>,
     mut shade: Local<Option<Handle<StandardMaterial>>>,
+    cape: Res<Cape>,
 ) {
     if !args.opt("cape") {
         return;
@@ -304,7 +382,9 @@ pub(super) fn cloaks(
             continue;
         }
         worn.push(entity);
-        if let Some((fabric, held)) = make(h.rig(), args.num("cape_length", LENGTH)) {
+        if let Some((mut fabric, held)) = cut(h.rig()) {
+            let (at, turn) = frame(h.rig(), Hold::Bone(2));
+            fabric.set(|i| at + turn * cape.0[i]);
             let mesh = meshes.add(fabric.mesh());
             let origin = fabric.origin();
             commands.spawn((Cloak { hunter: entity, fabric, held, cost: (0.0, 0, 0.0), since: 0.0 }, Mesh3d(mesh), MeshMaterial3d(shade.clone()), Transform::from_translation(origin), bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
@@ -317,9 +397,15 @@ pub(super) fn cloaks(
         };
         let cloak = &mut *cloak;
         let rig = h.rig();
-        let targets = targets(rig, &cloak.held);
         let begun = Instant::now();
-        cloak.fabric.step(&targets, &bodies(rig), rig.root.y, dt);
+        if args.opt("cape_frozen") {
+            // (`--opt cape_frozen`: not simulated, the user's test: kept as
+            // it hangs, carried with its chest.)
+            let (at, turn) = frame(rig, Hold::Bone(2));
+            cloak.fabric.set(|i| at + turn * cape.0[i]);
+        } else {
+            cloak.fabric.step(&targets(rig, &cloak.held), &bodies(rig), rig.root.y, dt);
+        }
         let took = begun.elapsed().as_secs_f32();
         cloak.cost = (cloak.cost.0 + took, cloak.cost.1 + 1, cloak.cost.2.max(took));
         cloak.since += dt;
@@ -347,7 +433,7 @@ mod tests {
     #[test]
     fn cloak_rests() {
         let rig = Rig::new(Plan::porter(), Vec3::new(1200.0, 30.0, 900.0), 0.4, 1, &|_, _| 30.0);
-        let (mut fabric, held) = make(&rig, LENGTH).expect("the porter has a load");
+        let (mut fabric, held) = make(&rig).expect("the porter has a load");
         let (held, bodies) = (targets(&rig, &held), bodies(&rig));
         let mut moving = 0.0;
         for k in 0..1200 {
@@ -372,7 +458,7 @@ mod tests {
     fn under_load() {
         const EDGE: f32 = 0.05;
         let mut rig = Rig::new(Plan::porter(), Vec3::new(1200.0, 30.0, 900.0), 0.4, 1, &|_, _| 30.0);
-        let (mut fabric, held) = make(&rig, LENGTH).expect("the porter has a load");
+        let (mut fabric, held) = make(&rig).expect("the porter has a load");
         let (mut over, mut longest) = (0, 0);
         for k in 0..900 {
             // (Standing 2 s, then walking at its pace.)
@@ -394,5 +480,14 @@ mod tests {
             longest = longest.max(over);
         }
         assert!(longest < 60, "some of it in its load or over it for {longest} frames on end");
+    }
+
+    /// The cape kept as data is the cape as it is cut, and reads back as
+    /// written.
+    #[test]
+    fn kept_cape_fits() {
+        let kept = decode(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/porter_cape.bin"))).expect("data/porter_cape.bin does not fit the cape as cut: keep it again with `--opt bakecape`");
+        let (as_cut, _) = hung();
+        assert_eq!(decode(&encode(&as_cut, &kept)), Some(kept));
     }
 }

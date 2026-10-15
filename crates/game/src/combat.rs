@@ -81,7 +81,7 @@ impl Plugin for CombatPlugin {
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
-            .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup, bishop::settle))
+            .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup, bishop::settle, clothlab::hang))
             .add_systems(
                 Update,
                 (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
