@@ -72,7 +72,7 @@ fn show(
     // twice a second (the user: what is being computed while it loads).
     let ground: usize = streamer.missing.iter().sum();
     let line = format!(
-        "loading: ground {} columns to go ({} being built), shaders {shaders} compiling, structures {} being built",
+        "loading: terrain {} patches to go ({} being built), shaders {shaders} compiling, structures {} being built",
         ground,
         streamer.in_flight,
         building.iter().count()
