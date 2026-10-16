@@ -135,7 +135,7 @@ fn startlog(args: Res<Args>, time: Res<Time>, streamer: Res<terrain::Streamer>, 
     state.1 += 1;
     state.2 = state.2.max(dt);
     if since - state.0 >= 0.5 {
-        info!("startlog: {since:5.2} s  {:4.0} fps  worst {:6.1} ms  settled {}", state.1 as f32 / (since - state.0), state.2 * 1000.0, streamer.settled);
+        info!("startlog: {since:5.2} s  {:4.0} fps  worst {:6.1} ms  settled {}  missing by level {:?}, {} being built", state.1 as f32 / (since - state.0), state.2 * 1000.0, streamer.settled, streamer.missing, streamer.in_flight);
         *state = (since, 0, 0.0, true);
     }
 }
@@ -169,7 +169,23 @@ fn main() {
         unfocused_mode: bevy::winit::UpdateMode::Continuous,
     });
     app
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        // (Half the cores for the background: the world's terrain and
+        // structures are generated there. Bevy's default, a quarter and at
+        // most four, left the ground streaming in for some 35 s at the
+        // start, the loading screen giving up at 15. `--set workers` to
+        // choose how many.)
+        .add_plugins(DefaultPlugins.set(bevy::app::TaskPoolPlugin {
+            task_pool_options: bevy::app::TaskPoolOptions {
+                async_compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                    min_threads: 1,
+                    max_threads: args.num("workers", 64.0) as usize,
+                    percent: 0.5,
+                    on_thread_spawn: None,
+                    on_thread_destroy: None,
+                },
+                ..default()
+            },
+        }).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "terrain".into(),
                 // (`--set width`, `height`: the benches at the user's

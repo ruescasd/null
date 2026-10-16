@@ -205,6 +205,10 @@ pub struct Streamer {
     /// True once the finest ring round the camera is (enough to stand, walk
     /// and fight on while the distance is still coming in).
     pub near: bool,
+    /// Columns wanted but not yet generated, at each level, and being
+    /// generated now (`--opt startlog`).
+    pub missing: [usize; LOD_LEVELS as usize],
+    pub in_flight: usize,
 }
 
 impl Streamer {
@@ -352,6 +356,7 @@ fn stream_columns(
     let mut requests: Vec<(f32, Key)> = Vec::new();
     let mut settled = true;
     let mut near = true;
+    let mut missing = [0; LOD_LEVELS as usize];
     for lod in 0..LOD_LEVELS {
         let n = world.columns_per_side(lod);
         for &key in &wanted[lod as usize] {
@@ -369,6 +374,7 @@ fn stream_columns(
                 draw.insert((lod, key));
             } else {
                 settled = false;
+                missing[lod as usize] += 1;
                 near &= lod > 0 || column_distance(lod, key, pos) > NEAR;
                 let urgency = column_distance(lod, key, pos) / column_size(lod);
                 requests.push((urgency, (lod, wrapped)));
@@ -377,6 +383,7 @@ fn stream_columns(
     }
     streamer.settled = settled;
     streamer.near = near;
+    streamer.missing = missing;
 
     // Start the most urgent generation work.
     requests.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -451,6 +458,7 @@ fn stream_columns(
     };
     streamer.cache.retain(|key, _| !far(key));
     streamer.pending.retain(|key, _| !far(key));
+    streamer.in_flight = streamer.pending.len();
 }
 
 fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh>>) {

@@ -207,7 +207,25 @@ impl Canals {
 
     /// The station whose court contains `p`, if any.
     pub fn station_at(&self, p: DVec2) -> Option<usize> {
-        (0..self.stations.len()).find(|&s| self.station_planes(s, p).iter().all(|f| f(p) <= 0.0))
+        // (Its edges tested only near it: built for every station at every
+        // point asked, they made the ground's meshing several times slower.)
+        let apothem = STATION_RADIUS * (std::f64::consts::PI / STATION_SIDES as f64).cos();
+        (0..self.stations.len()).find(|&s| {
+            let rel = self.wrap(p - self.stations[s]);
+            let r = rel.length();
+            if r > STATION_RADIUS {
+                return false;
+            }
+            if r <= apothem {
+                return true;
+            }
+            // Between the edges' and the corners' reach: against the
+            // nearest edge, whose outward normal is at a multiple of the
+            // sector from the x axis.
+            let sector = std::f64::consts::TAU / STATION_SIDES as f64;
+            let k = (rel.y.atan2(rel.x) / sector).round();
+            rel.dot(DVec2::new((k * sector).cos(), (k * sector).sin())) <= apothem
+        })
     }
 
     /// The edges of station `s`'s court in `near`'s copy of the world: each
@@ -285,6 +303,11 @@ impl Canals {
                 .into_iter()
                 .flat_map(|piece| {
                     let near = centroid(&piece);
+                    // (Only pieces that reach the court: the rest whole.)
+                    let reach = piece.iter().map(|v| v.distance(near)).fold(0.0, f64::max);
+                    if self.wrap(near - self.stations[s]).length() > STATION_RADIUS + reach {
+                        return vec![piece];
+                    }
                     subtract(piece, &self.station_planes(s, near))
                 })
                 .collect();
