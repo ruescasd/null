@@ -470,11 +470,12 @@ impl Ride {
 /// Quake's air acceleration against a remembered push: what the pipe's wall
 /// took of your push into it (`memory`) counts as though you still moved
 /// that way, and a push against it undoes it first, as moving one way must be
-/// undone before moving the other. (Without it the wall took the push into it
-/// every step, so speed that way never met the cap and the push's share
-/// along the canal grew without end: holding one strafe key, 1300 ups and
-/// on, the user. Quake's gain needs the push kept ahead of the motion by
-/// turning; the wall had done the turning, the half of the balance lost.)
+/// undone before moving the other, kept until you leave the pipe. (Without
+/// it the wall took the push into it every step, so speed that way never met
+/// the cap and the push's share along the canal grew without end: holding
+/// one strafe key, 1300 ups and on, the user. Quake's gain needs the push
+/// kept ahead of the motion by turning; the wall had done the turning, the
+/// half of the balance lost.)
 fn accelerate_remembering(v: &mut Vec3, memory: &mut Vec3, wishdir: Vec3, wishspeed: f32, accel: f32, dt: f32) {
     let add = wishspeed - (*v + *memory).dot(wishdir);
     if add <= 0.0 {
@@ -567,10 +568,12 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
                 player.velocity *= 1.0 + ride.pump * with * GRAVITY * ride.glide * fall * dt / speed;
             }
         }
-    } else {
-        // Off the wall, the memory fades fast: in the air, Quake's air.
-        player.pipe_memory *= (-dt / 0.3).exp();
     }
+    // (The memory kept all the while in the pipe, touching or not: faded
+    // off the wall, skimming just over it (barely touching for seconds)
+    // let it go, the push came back and speed along the canal grew again,
+    // 22 to 57 m/s holding one strafe key (the user's ride log). Out of the
+    // pipe, over the lip, it is forgotten: see `walk`.)
     if ride.on {
         // The swing across dying away; along the canal, nothing lost.
         let along = Vec3::new(-across.z, 0.0, across.x);
