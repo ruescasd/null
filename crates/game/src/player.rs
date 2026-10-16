@@ -142,6 +142,9 @@ pub struct Player {
     pub mantle: Option<Mantle>,
     /// Whether the player is on a canal's slick surface.
     pub in_canal: bool,
+    /// What a canal's pipe has taken of your push into it, remembered as
+    /// though you still moved that way (see `accelerate_remembering`).
+    pipe_memory: Vec3,
     /// How long the tether's line has been blocked.
     tether_blocked: f32,
     /// The tether button must be released before the tether fires again.
@@ -168,6 +171,7 @@ impl Player {
             tether: Tether::Idle,
             mantle: None,
             in_canal: false,
+            pipe_memory: Vec3::ZERO,
             tether_blocked: 0.0,
             tether_held: false,
             view_offset: 0.0,
@@ -447,6 +451,8 @@ struct Ride {
     pump: f32,
     glide: f32,
     cap: f32,
+    /// How fast a swing across the pipe dies away (per second; on).
+    damp: f32,
 }
 
 impl Ride {
@@ -456,8 +462,32 @@ impl Ride {
             pump: args.num("canal_pump", 0.25),
             glide: args.num("canal_glide", 0.85),
             cap: args.num("canal_cap", 60.0),
+            damp: args.num("canal_damp", 0.06),
         }
     }
+}
+
+/// Quake's air acceleration against a remembered push: what the pipe's wall
+/// took of your push into it (`memory`) counts as though you still moved
+/// that way, and a push against it undoes it first, as moving one way must be
+/// undone before moving the other. (Without it the wall took the push into it
+/// every step, so speed that way never met the cap and the push's share
+/// along the canal grew without end: holding one strafe key, 1300 ups and
+/// on, the user. Quake's gain needs the push kept ahead of the motion by
+/// turning; the wall had done the turning, the half of the balance lost.)
+fn accelerate_remembering(v: &mut Vec3, memory: &mut Vec3, wishdir: Vec3, wishspeed: f32, accel: f32, dt: f32) {
+    let add = wishspeed - (*v + *memory).dot(wishdir);
+    if add <= 0.0 {
+        return;
+    }
+    let mut push = (accel * dt * wishspeed).min(add);
+    let against = -memory.dot(wishdir);
+    if against > 0.0 {
+        let undo = push.min(against);
+        *memory += wishdir * undo;
+        push -= undo;
+    }
+    *v += wishdir * push;
 }
 
 /// One movement step inside a canal's half-pipe. The feet ride the exact
@@ -467,12 +497,17 @@ impl Ride {
 ///
 /// Off, the pipe is stone like any other: friction, walking. On, it is
 /// slick, as in Quake 3 (Defrag's slick gliding): no friction and
-/// air-strength acceleration, so speed turns into height and back without
-/// loss, down one wall and up the other, and with enough speed out above the
-/// lip; gravity a little weaker (`glide`), so arcs off the walls hang
-/// longer; and each descent pressed to the surface gives back `pump` more
-/// than gravity alone would: speed is won by working the walls, as a skater
-/// pumps a bowl, never by the canal pushing.
+/// air-strength acceleration, so speed turns into height and back, down one
+/// wall and up the other, and with enough speed out above the lip; gravity a
+/// little weaker (`glide`), so arcs off the walls hang longer; a swing across
+/// the pipe slowly dying away (`damp`). Either way the wall remembers what it
+/// takes of your push (`accelerate_remembering`): holding one way gains
+/// nothing; gaining takes Quake's skill, the push turned ahead of the motion,
+/// weaving across the pipe from strafe to strafe. And on, coming down a wall
+/// while strafing towards the middle, the way you are swinging, gives back
+/// `pump` more than the fall alone: a pump in time with the swing, as a
+/// skater pumps a bowl (on every descent whatever you did, it was free: a
+/// swing kept going fed itself).
 fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, jump: bool, dt: f32, ride: Ride) -> Vec3 {
     let radius = worldgen::canal::PIPE_RADIUS as f32;
     // Jump off the surface, away from it.
@@ -480,23 +515,18 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         player.velocity += player.ground_normal * JUMP_SPEED;
         player.grounded = false;
     }
-    if ride.on {
-        accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
-        player.velocity.y -= GRAVITY * ride.glide * dt;
-    } else {
+    if !ride.on && player.grounded {
         // (Friction along the surface, whichever way it slopes.)
-        if player.grounded {
-            let speed = player.velocity.length();
-            if speed > 0.0 {
-                let drop = speed.max(STOP_SPEED) * FRICTION * dt;
-                player.velocity *= (speed - drop).max(0.0) / speed;
-            }
-            accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
-        } else {
-            accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
+        let speed = player.velocity.length();
+        if speed > 0.0 {
+            let drop = speed.max(STOP_SPEED) * FRICTION * dt;
+            player.velocity *= (speed - drop).max(0.0) / speed;
         }
-        player.velocity.y -= GRAVITY * dt;
+        accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
+    } else {
+        accelerate_remembering(&mut player.velocity, &mut player.pipe_memory, wishdir, MAX_SPEED, AIR_ACCEL, dt);
     }
+    player.velocity.y -= GRAVITY * if ride.on { ride.glide } else { 1.0 } * dt;
 
     let mut moved = center + player.velocity * dt;
     player.grounded = false;
@@ -513,21 +543,39 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         let into = player.velocity.dot(outward);
         if into > 0.0 {
             player.velocity -= outward * into;
+            // What it took of your push, remembered (no more than a run's
+            // worth).
+            let taken = Vec3::new(outward.x, 0.0, outward.z) * into;
+            let pushed = taken.dot(wishdir);
+            if pushed > 0.0 {
+                player.pipe_memory = (player.pipe_memory + wishdir * pushed).clamp_length_max(MAX_SPEED);
+            }
         }
         let normal = -outward;
         if normal.y >= MIN_WALK_NORMAL {
             player.grounded = true;
             player.ground_normal = normal;
         }
-        // Pumping: pressed to the surface and going down, a little more
-        // speed than the fall alone gives.
-        let speed = player.velocity.length();
-        if ride.on && player.velocity.y < 0.0 && speed > 0.0 {
-            let fall = -player.velocity.y / speed;
-            player.velocity *= 1.0 + ride.pump * GRAVITY * ride.glide * fall * dt / speed;
+        if ride.on {
+            // Pumping: going down, pressed to the wall, strafing the way
+            // you swing.
+            let swing = player.velocity.dot(across);
+            let with = wishdir.dot(across) * swing.signum();
+            let speed = player.velocity.length();
+            if player.velocity.y < 0.0 && with > 0.0 && speed > 0.0 {
+                let fall = -player.velocity.y / speed;
+                player.velocity *= 1.0 + ride.pump * with * GRAVITY * ride.glide * fall * dt / speed;
+            }
         }
+    } else {
+        // Off the wall, the memory fades fast: in the air, Quake's air.
+        player.pipe_memory *= (-dt / 0.3).exp();
     }
     if ride.on {
+        // The swing across dying away; along the canal, nothing lost.
+        let along = Vec3::new(-across.z, 0.0, across.x);
+        let ahead = along * player.velocity.dot(along);
+        player.velocity = ahead + (player.velocity - ahead) * (-ride.damp * dt).exp();
         player.velocity = player.velocity.clamp_length_max(ride.cap);
     }
     moved
@@ -691,6 +739,7 @@ pub fn walk(
             center = ride_pipe(&world, &mut player, center, wishdir, jump, dt, ride);
             continue;
         }
+        player.pipe_memory = Vec3::ZERO;
         if player.grounded {
             // The tether's pull drags you along the ground rather than
             // fighting friction.

@@ -43,7 +43,8 @@ pub struct BotState {
     /// fastest it has gone on it.
     strafe_side: i8,
     strafe_peak: f32,
-    strafe_reported: bool,
+    /// The weave test's fastest.
+    weave_peak: f32,
     /// When the tether test started its drop, and from what height.
     tether_drop: Option<(f32, f32)>,
     /// The stairs test (`--opt stairbot`): where the flight starts, which
@@ -111,6 +112,8 @@ pub fn drive(
     let t = now - *state.started.get_or_insert(now) + if args.opt("strafeonly") { 25.0 } else { 0.0 };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
 
+    // (The canal strafe tests' length: `--set strafe_time`.)
+    let strafe = args.num("strafe_time", 4.0);
     let phase = match t {
         t if t < 1.0 => "stand",
         t if t < 3.0 => "run",
@@ -120,9 +123,13 @@ pub fn drive(
         t if t < 18.5 => "step up",
         t if t < 21.0 => "mantle",
         t if t < 25.0 => "canal",
-        t if t < 29.0 => "canal strafe right",
-        t if t < 33.0 => "canal strafe left",
+        t if t < 25.0 + strafe => "canal strafe right",
+        t if t < 25.0 + 2.0 * strafe => "canal strafe left",
+        t if t < 25.0 + 3.0 * strafe => "canal weave",
         _ => {
+            if state.weave_peak > 0.0 {
+                info!("bot canal weave: fastest {:.1} m/s, at the end {:.1}", state.weave_peak, player.velocity.length());
+            }
             exit.write(AppExit::Success);
             return;
         }
@@ -206,7 +213,7 @@ pub fn drive(
             let side: i8 = if phase.ends_with("right") { 1 } else { -1 };
             if state.strafe_side != side {
                 if state.strafe_side != 0 {
-                    info!("bot canal strafe: side {}: fastest {:.1} m/s", state.strafe_side, state.strafe_peak);
+                    info!("bot canal strafe: side {}: fastest {:.1} m/s, at the end {:.1}", state.strafe_side, state.strafe_peak, player.velocity.length());
                 }
                 state.strafe_side = side;
                 state.strafe_peak = 0.0;
@@ -222,10 +229,32 @@ pub fn drive(
             }
             input.wish = Vec2::new(side as f32 * args.num("strafe_key", 1.0), 0.0);
             state.strafe_peak = state.strafe_peak.max(player.velocity.length());
-            if t > 32.8 && side == -1 && state.strafe_peak > 0.0 && !state.strafe_reported {
-                state.strafe_reported = true;
-                info!("bot canal strafe: side -1: fastest {:.1} m/s", state.strafe_peak);
+        }
+        "canal weave" => {
+            // Skill, crudely: strafing the way it swings across the pipe,
+            // in time with each swing (with forward held, `--set
+            // weave_forward=1`). Should gain, as holding one way should not.
+            if state.strafe_side != 0 {
+                info!("bot canal strafe: side {}: fastest {:.1} m/s, at the end {:.1}", state.strafe_side, state.strafe_peak, player.velocity.length());
+                state.strafe_side = 0;
+                let p = transform.translation;
+                if let Some((center, dir, floor)) = world.nearest_canal(p.x, p.z) {
+                    let across = Vec3::new(-dir.y, 0.0, dir.x);
+                    transform.translation = Vec3::new(center.x, floor + super::EYE + super::HALF_WIDTH + 0.1, center.y) + across * 3.0;
+                    player.velocity = Vec3::ZERO;
+                    fly.yaw = (-dir.x).atan2(-dir.y);
+                    fly.pitch = 0.0;
+                }
             }
+            let p = transform.translation;
+            if let Some((_, dir, _)) = world.nearest_canal(p.x, p.z) {
+                let across = Vec3::new(-dir.y, 0.0, dir.x);
+                let swing = player.velocity.dot(across);
+                let right = fly.rotation() * Vec3::X;
+                let key = if swing.abs() < 0.3 { 0.0 } else { (right.dot(across) * swing).signum() };
+                input.wish = Vec2::new(key, args.num("weave_forward", 0.0));
+            }
+            state.weave_peak = state.weave_peak.max(player.velocity.length());
         }
         "tether down" => {
             // From 40 m up and at rest, tether straight down.
