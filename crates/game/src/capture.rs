@@ -154,6 +154,7 @@ fn bench(
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     entities: Query<()>,
     mut hunters: Query<&mut crate::combat::HunterMarker>,
+    drawn: Query<(Has<crate::terrain::TerrainColumn>, &ViewVisibility), With<Mesh3d>>,
 ) {
     if !args.opt("bench") {
         return;
@@ -185,6 +186,10 @@ fn bench(
     let worst = state.frames.iter().copied().fold(0.0, f32::max);
     info!("bench: {:.0} fps average ({:.2} ms), worst frame {:.2} ms", 1.0 / average, average * 1000.0, worst * 1000.0);
     info!("bench: {} entities, {} hunters", entities.iter().count(), hunters.iter().count());
+    // What is drawn: meshes, how many terrain columns, how many in view.
+    let (meshes, columns) = drawn.iter().fold((0, 0), |(m, c), (column, _)| (m + 1, c + column as usize));
+    let seen = drawn.iter().filter(|(_, v)| v.get()).count();
+    info!("bench: {meshes} meshes ({columns} terrain columns), {seen} in view");
     // The costliest render passes, on the GPU and the CPU.
     let mut passes: Vec<(String, f64)> = diagnostics
         .iter()

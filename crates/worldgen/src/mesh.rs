@@ -3,7 +3,7 @@
 
 
 /// Cells along each horizontal side of a column.
-pub const COLUMN_CELLS: usize = 32;
+pub const COLUMN_CELLS: usize = 64;
 /// Number of detail levels. Each level's cells are `LOD_FACTOR` times larger.
 pub const LOD_LEVELS: u32 = 3;
 pub const LOD_FACTOR: i32 = 4;
