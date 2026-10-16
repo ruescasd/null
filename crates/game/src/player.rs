@@ -583,7 +583,6 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
 
 /// Runs between mouse look and the world wrap (see `camera.rs`).
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn walk(
     time: Res<Time>,
     args: Res<Args>,
@@ -595,6 +594,7 @@ pub fn walk(
     bodies: Res<Bodies>,
     canals_on: Option<Res<crate::beams::CanalsOn>>,
     camera: Single<(&mut Transform, &mut FlyCam, Option<&mut Player>)>,
+    mut ridelog: Local<Option<std::fs::File>>,
 ) {
     let (mut transform, mut fly, player) = camera.into_inner();
     let Some(mut player) = player else { return };
@@ -840,6 +840,44 @@ pub fn walk(
                 }
             }
         }
+    }
+    // `--opt ridelog`: in a canal, a line a frame to target/ridelog.csv:
+    // how you move in it, what you press, what the wall remembers.
+    if args.opt("ridelog")
+        && let Some(pipe) = world.canal_at(center.x, center.z)
+    {
+        use std::io::Write;
+        let file = ridelog.get_or_insert_with(|| {
+            let mut f = std::fs::File::create("target/ridelog.csv").expect("writing target/ridelog.csv");
+            let _ = writeln!(f, "t,offset,height,along,across,up,speed,wish_x,wish_y,yaw_off,grounded,in_canal,memory_along,memory_across,canal,on");
+            f
+        });
+        let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
+        let along = Vec3::new(-across.z, 0.0, across.x);
+        let v = player.velocity;
+        let forward = Vec3::new(-fly.yaw.sin(), 0.0, -fly.yaw.cos());
+        let yaw_off = forward.dot(across).atan2(forward.dot(along)).to_degrees();
+        let on = canals_on.as_deref().and_then(|o| o.0.get(pipe.canal).copied()).unwrap_or(false);
+        let _ = writeln!(
+            file,
+            "{:.3},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{:.1},{},{},{:.2},{:.2},{},{}",
+            time.elapsed_secs(),
+            pipe.offset,
+            center.y - HEIGHT * 0.5 - pipe.floor,
+            v.dot(along),
+            v.dot(across),
+            v.y,
+            v.length(),
+            input.wish.x,
+            input.wish.y,
+            yaw_off,
+            player.grounded,
+            player.in_canal,
+            player.pipe_memory.dot(along),
+            player.pipe_memory.dot(across),
+            pipe.canal,
+            on,
+        );
     }
     player.view_offset = (player.view_offset * (-total / VIEW_SMOOTH).exp()).clamp(-1.0, 1.0);
     transform.translation = center + Vec3::Y * (EYE - HEIGHT * 0.5 + player.view_offset);
