@@ -156,6 +156,28 @@ haze variant.
 Run only one capture at a time: two instances starting together have
 crashed the GPU driver.
 
+### Crash dumps
+
+When the game crashes (a segfault, not a panic), Windows can save a small
+dump of where it was, to read afterwards. It costs nothing while the game
+runs: Windows acts only once it has crashed. To turn it on, in a PowerShell
+run as administrator (it applies to any program named `game.exe`):
+
+```powershell
+$key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\game.exe'
+New-Item -Path $key -Force | Out-Null
+New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value 'C:\work\projects\null\target\crashdumps' -Force | Out-Null
+New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 10 -Force | Out-Null
+New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+```
+
+Dumps then land in `target\crashdumps` (at most 10, a few MB each). To turn
+it off again:
+
+```powershell
+Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\game.exe'
+```
+
 ## Layout
 
 - `crates/worldgen` — engine-agnostic generation. `plates.rs`: the plate
