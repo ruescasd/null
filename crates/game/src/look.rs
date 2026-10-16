@@ -603,7 +603,7 @@ fn hud(
         .collect();
     text.0 = format!(
         "{fps:.0} fps  {ms:.2} ms\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}{}\n\n\
-         click: capture mouse  esc: release  f1: this help  f12: screenshot\n\
+         click: capture mouse  esc: release  f1: this help  f11: fullscreen or window  f12: screenshot\n\
          wasd: move  space or mouse 2 (hold): jump / bunny hop  mouse 1: shard shotgun\n\
          e or mouse 4/5 (hold): tether - roots where you aim and pulls you in; let go to keep the momentum\n\
          v: noclip fly (space/ctrl: up/down, shift: fast, wheel: speed)\n\

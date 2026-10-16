@@ -87,9 +87,15 @@ fn show(
         *shown = true;
         window.visible = true;
         window.focused = true;
-        // (Maximised, the user; captures, never shown, keep their 1600 by
-        // 900.)
-        window.set_maximized(true);
+        // (Borderless fullscreen (the user: clicking the window's border
+        // gave it focus but not the game, the cursor still free: the
+        // window's trouble, fullscreen's not); `--opt windowed`, or F11,
+        // a maximised window. Captures, never shown, keep their size.)
+        if args.opt("windowed") {
+            window.set_maximized(true);
+        } else {
+            window.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current);
+        }
         // (Flat out until now, hidden (see `main`); as games are, from
         // now: unfocused, slowed.)
         *winit = bevy::winit::WinitSettings::game();

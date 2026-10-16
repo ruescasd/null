@@ -16,6 +16,7 @@ impl Plugin for FlyCameraPlugin {
         app.add_systems(
             Update,
             (
+                fullscreen,
                 grab_cursor,
                 fly,
                 crate::player::gather_input,
@@ -45,20 +46,39 @@ impl FlyCam {
     }
 }
 
+/// F11: fullscreen (borderless) or a maximised window, in turn.
+fn fullscreen(keys: Res<ButtonInput<KeyCode>>, mut window: Single<&mut Window>) {
+    if !keys.just_pressed(KeyCode::F11) {
+        return;
+    }
+    if window.mode == bevy::window::WindowMode::Windowed {
+        window.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current);
+    } else {
+        window.mode = bevy::window::WindowMode::Windowed;
+        window.set_maximized(true);
+    }
+}
+
 /// The cursor is captured from the start (once the window has focus, and not
 /// in a measurement or capture); Esc frees it and a click captures it again,
 /// the click not firing. Losing focus frees it too: Windows lets the mouse go
 /// then without saying so, and the cursor stayed hidden over the window as if
 /// still captured, a click not taking it again (the user: the capture lost,
-/// the cursor not back).
+/// the cursor not back). Regaining it, however (Alt-Tab, the taskbar, the
+/// window's border), captures it again once the mouse's buttons are up (so
+/// a window dragged by its title is dropped first), unless the console is
+/// down.
+#[allow(clippy::too_many_arguments)]
 fn grab_cursor(
     args: Res<crate::Args>,
     window: Single<&Window>,
     mut cursor: Single<&mut CursorOptions>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    console: Res<crate::console::Console>,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut started: Local<bool>,
+    mut regained: Local<bool>,
 ) {
     if !*started && window.focused {
         *started = true;
@@ -67,9 +87,19 @@ fn grab_cursor(
             cursor.grab_mode = CursorGrabMode::Locked;
         }
     }
-    if focus.read().any(|f| !f.focused) && cursor.grab_mode != CursorGrabMode::None {
-        cursor.visible = true;
-        cursor.grab_mode = CursorGrabMode::None;
+    for f in focus.read() {
+        *regained = f.focused && *started && !args.unattended();
+        if !f.focused && cursor.grab_mode != CursorGrabMode::None {
+            cursor.visible = true;
+            cursor.grab_mode = CursorGrabMode::None;
+        }
+    }
+    if *regained && mouse.get_pressed().next().is_none() {
+        *regained = false;
+        if !console.open && cursor.grab_mode == CursorGrabMode::None {
+            cursor.visible = false;
+            cursor.grab_mode = CursorGrabMode::Locked;
+        }
     }
     if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
         cursor.visible = false;
