@@ -191,6 +191,24 @@ fn main() {
         // and with eight lamps casting shadows the region ran at 57-74
         // frames a second, 98-136 so. See `CpuBatching`.)
         }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() })
+        // (DirectX 12 on Windows, not Vulkan, which wgpu picks first: the
+        // same frames, near twice as fast. At the user's spot among the
+        // pillars by night 5.4 ms on Vulkan, 3.1 on DirectX 12; by day 10.3
+        // and 6.1: most of Vulkan's frame went waiting to present it, on
+        // the user's NVIDIA card. `--opt vulkan` for Vulkan; WGPU_BACKEND
+        // still chooses, if set.)
+        .set(bevy::render::RenderPlugin {
+            render_creation: bevy::render::settings::WgpuSettings {
+                backends: Some(bevy::render::settings::Backends::from_env().unwrap_or(if cfg!(windows) && !args.opt("vulkan") {
+                    bevy::render::settings::Backends::DX12
+                } else {
+                    bevy::render::settings::Backends::all()
+                })),
+                ..default()
+            }
+            .into(),
+            ..default()
+        })
         // (Silent when nobody is playing, a bench or a bot or a capture, or
         // with `--opt mute`: the hunters' cries sounded through the house
         // while it was measured.)
