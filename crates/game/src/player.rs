@@ -453,6 +453,11 @@ struct Ride {
     cap: f32,
     /// How fast a swing across the pipe dies away (per second; on).
     damp: f32,
+    /// Quake's air acceleration, times this (on): pushes kept ahead of the
+    /// motion (turning while strafing, forward and strafe together) gain
+    /// more. (The user: a bit more weight to that, the turning; holding
+    /// forward alone still nothing past a run.)
+    airaccel: f32,
 }
 
 impl Ride {
@@ -463,6 +468,7 @@ impl Ride {
             glide: args.num("canal_glide", 0.85),
             cap: args.num("canal_cap", 60.0),
             damp: args.num("canal_damp", 0.06),
+            airaccel: args.num("canal_airaccel", 3.0),
         }
     }
 }
@@ -525,7 +531,8 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         }
         accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
     } else {
-        accelerate_remembering(&mut player.velocity, &mut player.pipe_memory, wishdir, MAX_SPEED, AIR_ACCEL, dt);
+        let accel = if ride.on { AIR_ACCEL * ride.airaccel } else { AIR_ACCEL };
+        accelerate_remembering(&mut player.velocity, &mut player.pipe_memory, wishdir, MAX_SPEED, accel, dt);
     }
     player.velocity.y -= GRAVITY * if ride.on { ride.glide } else { 1.0 } * dt;
 
