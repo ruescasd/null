@@ -142,8 +142,6 @@ pub struct Player {
     pub mantle: Option<Mantle>,
     /// Whether the player is on a canal's slick surface.
     pub in_canal: bool,
-    /// Whether the feet touched a canal's pipe in the last movement step.
-    on_pipe: bool,
     /// How long the tether's line has been blocked.
     tether_blocked: f32,
     /// The tether button must be released before the tether fires again.
@@ -170,7 +168,6 @@ impl Player {
             tether: Tether::Idle,
             mantle: None,
             in_canal: false,
-            on_pipe: false,
             tether_blocked: 0.0,
             tether_held: false,
             view_offset: 0.0,
@@ -483,15 +480,6 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         player.velocity += player.ground_normal * JUMP_SPEED;
         player.grounded = false;
     }
-    // Touching the pipe, input steers you freely but adds speed only up to
-    // a run (`MAX_SPEED`): beyond, speed comes only from the pipe, height
-    // turned to speed, and (on) pumping. (Unbounded, it was Counter-Strike's
-    // surf: holding strafe looking some 30 degrees off the canal, the wall
-    // cancelled the push into it every step, so the push's share along the
-    // canal never met the cap, and speed grew and grew without friction to
-    // take it: 19 m/s in four seconds, and on, the user. Away from the wall,
-    // in the air, Quake's air control as anywhere.)
-    let before = player.velocity.length();
     if ride.on {
         accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
         player.velocity.y -= GRAVITY * ride.glide * dt;
@@ -509,20 +497,9 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         }
         player.velocity.y -= GRAVITY * dt;
     }
-    if player.on_pipe {
-        // (What gravity just added is the pipe's to give, not input's:
-        // measured with it removed.)
-        let gravity = Vec3::Y * GRAVITY * if ride.on { ride.glide } else { 1.0 } * dt;
-        let pushed = player.velocity + gravity;
-        let limit = before.max(MAX_SPEED);
-        if pushed.length() > limit {
-            player.velocity = pushed.normalize() * limit - gravity;
-        }
-    }
 
     let mut moved = center + player.velocity * dt;
     player.grounded = false;
-    player.on_pipe = false;
     let Some(pipe) = world.canal_at(moved.x, moved.z) else { return moved };
     let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
     let axis_height = pipe.floor + radius;
@@ -538,7 +515,6 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
             player.velocity -= outward * into;
         }
         let normal = -outward;
-        player.on_pipe = true;
         if normal.y >= MIN_WALK_NORMAL {
             player.grounded = true;
             player.ground_normal = normal;
