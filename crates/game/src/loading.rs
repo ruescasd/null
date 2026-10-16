@@ -59,12 +59,29 @@ fn show(
     mut window: Single<&mut Window>,
     mut even: Local<f32>,
     mut shown: Local<bool>,
+    building: Query<(), With<crate::structures::Building>>,
+    mut said: Local<(f32, String)>,
 ) {
     if *shown || args.unattended() {
         return;
     }
     let dt = time.delta_secs();
-    let ready = streamer.settled && compiling.0.load(Ordering::Relaxed) == 0;
+    let shaders = compiling.0.load(Ordering::Relaxed);
+    let ready = streamer.settled && shaders == 0;
+    // What it is waiting for, to the terminal: when it changes, at most
+    // twice a second (the user: what is being computed while it loads).
+    let ground: usize = streamer.missing.iter().sum();
+    let line = format!(
+        "loading: ground {} columns to go ({} being built), shaders {shaders} compiling, structures {} being built",
+        ground,
+        streamer.in_flight,
+        building.iter().count()
+    );
+    let now = time.elapsed_secs();
+    if line != said.1 && now - said.0 >= 0.5 {
+        info!("{line}");
+        *said = (now, line);
+    }
     *even = if ready && dt < EVEN { *even + dt } else { 0.0 };
     if *even >= EVEN_FOR || time.elapsed_secs() > AT_MOST {
         *shown = true;
