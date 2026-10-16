@@ -19,7 +19,7 @@ use glam::{DVec2, Quat, Vec2, Vec3};
 use crate::forms::{self, Growth, Grower, Prism};
 use serde::Deserialize;
 
-use crate::canal::HALF_WIDTH;
+use crate::canal::{HALF_WIDTH, STATION_RADIUS};
 use crate::district::District;
 use crate::noise::hash01;
 use crate::plates::PlateWorld;
@@ -403,12 +403,17 @@ pub fn plan_in(layer: Layer, library: &Library, world: &PlateWorld, cell: (i32, 
     };
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
 
-    // The site's outer radius stays inside the cell, off the canals and off
-    // the hand-placed structures.
+    // The site's outer radius stays inside the cell, off the canals and
+    // their stations and off the hand-placed structures.
     let mut reach = REACH * size;
     if let Some((center, _, _)) = world.nearest_canal(x, z) {
         let distance = (center - Vec2::new(x, z)).length();
         reach = reach.min(distance - HALF_WIDTH as f32 - CANAL_CLEARANCE);
+    }
+    for station in &world.canals.stations {
+        let wrap = |d: f32| d - (d / world.size()).round() * world.size();
+        let distance = wrap(station.x as f32 - x).hypot(wrap(station.y as f32 - z));
+        reach = reach.min(distance - STATION_RADIUS as f32 - CANAL_CLEARANCE);
     }
     for other in &library.structures {
         let wrap = |d: f32| d - (d / world.size()).round() * world.size();

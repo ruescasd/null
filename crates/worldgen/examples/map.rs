@@ -1,14 +1,16 @@
 //! A top-down map of the whole world, for judging layout at planet scale:
 //! relief shading tinted by district, canals, the footprints of the sites
-//! and test structures in `data/structures.ron`, and a 1 km grid.
+//! and test structures in `data/structures.ron`, a 1 km grid, and the canal
+//! network to come (`network.rs`): its stations as white discs, its canals
+//! in orange.
 //!
-//! `cargo run -p worldgen --release --example map -- [out.png] [metres per pixel] [seed]`
+//! `cargo run -p worldgen --release --example map -- [out.png] [metres per pixel] [seed] [network cells per side] [chance of a station]`
 
 use std::thread;
 
 use glam::Vec3;
 use image::{Rgb, RgbImage};
-use worldgen::{district::District, plates::PlateWorld, sites, structure::Library};
+use worldgen::{district::District, network::Network, plates::PlateWorld, sites, structure::Library};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -127,6 +129,39 @@ fn main() {
     for (x, y) in cores {
         img.put_pixel(x.rem_euclid(px as i64) as u32, y.rem_euclid(px as i64) as u32, Rgb([230, 30, 30]));
     }
+
+    // The network to come: canals in orange, three pixels wide, stations as
+    // white discs ringed in black.
+    let network = match (args.get(3).and_then(|s| s.parse().ok()), args.get(4).and_then(|s| s.parse().ok())) {
+        (Some(cells), Some(chance)) => Network::with(size as f64, seed, cells, chance),
+        _ => Network::new(size as f64, seed),
+    };
+    let mut dot = |x: f64, z: f64, r: i64, color: [u8; 3]| {
+        let (cx, cy) = ((x / scale as f64) as i64, (z / scale as f64) as i64);
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dy * dy <= r * r {
+                    img.put_pixel((cx + dx).rem_euclid(px as i64) as u32, (cy + dy).rem_euclid(px as i64) as u32, Rgb(color));
+                }
+            }
+        }
+    };
+    for link in &network.links {
+        let from = network.stations[link.a];
+        let steps = (link.length() / scale as f64 * 2.0) as i32;
+        for i in 0..=steps {
+            let p = from + link.offset * (i as f64 / steps as f64);
+            dot(p.x, p.y, 1, [255, 140, 20]);
+        }
+    }
+    for s in &network.stations {
+        dot(s.x, s.y, 7, [0, 0, 0]);
+        dot(s.x, s.y, 5, [255, 255, 255]);
+    }
+    let lengths: Vec<String> = network.links.iter().map(|l| format!("{:.1}", l.length() / 1000.0)).collect();
+    let at: Vec<String> = network.stations.iter().map(|s| format!("{:.0},{:.0}", s.x, s.y)).collect();
+    println!("stations at {}", at.join("  "));
+    println!("network: {} stations, {} canals (km: {}), canals per station {:?}", network.stations.len(), network.links.len(), lengths.join(" "), network.degrees());
     println!("{} sites: {styles:?}", all.len());
     // The nearest few to the default spawn point, for pointing the camera.
     let mut near = sites::near(&library, &world, 1200.0, 900.0, 4000.0);

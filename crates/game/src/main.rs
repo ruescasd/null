@@ -8,6 +8,7 @@ mod console;
 mod combat;
 mod ground;
 mod figure;
+mod beams;
 mod landmarks;
 mod loading;
 /// Every option name the game reads, gathered from its source by `build.rs`.
@@ -206,6 +207,7 @@ fn main() {
             terrain::TerrainPlugin,
             camera::FlyCameraPlugin,
             look::LookPlugin,
+            beams::BeamsPlugin,
             capture::CapturePlugin,
             combat::CombatPlugin,
             figure::FigurePlugin,

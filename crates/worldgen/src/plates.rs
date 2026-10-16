@@ -171,9 +171,10 @@ impl PlateWorld {
         base * 90.0 * self.districts.blended(c.x, c.y).0
     }
 
-    /// Height of a canal's floor at a point on its centreline: the broad
-    /// shape of the ground (no ridges), so canals run in trenches through
-    /// high ground and on embankments over low ground, with gentle grades.
+    /// Height of a canal's floor at a point on its centreline (and of a
+    /// station's court, at its centre): the broad shape of the ground (no
+    /// ridges), so canals run in trenches through high ground and on
+    /// embankments over low ground, with gentle grades.
     pub fn canal_floor(&self, c: DVec2) -> f64 {
         let base = self.base.sample2(c.x as f32, c.y as f32, self.size as f32) as f64;
         let base = if base < 0.0 { base * 0.25 } else { base };
@@ -186,10 +187,10 @@ impl PlateWorld {
         if self.lab {
             return None;
         }
-        let hit: CanalHit = self.canals.hit(DVec2::new(x as f64, z as f64), 0.0)?;
+        let hit: CanalHit = self.canals.hit(DVec2::new(x as f64, z as f64), 0.0, &|c| self.canal_floor(c))?;
         (hit.offset.abs() < PIPE_RADIUS).then(|| CanalFlow {
             dir: glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
-            floor: self.canal_floor(hit.center) as f32,
+            floor: hit.floor as f32,
             offset: hit.offset as f32,
             across: glam::Vec2::new(hit.across.x as f32, hit.across.y as f32),
         })
@@ -201,11 +202,11 @@ impl PlateWorld {
         if self.lab {
             return None;
         }
-        let hit = self.canals.nearest(DVec2::new(x as f64, z as f64))?;
+        let hit = self.canals.nearest(DVec2::new(x as f64, z as f64), &|c| self.canal_floor(c))?;
         Some((
             glam::Vec2::new(hit.center.x as f32, hit.center.y as f32),
             glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
-            self.canal_floor(hit.center) as f32,
+            hit.floor as f32,
         ))
     }
 

@@ -15,6 +15,7 @@ pub mod ifs;
 pub mod lab;
 pub mod lattice;
 pub mod mega;
+pub mod network;
 pub mod plates;
 pub mod reactor;
 pub mod sites;
