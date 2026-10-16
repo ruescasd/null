@@ -85,6 +85,29 @@ pub struct Stones {
     pub tilt: f32,
 }
 
+/// Rises and dips along a canal, over the land's broad shape: up to
+/// `height` m either way, about `wave` m from one crest to the next (two
+/// waves of different lengths, their phases each canal's own). Downhill
+/// gives speed, uphill takes it; risen, the pipe stands high on its outer
+/// walls like an aqueduct, dipped, it runs in a deep cutting; and a crest
+/// hides what lies beyond it. (The user: more vertical variation, to make
+/// the journey more interesting.) Near the stations it eases out with the
+/// floor. Off for now (`--set canal_rise=30`, `canal_wave=1800` to see it):
+/// how canals rise and fall waits on the world's own verticality, still to
+/// decide, the user; a canal's waves should perhaps come from the land it
+/// crosses rather than their own.
+#[derive(Clone, Copy, Debug)]
+pub struct Rise {
+    pub height: f64,
+    pub wave: f64,
+}
+
+impl Default for Rise {
+    fn default() -> Self {
+        Self { height: 0.0, wave: 1800.0 }
+    }
+}
+
 impl Default for Stones {
     fn default() -> Self {
         Self { length: 2.0, tone: 0.08, tilt: 2.0 }
@@ -135,6 +158,7 @@ pub struct Canals {
     pub lines: Vec<Canal>,
     pub stations: Vec<DVec2>,
     pub stones: Stones,
+    pub rise: Rise,
 }
 
 impl Canals {
@@ -158,7 +182,7 @@ impl Canals {
                 }
             })
             .collect();
-        Self { size, lines, stations: network.stations, stones: Stones::default() }
+        Self { size, lines, stations: network.stations, stones: Stones::default(), rise: Rise::default() }
     }
 
     /// `d` round the wrap the short way.
@@ -185,7 +209,10 @@ impl Canals {
     /// field's, easing to each station's near its ends.
     fn floor(&self, i: usize, along: f64, at: DVec2, field: &impl Fn(DVec2) -> f64) -> f64 {
         let c = &self.lines[i];
-        let f = field(at);
+        // The land's broad shape, and the canal's own rises and dips.
+        let phase = |k: i32| hash01(i as i32, k, 0, 0x51e5) as f64 * std::f64::consts::TAU;
+        let wave = |length: f64, k: i32| (along / length * std::f64::consts::TAU + phase(k)).sin();
+        let f = field(at) + self.rise.height * (0.65 * wave(self.rise.wave, 1) + 0.35 * wave(self.rise.wave * 0.43, 2));
         let ease = |s: f64| {
             let t = ((s - self.end()) / RAMP).clamp(0.0, 1.0);
             1.0 - t * t * (3.0 - 2.0 * t)

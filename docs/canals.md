@@ -41,9 +41,19 @@ should feel lost, even afraid, and each lit station feels safer for it.
      `strafe_yaw`); `--opt ridelog` writes `target/ridelog.csv`, frame by
      frame.
 6. **Geometry tweaks**, to make the journey more interesting:
-   - more vertical variation along a canal (the floors were lowered 4.5 m,
-     `51cce99`, kept for now);
-   - canals that turn somewhat, not dead straight.
+   - **More vertical variation along a canal.** Built and switched off: long
+     rises and dips over the land's shape (`--set canal_rise=30`,
+     `canal_wave=1800`; the `canal_profile` example prints a canal's floor
+     against the ground). Waiting on the world's own verticality, still to
+     decide: how a canal rises and falls depends on what it crosses, and
+     its rises should perhaps come from the land, not their own wave. (The
+     floors were also lowered 4.5 m, `51cce99`, kept for now.)
+   - **Turning: smooth curves set aside.** They need every piece of canal
+     code to follow a curve, with a real risk of geometry glitches. Bends
+     inside buildings (two straight pipes meeting at a "bend house", like a
+     two-pipe station) would be cheap, but stopping and crossing a floor
+     kills the ride's rhythm and momentum. Crests from the vertical
+     variation hide what lies ahead instead.
 7. **Activation.** How a canal or station is turned on is still open. A
    candidate: energy delivered to a station, such as a porter's load.
 
