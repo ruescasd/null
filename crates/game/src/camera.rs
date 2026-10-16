@@ -47,13 +47,17 @@ impl FlyCam {
 
 /// The cursor is captured from the start (once the window has focus, and not
 /// in a measurement or capture); Esc frees it and a click captures it again,
-/// the click not firing.
+/// the click not firing. Losing focus frees it too: Windows lets the mouse go
+/// then without saying so, and the cursor stayed hidden over the window as if
+/// still captured, a click not taking it again (the user: the capture lost,
+/// the cursor not back).
 fn grab_cursor(
     args: Res<crate::Args>,
     window: Single<&Window>,
     mut cursor: Single<&mut CursorOptions>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut focus: MessageReader<bevy::window::WindowFocused>,
     mut started: Local<bool>,
 ) {
     if !*started && window.focused {
@@ -62,6 +66,10 @@ fn grab_cursor(
             cursor.visible = false;
             cursor.grab_mode = CursorGrabMode::Locked;
         }
+    }
+    if focus.read().any(|f| !f.focused) && cursor.grab_mode != CursorGrabMode::None {
+        cursor.visible = true;
+        cursor.grab_mode = CursorGrabMode::None;
     }
     if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
         cursor.visible = false;
