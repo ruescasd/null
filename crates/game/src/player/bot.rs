@@ -39,6 +39,11 @@ pub struct BotState {
     canal_rim: f32,
     canal_peak: f32,
     canal_reported: bool,
+    /// The canal strafe test: which side it is on (0 not begun), and the
+    /// fastest it has gone on it.
+    strafe_side: i8,
+    strafe_peak: f32,
+    strafe_reported: bool,
     /// When the tether test started its drop, and from what height.
     tether_drop: Option<(f32, f32)>,
     /// The stairs test (`--opt stairbot`): where the flight starts, which
@@ -102,7 +107,8 @@ pub fn drive(
         return;
     }
     let now = time.elapsed_secs();
-    let t = now - *state.started.get_or_insert(now);
+    // (`--opt strafeonly`: straight to the canal strafe test.)
+    let t = now - *state.started.get_or_insert(now) + if args.opt("strafeonly") { 25.0 } else { 0.0 };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
 
     let phase = match t {
@@ -114,6 +120,8 @@ pub fn drive(
         t if t < 18.5 => "step up",
         t if t < 21.0 => "mantle",
         t if t < 25.0 => "canal",
+        t if t < 29.0 => "canal strafe right",
+        t if t < 33.0 => "canal strafe left",
         _ => {
             exit.write(AppExit::Success);
             return;
@@ -188,6 +196,35 @@ pub fn drive(
                     state.canal_peak - state.canal_rim,
                     if player.in_canal { "in" } else { "out of" },
                 );
+            }
+        }
+        "canal strafe right" | "canal strafe left" => {
+            // The surf exploit (the user): standing in a pipe a facet off its
+            // middle, looking nearly along it, holding strafe towards the
+            // wall: it ran away to great speeds. Should stay near walking
+            // speed.
+            let side: i8 = if phase.ends_with("right") { 1 } else { -1 };
+            if state.strafe_side != side {
+                if state.strafe_side != 0 {
+                    info!("bot canal strafe: side {}: fastest {:.1} m/s", state.strafe_side, state.strafe_peak);
+                }
+                state.strafe_side = side;
+                state.strafe_peak = 0.0;
+                let p = transform.translation;
+                if let Some((center, dir, floor)) = world.nearest_canal(p.x, p.z) {
+                    let across = Vec3::new(-dir.y, 0.0, dir.x);
+                    let at = Vec3::new(center.x, floor + super::EYE + super::HALF_WIDTH + 0.1, center.y) + across * side as f32;
+                    transform.translation = at;
+                    player.velocity = Vec3::ZERO;
+                    fly.yaw = (-dir.x).atan2(-dir.y) + args.num("strafe_yaw", 6.0).to_radians();
+                    fly.pitch = 0.0;
+                }
+            }
+            input.wish = Vec2::new(side as f32 * args.num("strafe_key", 1.0), 0.0);
+            state.strafe_peak = state.strafe_peak.max(player.velocity.length());
+            if t > 32.8 && side == -1 && state.strafe_peak > 0.0 && !state.strafe_reported {
+                state.strafe_reported = true;
+                info!("bot canal strafe: side -1: fastest {:.1} m/s", state.strafe_peak);
             }
         }
         "tether down" => {

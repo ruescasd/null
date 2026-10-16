@@ -142,6 +142,8 @@ pub struct Player {
     pub mantle: Option<Mantle>,
     /// Whether the player is on a canal's slick surface.
     pub in_canal: bool,
+    /// Whether the feet touched a canal's pipe in the last movement step.
+    on_pipe: bool,
     /// How long the tether's line has been blocked.
     tether_blocked: f32,
     /// The tether button must be released before the tether fires again.
@@ -168,6 +170,7 @@ impl Player {
             tether: Tether::Idle,
             mantle: None,
             in_canal: false,
+            on_pipe: false,
             tether_blocked: 0.0,
             tether_held: false,
             view_offset: 0.0,
@@ -436,25 +439,90 @@ fn pull_towards(velocity: &mut Vec3, to_anchor: Vec3, dt: f32) {
     }
 }
 
-/// One movement step inside a canal's half-pipe. The surface is slick, as in
-/// Quake 3 (Defrag's slick gliding): no friction and air-strength
-/// acceleration, with gravity always acting. The feet ride the exact
+/// How a canal's pipe rides: whether its canal is on, and (on) how much
+/// speed a descent gives back over what it took, how strongly gravity pulls,
+/// and the fastest you may go. (The user: the player does the moving, the
+/// canal rewards it, never drives it; the whole segment different while it
+/// is on.) `--set canal_pump`, `canal_glide`, `canal_cap`.
+#[derive(Clone, Copy)]
+struct Ride {
+    on: bool,
+    pump: f32,
+    glide: f32,
+    cap: f32,
+}
+
+impl Ride {
+    fn of(args: &Args, on: Option<&crate::beams::CanalsOn>, canal: usize) -> Self {
+        Self {
+            on: on.and_then(|o| o.0.get(canal).copied()).unwrap_or(false),
+            pump: args.num("canal_pump", 0.25),
+            glide: args.num("canal_glide", 0.85),
+            cap: args.num("canal_cap", 60.0),
+        }
+    }
+}
+
+/// One movement step inside a canal's half-pipe. The feet ride the exact
 /// cylinder: after moving, if they are outside it they are put back on it
-/// and only the outward part of the velocity is removed, so speed turns into
-/// height and back without loss: down one wall, up the other, and with
-/// enough speed out above the lip. Returns the new hull centre.
-fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, jump: bool, dt: f32) -> Vec3 {
+/// and only the outward part of the velocity is removed. Returns the new
+/// hull centre.
+///
+/// Off, the pipe is stone like any other: friction, walking. On, it is
+/// slick, as in Quake 3 (Defrag's slick gliding): no friction and
+/// air-strength acceleration, so speed turns into height and back without
+/// loss, down one wall and up the other, and with enough speed out above the
+/// lip; gravity a little weaker (`glide`), so arcs off the walls hang
+/// longer; and each descent pressed to the surface gives back `pump` more
+/// than gravity alone would: speed is won by working the walls, as a skater
+/// pumps a bowl, never by the canal pushing.
+fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, jump: bool, dt: f32, ride: Ride) -> Vec3 {
     let radius = worldgen::canal::PIPE_RADIUS as f32;
     // Jump off the surface, away from it.
     if player.grounded && jump {
         player.velocity += player.ground_normal * JUMP_SPEED;
         player.grounded = false;
     }
-    accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
-    player.velocity.y -= GRAVITY * dt;
+    // Touching the pipe, input steers you freely but adds speed only up to
+    // a run (`MAX_SPEED`): beyond, speed comes only from the pipe, height
+    // turned to speed, and (on) pumping. (Unbounded, it was Counter-Strike's
+    // surf: holding strafe looking some 30 degrees off the canal, the wall
+    // cancelled the push into it every step, so the push's share along the
+    // canal never met the cap, and speed grew and grew without friction to
+    // take it: 19 m/s in four seconds, and on, the user. Away from the wall,
+    // in the air, Quake's air control as anywhere.)
+    let before = player.velocity.length();
+    if ride.on {
+        accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
+        player.velocity.y -= GRAVITY * ride.glide * dt;
+    } else {
+        // (Friction along the surface, whichever way it slopes.)
+        if player.grounded {
+            let speed = player.velocity.length();
+            if speed > 0.0 {
+                let drop = speed.max(STOP_SPEED) * FRICTION * dt;
+                player.velocity *= (speed - drop).max(0.0) / speed;
+            }
+            accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
+        } else {
+            accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
+        }
+        player.velocity.y -= GRAVITY * dt;
+    }
+    if player.on_pipe {
+        // (What gravity just added is the pipe's to give, not input's:
+        // measured with it removed.)
+        let gravity = Vec3::Y * GRAVITY * if ride.on { ride.glide } else { 1.0 } * dt;
+        let pushed = player.velocity + gravity;
+        let limit = before.max(MAX_SPEED);
+        if pushed.length() > limit {
+            player.velocity = pushed.normalize() * limit - gravity;
+        }
+    }
 
     let mut moved = center + player.velocity * dt;
     player.grounded = false;
+    player.on_pipe = false;
     let Some(pipe) = world.canal_at(moved.x, moved.z) else { return moved };
     let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
     let axis_height = pipe.floor + radius;
@@ -470,10 +538,21 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
             player.velocity -= outward * into;
         }
         let normal = -outward;
+        player.on_pipe = true;
         if normal.y >= MIN_WALK_NORMAL {
             player.grounded = true;
             player.ground_normal = normal;
         }
+        // Pumping: pressed to the surface and going down, a little more
+        // speed than the fall alone gives.
+        let speed = player.velocity.length();
+        if ride.on && player.velocity.y < 0.0 && speed > 0.0 {
+            let fall = -player.velocity.y / speed;
+            player.velocity *= 1.0 + ride.pump * GRAVITY * ride.glide * fall * dt / speed;
+        }
+    }
+    if ride.on {
+        player.velocity = player.velocity.clamp_length_max(ride.cap);
     }
     moved
 }
@@ -490,6 +569,7 @@ pub fn walk(
     world: Res<WorldGen>,
     move_and_slide: MoveAndSlide,
     bodies: Res<Bodies>,
+    canals_on: Option<Res<crate::beams::CanalsOn>>,
     camera: Single<(&mut Transform, &mut FlyCam, Option<&mut Player>)>,
 ) {
     let (mut transform, mut fly, player) = camera.into_inner();
@@ -631,7 +711,8 @@ pub fn walk(
             if let Tether::Anchored { point, .. } = player.tether {
                 pull_towards(&mut player.velocity, point - center, dt);
             }
-            center = ride_pipe(&world, &mut player, center, wishdir, jump, dt);
+            let ride = Ride::of(&args, canals_on.as_deref(), pipe.map_or(0, |p| p.canal));
+            center = ride_pipe(&world, &mut player, center, wishdir, jump, dt, ride);
             continue;
         }
         if player.grounded {

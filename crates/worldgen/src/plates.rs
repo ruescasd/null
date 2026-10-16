@@ -56,6 +56,8 @@ pub struct PlateWorld {
 /// Flow inside a canal at a point.
 #[derive(Clone, Copy, Debug)]
 pub struct CanalFlow {
+    /// Which canal (its index in the world's canals).
+    pub canal: usize,
     /// Horizontal unit direction the flow pushes along.
     pub dir: glam::Vec2,
     /// Height of the canal's floor (bottom of the pipe) here.
@@ -194,6 +196,7 @@ impl PlateWorld {
         }
         let hit: CanalHit = self.canals.hit(DVec2::new(x as f64, z as f64), 0.0, &|c| self.canal_floor(c))?;
         (hit.offset.abs() < PIPE_RADIUS).then(|| CanalFlow {
+            canal: hit.canal,
             dir: glam::Vec2::new(hit.flow_dir.x as f32, hit.flow_dir.y as f32),
             floor: hit.floor as f32,
             offset: hit.offset as f32,
