@@ -9,6 +9,7 @@ mod combat;
 mod ground;
 mod figure;
 mod beams;
+mod canal_light;
 mod landmarks;
 mod loading;
 /// Every option name the game reads, gathered from its source by `build.rs`.
@@ -208,6 +209,7 @@ fn main() {
             camera::FlyCameraPlugin,
             look::LookPlugin,
             beams::BeamsPlugin,
+            canal_light::CanalLightPlugin,
             capture::CapturePlugin,
             combat::CombatPlugin,
             figure::FigurePlugin,

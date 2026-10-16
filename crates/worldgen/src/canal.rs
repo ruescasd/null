@@ -42,6 +42,31 @@ const PIPE_ALBEDO: f32 = 0.27;
 const DARK_FACETS: usize = 3;
 const DARK_ALBEDO: f32 = 0.06;
 const WALL_ALBEDO: f32 = 0.12;
+/// The grooves along a pipe (the canal's light runs in them when it is on),
+/// as angles from its bottom (radians): one under the rider, one up each
+/// wall. Each is `GROOVE_HALF` m to either side of its line and
+/// `GROOVE_DEPTH` m deep.
+pub const GROOVES: [f64; 3] = [-0.87, 0.0, 0.87];
+pub const GROOVE_HALF: f64 = 0.25;
+pub const GROOVE_DEPTH: f64 = 0.12;
+const GROOVE_ALBEDO: f32 = 0.05;
+/// A joint between the pipe's sections: every `JOINT_EVERY` finest
+/// segments (some 24 m), a ring `JOINT_WIDTH` m long sunk `JOINT_DEPTH` m.
+const JOINT_EVERY: i64 = 3;
+const JOINT_WIDTH: f64 = 0.3;
+const JOINT_DEPTH: f64 = 0.06;
+const JOINT_ALBEDO: f32 = 0.12;
+
+/// A point across a canal's profile, and the facet that starts at it.
+#[derive(Clone, Copy, Debug)]
+struct Facet {
+    /// Offset across, height above the floor.
+    o: f64,
+    h: f64,
+    albedo: f32,
+    /// A groove's side: flat, facing this way (across, up); else curved.
+    flat: Option<DVec2>,
+}
 
 /// A canal: from station `a` to station `b`.
 #[derive(Clone, Copy, Debug)]
@@ -283,6 +308,7 @@ impl Canals {
             let seg = run / n as f64;
             let first = (((l.along - reach - end) / seg).floor() as i64).max(0);
             let last = (((l.along + reach - end) / seg).ceil() as i64).min(n);
+            let (surface, sunk) = (Self::profile(0.0), Self::profile(JOINT_DEPTH));
             for k in first..last {
                 let (s0, s1) = (end + k as f64 * seg, end + (k + 1) as f64 * seg);
                 if !inside(l.start + c.dir * ((s0 + s1) * 0.5)) {
@@ -290,7 +316,19 @@ impl Canals {
                 }
                 let (a, b) = (l.start + c.dir * s0, l.start + c.dir * s1);
                 let (fa, fb) = (self.floor(i, s0, a, field), self.floor(i, s1, b, field));
-                Self::mesh_segment(mesh, c.perp, a, b, fa, fb, (x0, z0));
+                // A joint at its start (near enough to be seen): a ring
+                // sunk a little, stepping down into it and up out of it.
+                let (from, floor_from) = if scale <= 1.0 && k > 0 && k % JOINT_EVERY == 0 {
+                    let j = l.start + c.dir * (s0 + JOINT_WIDTH);
+                    let fj = self.floor(i, s0 + JOINT_WIDTH, j, field);
+                    Self::mesh_segment(mesh, c.perp, a, b, fa, fj, &sunk, (x0, z0), Some(j));
+                    Self::mesh_step(mesh, c.perp, a, fa, &surface, &sunk, c.dir, (x0, z0));
+                    Self::mesh_step(mesh, c.perp, j, fj, &surface, &sunk, -c.dir, (x0, z0));
+                    (j, fj)
+                } else {
+                    (a, fa)
+                };
+                Self::mesh_segment(mesh, c.perp, from, b, floor_from, fb, &surface, (x0, z0), None);
                 // Its ends, where it opens onto a court: capped.
                 if k == 0 {
                     Self::mesh_cap(mesh, c.perp, a, fa, -c.dir, (x0, z0));
@@ -344,64 +382,125 @@ impl Canals {
             Vec3::new((p.x - origin.0) as f32, (floor + h) as f32, (p.y - origin.1) as f32)
         };
         let normal = Vec3::new(out.x as f32, 0.0, out.y as f32);
-        for w in Self::profile().windows(2) {
-            let ((o0, h0, _), (o1, h1, _)) = (w[0], w[1]);
-            if h0 + h1 < 1e-3 {
+        for w in Self::profile(0.0).windows(2) {
+            let (p0, p1) = (w[0], w[1]);
+            if p0.h + p1.h < 1e-3 {
                 continue;
             }
-            push_quad(mesh, [local(o0, h0), local(o1, h1), local(o1, 0.0), local(o0, 0.0)], normal, WALL_ALBEDO, [1.0; 4]);
+            push_quad(mesh, [local(p0.o, p0.h), local(p1.o, p1.h), local(p1.o, 0.0), local(p0.o, 0.0)], normal, WALL_ALBEDO, [1.0; 4]);
         }
     }
 
-    /// The profile across a canal: (offset, height above floor, albedo).
-    /// (Each point's albedo is the facet's that starts at it: the outermost
-    /// each side dark.)
-    fn profile() -> Vec<(f64, f64, f32)> {
-        let mut profile = vec![(-PIPE_RADIUS, PIPE_RADIUS, DARK_ALBEDO)];
-        for f in 1..FACETS {
-            let theta = std::f64::consts::PI * (1.0 + f as f64 / FACETS as f64);
-            let dark = f < DARK_FACETS || f >= FACETS - DARK_FACETS;
-            profile.push((PIPE_RADIUS * theta.cos(), PIPE_RADIUS * (1.0 + theta.sin()), if dark { DARK_ALBEDO } else { PIPE_ALBEDO }));
+    /// Where the surface steps between two profiles (`from` and `to`, of
+    /// the same points), facing `out`.
+    #[allow(clippy::too_many_arguments)]
+    fn mesh_step(mesh: &mut ColumnMesh, perp: DVec2, at: DVec2, floor: f64, from: &[Facet], to: &[Facet], out: DVec2, origin: (f64, f64)) {
+        let local = |p: &Facet| {
+            let q = at + perp * p.o;
+            Vec3::new((q.x - origin.0) as f32, (floor + p.h) as f32, (q.y - origin.1) as f32)
+        };
+        let normal = Vec3::new(out.x as f32, 0.0, out.y as f32);
+        for k in 0..from.len() - 1 {
+            push_quad(mesh, [local(&from[k]), local(&from[k + 1]), local(&to[k + 1]), local(&to[k])], normal, JOINT_ALBEDO, [1.0; 4]);
         }
-        profile.push((PIPE_RADIUS, PIPE_RADIUS, DARK_ALBEDO));
-        profile
     }
 
-    fn mesh_segment(mesh: &mut ColumnMesh, perp: DVec2, a: DVec2, b: DVec2, floor_a: f64, floor_b: f64, origin: (f64, f64)) {
-        let world = |center: DVec2, f: f64, (o, h, _): (f64, f64, f32)| {
+    /// The profile across a canal, `sink` m outside its surface (a joint's
+    /// ring): the half-pipe in facets, the outermost each side dark, with
+    /// its grooves cut in.
+    fn profile(sink: f64) -> Vec<Facet> {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let r = PIPE_RADIUS + sink;
+        let half = GROOVE_HALF / PIPE_RADIUS;
+        // By the angle from the bottom (`phi`): where, and which way along
+        // the surface (towards greater `phi`).
+        let at = |phi: f64, radius: f64| (radius * phi.sin(), PIPE_RADIUS - radius * phi.cos());
+        let tangent = |phi: f64| DVec2::new(phi.cos(), phi.sin());
+        let dark = |phi: f64| phi.abs() > FRAC_PI_2 - DARK_FACETS as f64 * PI / FACETS as f64;
+        let surface = |phi: f64| {
+            if sink > 0.0 {
+                JOINT_ALBEDO
+            } else if dark(phi) {
+                DARK_ALBEDO
+            } else {
+                PIPE_ALBEDO
+            }
+        };
+        let facet = |phi: f64, radius: f64, albedo: f32, flat: Option<DVec2>| {
+            let (o, h) = at(phi, radius);
+            Facet { o, h, albedo, flat }
+        };
+        // (Sorted by angle, then by order at one angle.)
+        let mut points: Vec<(f64, u8, Facet)> = (0..=FACETS)
+            .map(|f| -FRAC_PI_2 + PI * f as f64 / FACETS as f64)
+            .filter(|phi| GROOVES.iter().all(|g| (phi - g).abs() > half))
+            .map(|phi| (phi, 0, facet(phi, r, surface(phi + PI / FACETS as f64 * 0.5), None)))
+            .collect();
+        for g in GROOVES {
+            let (a, b) = (g - half, g + half);
+            points.push((a, 0, facet(a, r, GROOVE_ALBEDO, Some(tangent(a)))));
+            points.push((a, 1, facet(a, r + GROOVE_DEPTH, GROOVE_ALBEDO, None)));
+            points.push((b, 0, facet(b, r + GROOVE_DEPTH, GROOVE_ALBEDO, Some(-tangent(b)))));
+            points.push((b, 1, facet(b, r, surface(b + 1e-6), None)));
+        }
+        points.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+        points.into_iter().map(|(_, _, f)| f).collect()
+    }
+
+    /// A length of pipe from `a` to `b` (or only to `to`, if given) with
+    /// the given profile, and its outer walls.
+    #[allow(clippy::too_many_arguments)]
+    fn mesh_segment(mesh: &mut ColumnMesh, perp: DVec2, a: DVec2, b: DVec2, floor_a: f64, floor_b: f64, profile: &[Facet], origin: (f64, f64), to: Option<DVec2>) {
+        let b = to.unwrap_or(b);
+        let world = |center: DVec2, f: f64, o: f64, h: f64| {
             let p = center + perp * o;
             Vec3::new((p.x - origin.0) as f32, (f + h) as f32, (p.y - origin.1) as f32)
         };
-        // Smooth shading: each profile point gets the curved surface's
-        // normal there (towards the pipe's axis).
-        let profile_normal = |(o, h, _): (f64, f64, f32)| {
-            let n = DVec2::new(-o, PIPE_RADIUS - h).normalize_or_zero();
-            Vec3::new((perp.x * n.x) as f32, n.y as f32, (perp.y * n.x) as f32).normalize_or(Vec3::Y)
-        };
-        for w in Self::profile().windows(2) {
-            let (p0, p1) = (w[0], w[1]);
-            let quad = [world(a, floor_a, p0), world(a, floor_a, p1), world(b, floor_b, p1), world(b, floor_b, p0)];
-            // Open side is up (and towards the pipe's axis inside it).
-            let along = quad[3] - quad[0];
-            let across = quad[1] - quad[0];
-            let mut normal = across.cross(along).normalize_or_zero();
-            if normal.y < 0.0 {
-                normal = -normal;
-            }
-            let bottom_ness = 1.0 - (p0.1 + p1.1) as f32 * 0.5 / PIPE_RADIUS as f32;
+        let across = |n: DVec2| Vec3::new((perp.x * n.x) as f32, n.y as f32, (perp.y * n.x) as f32).normalize_or(Vec3::Y);
+        // Smooth shading on the curve: each point gets the curved surface's
+        // normal there (towards the pipe's axis); a groove's sides are flat.
+        let radial = |p: &Facet| across(DVec2::new(-p.o, PIPE_RADIUS - p.h).normalize_or_zero());
+        for w in profile.windows(2) {
+            let (p0, p1) = (&w[0], &w[1]);
+            let quad = [world(a, floor_a, p0.o, p0.h), world(a, floor_a, p1.o, p1.h), world(b, floor_b, p1.o, p1.h), world(b, floor_b, p0.o, p0.h)];
+            let (n0, n1) = match p0.flat {
+                Some(n) => (across(n), across(n)),
+                None => (radial(p0), radial(p1)),
+            };
+            let bottom_ness = 1.0 - (p0.h + p1.h) as f32 * 0.5 / PIPE_RADIUS as f32;
             let ao = 1.0 - 0.35 * bottom_ness.max(0.0);
-            let (n0, n1) = (profile_normal(p0), profile_normal(p1));
-            push_quad_smooth(mesh, quad, [n0, n1, n1, n0], normal, p0.2, [ao; 4]);
+            push_quad_smooth(mesh, quad, [n0, n1, n1, n0], (n0 + n1).normalize_or(Vec3::Y), p0.albedo, [ao; 4]);
         }
 
         // Outer walls, down past the ground on both sides.
         for side in [-1.0, 1.0] {
-            let top_a = world(a, floor_a, (side * HALF_WIDTH, PIPE_RADIUS, 0.0));
-            let top_b = world(b, floor_b, (side * HALF_WIDTH, PIPE_RADIUS, 0.0));
+            let top_a = world(a, floor_a, side * HALF_WIDTH, PIPE_RADIUS);
+            let top_b = world(b, floor_b, side * HALF_WIDTH, PIPE_RADIUS);
             let down = Vec3::Y * OUTER_DEPTH as f32;
             let normal = Vec3::new((perp.x * side) as f32, 0.0, (perp.y * side) as f32);
             push_quad(mesh, [top_a, top_b, top_b - down, top_a - down], normal, WALL_ALBEDO, [1.0, 1.0, 0.0, 0.0]);
         }
+    }
+
+    /// Canal `i`'s pipe as points along its centreline about `step` m
+    /// apart, from end to end: each where it is, how far along, and its
+    /// floor there.
+    pub fn track(&self, i: usize, step: f64, field: &impl Fn(DVec2) -> f64) -> Vec<(DVec2, f64, f64)> {
+        let c = &self.lines[i];
+        let end = self.end();
+        let n = ((c.length - 2.0 * end) / step).round().max(1.0) as usize;
+        (0..=n)
+            .map(|k| {
+                let along = end + (c.length - 2.0 * end) * k as f64 / n as f64;
+                let at = c.start + c.dir * along;
+                (at, along, self.floor(i, along, at, field))
+            })
+            .collect()
+    }
+
+    /// The unit across canal `i`.
+    pub fn across(&self, i: usize) -> DVec2 {
+        self.lines[i].perp
     }
 }
 
