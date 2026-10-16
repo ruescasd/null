@@ -262,8 +262,19 @@ fn update_material(
     let curvature = if args.opt("flat") { 0.0 } else { 0.5 / PLANET_RADIUS };
     let p = anchor.translation;
     for handle in [&terrain.0, &structures.0] {
+        // (Written only when it changes: each change made Bevy check every
+        // mesh drawn with it again, in every view (the main one, the
+        // prepass, six shadow cascades with both suns up), every frame:
+        // 2.3 ms of a frame on Vulkan at the user's spot standing still.
+        // Moving, it still changes every frame: the camera belongs
+        // somewhere that is not the material.)
+        let Some(old) = materials.get(handle).map(|m| m.extension.params) else { continue };
+        let new = Vec4::new(old.x, curvature, p.x, p.z);
+        if new == old {
+            continue;
+        }
         let Some(mut material) = materials.get_mut(handle) else { continue };
-        material.extension.params = Vec4::new(material.extension.params.x, curvature, p.x, p.z);
+        material.extension.params = new;
     }
 }
 

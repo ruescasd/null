@@ -108,7 +108,7 @@ fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Con
 /// the line, Backspace takes one off, Enter runs it, Up brings back the
 /// last command, Esc puts it away.
 #[allow(clippy::too_many_arguments)]
-fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>, mut exit: MessageWriter<AppExit>) {
+fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, mut exit: MessageWriter<AppExit>) {
     for key in keys.read() {
         if key.state != ButtonState::Pressed {
             continue;
@@ -150,9 +150,14 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                         _ => console.lines.push(format!("spawn what? {}", KINDS.join(", "))),
                     }
                 } else if line.trim() == "where" {
+                    // (Its height above the ground, as `--cam` takes it; also
+                    // in the log, where it can be copied, the user.)
                     let (t, fly) = *camera;
                     let p = t.translation;
-                    console.lines.push(format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, p.y, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()));
+                    let above = p.y - world.as_ref().map_or(0.0, |w| w.ground_height(p.x, p.z));
+                    let cam = format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees());
+                    info!("where: {cam}");
+                    console.lines.push(cam);
                 } else {
                     let said = run(&line, &mut args);
                     console.lines.extend(said);

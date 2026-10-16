@@ -172,7 +172,9 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "terrain".into(),
-                resolution: (1600, 900).into(),
+                // (`--set width`, `height`: the benches at the user's
+                // 1080p.)
+                resolution: (args.num("width", 1600.0) as u32, args.num("height", 900.0) as u32).into(),
                 position: bevy::window::WindowPosition::Centered(bevy::window::MonitorSelection::Primary),
                 present_mode: PresentMode::AutoNoVsync,
                 // (Shown only once the view has settled (see `loading.rs`);
