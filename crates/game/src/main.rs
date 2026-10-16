@@ -120,7 +120,7 @@ pub(crate) static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::
 
 /// `--opt startlog`: from the process's start, each half second
 /// the frames, the worst, whether the ground has settled.
-fn startlog(args: Res<Args>, time: Res<Time>, streamer: Res<terrain::Streamer>, mut state: Local<(f32, u32, f32, bool)>) {
+fn startlog(args: Res<Args>, time: Res<Time>, streamer: Res<terrain::Streamer>, compiling: Res<loading::Compiling>, mut state: Local<(f32, u32, f32, bool)>) {
     if !args.opt("startlog") {
         return;
     }
@@ -135,7 +135,7 @@ fn startlog(args: Res<Args>, time: Res<Time>, streamer: Res<terrain::Streamer>, 
     state.1 += 1;
     state.2 = state.2.max(dt);
     if since - state.0 >= 0.5 {
-        info!("startlog: {since:5.2} s  {:4.0} fps  worst {:6.1} ms  settled {}  missing by level {:?}, {} being built", state.1 as f32 / (since - state.0), state.2 * 1000.0, streamer.settled, streamer.missing, streamer.in_flight);
+        info!("startlog: {since:5.2} s  {:4.0} fps  worst {:6.1} ms  settled {}  missing by level {:?}, {} being built, {} shaders compiling", state.1 as f32 / (since - state.0), state.2 * 1000.0, streamer.settled, streamer.missing, streamer.in_flight, compiling.0.load(std::sync::atomic::Ordering::Relaxed));
         *state = (since, 0, 0.0, true);
     }
 }
@@ -207,15 +207,16 @@ fn main() {
         // and with eight lamps casting shadows the region ran at 57-74
         // frames a second, 98-136 so. See `CpuBatching`.)
         }).set(bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: args.opt("gpubatch"), ..default() })
-        // (DirectX 12 on Windows, not Vulkan, which wgpu picks first: the
-        // same frames, near twice as fast. At the user's spot among the
-        // pillars by night 5.4 ms on Vulkan, 3.1 on DirectX 12; by day 10.3
-        // and 6.1: most of Vulkan's frame went waiting to present it, on
-        // the user's NVIDIA card. `--opt vulkan` for Vulkan; WGPU_BACKEND
-        // still chooses, if set.)
+        // (Vulkan, as wgpu picks first; `--opt dx12` for DirectX 12. Its
+        // frames were faster (at the user's spot by day 9.6 ms to Vulkan's
+        // 10.4, once the terrain's material stopped being rewritten every
+        // frame), but its shader compiler, FXC, is slow: the window,
+        // waiting for the shaders, showed at 11.8 s; Vulkan's soon. Its
+        // other, DXC, compiles fast, but its shaders ran 15-30% slower.
+        // Development first, the user. WGPU_BACKEND still chooses, if set.)
         .set(bevy::render::RenderPlugin {
             render_creation: bevy::render::settings::WgpuSettings {
-                backends: Some(bevy::render::settings::Backends::from_env().unwrap_or(if cfg!(windows) && !args.opt("vulkan") {
+                backends: Some(bevy::render::settings::Backends::from_env().unwrap_or(if cfg!(windows) && args.opt("dx12") {
                     bevy::render::settings::Backends::DX12
                 } else {
                     bevy::render::settings::Backends::all()
