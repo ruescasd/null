@@ -1,6 +1,7 @@
 //! Screenshots: F12 at any time, or `--shot path.png` to render a single frame
 //! once the terrain in view has loaded, save it and exit. `--opt bench`
-//! measures frame times once everything in view has loaded, and exits.
+//! measures frame times once everything in view has loaded, and exits;
+//! `--opt flybench` flies and measures every frame, for stutter.
 
 use bevy::{
     prelude::*,
@@ -16,7 +17,9 @@ impl Plugin for CapturePlugin {
         app.init_resource::<AutoShot>()
             .init_resource::<Bench>()
             .init_resource::<Tour>()
-            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus, room_tour, view_bench));
+            .init_resource::<Flight>()
+            .add_systems(Update, (manual_shot, auto_shot, bench, lab_tour, lab_focus, room_tour, view_bench))
+            .add_systems(PostUpdate, fly_bench.before(TransformSystems::Propagate));
     }
 }
 
@@ -30,6 +33,102 @@ struct AutoShot {
     /// between frames.
     after: u32,
     more_saved: u32,
+}
+
+/// `--opt flybench`: a flight for stutter (the user: flying in noclip
+/// stutters). Once the world round the start (`--cam`) has loaded and a
+/// moment passed, flies straight on along its heading at its height, at
+/// `--set flyspeed` m/s (125, noclip's fast; 25 its pace) for `--set
+/// flytime` s, recording each frame's real time and what arrived in it;
+/// then logs the spread of frame times and the worst frames with what came
+/// in them, and exits.
+#[derive(Resource, Default)]
+struct Flight {
+    /// When the world had loaded, where from and which way.
+    since: Option<(f32, Vec3, Vec3)>,
+    /// Each frame: its time (ms), terrain columns put in the world, meshes
+    /// added, structures finished, physics bodies added.
+    frames: Vec<(f32, u32, u32, u32, u32)>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fly_bench(
+    args: Res<Args>,
+    real: Res<Time<Real>>,
+    streamer: Res<Streamer>,
+    building: Query<(), With<crate::structures::Building>>,
+    columns: Query<(), Added<crate::terrain::TerrainColumn>>,
+    bodies: Query<(), Added<avian3d::prelude::RigidBody>>,
+    mut built: RemovedComponents<crate::structures::Building>,
+    mut meshes: MessageReader<AssetEvent<Mesh>>,
+    mut flight: ResMut<Flight>,
+    mut camera: Single<&mut Transform, With<crate::camera::FlyCam>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let added = meshes.read().filter(|e| matches!(e, AssetEvent::Added { .. })).count() as u32;
+    let finished = built.read().count() as u32;
+    if !args.opt("flybench") {
+        return;
+    }
+    let now = real.elapsed_secs();
+    let Some((since, from, toward)) = flight.since else {
+        if streamer.settled && building.is_empty() {
+            let f = camera.forward();
+            flight.since = Some((now, camera.translation, Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::X)));
+        }
+        return;
+    };
+    let wait = 2.0;
+    let (speed, time) = (args.num("flyspeed", 125.0), args.num("flytime", 30.0));
+    let t = now - since - wait;
+    if t < 0.0 {
+        return;
+    }
+    camera.translation = from + toward * speed * t;
+    if t < time {
+        flight.frames.push((real.delta_secs() * 1000.0, columns.iter().count() as u32, added, finished, bodies.iter().count() as u32));
+        return;
+    }
+    let frames = &flight.frames;
+    let mut sorted: Vec<f32> = frames.iter().map(|f| f.0).collect();
+    sorted.sort_by(f32::total_cmp);
+    let at = |q: f32| sorted[((sorted.len() - 1) as f32 * q) as usize];
+    let over = |ms: f32| sorted.iter().filter(|&&f| f > ms).count();
+    info!(
+        "flybench: {} frames over {:.0} m at {speed} m/s: median {:.2} ms, 95% {:.2}, 99% {:.2}, worst {:.2}; over 10 ms {}, over 16.7 ms {}, over 33 ms {}",
+        frames.len(),
+        speed * time,
+        at(0.5),
+        at(0.95),
+        at(0.99),
+        at(1.0),
+        over(10.0),
+        over(16.7),
+        over(33.3)
+    );
+    // Frames with something arriving, and those with nothing.
+    let quiet: Vec<f32> = frames.iter().filter(|f| f.1 + f.2 + f.3 + f.4 == 0).map(|f| f.0).collect();
+    let busy: Vec<f32> = frames.iter().filter(|f| f.1 + f.2 + f.3 + f.4 > 0).map(|f| f.0).collect();
+    let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+    let worst = |v: &[f32]| v.iter().copied().fold(0.0, f32::max);
+    info!(
+        "flybench: quiet frames {} (mean {:.2} ms, worst {:.2}); frames with arrivals {} (mean {:.2} ms, worst {:.2})",
+        quiet.len(),
+        mean(&quiet),
+        worst(&quiet),
+        busy.len(),
+        mean(&busy),
+        worst(&busy)
+    );
+    let totals = frames.iter().fold((0, 0, 0, 0), |a, f| (a.0 + f.1, a.1 + f.2, a.2 + f.3, a.3 + f.4));
+    info!("flybench: arrived in all: {} terrain columns, {} meshes, {} structures, {} bodies", totals.0, totals.1, totals.2, totals.3);
+    let mut order: Vec<usize> = (0..frames.len()).collect();
+    order.sort_by(|&a, &b| frames[b].0.total_cmp(&frames[a].0));
+    for &k in order.iter().take(15) {
+        let f = frames[k];
+        info!("flybench: frame {k} ({:.0} m): {:.2} ms; columns {}, meshes {}, structures {}, bodies {}", k as f32 / frames.len() as f32 * speed * time, f.0, f.1, f.2, f.3, f.4);
+    }
+    exit.write(AppExit::Success);
 }
 
 #[derive(Resource, Default)]

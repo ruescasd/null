@@ -198,7 +198,7 @@ fn setup(
         yaw: yaw.to_radians(),
         pitch: pitch.to_radians(),
         speed: 25.0,
-        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots") || args.opt("roomshots") || args.opt("viewbench"),
+        noclip: (args.shot.is_some() && !args.opt("fight")) || args.opt("noclip") || args.opt("labshots") || args.opt("roomshots") || args.opt("viewbench") || args.opt("flybench"),
     };
 
     let stars = star_cubemap(&mut images);

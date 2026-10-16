@@ -29,7 +29,15 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
+        // The collision shapes' tree re-optimised as physics runs, not in a
+        // background task: that task queued behind the terrain's and the
+        // structures' building, on the same few threads, and physics waited
+        // for it: frames of half a second flying fast (`--opt flybench`),
+        // the stutter the user saw in noclip. `--opt treeasync` for avian's
+        // own way.
+        let tree_async = app.world().resource::<crate::Args>().opt("treeasync");
         app.add_plugins(PhysicsPlugins::default())
+            .insert_resource(avian3d::collider_tree::ColliderTreeOptimization { use_async_tasks: tree_async, ..default() })
             .init_resource::<MoveInput>().init_resource::<Bodies>()
             .add_systems(Startup, setup_hud)
             .add_systems(Update, update_hud)
