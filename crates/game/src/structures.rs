@@ -228,7 +228,9 @@ fn watch(
         && !args.opt("lab")
         && !args.opt("chasm")
     {
-        let new = PlateWorld::new(old.size(), args.seed).with_sites(&library);
+        let mut new = PlateWorld::new(old.size(), args.seed);
+        new.canals.stones = old.canals.stones;
+        let new = new.with_sites(&library);
         if !old.same_ground(&new) {
             info!("sites changed: regenerating the terrain");
             commands.insert_resource(WorldGen(Arc::new(new)));

@@ -66,6 +66,29 @@ struct Facet {
     albedo: f32,
     /// A groove's side: flat, facing this way (across, up); else curved.
     flat: Option<DVec2>,
+    /// Lined with stones (near you): the pipe's own surface, not a
+    /// groove's or a joint's.
+    stone: bool,
+}
+
+/// The stones lining a pipe near you (at the finest detail only: smaller
+/// than a pixel they would shimmer): each `length` m along it, its rows
+/// staggered by half that, its tone varying by up to `tone` (a share of its
+/// albedo), and lit as if tilted up to `tilt` degrees, each its own way.
+/// The same whether a canal is on or off: they are the stone itself. (The
+/// user: in the pipe it was hard to judge how fast you go, nothing in it
+/// passing; grain, but not a texture.)
+#[derive(Clone, Copy, Debug)]
+pub struct Stones {
+    pub length: f64,
+    pub tone: f32,
+    pub tilt: f32,
+}
+
+impl Default for Stones {
+    fn default() -> Self {
+        Self { length: 2.0, tone: 0.08, tilt: 2.0 }
+    }
 }
 
 /// A canal: from station `a` to station `b`.
@@ -111,6 +134,7 @@ pub struct Canals {
     size: f64,
     pub lines: Vec<Canal>,
     pub stations: Vec<DVec2>,
+    pub stones: Stones,
 }
 
 impl Canals {
@@ -134,7 +158,7 @@ impl Canals {
                 }
             })
             .collect();
-        Self { size, lines, stations: network.stations }
+        Self { size, lines, stations: network.stations, stones: Stones::default() }
     }
 
     /// `d` round the wrap the short way.
@@ -321,14 +345,16 @@ impl Canals {
                 let (from, floor_from) = if scale <= 1.0 && k > 0 && k % JOINT_EVERY == 0 {
                     let j = l.start + c.dir * (s0 + JOINT_WIDTH);
                     let fj = self.floor(i, s0 + JOINT_WIDTH, j, field);
-                    Self::mesh_segment(mesh, c.perp, a, b, fa, fj, &sunk, (x0, z0), Some(j));
+                    Self::mesh_segment(mesh, c.perp, a, b, fa, fj, &sunk, (x0, z0), Some(j), None);
                     Self::mesh_step(mesh, c.perp, a, fa, &surface, &sunk, c.dir, (x0, z0));
                     Self::mesh_step(mesh, c.perp, j, fj, &surface, &sunk, -c.dir, (x0, z0));
                     (j, fj)
                 } else {
                     (a, fa)
                 };
-                Self::mesh_segment(mesh, c.perp, from, b, floor_from, fb, &surface, (x0, z0), None);
+                let start = s0 + (from - a).length();
+                let stones = (scale <= 1.0).then_some((self.stones, i, start, s1));
+                Self::mesh_segment(mesh, c.perp, from, b, floor_from, fb, &surface, (x0, z0), None, stones);
                 // Its ends, where it opens onto a court: capped.
                 if k == 0 {
                     Self::mesh_cap(mesh, c.perp, a, fa, -c.dir, (x0, z0));
@@ -428,29 +454,42 @@ impl Canals {
         };
         let facet = |phi: f64, radius: f64, albedo: f32, flat: Option<DVec2>| {
             let (o, h) = at(phi, radius);
-            Facet { o, h, albedo, flat }
+            Facet { o, h, albedo, flat, stone: false }
         };
+        let stone = |f: Facet| Facet { stone: sink == 0.0, ..f };
         // (Sorted by angle, then by order at one angle.)
         let mut points: Vec<(f64, u8, Facet)> = (0..=FACETS)
             .map(|f| -FRAC_PI_2 + PI * f as f64 / FACETS as f64)
             .filter(|phi| GROOVES.iter().all(|g| (phi - g).abs() > half))
-            .map(|phi| (phi, 0, facet(phi, r, surface(phi + PI / FACETS as f64 * 0.5), None)))
+            .map(|phi| (phi, 0, stone(facet(phi, r, surface(phi + PI / FACETS as f64 * 0.5), None))))
             .collect();
         for g in GROOVES {
             let (a, b) = (g - half, g + half);
             points.push((a, 0, facet(a, r, GROOVE_ALBEDO, Some(tangent(a)))));
             points.push((a, 1, facet(a, r + GROOVE_DEPTH, GROOVE_ALBEDO, None)));
             points.push((b, 0, facet(b, r + GROOVE_DEPTH, GROOVE_ALBEDO, Some(-tangent(b)))));
-            points.push((b, 1, facet(b, r, surface(b + 1e-6), None)));
+            points.push((b, 1, stone(facet(b, r, surface(b + 1e-6), None))));
         }
         points.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
         points.into_iter().map(|(_, _, f)| f).collect()
     }
 
     /// A length of pipe from `a` to `b` (or only to `to`, if given) with
-    /// the given profile, and its outer walls.
+    /// the given profile, and its outer walls; lined with stones if given
+    /// them (and which canal it is, and how far along it runs, from and to).
     #[allow(clippy::too_many_arguments)]
-    fn mesh_segment(mesh: &mut ColumnMesh, perp: DVec2, a: DVec2, b: DVec2, floor_a: f64, floor_b: f64, profile: &[Facet], origin: (f64, f64), to: Option<DVec2>) {
+    fn mesh_segment(
+        mesh: &mut ColumnMesh,
+        perp: DVec2,
+        a: DVec2,
+        b: DVec2,
+        floor_a: f64,
+        floor_b: f64,
+        profile: &[Facet],
+        origin: (f64, f64),
+        to: Option<DVec2>,
+        stones: Option<(Stones, usize, f64, f64)>,
+    ) {
         let b = to.unwrap_or(b);
         let world = |center: DVec2, f: f64, o: f64, h: f64| {
             let p = center + perp * o;
@@ -460,16 +499,44 @@ impl Canals {
         // Smooth shading on the curve: each point gets the curved surface's
         // normal there (towards the pipe's axis); a groove's sides are flat.
         let radial = |p: &Facet| across(DVec2::new(-p.o, PIPE_RADIUS - p.h).normalize_or_zero());
-        for w in profile.windows(2) {
+        let along = (world(b, floor_b, 0.0, 0.0) - world(a, floor_a, 0.0, 0.0)).normalize_or(Vec3::X);
+        for (f, w) in profile.windows(2).enumerate() {
             let (p0, p1) = (&w[0], &w[1]);
-            let quad = [world(a, floor_a, p0.o, p0.h), world(a, floor_a, p1.o, p1.h), world(b, floor_b, p1.o, p1.h), world(b, floor_b, p0.o, p0.h)];
             let (n0, n1) = match p0.flat {
                 Some(n) => (across(n), across(n)),
                 None => (radial(p0), radial(p1)),
             };
             let bottom_ness = 1.0 - (p0.h + p1.h) as f32 * 0.5 / PIPE_RADIUS as f32;
             let ao = 1.0 - 0.35 * bottom_ness.max(0.0);
-            push_quad_smooth(mesh, quad, [n0, n1, n1, n0], (n0 + n1).normalize_or(Vec3::Y), p0.albedo, [ao; 4]);
+            let facing = (n0 + n1).normalize_or(Vec3::Y);
+            let Some((st, canal, from, upto)) = stones.filter(|_| p0.stone) else {
+                let quad = [world(a, floor_a, p0.o, p0.h), world(a, floor_a, p1.o, p1.h), world(b, floor_b, p1.o, p1.h), world(b, floor_b, p0.o, p0.h)];
+                push_quad_smooth(mesh, quad, [n0, n1, n1, n0], facing, p0.albedo, [ao; 4]);
+                continue;
+            };
+            // The row's stones: cut every `length` m along the canal, every
+            // other row staggered by half that.
+            let stagger = if f % 2 == 1 { st.length * 0.5 } else { 0.0 };
+            let mut cuts = vec![from];
+            let mut k = ((from - stagger) / st.length).floor() as i64 + 1;
+            while stagger + k as f64 * st.length < upto - 1e-6 {
+                cuts.push(stagger + k as f64 * st.length);
+                k += 1;
+            }
+            cuts.push(upto);
+            let lean = st.tilt.to_radians().tan();
+            for c in cuts.windows(2) {
+                let (t0, t1) = ((c[0] - from) / (upto - from), (c[1] - from) / (upto - from));
+                let id = (((c[0] + c[1]) * 0.5 - stagger) / st.length).floor() as i32;
+                let r = |k: i32| hash01(id, f as i32 * 4 + k, canal as i32, 0x570e5);
+                let tone = 1.0 + st.tone * (2.0 * r(0) - 1.0);
+                let (x, y) = (2.0 * r(1) - 1.0, 2.0 * r(2) - 1.0);
+                let tilt = |n: Vec3| (n + (n.cross(along) * x + along * y) * lean).normalize();
+                let (q0, q1) = (a.lerp(b, t0), a.lerp(b, t1));
+                let (f0, f1) = (floor_a + (floor_b - floor_a) * t0, floor_a + (floor_b - floor_a) * t1);
+                let quad = [world(q0, f0, p0.o, p0.h), world(q0, f0, p1.o, p1.h), world(q1, f1, p1.o, p1.h), world(q1, f1, p0.o, p0.h)];
+                push_quad_smooth(mesh, quad, [tilt(n0), tilt(n1), tilt(n1), tilt(n0)], facing, p0.albedo * tone, [ao; 4]);
+            }
         }
 
         // Outer walls, down past the ground on both sides.

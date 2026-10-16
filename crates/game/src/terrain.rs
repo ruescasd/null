@@ -42,6 +42,18 @@ const NEAR: f32 = 80.0;
 /// Radius of the fake planet used to bend the world below the horizon.
 pub const PLANET_RADIUS: f32 = 40_000.0;
 
+/// The stones lining the canals' pipes (see worldgen's `canal::Stones`):
+/// `--set stone_length` (m), `stone_tone` (a share of the albedo),
+/// `stone_tilt` (degrees).
+pub fn stones(args: &Args) -> worldgen::canal::Stones {
+    let d = worldgen::canal::Stones::default();
+    worldgen::canal::Stones {
+        length: args.num("stone_length", d.length as f32) as f64,
+        tone: args.num("stone_tone", d.tone),
+        tilt: args.num("stone_tilt", d.tilt),
+    }
+}
+
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
@@ -53,7 +65,8 @@ impl Plugin for TerrainPlugin {
             WorldGen(Arc::new(PlateWorld::lab(WORLD_SIZE, args.seed)))
         } else {
             // The sites in the structure library reshape the ground.
-            let world = PlateWorld::new(WORLD_SIZE, args.seed);
+            let mut world = PlateWorld::new(WORLD_SIZE, args.seed);
+            world.canals.stones = stones(args);
             match crate::structures::load_library() {
                 Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
                 _ => WorldGen(Arc::new(world)),
