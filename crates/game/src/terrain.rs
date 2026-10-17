@@ -260,7 +260,9 @@ fn setup_material(
             } else {
                 Vec4::new(grain, world.size(), relief, if args.opt("coarsegrain") { 1.0 } else { 0.0 })
             },
-            glow: Vec4::new(glow, 0.0, 0.0, 0.0),
+            // (`--set surface`, `surface_strength`, `crack_mask`: the
+            // ground's detail, test switches, see `terrain.wgsl`.)
+            glow: Vec4::new(glow, args.num("surface", 0.0), args.num("surface_strength", 1.6), args.num("crack_mask", 0.0)),
             paving: Vec4::new(paving, args.num("tile", 2.0), args.num("paving_contrast", 0.18), args.num("paved", 0.45)),
         },
     };
