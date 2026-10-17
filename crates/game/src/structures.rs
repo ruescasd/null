@@ -231,6 +231,7 @@ fn watch(
         let mut new = PlateWorld::new(old.size(), args.seed);
         new.canals.stones = old.canals.stones;
         new.canals.rise = old.canals.rise;
+        new.canals.relief = old.canals.relief;
         new.districts.force = old.districts.force;
         let new = new.with_sites(&library);
         if !old.same_ground(&new) {

@@ -159,6 +159,12 @@ pub struct Canals {
     pub stations: Vec<DVec2>,
     pub stones: Stones,
     pub rise: Rise,
+    /// How much of a district's relief a canal's floor follows, at most
+    /// (`--set canal_relief`): over it the hills rise round the canal, in a
+    /// cutting. 1.5 (the user: working the right way; at 0.8 the highlands,
+    /// at 3, put canals in gorges 14 to 86 m deep, 48 on average, which the
+    /// user found dramatic; at 1.5, 10 to 65, 36).
+    pub relief: f64,
 }
 
 impl Canals {
@@ -182,7 +188,7 @@ impl Canals {
                 }
             })
             .collect();
-        Self { size, lines, stations: network.stations, stones: Stones::default(), rise: Rise::default() }
+        Self { size, lines, stations: network.stations, stones: Stones::default(), rise: Rise::default(), relief: 1.5 }
     }
 
     /// `d` round the wrap the short way.

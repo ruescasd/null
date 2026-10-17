@@ -217,7 +217,7 @@ impl PlateWorld {
     pub fn canal_floor(&self, c: DVec2) -> f64 {
         let base = self.base.sample2(c.x as f32, c.y as f32, self.size as f32) as f64;
         let base = if base < 0.0 { base * 0.25 } else { base };
-        let relief = self.districts.blended(c.x, c.y).relief.min(0.8);
+        let relief = self.districts.blended(c.x, c.y).relief.min(self.canals.relief);
         // (Its rim 3.5 m under the ground's broad height: the ground beside
         // it above the rim on 99 edges in 100, so it lies in a cutting, the
         // plates' own walls down to it. A metre over that height, the ground

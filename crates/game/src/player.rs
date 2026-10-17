@@ -562,7 +562,6 @@ fn pipe_move(v: &mut Vec3, along: Vec3, steer: Steer, dt: f32, ride: Ride) {
 /// whatever you did, it was free: a swing kept going fed itself).
 #[allow(clippy::too_many_arguments)]
 fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, steer: Steer, jump: bool, dt: f32, ride: Ride) -> Vec3 {
-    let radius = worldgen::canal::PIPE_RADIUS as f32;
     // Below the lip, standing is the feet on the pipe's cylinder, where it
     // is walkable, not moving off it. (The physics' ground test cannot tell:
     // the feet ride the cylinder half a hull's width inside the pipe's
@@ -572,12 +571,9 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
     // stood on a wall.)
     let mut along = Vec3::ZERO;
     if let Some(pipe) = world.canal_at(center.x, center.z) {
-        let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
-        along = Vec3::new(-across.z, 0.0, across.x);
-        let (o, h) = (pipe.offset, center.y - HEIGHT * 0.5 - (pipe.floor + radius));
-        if h < 0.0 {
-            let r = (o * o + h * h).sqrt();
-            let normal = -(across * o + Vec3::Y * h) / r;
+        let frame = PipeFrame::at(world, &pipe, center);
+        along = frame.level_along;
+        if let Some((r, normal)) = frame.feet(center) {
             player.grounded = r > PIPE_RIDE_RADIUS - 0.05 && normal.y >= MIN_WALK_NORMAL && player.velocity.dot(normal) <= 0.5;
             if player.grounded {
                 player.ground_normal = normal;
@@ -589,6 +585,7 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         player.velocity += player.ground_normal * JUMP_SPEED;
         player.grounded = false;
     }
+    let on_surface = player.grounded;
     if ride.on {
         pipe_move(&mut player.velocity, along, steer, dt, ride);
     } else if player.grounded {
@@ -611,44 +608,89 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
     let mut moved = center + player.velocity * dt;
     player.grounded = false;
     let Some(pipe) = world.canal_at(moved.x, moved.z) else { return moved };
-    let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
-    let axis_height = pipe.floor + radius;
-    // The feet relative to the pipe's axis, in its cross-section.
-    let (o, h) = (pipe.offset, moved.y - HEIGHT * 0.5 - axis_height);
-    let r = (o * o + h * h).sqrt();
-    if h < 0.0 && r > PIPE_RIDE_RADIUS {
-        let k = PIPE_RIDE_RADIUS / r;
-        moved += across * (o * k - o) + Vec3::Y * (h * k - h);
-        let outward = (across * o + Vec3::Y * h) / r;
+    let frame = PipeFrame::at(world, &pipe, moved);
+    if let Some((r, normal)) = frame.feet(moved) {
+        let outward = -normal;
         let into = player.velocity.dot(outward);
-        if into > 0.0 {
-            player.velocity -= outward * into;
-        }
-        let normal = -outward;
-        if normal.y >= MIN_WALK_NORMAL {
-            player.grounded = true;
-            player.ground_normal = normal;
-        }
-        if ride.on {
-            // Pumping: going down, pressed to the wall, strafing the way
-            // you swing.
-            let swing = player.velocity.dot(across);
-            let with = wishdir.dot(across) * swing.signum();
-            let speed = player.velocity.length();
-            if player.velocity.y < 0.0 && with > 0.0 && speed > 0.0 {
-                let fall = -player.velocity.y / speed;
-                player.velocity *= 1.0 + ride.pump * with * GRAVITY * ride.glide * fall * dt / speed;
+        // Outside the cylinder, put back on it; just inside it, coming off
+        // the walkable bottom only by the canal's own fall or rise and not
+        // leaving it, kept on it, as walking down stairs (the user: gliding
+        // down a ramp, you bounced, airborne: no high-tech surface).
+        let snap = on_surface && r > PIPE_RIDE_RADIUS - 0.15 && normal.y >= MIN_WALK_NORMAL && into > -1.0;
+        if r > PIPE_RIDE_RADIUS || snap {
+            moved += outward * (PIPE_RIDE_RADIUS - r);
+            if into > 0.0 || snap {
+                player.velocity -= outward * into;
+            }
+            if normal.y >= MIN_WALK_NORMAL {
+                player.grounded = true;
+                player.ground_normal = normal;
+            }
+            if ride.on {
+                // Pumping: going down the wall (across the pipe, not the
+                // canal's own fall), pressed to it, strafing the way you
+                // swing.
+                let swing = player.velocity.dot(frame.across);
+                let with = wishdir.dot(frame.across) * swing.signum();
+                let speed = player.velocity.length();
+                let down = -player.velocity.dot(frame.up);
+                if down > 0.0 && with > 0.0 && speed > 0.0 {
+                    player.velocity *= 1.0 + ride.pump * with * GRAVITY * ride.glide * (down / speed) * dt / speed;
+                }
             }
         }
     }
     if ride.on {
         // The swing across dying away; along the canal, nothing lost.
-        let along = Vec3::new(-across.z, 0.0, across.x);
-        let ahead = along * player.velocity.dot(along);
+        let ahead = frame.along * player.velocity.dot(frame.along);
         player.velocity = ahead + (player.velocity - ahead) * (-ride.damp * dt).exp();
         player.velocity = player.velocity.clamp_length_max(ride.cap);
     }
     moved
+}
+
+/// A canal's pipe at a point, tilted with its floor: across it, along it
+/// (rising or falling as the floor does), up square to that, and where its
+/// axis passes. (Level, gravity never ran along a ramp, so speed was
+/// neither gained down one nor lost up one, and gliding down you left the
+/// floor and bounced, the user.)
+struct PipeFrame {
+    across: Vec3,
+    along: Vec3,
+    level_along: Vec3,
+    up: Vec3,
+    axis_height: f32,
+    offset: f32,
+}
+
+impl PipeFrame {
+    fn at(world: &WorldGen, pipe: &worldgen::plates::CanalFlow, p: Vec3) -> Self {
+        let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
+        let level_along = Vec3::new(-across.z, 0.0, across.x);
+        // (The floor's grade, from a metre either way.)
+        let floor = |q: Vec3| world.canal_at(q.x, q.z).map(|c| c.floor);
+        let grade = match (floor(p + level_along), floor(p - level_along)) {
+            (Some(a), Some(b)) => (a - b) * 0.5,
+            _ => 0.0,
+        };
+        let along = (level_along + Vec3::Y * grade).normalize();
+        let up = (Vec3::Y - along * along.y).normalize();
+        let radius = worldgen::canal::PIPE_RADIUS as f32;
+        Self { across, along, level_along, up, axis_height: pipe.floor + radius, offset: pipe.offset }
+    }
+
+    /// The feet of a body centred at `center`, if below the axis: how far
+    /// from the axis (square to it), and the surface's normal there.
+    fn feet(&self, center: Vec3) -> Option<(f32, Vec3)> {
+        let h = center.y - HEIGHT * 0.5 - self.axis_height;
+        if h >= 0.0 {
+            return None;
+        }
+        // (Measured square to the tilted axis.)
+        let hp = h * self.up.y;
+        let r = (self.offset * self.offset + hp * hp).sqrt();
+        Some((r, -(self.across * self.offset + self.up * hp) / r))
+    }
 }
 
 /// Runs between mouse look and the world wrap (see `camera.rs`).

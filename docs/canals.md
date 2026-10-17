@@ -76,6 +76,14 @@ should feel lost, even afraid, and each lit station feels safer for it.
      the new movement. `--opt ridelog` writes `target/ridelog.csv`, frame
      by frame, with the turn rate.
 6. **Geometry tweaks**, to make the journey more interesting:
+   - **Following the land.** A canal's floor follows the land's broad
+     shape (no ridges, unwarped), its relief capped at `--set
+     canal_relief`, 1.5 (was 0.8, the user: the right way; a small effect).
+     Through the highlands canals run in gorges, 10 to 65 m deep, which the
+     user found dramatic. Ramps now ride as ramps: the pipe tilts with its
+     floor, so gravity speeds you down one and slows you up one, and you
+     glide down without bouncing. A bigger lever, if wanted: let canals
+     follow the warped landform, so their rises line up with the hills.
    - **More vertical variation along a canal.** Built and switched off: long
      rises and dips over the land's shape (`--set canal_rise=30`,
      `canal_wave=1800`; the `canal_profile` example prints a canal's floor

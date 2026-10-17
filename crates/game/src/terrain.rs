@@ -75,6 +75,7 @@ impl Plugin for TerrainPlugin {
             let mut world = PlateWorld::new(WORLD_SIZE, args.seed);
             world.canals.stones = stones(args);
             world.canals.rise = rise(args);
+            world.canals.relief = args.num("canal_relief", 1.5) as f64;
             // (`--set district=N`: one district everywhere, in the order of
             // `District::ALL`: 0 floor, 1 tiers, 2 stacks, 3 broken, 4
             // uplands, 5 highlands.)
