@@ -734,18 +734,43 @@ impl PlateWorld {
         let tops: Vec<f64> = poly.iter().map(|&p| top(p)).collect();
         let center_top = top(centroid);
 
-        // What lies just beyond each edge (at its ends and middle), for the
-        // walls: they reach just below the lowest of it, and are left out
-        // where it stands as high as the top (they would never be seen).
+        // What lies just beyond each edge, for the walls: they reach just
+        // below the lowest of it, and are left out where it stands as high
+        // as the top (they would never be seen). Sampled just across the
+        // edge, square to it, a little in from each end and every 8 m
+        // between. (Three samples out from the centre, at the ends and the
+        // middle, missed it: at the ends they fell on a third plate, so a
+        // neighbour tilted away or a sunk station court was not seen, and
+        // walls stopped short of it or were left out, holes onto the void
+        // under the world, the user.)
         let mut lowest = tops.iter().copied().fold(h, f64::min);
         let mut beyond = Vec::with_capacity(n);
         for i in 0..n {
             let (a, b) = (poly[i], poly[(i + 1) % n]);
+            let edge = b - a;
+            let length = edge.length();
             let mut edge_low = f64::MAX;
-            for p in [a, (a + b) * 0.5, b] {
-                let out = p + (p - centroid).normalize_or_zero() * 0.75;
-                let s = self.surface(cache, out.x, out.y, max_level);
-                edge_low = edge_low.min(s);
+            if length > 1e-6 {
+                let mut out = DVec2::new(edge.y, -edge.x) / length;
+                if out.dot((a + b) * 0.5 - centroid) < 0.0 {
+                    out = -out;
+                }
+                let inset = (0.3 / length).min(0.25);
+                let between = (length / 8.0).ceil().clamp(1.0, 8.0) as usize;
+                let ts = [inset, 1.0 - inset].into_iter().chain((0..between).map(|k| (k as f64 + 0.5) / between as f64));
+                for t in ts {
+                    let p = a + edge * t + out * 0.3;
+                    edge_low = edge_low.min(self.surface(cache, p.x, p.y, max_level));
+                }
+                // (A station's court cuts the plates along its sides' lines
+                // drawn on past it, so a wall facing it may be 50 m long and
+                // border it for 8: samples could miss it, and the wall
+                // stopped short of the court's floor, the user's hole.)
+                if !self.lab
+                    && let Some(f) = self.canals.court_floor_near(a, b, &|c| self.canal_floor(c))
+                {
+                    edge_low = edge_low.min(f);
+                }
             }
             lowest = lowest.min(edge_low);
             beyond.push(edge_low);

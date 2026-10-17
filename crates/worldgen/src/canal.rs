@@ -238,6 +238,23 @@ impl Canals {
         field(self.stations[s])
     }
 
+    /// The lowest floor of any station court the segment `a`-`b` touches
+    /// (within half a metre), if any: a plate edge there must reach it.
+    pub fn court_floor_near(&self, a: DVec2, b: DVec2, field: &impl Fn(DVec2) -> f64) -> Option<f64> {
+        let mut lowest: Option<f64> = None;
+        for s in 0..self.stations.len() {
+            // (The station's copy nearest the segment.)
+            let at = a - self.wrap(a - self.stations[s]);
+            let edge = b - a;
+            let t = ((at - a).dot(edge) / edge.length_squared().max(1e-12)).clamp(0.0, 1.0);
+            if (a + edge * t).distance(at) <= STATION_RADIUS + 0.5 {
+                let f = self.station_floor(s, field);
+                lowest = Some(lowest.map_or(f, |l| l.min(f)));
+            }
+        }
+        lowest
+    }
+
     /// The station whose court contains `p`, if any.
     pub fn station_at(&self, p: DVec2) -> Option<usize> {
         // (Its edges tested only near it: built for every station at every
