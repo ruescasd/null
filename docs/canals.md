@@ -70,6 +70,14 @@ should feel lost, even afraid, and each lit station feels safer for it.
      length (the user), so better boots would bring it sooner.
    - Items could raise them: better boots, say, `turn_gain` 3, and the top
      speed (see item progression).
+   - Surfing elsewhere: Quake's surf trick needs faces too steep to stand
+     on (over 45 degrees) but not vertical, long enough to ride. A scan of
+     the whole world at full detail (2026-10-17, seed 1) found almost none
+     away from the canals: 98 patches of 32 m, 7,400 square metres in all,
+     the largest a stretch of 45 to 65 degree slopes about 100 m across in
+     the tiers near (9500, 12190). Sites none; colossi only small facets.
+     Too little to surf; worth scanning again when new forms or districts
+     bring steep slopes.
    - Tests: the movement bot holds one strafe for a set time and weaves
      (`--opt bot --opt strafeonly --opt canals_on`, `--set strafe_time`,
      `strafe_yaw`); it neither turns nor times, so it says little about
@@ -101,9 +109,6 @@ should feel lost, even afraid, and each lit station feels safer for it.
    candidate: energy delivered to a station, such as a porter's load.
 
 ## Open
-
-- **Riding.** Whether steep ordinary ground (earthworks, slanted plates)
-  allows Quake's surf trick: not checked.
 
 - **Stations need real architecture.** They are their own kind of place,
   a transit building, not every important place. Finding them must not be
