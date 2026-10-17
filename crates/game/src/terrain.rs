@@ -258,7 +258,7 @@ fn setup_material(
             grain: if args.opt("nograin") {
                 Vec4::new(0.0, world.size(), 0.0, 0.0)
             } else {
-                Vec4::new(grain, world.size(), relief, 0.0)
+                Vec4::new(grain, world.size(), relief, if args.opt("coarsegrain") { 1.0 } else { 0.0 })
             },
             glow: Vec4::new(glow, 0.0, 0.0, 0.0),
             paving: Vec4::new(paving, args.num("tile", 2.0), args.num("paving_contrast", 0.18), args.num("paved", 0.45)),

@@ -31,7 +31,8 @@
 // zw: camera x and z.
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: vec4<f32>;
 // x: albedo grain strength, y: world wrap period in metres, z: relief
-// strength.
+// strength, w: the coarser octaves (1 m mottling, 4 m blotches) on (1) or
+// off (0).
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> grain: vec4<f32>;
 // x: brightness of lit geometry.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> glow: vec4<f32>;
@@ -72,14 +73,18 @@ struct Grain {
 
 fn sample_grain(p: vec2<f32>, pixel: f32) -> Grain {
     // Octaves: 25 cm speckle, 1 m mottling, 4 m blotches (powers of two, so
-    // every lattice fits the wrap period exactly).
+    // every lattice fits the wrap period exactly). Only the speckle by
+    // default: the mottling and blotches, on big plain faces, read as
+    // camouflage, a texture gone wrong (the user); texture keeps to the
+    // finest scale, the geometry carries the rest (`--opt coarsegrain` for
+    // them).
     let freqs = vec3<f32>(4.0, 1.0, 0.25);
     let mottle_weights = vec3<f32>(0.35, 0.4, 0.25);
     let heights = vec3<f32>(0.004, 0.012, 0.03);
     var g = Grain(0.0, 0.0);
     for (var k = 0; k < 3; k++) {
         let cell = 1.0 / freqs[k];
-        let fade = saturate(cell / (pixel * 3.0) - 1.0);
+        let fade = saturate(cell / (pixel * 3.0) - 1.0) * select(grain.w, 1.0, k == 0);
         let n = value_noise(p, freqs[k]) - 0.5;
         g.mottle += n * mottle_weights[k] * fade;
         g.height += n * heights[k] * fade;
