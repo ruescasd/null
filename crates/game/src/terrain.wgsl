@@ -116,7 +116,7 @@ fn voronoi(p: vec2<f32>, size: f32, seed: i32) -> Cell {
 // and tilt (lit as if tilted, as the canal's stones), with a fine joint round
 // it. Pieces of 32, 8, 2 and 0.5 m (the plates are 128, 32 and 8); each
 // scale fades out before its pieces near a pixel. `level` is the plate's own
-// (0..=2), `id` its number.
+// (0..=2), `id` its number, `smallest` the smallest pieces drawn (m).
 struct Sub {
     tone: f32,
     tilt: vec2<f32>,
@@ -126,7 +126,7 @@ struct Sub {
     groove: vec2<f32>,
 }
 
-fn subdivide(p: vec2<f32>, pixel: f32, level: i32, id: i32) -> Sub {
+fn subdivide(p: vec2<f32>, pixel: f32, level: i32, id: i32, smallest: f32) -> Sub {
     var out = Sub(0.0, vec2<f32>(0.0), 0.0, vec2<f32>(0.0));
     let sizes = array<f32, 4>(32.0, 8.0, 2.0, 0.5);
     let plate_size = 128.0 / f32(1 << u32(2 * level));
@@ -136,7 +136,7 @@ fn subdivide(p: vec2<f32>, pixel: f32, level: i32, id: i32) -> Sub {
         if size >= plate_size || size > wrap.w {
             continue;
         }
-        if size < pieces.x {
+        if size < smallest {
             break;
         }
         let fade = saturate(size / (pixel * 6.0) - 1.0);
@@ -292,7 +292,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // The plates' subdivision, on their tops.
     if wrap.y > 0.5 && plate >= 0 && n.y > 0.85 {
-        let sub = subdivide(p.xz, pixel, plate % 4, plate / 4);
+        // (Its district may keep to the big pieces: see `Rules::pieces`.)
+        let code = plate / 4;
+        let smallest = select(pieces.x, max(pieces.x, 32.0), code >= 1024);
+        let sub = subdivide(p.xz, pixel, plate % 4, code % 1024, smallest);
         // (Grooved, the joint is shaded by its slope, and darkened less.)
         let dark = select(glow.w, glow.w * 0.4, pieces.y > 0.0);
         let c = pbr_input.material.base_color.rgb * (1.0 + sub.tone * glow.y) * (1.0 - dark * sub.joint);

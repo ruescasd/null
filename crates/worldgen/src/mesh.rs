@@ -37,10 +37,11 @@ pub struct ColumnMesh {
     pub indices: Vec<u32>,
 }
 
-/// What a plate's top tells the shader: its level (0..=2) and a number of
-/// its own (0..1024), from 1 up (0 is no plate). Read in `terrain.wgsl`.
-pub fn plate_code(level: usize, id: f32) -> f32 {
-    1.0 + level as f32 + 4.0 * id
+/// What a plate's top tells the shader: its level (0..=2), a number of its
+/// own (0..1024), and whether its district keeps to the big pieces (32 m,
+/// see `Rules::pieces`), from 1 up (0 is no plate). Read in `terrain.wgsl`.
+pub fn plate_code(level: usize, id: f32, big: bool) -> f32 {
+    1.0 + level as f32 + 4.0 * (id + if big { 1024.0 } else { 0.0 })
 }
 
 impl ColumnMesh {

@@ -21,8 +21,9 @@ built, which the noise grain, flecks and cracks did not. The finer pieces
 (2 and 0.5 m) read as painted and are off. `--opt nosubdiv` for none;
 `--set subdiv_smallest` (8; 32 for the 32 m pieces only, 2 or 0.5 for the
 finer ones), `subdiv_split`, `subdiv_groove`, `subdiv_tone`, `subdiv_tilt`,
-`subdiv_joint`. The smallest pieces drawn might be a district's own lever
-(the user was torn between 8 and 32 m). No measurable cost.
+`subdiv_joint`. The smallest pieces drawn are a district's own lever (the
+user was torn between 8 and 32 m): 32 m in the highlands, 8 elsewhere. No
+measurable cost.
 
 ## Districts
 
@@ -33,10 +34,12 @@ cliffs. Defined in `crates/worldgen/src/district.rs`.
 
 | District | Share | Character | Relief | Ledges | Extras |
 |---|---|---|---|---|---|
-| **Floor** | 28% | Vast pale flat plates, like plazas: steps of a few centimetres | ×0.04 | 0.25 m | rare mesas and pits; the hanging cities stand here |
-| **Tiers** | 24% | Terraced slopes of 2 m ledges: everything is a mantle away | ×1.3 | 2 m | big plates rarely split |
-| **Stacks** | 20% | Dark, dense piers and pillars on small plates | ×0.6 | 1 / 0.5 m | pillars on 18% of the finest plates (5–28 m tall) |
-| **Broken** | 28% | The original broken plate terrain, a bit of everything | ×1.0 | 2 / 0.75 m | small plates, nudged; rare pillars |
+| **Floor** | 26% | Vast pale flat plates, like plazas: steps of a few centimetres | ×0.04 | 0.25 m | rare mesas and pits; the hanging cities stand here |
+| **Tiers** | 11% | Terraced slopes of 2 m ledges: everything is a mantle away | ×1.3 | 2 m | big plates rarely split |
+| **Stacks** | 26% | Dark, dense piers and pillars on small plates | ×0.6 | 1 / 0.5 m | pillars on 18% of the finest plates (5–28 m tall) |
+| **Broken** | 19% | The original broken plate terrain, a bit of everything | ×1.0 | 2 / 0.75 m | small plates, nudged; rare pillars |
+| **Uplands** | 12% | Gentle rolling hills of tilted plates, level crests | ×1.5 | 1.75 m | big plates, tilted to set gradients and eight headings |
+| **Highlands** | 6% | High country: tilted plates in strata, lunar ridges | ×3.0 | 1 m | no level crests; the shader's pieces only 32 m |
 
 Measured heights by district (median, 95% below, highest): Floor 1 / 8 /
 87 m, Stacks 12 / 53 / 128 m, Broken 16 / 74 / 170 m, Tiers 18 / 92 /
@@ -46,23 +49,24 @@ Within any district: **mesas** (raised big plates) and **pits** (sunken
 ones), dark or light **marker** plates, and **pillars** grown from the
 `pillar` form.
 
-## Experiment: rolling terrain (Slopes)
+Shares are of the ground (seed 1). The district map picks floor, tiers,
+stacks or broken by weight, then turns two fifths of the tiers into
+highlands and of the broken into uplands. `--set district=N` makes one
+district everywhere (0 floor, 1 tiers, 2 stacks, 3 broken, 4 uplands, 5
+highlands). Uplands and highlands have no sites or colossi yet.
 
-`--opt slopes` turns the whole world into one test district whose plates
-tilt to follow a rolling landform (to set gradients, about 5–19 degrees,
-and eight headings), keeping their steps so the land reads as built.
-`--set slopes_version=1|2|3` and `--set slopes_relief=N` (the hills' total
-height; 1 is today's scale) choose the variant.
+## Rolling terrain: uplands and highlands
 
-| Version | Plates | Steps | Level crests | Relief |
-|---|---|---|---|---|
-| 1 | big | 1 m | no | 2 |
-| 2 | big | 1.75 m | yes | 2.5 |
-| 3 | big | 2.5 m | yes | 3 |
+Plates that tilt to follow a rolling landform (to set gradients, about
+5–19 degrees, and eight headings), keeping their steps so the land reads as
+built. They follow the landform without its ridges, which fade in across
+their borders. They came from an experiment of three versions (big plates
+with 1 m steps; 1.75 m steps and level crests; 2.5 m steps and level
+crests).
 
-**Findings so far (the user, 2026-10-17):**
-- Version 2 works better for reliefs 1 to 2; version 1 works better for
-  reliefs 3 and up.
+**The user's findings (2026-10-17), which made the two districts:**
+- Version 2 works better for reliefs 1 to 2 (now the uplands); version 1
+  works better for reliefs 3 and up (now the highlands).
 - These variants suit the terrain of biomes: kinds of land that districts
   are made from, alongside Floor, Tiers, Stacks and Broken.
 - Small plates with big steps read as the Broken district, and distant

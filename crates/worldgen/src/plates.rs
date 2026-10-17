@@ -185,11 +185,11 @@ impl PlateWorld {
     pub fn shaped(&self, x: f64, z: f64) -> f64 {
         // (Tilted plates follow the landform's rolling part only: with its
         // ridges, far steeper than the steepest set gradient, they could
-        // not, and stood in walls and jumbled blocks.)
-        if self.districts.at(x, z).rules().tilt {
-            return self.rolling(x, z) * self.districts.blended(x, z).0;
-        }
-        self.landform(x, z) * self.districts.blended(x, z).0
+        // not, and stood in walls and jumbled blocks. The ridges fade in
+        // across a border.)
+        let b = self.districts.blended(x, z);
+        let ridges = if b.ridges > 0.0 { self.ridges_at(x, z) * b.ridges } else { 0.0 };
+        (self.rolling(x, z) + ridges) * b.relief
     }
 
     /// The landform without its ridges: its rolling, warped base.
@@ -207,7 +207,7 @@ impl PlateWorld {
     pub fn broad(&self, c: DVec2) -> f64 {
         let base = self.base.sample2(c.x as f32, c.y as f32, self.size as f32) as f64;
         let base = if base < 0.0 { base * 0.25 } else { base };
-        base * 90.0 * self.districts.blended(c.x, c.y).0
+        base * 90.0 * self.districts.blended(c.x, c.y).relief
     }
 
     /// Height of a canal's floor at a point on its centreline (and of a
@@ -217,7 +217,7 @@ impl PlateWorld {
     pub fn canal_floor(&self, c: DVec2) -> f64 {
         let base = self.base.sample2(c.x as f32, c.y as f32, self.size as f32) as f64;
         let base = if base < 0.0 { base * 0.25 } else { base };
-        let relief = self.districts.blended(c.x, c.y).0.min(0.8);
+        let relief = self.districts.blended(c.x, c.y).relief.min(0.8);
         // (Its rim 3.5 m under the ground's broad height: the ground beside
         // it above the rim on 99 edges in 100, so it lies in a cutting, the
         // plates' own walls down to it. A metre over that height, the ground
@@ -292,15 +292,18 @@ impl PlateWorld {
 
     /// Smooth large-scale terrain height that plates are fitted to.
     pub fn landform(&self, x: f64, z: f64) -> f64 {
+        self.rolling(x, z) + self.ridges_at(x, z)
+    }
+
+    /// The landform's ridges, on top of its rolling base.
+    fn ridges_at(&self, x: f64, z: f64) -> f64 {
         let w = self.size as f32;
         let (xf, zf) = (x as f32, z as f32);
         let qx = xf + self.warp_x.sample2(xf, zf, w) * 300.0;
         let qz = zf + self.warp_z.sample2(xf, zf, w) * 300.0;
-        let base = self.base.sample2(qx, qz, w) as f64;
-        let base = if base < 0.0 { base * 0.25 } else { base };
         let mask = smoothstep(-0.2, 0.5, self.ridge_mask.sample2(xf, zf, w) as f64);
         let r = self.ridges.ridged2(qx, qz, w) as f64;
-        base * 90.0 + r * r * 160.0 * mask
+        r * r * 160.0 * mask
     }
 
     fn site(&self, level: usize, g: (i32, i32)) -> DVec2 {
@@ -382,7 +385,7 @@ impl PlateWorld {
         }
         let s0 = self.site(0, sites[0]);
         let rules = self.districts.at(s0.x, s0.y).rules();
-        let base_albedo = self.districts.blended(s0.x, s0.y).1;
+        let base_albedo = self.districts.blended(s0.x, s0.y).albedo;
         let step = |h: f64, q: f64| (h / q).round() * q;
 
         let l0 = self.landform_at_site(cache, 0, sites[0]);
@@ -810,7 +813,8 @@ impl PlateWorld {
         // The top tells the shader which plate it is, so the shader can go
         // on splitting it below what the geometry draws.
         let id = (self.rand(plate.level, plate.sites[plate.level], 11) * 1024.0).floor() as f32;
-        mesh.plate_of(mesh.positions.len() - top_start, crate::mesh::plate_code(plate.level, id));
+        let big = self.districts.at(centroid.x, centroid.y).rules().pieces >= 32.0;
+        mesh.plate_of(mesh.positions.len() - top_start, crate::mesh::plate_code(plate.level, id, big));
 
         // Walls, darkening towards their foot.
         let wall_albedo = plate.albedo * 0.85;

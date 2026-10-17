@@ -23,17 +23,22 @@ pub enum District {
     Stacks,
     /// The original broken plate terrain, a bit of everything.
     Broken,
-    /// An experiment (`--opt slopes`, everywhere): hills of a couple of
-    /// hundred metres made of tilted plates, each to one of a few set
-    /// gradients and eight headings, keeping their steps: landscape-scale
-    /// earthworks, built, not natural (the user: verticality you can move
-    /// through without big plate differences; the identity kept by the
-    /// steps). Not on the district map.
-    Slopes,
+    /// Gentle uplands: rolling hills of tilted plates, each to one of a few
+    /// set gradients and eight headings, keeping their steps (1.75 m), with
+    /// level crests: landscape-scale earthworks, built, not natural. (The
+    /// slopes experiment's version 2, which the user found best for gentle
+    /// reliefs, 1 to 2.)
+    Uplands,
+    /// High country: the same tilted plates on hills three times today's
+    /// height, big plates, steps of 1 m and no level crests: tilted ground
+    /// in strata, a lunar ridge. (The experiment's version 1, best for
+    /// reliefs of 3 and up, the user.)
+    Highlands,
 }
 
 impl District {
-    pub const ALL: [District; 5] = [District::Floor, District::Tiers, District::Stacks, District::Broken, District::Slopes];
+    pub const ALL: [District; 6] =
+        [District::Floor, District::Tiers, District::Stacks, District::Broken, District::Uplands, District::Highlands];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -41,7 +46,8 @@ impl District {
             District::Tiers => "tiers",
             District::Stacks => "stacks",
             District::Broken => "broken",
-            District::Slopes => "slopes",
+            District::Uplands => "uplands",
+            District::Highlands => "highlands",
         }
     }
 
@@ -64,6 +70,7 @@ impl District {
                 marking_chance: 0.03,
                 tilt: false,
                 crest: false,
+                pieces: 8.0,
             },
             District::Tiers => Rules {
                 relief: 1.3,
@@ -82,6 +89,7 @@ impl District {
                 marking_chance: 0.01,
                 tilt: false,
                 crest: false,
+                pieces: 8.0,
             },
             District::Stacks => Rules {
                 relief: 0.6,
@@ -100,6 +108,7 @@ impl District {
                 marking_chance: 0.01,
                 tilt: false,
                 crest: false,
+                pieces: 8.0,
             },
             District::Broken => Rules {
                 relief: 1.0,
@@ -118,9 +127,38 @@ impl District {
                 marking_chance: 0.018,
                 tilt: false,
                 crest: false,
+                pieces: 8.0,
             },
-            District::Slopes => *SLOPES.get_or_init(|| slopes(3)),
+            District::Uplands => tilted(1.5, 0.19, [0.2, 0.12], [0.15, 0.15], 1.75, true, 8.0),
+            District::Highlands => tilted(3.0, 0.15, [0.35, 0.15], [0.3, 0.3], 1.0, false, 32.0),
         }
+    }
+}
+
+/// The rules of a district of tilted plates: its relief (the hills' total
+/// height), tone, chances of splitting, steps, whether hills end in level
+/// crests, and the smallest pieces its plates are split into in the shader.
+fn tilted(relief: f64, albedo: f64, split: [f64; 2], split_mask_gain: [f64; 2], quantum: f64, crest: bool, pieces: f64) -> Rules {
+    Rules {
+        relief,
+        albedo,
+        albedo_spread: 0.04,
+        split,
+        split_mask_gain,
+        // (Tilted, a plate follows the slope: it splits by chance only,
+        // never because the land rises across it.)
+        split_rise: [1000.0, 1000.0],
+        quantum0: quantum,
+        quantum,
+        nudge: 0.0,
+        pillar_chance: 0.0,
+        pillar_height: (0.0, 0.0),
+        mesa_chance: 0.0,
+        pit_chance: 0.0,
+        marking_chance: 0.01,
+        tilt: true,
+        crest,
+        pieces,
     }
 }
 
@@ -157,54 +195,21 @@ pub struct Rules {
     pub tilt: bool,
     /// Tilted plates level on crests: hills ending in flat tops.
     pub crest: bool,
+    /// The smallest pieces the shader splits plates into, in metres: 8, or
+    /// 32 for broader, quieter ground (the user, torn between the two: a
+    /// district's own).
+    pub pieces: f64,
 }
 
-/// The slopes experiment's rules, chosen once (`set_slopes`).
-static SLOPES: std::sync::OnceLock<Rules> = std::sync::OnceLock::new();
-
-/// Chooses the slopes experiment's version, and its relief if given: the
-/// hills' total height, not their steps (`--set slopes_version`,
-/// `slopes_relief`). Before any plate is made; later calls change nothing.
-pub fn set_slopes(version: u32, relief: Option<f64>) {
-    let mut rules = slopes(version);
-    if let Some(r) = relief {
-        rules.relief = r;
-    }
-    let _ = SLOPES.set(rules);
-}
-
-/// The slopes experiment's versions. 1: big plates, steps of 1 m: the
-/// user's better first (neighbours near flush, read as tilted ground,
-/// strata, a lunar hill). 3: big plates, big steps, level crests. 2: the
-/// midpoint between them, level crests kept (a built skyline). (Small
-/// plates with big steps read as the broken district, the distance as
-/// blocks of houses: gone.)
-fn slopes(version: u32) -> Rules {
-    let (relief, split, mask, quantum, crest) = match version {
-        1 => (2.0, [0.35, 0.15], [0.3, 0.3], 1.0, false),
-        2 => (2.5, [0.2, 0.12], [0.15, 0.15], 1.75, true),
-        _ => (3.0, [0.1, 0.1], [0.0, 0.0], 2.5, true),
-    };
-    Rules {
-        relief,
-        albedo: 0.17,
-        albedo_spread: 0.04,
-        split,
-        split_mask_gain: mask,
-        // (Tilted, a plate follows the slope: it splits by chance only,
-        // never because the land rises across it.)
-        split_rise: [1000.0, 1000.0],
-        quantum0: quantum,
-        quantum,
-        nudge: 0.0,
-        pillar_chance: 0.0,
-        pillar_height: (0.0, 0.0),
-        mesa_chance: 0.0,
-        pit_chance: 0.0,
-        marking_chance: 0.01,
-        tilt: true,
-        crest,
-    }
+/// The rules blended across district borders.
+#[derive(Clone, Copy, Debug)]
+pub struct Blend {
+    pub relief: f64,
+    pub albedo: f64,
+    /// How much of the landform's ridges there are: none where plates tilt
+    /// (they could not follow them), fading in across a border, so the land
+    /// does not jump there.
+    pub ridges: f64,
 }
 
 /// Size of the district map's cells, in metres (districts span ~1.5-3 km).
@@ -215,7 +220,7 @@ const BLEND: f64 = 250.0;
 pub struct DistrictMap {
     size: f64,
     seed: u32,
-    /// One district everywhere, if set (`--opt slopes`).
+    /// One district everywhere, if set (`--set district=N`, see `ALL`).
     pub force: Option<District>,
 }
 
@@ -239,13 +244,16 @@ impl DistrictMap {
     }
 
     fn kind(&self, g: (i32, i32)) -> District {
-        // Weighted pick: floor 28%, tiers 24%, stacks 20%, broken 28%.
+        // Weighted pick: floor 28%, tiers 24%, stacks 20%, broken 28%; then
+        // two fifths of the tiers become highlands and of the broken
+        // uplands (drawn apart, so the rest of the map stays as it was).
         let r = self.rand(g, 3);
+        let hills = self.rand(g, 4) < 0.4;
         match r {
             r if r < 0.28 => District::Floor,
-            r if r < 0.52 => District::Tiers,
+            r if r < 0.52 => if hills { District::Highlands } else { District::Tiers },
             r if r < 0.72 => District::Stacks,
-            _ => District::Broken,
+            _ => if hills { District::Uplands } else { District::Broken },
         }
     }
 
@@ -270,22 +278,26 @@ impl DistrictMap {
         self.kind(*g)
     }
 
-    /// Relief and base albedo, blended smoothly across district borders.
-    pub fn blended(&self, x: f64, z: f64) -> (f64, f64) {
+    /// Relief, base albedo and ridges, blended smoothly across district
+    /// borders.
+    pub fn blended(&self, x: f64, z: f64) -> Blend {
+        let ridges = |r: &Rules| if r.tilt { 0.0 } else { 1.0 };
         if let Some(d) = self.force {
             let r = d.rules();
-            return (r.relief, r.albedo);
+            return Blend { relief: r.relief, albedo: r.albedo, ridges: ridges(&r) };
         }
         let near = self.nearby(DVec2::new(x, z));
         let closest = near.iter().map(|n| n.1).fold(f64::MAX, f64::min);
-        let (mut relief, mut albedo, mut total) = (0.0, 0.0, 0.0);
+        let mut sum = Blend { relief: 0.0, albedo: 0.0, ridges: 0.0 };
+        let mut total = 0.0;
         for (g, d) in near {
             let w = (-(d - closest) / BLEND * 3.0).exp();
             let rules = self.kind(g).rules();
-            relief += rules.relief * w;
-            albedo += rules.albedo * w;
+            sum.relief += rules.relief * w;
+            sum.albedo += rules.albedo * w;
+            sum.ridges += ridges(&rules) * w;
             total += w;
         }
-        (relief / total, albedo / total)
+        Blend { relief: sum.relief / total, albedo: sum.albedo / total, ridges: sum.ridges / total }
     }
 }
