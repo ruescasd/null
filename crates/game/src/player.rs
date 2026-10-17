@@ -52,8 +52,8 @@ impl Plugin for PlayerPlugin {
 
 // Quake 3 constants in metres. A 56-unit Quake player is 1.8 m tall, so one
 // unit is about 3.2 cm.
-/// Top running speed (320 units/s).
-const MAX_SPEED: f32 = 10.0;
+/// Top running speed (320 units/s; it was 10 m/s, 313, the user).
+const MAX_SPEED: f32 = 10.24;
 /// Walking (Shift): slower, and quiet (see `combat/grove.rs`).
 pub const WALK_SPEED: f32 = 4.0;
 const GROUND_ACCEL: f32 = 10.0;
