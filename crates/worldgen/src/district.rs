@@ -63,6 +63,7 @@ impl District {
                 pit_chance: 0.003,
                 marking_chance: 0.03,
                 tilt: false,
+                crest: false,
             },
             District::Tiers => Rules {
                 relief: 1.3,
@@ -80,6 +81,7 @@ impl District {
                 pit_chance: 0.004,
                 marking_chance: 0.01,
                 tilt: false,
+                crest: false,
             },
             District::Stacks => Rules {
                 relief: 0.6,
@@ -97,6 +99,7 @@ impl District {
                 pit_chance: 0.01,
                 marking_chance: 0.01,
                 tilt: false,
+                crest: false,
             },
             District::Broken => Rules {
                 relief: 1.0,
@@ -114,30 +117,9 @@ impl District {
                 pit_chance: 0.007,
                 marking_chance: 0.018,
                 tilt: false,
+                crest: false,
             },
-            District::Slopes => Rules {
-                // (Hills of a few hundred metres, steps of 2.5 m on plates
-                // mostly 32 m across: with steps of 1 m on plates of 128,
-                // neighbours met near flush, the slopes read as tilted
-                // ground, strata, a lunar hill.)
-                relief: 3.5,
-                albedo: 0.17,
-                albedo_spread: 0.04,
-                split: [1.0, 0.35],
-                split_mask_gain: [0.0, 0.3],
-                // (Tilted, a plate follows the slope: it splits by chance
-                // only, never because the land rises across it.)
-                split_rise: [1000.0, 1000.0],
-                quantum0: 2.5,
-                quantum: 2.5,
-                nudge: 0.0,
-                pillar_chance: 0.0,
-                pillar_height: (0.0, 0.0),
-                mesa_chance: 0.0,
-                pit_chance: 0.0,
-                marking_chance: 0.01,
-                tilt: true,
-            },
+            District::Slopes => *SLOPES.get_or_init(|| slopes(3)),
         }
     }
 }
@@ -173,6 +155,54 @@ pub struct Rules {
     /// Plates tilted to follow the landform (to set gradients and
     /// headings), not flat.
     pub tilt: bool,
+    /// Tilted plates level on crests: hills ending in flat tops.
+    pub crest: bool,
+}
+
+/// The slopes experiment's rules, chosen once (`set_slopes`).
+static SLOPES: std::sync::OnceLock<Rules> = std::sync::OnceLock::new();
+
+/// Chooses the slopes experiment's version, and its relief if given: the
+/// hills' total height, not their steps (`--set slopes_version`,
+/// `slopes_relief`). Before any plate is made; later calls change nothing.
+pub fn set_slopes(version: u32, relief: Option<f64>) {
+    let mut rules = slopes(version);
+    if let Some(r) = relief {
+        rules.relief = r;
+    }
+    let _ = SLOPES.set(rules);
+}
+
+/// The slopes experiment's versions. 1: big plates, steps of 1 m: the
+/// user's better first (neighbours near flush, read as tilted ground,
+/// strata, a lunar hill). 3: big plates, big steps, level crests. (2, small
+/// plates with big steps, read as the broken district, the distance as
+/// blocks of houses: gone.)
+fn slopes(version: u32) -> Rules {
+    let (relief, split, mask, quantum, crest) = match version {
+        1 => (2.0, [0.35, 0.15], [0.3, 0.3], 1.0, false),
+        _ => (3.0, [0.1, 0.1], [0.0, 0.0], 2.5, true),
+    };
+    Rules {
+        relief,
+        albedo: 0.17,
+        albedo_spread: 0.04,
+        split,
+        split_mask_gain: mask,
+        // (Tilted, a plate follows the slope: it splits by chance only,
+        // never because the land rises across it.)
+        split_rise: [1000.0, 1000.0],
+        quantum0: quantum,
+        quantum,
+        nudge: 0.0,
+        pillar_chance: 0.0,
+        pillar_height: (0.0, 0.0),
+        mesa_chance: 0.0,
+        pit_chance: 0.0,
+        marking_chance: 0.01,
+        tilt: true,
+        crest,
+    }
 }
 
 /// Size of the district map's cells, in metres (districts span ~1.5-3 km).

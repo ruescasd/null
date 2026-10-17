@@ -429,7 +429,7 @@ impl PlateWorld {
             // ridge.
             let r = CREST_REACH;
             let around = (self.shaped(c.x + r, c.y) + self.shaped(c.x - r, c.y) + self.shaped(c.x, c.y + r) + self.shaped(c.x, c.y - r)) * 0.25;
-            let rise = if self.shaped(c.x, c.y) - around > CREST_RISE { 0.0 } else { rise };
+            let rise = if rules.crest && self.shaped(c.x, c.y) - around > CREST_RISE { 0.0 } else { rise };
             let sector = std::f64::consts::TAU / HEADINGS;
             let heading = (g.y.atan2(g.x) / sector).round() * sector;
             tilt = DVec2::new(heading.cos(), heading.sin()) * rise;

@@ -77,6 +77,10 @@ impl Plugin for TerrainPlugin {
             world.canals.rise = rise(args);
             // (`--opt slopes`: the tilted plates' experiment, everywhere.)
             if args.opt("slopes") {
+                // (`--set slopes_version`, 1 or 3; `slopes_relief`, the
+                // hills' total height.)
+                let relief = args.num("slopes_relief", 0.0);
+                worldgen::district::set_slopes(args.num("slopes_version", 3.0) as u32, (relief > 0.0).then_some(relief as f64));
                 world.districts.force = Some(worldgen::district::District::Slopes);
             }
             match crate::structures::load_library() {
