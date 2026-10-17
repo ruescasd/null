@@ -75,6 +75,10 @@ impl Plugin for TerrainPlugin {
             let mut world = PlateWorld::new(WORLD_SIZE, args.seed);
             world.canals.stones = stones(args);
             world.canals.rise = rise(args);
+            // (`--opt slopes`: the tilted plates' experiment, everywhere.)
+            if args.opt("slopes") {
+                world.districts.force = Some(worldgen::district::District::Slopes);
+            }
             match crate::structures::load_library() {
                 Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
                 _ => WorldGen(Arc::new(world)),

@@ -83,7 +83,28 @@ pub struct Plate {
     /// On an earthwork's slope: its top follows the earthwork's surface
     /// (see `slope_at`) rather than lying flat at `height`.
     pub sloped: bool,
+    /// Tilted (in a district whose plates tilt): its top rises by this
+    /// much per metre from `center`, where it stands at `height`.
+    pub tilt: DVec2,
+    pub center: DVec2,
 }
+
+impl Plate {
+    /// The height of its top at a point.
+    fn top(&self, world: &PlateWorld, p: DVec2) -> f64 {
+        if self.sloped { world.slope_at(p) } else { self.height + self.tilt.dot(p - self.center) }
+    }
+}
+
+/// The gradients a tilted plate may take (rise per metre, about 0, 5, 9,
+/// 14 and 19 degrees): set ones, as engineered ramps are, not the land's
+/// own; and its heading, one of eight.
+const TILTS: [f64; 5] = [0.0, 0.08, 0.16, 0.25, 0.35];
+const HEADINGS: f64 = 8.0;
+/// A tilted plate is level on a crest: where the land at its middle stands
+/// `CREST_RISE` m above the land `CREST_REACH` m round it.
+const CREST_REACH: f64 = 120.0;
+const CREST_RISE: f64 = 4.0;
 
 /// A plate belonging to a site: its outline (world coordinates near the
 /// site's centre), height, and how far its own site lies from the centre.
@@ -162,7 +183,23 @@ impl PlateWorld {
 
     /// The landform scaled by the local district's relief: what plates fit.
     pub fn shaped(&self, x: f64, z: f64) -> f64 {
+        // (Tilted plates follow the landform's rolling part only: with its
+        // ridges, far steeper than the steepest set gradient, they could
+        // not, and stood in walls and jumbled blocks.)
+        if self.districts.at(x, z).rules().tilt {
+            return self.rolling(x, z) * self.districts.blended(x, z).0;
+        }
         self.landform(x, z) * self.districts.blended(x, z).0
+    }
+
+    /// The landform without its ridges: its rolling, warped base.
+    fn rolling(&self, x: f64, z: f64) -> f64 {
+        let w = self.size as f32;
+        let (xf, zf) = (x as f32, z as f32);
+        let qx = xf + self.warp_x.sample2(xf, zf, w) * 300.0;
+        let qz = zf + self.warp_z.sample2(xf, zf, w) * 300.0;
+        let base = self.base.sample2(qx, qz, w) as f64;
+        (if base < 0.0 { base * 0.25 } else { base }) * 90.0
     }
 
     /// The broad shape of the ground at a point: the landform without its
@@ -230,7 +267,7 @@ impl PlateWorld {
         if plate.sloped {
             return self.slope_at(p);
         }
-        plate.height
+        plate.top(self, p)
     }
 
     /// The height of an earthwork's slope at a point: its surface inside a
@@ -341,7 +378,7 @@ impl PlateWorld {
     fn plate(&self, cache: &mut Cache, sites: [(i32, i32); 3], level: usize) -> Plate {
         if self.lab {
             let albedo = 0.19 + 0.04 * (self.rand(level, sites[level], 6) as f32 - 0.5);
-            return Plate { height: 0.0, albedo, level, sites, pillar: 0.0, sloped: false };
+            return Plate { height: 0.0, albedo, level, sites, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, center: DVec2::ZERO };
         }
         let s0 = self.site(0, sites[0]);
         let rules = self.districts.at(s0.x, s0.y).rules();
@@ -352,6 +389,7 @@ impl PlateWorld {
         let mut height = step(l0, rules.quantum0);
         let mut pillar = 0.0;
         let mut sloped = false;
+        let (mut tilt, mut center) = (DVec2::ZERO, DVec2::ZERO);
         let r = self.rand(0, sites[0], 4);
         if r < rules.mesa_chance {
             height += 25.0 + self.rand(0, sites[0], 5) * 60.0;
@@ -377,6 +415,26 @@ impl PlateWorld {
             }
             albedo += rules.albedo_spread * 0.6 * (self.rand(2, sites[2], 6) - 0.5);
         }
+        if rules.tilt {
+            // Its own height, in the district's steps, and the land's slope
+            // at its middle, to the nearest set gradient and heading:
+            // neighbours, each its own, meet in steps.
+            let c = self.site(level, sites[level]);
+            height = step(self.landform_at_site(cache, level, sites[level]), rules.quantum);
+            let e = GRID[level] * 0.35;
+            let g = DVec2::new(self.shaped(c.x + e, c.y) - self.shaped(c.x - e, c.y), self.shaped(c.x, c.y + e) - self.shaped(c.x, c.y - e)) / (2.0 * e);
+            let rise = TILTS.iter().copied().min_by(|a, b| (a - g.length()).abs().total_cmp(&(b - g.length()).abs())).unwrap_or(0.0);
+            // On a crest (the land higher here than round it), level: hills
+            // end in flat tops and terraces, a built skyline, not a rounded
+            // ridge.
+            let r = CREST_REACH;
+            let around = (self.shaped(c.x + r, c.y) + self.shaped(c.x - r, c.y) + self.shaped(c.x, c.y + r) + self.shaped(c.x, c.y - r)) * 0.25;
+            let rise = if self.shaped(c.x, c.y) - around > CREST_RISE { 0.0 } else { rise };
+            let sector = std::f64::consts::TAU / HEADINGS;
+            let heading = (g.y.atan2(g.x) / sector).round() * sector;
+            tilt = DVec2::new(heading.cos(), heading.sin()) * rise;
+            center = c;
+        }
         // Inside a site, its core and terraces.
         let p = self.site(level, sites[level]);
         if let Some((ground, distance)) = self.sites.at(p, 0.0) {
@@ -385,9 +443,11 @@ impl PlateWorld {
                 height = self.slope_at(p);
                 pillar = 0.0;
                 sloped = true;
+                tilt = DVec2::ZERO;
             } else if let Some(h) = ground.height(distance, natural) {
                 height = h;
                 pillar = 0.0;
+                tilt = DVec2::ZERO;
             }
         } else if let Some((ground, order)) = self.sites.order_ground(p) {
             // In an ordered site's field the land settles onto the site's
@@ -408,7 +468,7 @@ impl PlateWorld {
         } else if marking < rules.marking_chance {
             albedo = 0.26;
         }
-        Plate { height, albedo: albedo as f32, level, sites, pillar, sloped }
+        Plate { height, albedo: albedo as f32, level, sites, pillar, sloped, tilt, center }
     }
 
     /// The plate covering (x, z), using at most `max_level` levels of detail.
@@ -657,7 +717,7 @@ impl PlateWorld {
             && let Some(library) = &self.library
             && library.forms.contains_key(PILLAR_FORM)
         {
-            let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, ..*plate };
+            let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, ..*plate };
             self.emit_prism(cache, mesh, poly, &base, max_level, origin);
             self.emit_pillar(library, mesh, poly, plate, origin);
             return;
@@ -667,7 +727,7 @@ impl PlateWorld {
         let centroid = poly.iter().copied().sum::<DVec2>() / n as f64;
         // The top's height at each corner and at the centroid: flat, or on
         // an earthwork's slope.
-        let top = |p: DVec2| if plate.sloped { self.slope_at(p) } else { h };
+        let top = |p: DVec2| plate.top(self, p);
         let tops: Vec<f64> = poly.iter().map(|&p| top(p)).collect();
         let center_top = top(centroid);
 
@@ -718,7 +778,7 @@ impl PlateWorld {
             })
             .collect();
         let center_ao = self.sky_visibility(cache, centroid, center_top, max_level);
-        if plate.sloped {
+        if plate.sloped || plate.tilt != DVec2::ZERO {
             // Each triangle its own flat facet: crisp, geometric slopes.
             for i in 0..n {
                 let j = (i + 1) % n;

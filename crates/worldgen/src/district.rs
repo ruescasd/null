@@ -23,10 +23,17 @@ pub enum District {
     Stacks,
     /// The original broken plate terrain, a bit of everything.
     Broken,
+    /// An experiment (`--opt slopes`, everywhere): hills of a couple of
+    /// hundred metres made of tilted plates, each to one of a few set
+    /// gradients and eight headings, keeping their steps: landscape-scale
+    /// earthworks, built, not natural (the user: verticality you can move
+    /// through without big plate differences; the identity kept by the
+    /// steps). Not on the district map.
+    Slopes,
 }
 
 impl District {
-    pub const ALL: [District; 4] = [District::Floor, District::Tiers, District::Stacks, District::Broken];
+    pub const ALL: [District; 5] = [District::Floor, District::Tiers, District::Stacks, District::Broken, District::Slopes];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -34,6 +41,7 @@ impl District {
             District::Tiers => "tiers",
             District::Stacks => "stacks",
             District::Broken => "broken",
+            District::Slopes => "slopes",
         }
     }
 
@@ -54,6 +62,7 @@ impl District {
                 mesa_chance: 0.002,
                 pit_chance: 0.003,
                 marking_chance: 0.03,
+                tilt: false,
             },
             District::Tiers => Rules {
                 relief: 1.3,
@@ -70,6 +79,7 @@ impl District {
                 mesa_chance: 0.004,
                 pit_chance: 0.004,
                 marking_chance: 0.01,
+                tilt: false,
             },
             District::Stacks => Rules {
                 relief: 0.6,
@@ -86,6 +96,7 @@ impl District {
                 mesa_chance: 0.004,
                 pit_chance: 0.01,
                 marking_chance: 0.01,
+                tilt: false,
             },
             District::Broken => Rules {
                 relief: 1.0,
@@ -102,6 +113,30 @@ impl District {
                 mesa_chance: 0.005,
                 pit_chance: 0.007,
                 marking_chance: 0.018,
+                tilt: false,
+            },
+            District::Slopes => Rules {
+                // (Hills of a few hundred metres, steps of 2.5 m on plates
+                // mostly 32 m across: with steps of 1 m on plates of 128,
+                // neighbours met near flush, the slopes read as tilted
+                // ground, strata, a lunar hill.)
+                relief: 3.5,
+                albedo: 0.17,
+                albedo_spread: 0.04,
+                split: [1.0, 0.35],
+                split_mask_gain: [0.0, 0.3],
+                // (Tilted, a plate follows the slope: it splits by chance
+                // only, never because the land rises across it.)
+                split_rise: [1000.0, 1000.0],
+                quantum0: 2.5,
+                quantum: 2.5,
+                nudge: 0.0,
+                pillar_chance: 0.0,
+                pillar_height: (0.0, 0.0),
+                mesa_chance: 0.0,
+                pit_chance: 0.0,
+                marking_chance: 0.01,
+                tilt: true,
             },
         }
     }
@@ -135,6 +170,9 @@ pub struct Rules {
     pub pit_chance: f64,
     /// Chance of a dark or light marker plate.
     pub marking_chance: f64,
+    /// Plates tilted to follow the landform (to set gradients and
+    /// headings), not flat.
+    pub tilt: bool,
 }
 
 /// Size of the district map's cells, in metres (districts span ~1.5-3 km).
@@ -145,11 +183,13 @@ const BLEND: f64 = 250.0;
 pub struct DistrictMap {
     size: f64,
     seed: u32,
+    /// One district everywhere, if set (`--opt slopes`).
+    pub force: Option<District>,
 }
 
 impl DistrictMap {
     pub fn new(size: f64, seed: u32) -> Self {
-        Self { size, seed: seed ^ 0xd157_71c7 }
+        Self { size, seed: seed ^ 0xd157_71c7, force: None }
     }
 
     fn cells(&self) -> i32 {
@@ -190,6 +230,9 @@ impl DistrictMap {
 
     /// The district at a point.
     pub fn at(&self, x: f64, z: f64) -> District {
+        if let Some(d) = self.force {
+            return d;
+        }
         let near = self.nearby(DVec2::new(x, z));
         let (g, _) = near.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
         self.kind(*g)
@@ -197,6 +240,10 @@ impl DistrictMap {
 
     /// Relief and base albedo, blended smoothly across district borders.
     pub fn blended(&self, x: f64, z: f64) -> (f64, f64) {
+        if let Some(d) = self.force {
+            let r = d.rules();
+            return (r.relief, r.albedo);
+        }
         let near = self.nearby(DVec2::new(x, z));
         let closest = near.iter().map(|n| n.1).fold(f64::MAX, f64::min);
         let (mut relief, mut albedo, mut total) = (0.0, 0.0, 0.0);

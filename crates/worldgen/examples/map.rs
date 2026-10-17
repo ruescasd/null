@@ -65,6 +65,7 @@ fn main() {
                 District::Tiers => [0.72, 0.95, 0.75],
                 District::Stacks => [0.78, 0.7, 0.95],
                 District::Broken => [0.75, 0.82, 0.9],
+                District::Slopes => [0.95, 0.8, 0.8],
             };
             let c = |t: f32| (((shade + lift) * t).clamp(0.0, 1.0) * 255.0) as u8;
             let mut pixel = [c(tint[0]), c(tint[1]), c(tint[2])];
