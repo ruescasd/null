@@ -65,8 +65,9 @@ should feel lost, even afraid, and each lit station feels safer for it.
      reinforce each other, with a trade-off between them. Too much turning
      at the bottom of the pipe loses the pump's gains; too many long swings
      up the walls means fewer turning boosts. The best balance shifts with
-     speed: from slow, swing more; when fast, turn tighter. `turn_gain` 2.2
-     reaches the top speed within a reasonable share of a canal's length.
+     speed: from slow, swing more; when fast, turn tighter. With `turn_gain`
+     2.2 the top speed, 90 m/s, comes at about three quarters of a canal's
+     length (the user), so better boots would bring it sooner.
    - Items could raise them: better boots, say, `turn_gain` 3, and the top
      speed (see item progression).
    - Tests: the movement bot holds one strafe for a set time and weaves
