@@ -143,7 +143,7 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               whenever there is none (with biped|beast to choose)
     --set crowd=N                             with --opt hunters: N of them at once, round you (for measuring their cost)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
-    --opt flat|hard|noao|nocontact|notaa|nosites   switch features off
+    --opt flat|hard|noao|nocontact|notaa|nosites|nosubdiv   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set soft0=1 --set soft1=1                tuning numbers
@@ -212,9 +212,11 @@ the suns), because layers fading with distance are what make the scale read. Bes
 visible disc) and the light bounced off the sunlit ground, there is a
 shadowless fill with no visible source: opposite the dominant sun by day,
 scaled with how much sun is up, and a faint glow from overhead at night.
-The ground is plain: shader grain on it read as a texture gone wrong, so
-the sense of motion has to come from built things (open, see
-`docs/removed.md`). Structures are plain too, so their geometry reads; only pieces marked as lit glow (the reactor's etchings,
+The ground has no texture (grain on it read as a texture gone wrong, see
+`docs/removed.md`). Instead the shader carries on the plates' own
+subdivision below what the geometry draws: flush pieces of 32 and 8 m with
+grooved joints, so motion reads (see `docs/world.md`). Structures are
+plain, so their geometry reads; only pieces marked as lit glow (the reactor's etchings,
 `--set glow=3000`). Bloom flickers in short irregular bursts, so bright
 things (the creature's chest and eyes) stutter like a failing light.
 

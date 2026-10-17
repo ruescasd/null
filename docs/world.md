@@ -10,6 +10,20 @@ The world is a 16 km square that wraps at its edges. Its ground is
 about 2 km across) in flat steps. Heights now run from -21 to 206 m: half
 the land within a few metres of 8 m, 95% below 64 m.
 
+**The ground's subdivision.** Below what the geometry draws, the terrain
+shader carries on the plates' own rule: a plate splits into the pieces of a
+finer Voronoi diagram that fall inside it (32 m, then 8 m; 80% of pieces
+split again), every piece flush but its own tone and slight tilt (the canal
+stones' numbers), with a grooved joint round it (lit as a 45-degree chamfer
+on either side). It gives a sense of speed without a texture: the user
+judged a pattern acceptable only where it describes how the thing was
+built, which the noise grain, flecks and cracks did not. The finer pieces
+(2 and 0.5 m) read as painted and are off. `--opt nosubdiv` for none;
+`--set subdiv_smallest` (8; 32 for the 32 m pieces only, 2 or 0.5 for the
+finer ones), `subdiv_split`, `subdiv_groove`, `subdiv_tone`, `subdiv_tilt`,
+`subdiv_joint`. The smallest pieces drawn might be a district's own lever
+(the user was torn between 8 and 32 m). No measurable cost.
+
 ## Districts
 
 The district map is a coarse Voronoi diagram (cells about 2 km), so

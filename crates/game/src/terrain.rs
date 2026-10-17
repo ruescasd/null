@@ -153,10 +153,14 @@ pub struct TerrainExtension {
     /// x: baked occlusion strength, y: curvature (1 / 2R), zw: camera x and z.
     #[uniform(100)]
     pub params: Vec4,
-    /// x: world wrap period (m), for patterns to tile with the world.
+    /// x: world wrap period (m), for patterns to tile with the world; the
+    /// plates' subdivision (`--opt nosubdiv` for none): y on, z the chance
+    /// a piece splits again, w the largest pieces drawn (m).
     #[uniform(101)]
     pub wrap: Vec4,
-    /// x: brightness of lit geometry (glowing etchings and seams).
+    /// x: brightness of lit geometry (glowing etchings and seams); the
+    /// plates' subdivision: y the pieces' tone, z their tilt (degrees), w how
+    /// dark the joints are.
     #[uniform(102)]
     pub glow: Vec4,
     /// Paving on some of the ground (`--set paving=N`, off by default): x the
@@ -164,6 +168,10 @@ pub struct TerrainExtension {
     /// the contrast, w the share of the ground paved.
     #[uniform(103)]
     pub paving: Vec4,
+    /// The plates' subdivision: x the smallest pieces drawn (m), y the slope
+    /// of the joints' sides (degrees; 0, flat dark lines).
+    #[uniform(104)]
+    pub pieces: Vec4,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -255,9 +263,21 @@ fn setup_material(
         },
         extension: TerrainExtension {
             params: Vec4::new(if args.opt("noao") { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0),
-            wrap: Vec4::new(world.size(), 0.0, 0.0, 0.0),
-            glow: Vec4::new(glow, 0.0, 0.0, 0.0),
+            // (The subdivision's numbers: `--set subdiv_split`,
+            // `subdiv_largest`, `subdiv_tone`, `subdiv_tilt` and
+            // `subdiv_joint`; the tone and tilt the canal stones'.)
+            wrap: Vec4::new(
+                world.size(),
+                if args.opt("nosubdiv") { 0.0 } else { 1.0 },
+                args.num("subdiv_split", 0.8),
+                args.num("subdiv_largest", 32.0),
+            ),
+            glow: Vec4::new(glow, args.num("subdiv_tone", 0.08), args.num("subdiv_tilt", 2.0), args.num("subdiv_joint", 0.35)),
             paving: Vec4::new(paving, args.num("tile", 2.0), args.num("paving_contrast", 0.18), args.num("paved", 0.45)),
+            // (`--set subdiv_smallest`: the smaller pieces read as painted,
+            // the user, between 8 and 32 m perhaps a district's own;
+            // `subdiv_groove`, the joints' slope.)
+            pieces: Vec4::new(args.num("subdiv_smallest", 8.0), args.num("subdiv_groove", 45.0), 0.0, 0.0),
         },
     };
     // The ground may be paved; `glow` is the brightness of lit geometry.
@@ -516,15 +536,15 @@ pub fn column_collider(column: &ColumnMesh) -> Option<Collider> {
 }
 
 pub fn to_bevy_mesh(mut column: ColumnMesh) -> Mesh {
-    // Albedo in red, the face's size in green, glow in blue, sky visibility
-    // in alpha (read by terrain.wgsl).
-    column.face.resize(column.positions.len(), worldgen::mesh::OPEN_GROUND);
+    // Albedo in red, the plate (see `plate_code`) in green, glow in blue, sky
+    // visibility in alpha (read by terrain.wgsl).
+    column.plate.resize(column.positions.len(), 0.0);
     column.glow.resize(column.positions.len(), 0.0);
     let colors: Vec<[f32; 4]> = column
         .albedo
         .iter()
         .zip(&column.ao)
-        .zip(column.face.iter().zip(&column.glow))
+        .zip(column.plate.iter().zip(&column.glow))
         .map(|((&a, &v), (&f, &g))| [a, f, g, v])
         .collect();
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())

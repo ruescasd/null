@@ -6,6 +6,10 @@
 //   and seams);
 // - paving (off by default): in some regions of the ground, a pattern of
 //   tiles with cut joints, a ruler underfoot and something to stream past.
+// - the plates' subdivision (`--opt nosubdiv` for none): each plate split
+//   on below what the geometry draws, by the same rule, into flush pieces
+//   with grooved joints (see `subdivide`). What the ground has instead of a
+//   texture: a sense of speed from the ground's own make-up.
 // The ground is otherwise plain. (Its grain, value-noise mottling, read as
 // camouflage, a texture gone wrong, and the flecks and cracks tried after it
 // as cosmetic: the user, 2026-10-17; see docs/removed.md. A sense of speed
@@ -31,9 +35,15 @@
 // x: strength of the baked occlusion (0 disables it), y: curvature 1 / 2R,
 // zw: camera x and z.
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: vec4<f32>;
-// x: world wrap period in metres.
+// x: world wrap period in metres; the plates' subdivision: y on (1) or off
+// (0), z the chance a piece splits again, w the largest pieces drawn (m).
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> wrap: vec4<f32>;
-// x: brightness of lit geometry.
+// The plates' subdivision: x the smallest pieces drawn (m), y the slope of
+// the joints' sides (degrees; 0, flat dark lines).
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> pieces: vec4<f32>;
+// x: brightness of lit geometry; the plates' subdivision: y each piece's
+// tone (a share of the albedo either way), z its tilt (degrees), w how dark
+// the joints are.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> glow: vec4<f32>;
 // x: pattern (0 none, 1 checkerboard, 2 fractal), y: tile size (m), z:
 // contrast, w: share of the ground paved.
@@ -47,6 +57,112 @@ fn hash(cell: vec2<i32>, period: i32) -> f32 {
     h = (h ^ (h >> 15u)) * 0x846ca68bu;
     h = h ^ (h >> 16u);
     return f32(h >> 8u) / 16777216.0;
+}
+
+// A Voronoi diagram of sites `size` m apart (jittered as the plates' are),
+// its own for each `seed`: the cell `p` is in, how far `p` is from that
+// cell's border (m), and which way that border lies.
+struct Cell {
+    id: vec2<i32>,
+    edge: f32,
+    dir: vec2<f32>,
+}
+
+fn voronoi(p: vec2<f32>, size: f32, seed: i32) -> Cell {
+    let q = p / size;
+    let i = vec2<i32>(floor(q));
+    let period = i32(round(wrap.x / size));
+    let s = vec2<i32>(seed, seed * 7 + 3);
+    var best = 1e9;
+    var near = vec2<f32>(0.0);
+    var id = i;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let c = i + vec2<i32>(x, y);
+            let at = vec2<f32>(c) + 0.5 + (vec2<f32>(hash(c + s, period), hash(c + s + vec2(17, 31), period)) - 0.5) * 0.6;
+            let d = dot(at - q, at - q);
+            if d < best {
+                best = d;
+                near = at;
+                id = c;
+            }
+        }
+    }
+    // (The distance to the border with each neighbour, along the line
+    // between the two sites.)
+    var edge = 1e9;
+    var dir = vec2<f32>(0.0);
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let c = id + vec2<i32>(x, y);
+            if x == 0 && y == 0 {
+                continue;
+            }
+            let at = vec2<f32>(c) + 0.5 + (vec2<f32>(hash(c + s, period), hash(c + s + vec2(17, 31), period)) - 0.5) * 0.6;
+            let across = normalize(at - near);
+            let e = dot((near + at) * 0.5 - q, across);
+            if e < edge {
+                edge = e;
+                dir = across;
+            }
+        }
+    }
+    return Cell(id, edge * size, dir);
+}
+
+// A plate split on below what the geometry draws, by the plates' own rule:
+// a piece splits into the pieces of the next, finer Voronoi diagram that fall
+// inside it, and those may split again; every piece flush, but its own tone
+// and tilt (lit as if tilted, as the canal's stones), with a fine joint round
+// it. Pieces of 32, 8, 2 and 0.5 m (the plates are 128, 32 and 8); each
+// scale fades out before its pieces near a pixel. `level` is the plate's own
+// (0..=2), `id` its number.
+struct Sub {
+    tone: f32,
+    tilt: vec2<f32>,
+    joint: f32,
+    // The joint's side sloping down to the border, as a groove's would: the
+    // way it leans, faded where the groove is narrower than a pixel.
+    groove: vec2<f32>,
+}
+
+fn subdivide(p: vec2<f32>, pixel: f32, level: i32, id: i32) -> Sub {
+    var out = Sub(0.0, vec2<f32>(0.0), 0.0, vec2<f32>(0.0));
+    let sizes = array<f32, 4>(32.0, 8.0, 2.0, 0.5);
+    let plate_size = 128.0 / f32(1 << u32(2 * level));
+    var seed = id * 131 + level * 977;
+    for (var k = 0; k < 4; k++) {
+        let size = sizes[k];
+        if size >= plate_size || size > wrap.w {
+            continue;
+        }
+        if size < pieces.x {
+            break;
+        }
+        let fade = saturate(size / (pixel * 6.0) - 1.0);
+        if fade <= 0.0 {
+            break;
+        }
+        let c = voronoi(p, size, seed);
+        let period = i32(round(wrap.x / size));
+        // Joints thinner the smaller the pieces: 10 cm round 32 m pieces,
+        // 3 cm round 8 m, 1 cm round 2 m; thinner than a pixel, fainter.
+        let w = 0.003 * size + 0.004;
+        let drawn = max(w, pixel);
+        let joint = saturate(1.0 - (c.edge - drawn * 0.5) / pixel) * (w / drawn) * fade;
+        if joint > out.joint {
+            out.joint = joint;
+            out.groove = c.dir * joint;
+        }
+        let a = hash(c.id + vec2(seed, 5), period) * 6.2831;
+        out.tone = mix(out.tone, hash(c.id + vec2(seed, 3), period) * 2.0 - 1.0, fade);
+        out.tilt = mix(out.tilt, vec2<f32>(cos(a), sin(a)) * hash(c.id + vec2(seed, 7), period), fade);
+        if hash(c.id + vec2(seed, 11), period) >= wrap.z {
+            break;
+        }
+        seed = i32(hash(c.id + vec2(seed, 13), period) * 65536.0);
+    }
+    return out;
 }
 
 // The paving region a point falls in (cells of a Voronoi pattern 512 m
@@ -150,7 +266,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     var lit = 0.0;
+    // A plate's top: its level and number (see `plate_code` in worldgen).
+    var plate = -1;
 #ifdef VERTEX_COLORS
+    if in.color.g > 0.5 {
+        plate = i32(round(in.color.g)) - 1;
+    }
     let visibility = mix(1.0, in.color.a, params.x);
     pbr_input.material.base_color = vec4<f32>(vec3<f32>(in.color.r), 1.0);
     lit = in.color.b;
@@ -168,6 +289,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // (The size of a pixel on the ground, in metres: outside the branch,
     // since derivatives need every pixel nearby to take the same path.)
     let pixel = max(length(fwidth(p.xz)), 1e-4);
+
+    // The plates' subdivision, on their tops.
+    if wrap.y > 0.5 && plate >= 0 && n.y > 0.85 {
+        let sub = subdivide(p.xz, pixel, plate % 4, plate / 4);
+        // (Grooved, the joint is shaded by its slope, and darkened less.)
+        let dark = select(glow.w, glow.w * 0.4, pieces.y > 0.0);
+        let c = pbr_input.material.base_color.rgb * (1.0 + sub.tone * glow.y) * (1.0 - dark * sub.joint);
+        pbr_input.material.base_color = vec4<f32>(c, 1.0);
+        let t = tan(radians(glow.z));
+        let g = tan(radians(pieces.y));
+        pbr_input.N = normalize(pbr_input.N + vec3<f32>(sub.tilt.x, 0.0, sub.tilt.y) * t + vec3<f32>(sub.groove.x, 0.0, sub.groove.y) * g);
+    }
 
     // Paving, on top surfaces in paved regions.
     if paving.x > 0.5 && n.y > 0.85 {

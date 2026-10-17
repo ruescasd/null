@@ -747,7 +747,6 @@ pub fn mesh_tiles(solids: &[Solid], tile: f32) -> Vec<((i32, i32), ColumnMesh)> 
                 let ao = if normal.y < -0.5 { 0.45 } else { 0.75 + 0.25 * (height * 0.5 + 0.5) };
                 mesh.ao.push(ao);
             }
-            mesh.face_size(4, (hi[a] - lo[a]).min(hi[b] - lo[b]));
             if s.glow > 0.0 {
                 mesh.glow_of(4, s.glow);
             }
@@ -768,7 +767,6 @@ pub fn mesh_tiles(solids: &[Solid], tile: f32) -> Vec<((i32, i32), ColumnMesh)> 
                 mesh.albedo.push(s.albedo);
                 mesh.ao.push(ao_at(*c, normal.y < -0.5));
             }
-            mesh.face_size(corners.len(), crate::mesh::polygon_width(&p));
             if s.glow > 0.0 {
                 mesh.glow_of(corners.len(), s.glow);
             }
@@ -815,8 +813,6 @@ fn round(mesh: &mut ColumnMesh, s: &Solid) {
             .collect()
     };
     let (a, b) = (ring(-1.0), ring(1.0));
-    // Narrow, as far as the panelling goes: round surfaces carry no bands.
-    let width = (2.0 * s.half.y.min(s.half.z)).min(1.0);
     let base = mesh.positions.len() as u32;
     for (p, n) in a.iter().chain(&b) {
         mesh.positions.push(p.to_array());
@@ -824,7 +820,6 @@ fn round(mesh: &mut ColumnMesh, s: &Solid) {
         mesh.albedo.push(s.albedo);
         mesh.ao.push(0.75 + 0.25 * n.y.max(0.0));
     }
-    mesh.face_size(2 * ROUND_SIDES, width);
     if s.glow > 0.0 {
         mesh.glow_of(2 * ROUND_SIDES, s.glow);
     }
@@ -843,7 +838,6 @@ fn round(mesh: &mut ColumnMesh, s: &Solid) {
             mesh.albedo.push(s.albedo);
             mesh.ao.push(0.7);
         }
-        mesh.face_size(ROUND_SIDES, width);
         for k in 1..n - 1 {
             if sign > 0.0 {
                 mesh.indices.extend_from_slice(&[start, start + k, start + k + 1]);

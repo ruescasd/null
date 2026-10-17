@@ -778,6 +778,7 @@ impl PlateWorld {
             })
             .collect();
         let center_ao = self.sky_visibility(cache, centroid, center_top, max_level);
+        let top_start = mesh.positions.len();
         if plate.sloped || plate.tilt != DVec2::ZERO {
             // Each triangle its own flat facet: crisp, geometric slopes.
             for i in 0..n {
@@ -806,6 +807,10 @@ impl PlateWorld {
                 tri(mesh, [c, first + i, first + (i + 1) % n as u32], Vec3::Y);
             }
         }
+        // The top tells the shader which plate it is, so the shader can go
+        // on splitting it below what the geometry draws.
+        let id = (self.rand(plate.level, plate.sites[plate.level], 11) * 1024.0).floor() as f32;
+        mesh.plate_of(mesh.positions.len() - top_start, crate::mesh::plate_code(plate.level, id));
 
         // Walls, darkening towards their foot.
         let wall_albedo = plate.albedo * 0.85;
