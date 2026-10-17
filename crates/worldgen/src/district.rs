@@ -175,12 +175,14 @@ pub fn set_slopes(version: u32, relief: Option<f64>) {
 
 /// The slopes experiment's versions. 1: big plates, steps of 1 m: the
 /// user's better first (neighbours near flush, read as tilted ground,
-/// strata, a lunar hill). 3: big plates, big steps, level crests. (2, small
-/// plates with big steps, read as the broken district, the distance as
+/// strata, a lunar hill). 3: big plates, big steps, level crests. 2: the
+/// midpoint between them, level crests kept (a built skyline). (Small
+/// plates with big steps read as the broken district, the distance as
 /// blocks of houses: gone.)
 fn slopes(version: u32) -> Rules {
     let (relief, split, mask, quantum, crest) = match version {
         1 => (2.0, [0.35, 0.15], [0.3, 0.3], 1.0, false),
+        2 => (2.5, [0.2, 0.12], [0.15, 0.15], 1.75, true),
         _ => (3.0, [0.1, 0.1], [0.0, 0.0], 2.5, true),
     };
     Rules {
