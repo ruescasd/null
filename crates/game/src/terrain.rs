@@ -153,9 +153,9 @@ pub struct TerrainExtension {
     /// x: baked occlusion strength, y: curvature (1 / 2R), zw: camera x and z.
     #[uniform(100)]
     pub params: Vec4,
-    /// x: albedo grain strength, y: world wrap period (m), z: relief strength.
+    /// x: world wrap period (m), for patterns to tile with the world.
     #[uniform(101)]
-    pub grain: Vec4,
+    pub wrap: Vec4,
     /// x: brightness of lit geometry (glowing etchings and seams).
     #[uniform(102)]
     pub glow: Vec4,
@@ -246,7 +246,7 @@ fn setup_material(
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // Albedo comes from vertex colours; the material only sets the surface response.
-    let make = |glow: f32, grain: f32, relief: f32, paving: f32| ExtendedMaterial {
+    let make = |glow: f32, paving: f32| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
@@ -255,21 +255,14 @@ fn setup_material(
         },
         extension: TerrainExtension {
             params: Vec4::new(if args.opt("noao") { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0),
-            grain: if args.opt("nograin") {
-                Vec4::new(0.0, world.size(), 0.0, 0.0)
-            } else {
-                Vec4::new(grain, world.size(), relief, if args.opt("coarsegrain") { 1.0 } else { 0.0 })
-            },
-            // (`--set surface`, `surface_strength`, `crack_mask`: the
-            // ground's detail, test switches, see `terrain.wgsl`.)
-            glow: Vec4::new(glow, args.num("surface", 0.0), args.num("surface_strength", 1.6), args.num("crack_mask", 0.0)),
+            wrap: Vec4::new(world.size(), 0.0, 0.0, 0.0),
+            glow: Vec4::new(glow, 0.0, 0.0, 0.0),
             paving: Vec4::new(paving, args.num("tile", 2.0), args.num("paving_contrast", 0.18), args.num("paved", 0.45)),
         },
     };
-    // The ground has grain; structures are plain, so their geometry reads.
-    // `glow` is the brightness of lit geometry.
-    let ground = make(0.0, args.num("grain", 0.2), args.num("relief", 2.5), args.num("paving", 0.0));
-    let structures = make(args.num("glow", 3000.0), 0.0, 0.0, 0.0);
+    // The ground may be paved; `glow` is the brightness of lit geometry.
+    let ground = make(0.0, args.num("paving", 0.0));
+    let structures = make(args.num("glow", 3000.0), 0.0);
     commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
     commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
 }

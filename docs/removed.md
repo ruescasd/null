@@ -29,6 +29,14 @@ listed. The rest was judged in review and dropped.
 - **Procedural panelling and etched network** (`terrain.wgsl`). Detail in the
   shading on structures. Geometry comes first, so this would only return with
   restraint (finest octave only).
+- **The ground's grain, flecks and cracks** (`terrain.wgsl`, removed
+  2026-10-17; all three at `1127424`). Value-noise mottling and micro-relief
+  on the ground, there for a sense of speed, read as camouflage or a bugged
+  texture, even at its finest octave. Sparse flecks and fine cellular
+  (Worley) cracks were better but still cosmetic; the plain ground looked
+  best. The cellular cracks might suit somewhere specific (a crazed glaze,
+  dried ground). Speed now has to come from built things: stones in the
+  shader, matched to the canal's, or small built features.
 
 ## Movement
 

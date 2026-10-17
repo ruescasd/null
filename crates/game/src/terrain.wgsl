@@ -2,13 +2,14 @@
 // - baked sky visibility (vertex colour alpha) applied to indirect light only;
 //   direct sunlight is left to the shadow maps, so a crevice in full sun is
 //   still lit;
-// - procedural grain: albedo mottling and a faint micro-relief, fixed in the
-//   world so it streams past as you move. It tiles with the world's wrap
-//   period and fades out with distance before it can shimmer;
 // - light from pieces of geometry the mesh marks as lit (glowing etchings
 //   and seams);
 // - paving (off by default): in some regions of the ground, a pattern of
 //   tiles with cut joints, a ruler underfoot and something to stream past.
+// The ground is otherwise plain. (Its grain, value-noise mottling, read as
+// camouflage, a texture gone wrong, and the flecks and cracks tried after it
+// as cosmetic: the user, 2026-10-17; see docs/removed.md. A sense of speed
+// has to come from built things.)
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -30,14 +31,9 @@
 // x: strength of the baked occlusion (0 disables it), y: curvature 1 / 2R,
 // zw: camera x and z.
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: vec4<f32>;
-// x: albedo grain strength, y: world wrap period in metres, z: relief
-// strength, w: the coarser octaves (1 m mottling, 4 m blotches) on (1) or
-// off (0).
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> grain: vec4<f32>;
-// x: brightness of lit geometry, y: the ground's surface detail (0 the
-// grain, 1 flecks, 2 cracks, 3 none; see `surface_detail`), z: its strength,
-// w: where the cracks are (0 in whole cells, 1 everywhere, 2 soft patches).
-// (Test switches: `--set surface`, `surface_strength`, `crack_mask`.)
+// x: world wrap period in metres.
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> wrap: vec4<f32>;
+// x: brightness of lit geometry.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> glow: vec4<f32>;
 // x: pattern (0 none, 1 checkerboard, 2 fractal), y: tile size (m), z:
 // contrast, w: share of the ground paved.
@@ -53,145 +49,6 @@ fn hash(cell: vec2<i32>, period: i32) -> f32 {
     return f32(h >> 8u) / 16777216.0;
 }
 
-// Value noise in 0..1 with `cells_per_metre` lattice cells per metre.
-fn value_noise(p: vec2<f32>, cells_per_metre: f32) -> f32 {
-    let q = p * cells_per_metre;
-    let i = vec2<i32>(floor(q));
-    let f = fract(q);
-    let u = f * f * (3.0 - 2.0 * f);
-    let period = i32(round(grain.y * cells_per_metre));
-    let a = hash(i, period);
-    let b = hash(i + vec2(1, 0), period);
-    let c = hash(i + vec2(0, 1), period);
-    let d = hash(i + vec2(1, 1), period);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-// Sparse flecks, as the stones in concrete: in cells `cell` m across, by
-// `chance` one small sharp disc (about `radius` m) of a tone of its own, the
-// rest plain. A brightness factor; faded out before the cells near a pixel.
-fn flecks(p: vec2<f32>, cell: f32, chance: f32, radius: f32, pixel: f32, seed: i32) -> f32 {
-    let fade = saturate(cell / (pixel * 4.0) - 1.0);
-    if fade <= 0.0 {
-        return 1.0;
-    }
-    let i = vec2<i32>(floor(p / cell));
-    let period = i32(round(grain.y / cell));
-    var factor = 1.0;
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-            let c = i + vec2<i32>(dx, dy);
-            if hash(c + vec2<i32>(seed, 0), period) >= chance {
-                continue;
-            }
-            let at = (vec2<f32>(c) + vec2<f32>(hash(c + vec2<i32>(seed, 7), period), hash(c + vec2<i32>(seed, 13), period))) * cell;
-            let r = radius * (0.6 + 0.8 * hash(c + vec2<i32>(seed, 19), period));
-            let cover = saturate((r - distance(p, at)) / pixel + 0.5);
-            let tone = mix(-0.45, 0.35, hash(c + vec2<i32>(seed, 23), period)) * glow.z;
-            factor *= max(1.0 + tone * cover * fade, 0.0);
-        }
-    }
-    return factor;
-}
-
-// Fine cracks: the edges of a cellular (Worley) pattern of cells `cell` m
-// across, drawn `width` m wide (at least a pixel, fainter for it). Only some
-// are drawn (`glow.w`): round cracked cells, chosen in clusters, so a cracked
-// area ends along cracks, not in a soft fade (the user: soft patches looked
-// bare for no reason); or all; or in soft patches. A brightness factor;
-// faded out before the cells near a pixel.
-fn cracks(p: vec2<f32>, cell: f32, width: f32, pixel: f32) -> f32 {
-    let fade = saturate(cell / (pixel * 6.0) - 1.0);
-    if fade <= 0.0 {
-        return 1.0;
-    }
-    let q = p / cell;
-    let i = vec2<i32>(floor(q));
-    let period = i32(round(grain.y / cell));
-    var f1 = 9.0;
-    var f2 = 9.0;
-    var at1 = vec2<f32>(0.0);
-    var at2 = vec2<f32>(0.0);
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-            let c = i + vec2<i32>(dx, dy);
-            let at = vec2<f32>(c) + 0.1 + 0.8 * vec2<f32>(hash(c, period), hash(c + vec2<i32>(37, 11), period));
-            let d = distance(q, at);
-            if d < f1 {
-                f2 = f1;
-                at2 = at1;
-                f1 = d;
-                at1 = at;
-            } else if d < f2 {
-                f2 = d;
-                at2 = at;
-            }
-        }
-    }
-    // (Distance to the edge between the two nearest cells, in metres.)
-    let edge = (f2 - f1) * 0.5 * cell;
-    let drawn = max(width, pixel);
-    let line = saturate(1.0 - (edge - drawn * 0.5) / pixel) * (width / drawn);
-    let mask = i32(round(glow.w));
-    var drawn_here = 1.0;
-    if mask == 0 {
-        // (A crack is drawn if either cell beside it is cracked; a cell is
-        // if the clustering noise at its point says so.)
-        let cracked = max(step(0.5, value_noise(at1 * cell, 0.25)), step(0.5, value_noise(at2 * cell, 0.25)));
-        drawn_here = cracked;
-    } else if mask == 2 {
-        drawn_here = smoothstep(0.45, 0.6, value_noise(p, 0.25));
-    }
-    return 1.0 - min(0.5 * glow.z, 0.95) * line * drawn_here * fade;
-}
-
-// The ground's surface detail (`--set surface`): 0 the grain (value noise,
-// see `sample_grain`), 1 sparse flecks, 2 fine cracks, 3 none. (The grain's
-// noise, on big plain faces, read as camouflage or a texture gone wrong, even
-// at its finest, the user; but without detail there was no sense of speed.
-// Flecks and cracks: sharp small features, not soft blobs.)
-fn surface_detail(uv: vec2<f32>, mottle: f32, pixel: f32) -> f32 {
-    let mode = i32(round(glow.y));
-    if grain.x <= 0.0 || mode == 3 {
-        return 1.0;
-    }
-    if mode == 1 {
-        return flecks(uv, 0.0625, 0.18, 0.008, pixel, 0) * flecks(uv, 0.25, 0.12, 0.025, pixel, 101);
-    }
-    if mode == 2 {
-        return cracks(uv, 0.5, 0.004 + 0.002 * glow.z, pixel);
-    }
-    return max(1.0 + grain.x * 2.0 * mottle, 0.0);
-}
-
-// Mottling and relief height (metres) on a surface plane, with each octave
-// faded out once it gets close to the pixel size.
-struct Grain {
-    mottle: f32,
-    height: f32,
-}
-
-fn sample_grain(p: vec2<f32>, pixel: f32) -> Grain {
-    // Octaves: 25 cm speckle, 1 m mottling, 4 m blotches (powers of two, so
-    // every lattice fits the wrap period exactly). Only the speckle by
-    // default: the mottling and blotches, on big plain faces, read as
-    // camouflage, a texture gone wrong (the user); texture keeps to the
-    // finest scale, the geometry carries the rest (`--opt coarsegrain` for
-    // them).
-    let freqs = vec3<f32>(4.0, 1.0, 0.25);
-    let mottle_weights = vec3<f32>(0.35, 0.4, 0.25);
-    let heights = vec3<f32>(0.004, 0.012, 0.03);
-    var g = Grain(0.0, 0.0);
-    for (var k = 0; k < 3; k++) {
-        let cell = 1.0 / freqs[k];
-        let fade = saturate(cell / (pixel * 3.0) - 1.0) * select(grain.w, 1.0, k == 0);
-        let n = value_noise(p, freqs[k]) - 0.5;
-        g.mottle += n * mottle_weights[k] * fade;
-        g.height += n * heights[k] * fade;
-    }
-    return g;
-}
-
 // The paving region a point falls in (cells of a Voronoi pattern 512 m
 // apart, which fits the wrap period): whether it is paved, its centre, and a
 // number of its own.
@@ -203,7 +60,7 @@ struct Region {
 
 fn region(p: vec2<f32>) -> Region {
     let size = 512.0;
-    let period = i32(round(grain.y / size));
+    let period = i32(round(wrap.x / size));
     let base = vec2<i32>(floor(p / size));
     var best = 1e9;
     var r = Region(false, vec2<f32>(0.0), 0.0);
@@ -301,26 +158,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.specular_occlusion *= visibility;
 #endif
 
-    // Undo the curvature so the grain stays fixed to the ground as the camera
-    // moves.
+    // Undo the curvature so the paving stays fixed to the ground as the
+    // camera moves.
     var p = in.world_position.xyz;
     let d = p.xz - params.zw;
     p.y += dot(d, d) * params.y;
 
-    // Project onto the surface's own plane: tops use x/z, walls run along
-    // their face and up.
     let n = normalize(in.world_normal);
-    var u_axis = vec3<f32>(1.0, 0.0, 0.0);
-    var v_axis = vec3<f32>(0.0, 0.0, 1.0);
-    if abs(n.y) < 0.7 {
-        u_axis = normalize(vec3<f32>(-n.z, 0.0, n.x));
-        v_axis = vec3<f32>(0.0, 1.0, 0.0);
-    }
-    let uv = vec2<f32>(dot(p, u_axis), dot(p, v_axis));
-    let pixel = max(length(fwidth(uv)), 1e-4);
-
-    let g = sample_grain(uv, pixel);
-    pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * surface_detail(uv, g.mottle, pixel), 1.0);
+    // (The size of a pixel on the ground, in metres: outside the branch,
+    // since derivatives need every pixel nearby to take the same path.)
+    let pixel = max(length(fwidth(p.xz)), 1e-4);
 
     // Paving, on top surfaces in paved regions.
     if paving.x > 0.5 && n.y > 0.85 {
@@ -332,16 +179,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Lit pieces of geometry (glowing etchings and seams).
     if lit > 0.0 {
         pbr_input.material.emissive = vec4<f32>(pbr_input.material.emissive.rgb + vec3<f32>(lit * glow.x), 1.0);
-    }
-
-    // Micro-relief: tilt the normal by the height field's slope, found with
-    // two extra samples a little way along the plane.
-    if grain.z > 0.0 && i32(round(glow.y)) == 0 {
-        let e = 0.04;
-        let gu = sample_grain(uv + vec2<f32>(e, 0.0), pixel).height - g.height;
-        let gv = sample_grain(uv + vec2<f32>(0.0, e), pixel).height - g.height;
-        let slope = (u_axis * gu + v_axis * gv) / e;
-        pbr_input.N = normalize(pbr_input.N - slope * grain.z);
     }
 
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
