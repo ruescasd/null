@@ -517,6 +517,25 @@ fn accelerate_remembering(v: &mut Vec3, memory: &mut Vec3, wishdir: Vec3, wishsp
 /// swing kept going fed itself).
 fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, jump: bool, dt: f32, ride: Ride) -> Vec3 {
     let radius = worldgen::canal::PIPE_RADIUS as f32;
+    // Below the lip, standing is the feet on the pipe's cylinder, where it
+    // is walkable, not moving off it. (The physics' ground test cannot tell:
+    // the feet ride the cylinder half a hull's width inside the pipe's
+    // triangles, out of its reach at the bottom, so an off canal had no
+    // friction and a swing across it, or speed along it, never died, the
+    // user; and just under the lip it touched the ground beyond, so you
+    // stood on a wall.)
+    if let Some(pipe) = world.canal_at(center.x, center.z) {
+        let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
+        let (o, h) = (pipe.offset, center.y - HEIGHT * 0.5 - (pipe.floor + radius));
+        if h < 0.0 {
+            let r = (o * o + h * h).sqrt();
+            let normal = -(across * o + Vec3::Y * h) / r;
+            player.grounded = r > PIPE_RIDE_RADIUS - 0.05 && normal.y >= MIN_WALK_NORMAL && player.velocity.dot(normal) <= 0.5;
+            if player.grounded {
+                player.ground_normal = normal;
+            }
+        }
+    }
     // Jump off the surface, away from it.
     if player.grounded && jump {
         player.velocity += player.ground_normal * JUMP_SPEED;
@@ -534,7 +553,11 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         let accel = if ride.on { AIR_ACCEL * ride.airaccel } else { AIR_ACCEL };
         accelerate_remembering(&mut player.velocity, &mut player.pipe_memory, wishdir, MAX_SPEED, accel, dt);
     }
-    player.velocity.y -= GRAVITY * if ride.on { ride.glide } else { 1.0 } * dt;
+    // (Standing on an off pipe, no gravity, as on any walkable ground: with
+    // it you crept down the canal's grade.)
+    if ride.on || !player.grounded {
+        player.velocity.y -= GRAVITY * if ride.on { ride.glide } else { 1.0 } * dt;
+    }
 
     let mut moved = center + player.velocity * dt;
     player.grounded = false;
