@@ -142,9 +142,6 @@ pub struct Player {
     pub mantle: Option<Mantle>,
     /// Whether the player is on a canal's slick surface.
     pub in_canal: bool,
-    /// What a canal's pipe has taken of your push into it, remembered as
-    /// though you still moved that way (see `accelerate_remembering`).
-    pipe_memory: Vec3,
     /// How long the tether's line has been blocked.
     tether_blocked: f32,
     /// The tether button must be released before the tether fires again.
@@ -154,6 +151,8 @@ pub struct Player {
     /// How far the view lags behind the body after a step (negative after
     /// stepping up).
     view_offset: f32,
+    /// The view's yaw last frame, for how fast you turn (see `pipe_move`).
+    last_yaw: Option<f32>,
 }
 
 fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
@@ -171,11 +170,11 @@ impl Player {
             tether: Tether::Idle,
             mantle: None,
             in_canal: false,
-            pipe_memory: Vec3::ZERO,
             tether_blocked: 0.0,
             tether_held: false,
             view_offset: 0.0,
             ready: false,
+            last_yaw: None,
         }
     }
 }
@@ -442,9 +441,12 @@ fn pull_towards(velocity: &mut Vec3, to_anchor: Vec3, dt: f32) {
 
 /// How a canal's pipe rides: whether its canal is on, and (on) how much
 /// speed a descent gives back over what it took, how strongly gravity pulls,
-/// and the fastest you may go. (The user: the player does the moving, the
-/// canal rewards it, never drives it; the whole segment different while it
-/// is on.) `--set canal_pump`, `canal_glide`, `canal_cap`.
+/// the fastest you may go, how fast a swing across dies away, and the
+/// movement's own numbers (see `pipe_move`). (The user: the player does the
+/// moving, the canal rewards it, never drives it; the whole segment
+/// different while it is on.) `--set canal_pump`, `canal_glide`,
+/// `canal_cap`, `canal_damp`, `pipe_accel`, `turn_gain`, `turn_window`,
+/// `turn_max`.
 #[derive(Clone, Copy)]
 struct Ride {
     on: bool,
@@ -453,11 +455,28 @@ struct Ride {
     cap: f32,
     /// How fast a swing across the pipe dies away (per second; on).
     damp: f32,
-    /// Quake's air acceleration, times this (on): pushes kept ahead of the
-    /// motion (turning while strafing, forward and strafe together) gain
-    /// more. (The user: a bit more weight to that, the turning; holding
-    /// forward alone still nothing past a run.)
-    airaccel: f32,
+    /// How hard each key pushes, in runs per second.
+    accel: f32,
+    /// The speed along the pipe a turn against the strafe gives, in units
+    /// per degree: a "modest" setting, the user; better boots, say, might
+    /// raise it (see docs/canals.md).
+    turn_gain: f32,
+    /// How far from the way you move along the pipe the view may be for a
+    /// turn to count, degrees either side.
+    turn_window: f32,
+    /// Turning faster than this (degrees a second) gives nothing.
+    turn_max: f32,
+}
+
+/// What the player asks of a step: where the view looks and its right, the
+/// keys (x strafe, y forward), and how far the view turned this step
+/// (radians, left positive).
+#[derive(Clone, Copy)]
+struct Steer {
+    view: Vec3,
+    right: Vec3,
+    wish: Vec2,
+    turn: f32,
 }
 
 impl Ride {
@@ -468,33 +487,62 @@ impl Ride {
             glide: args.num("canal_glide", 0.85),
             cap: args.num("canal_cap", 60.0),
             damp: args.num("canal_damp", 0.06),
-            airaccel: args.num("canal_airaccel", 3.0),
+            accel: args.num("pipe_accel", 1.0),
+            turn_gain: args.num("turn_gain", 2.2),
+            turn_window: args.num("turn_window", 70.0),
+            turn_max: args.num("turn_max", 350.0),
         }
     }
 }
 
-/// Quake's air acceleration against a remembered push: what the pipe's wall
-/// took of your push into it (`memory`) counts as though you still moved
-/// that way, and a push against it undoes it first, as moving one way must be
-/// undone before moving the other, kept until you leave the pipe. (Without
-/// it the wall took the push into it every step, so speed that way never met
-/// the cap and the push's share along the canal grew without end: holding
-/// one strafe key, 1300 ups and on, the user. Quake's gain needs the push
-/// kept ahead of the motion by turning; the wall had done the turning, the
-/// half of the balance lost.)
-fn accelerate_remembering(v: &mut Vec3, memory: &mut Vec3, wishdir: Vec3, wishspeed: f32, accel: f32, dt: f32) {
-    let add = wishspeed - (*v + *memory).dot(wishdir);
-    if add <= 0.0 {
-        return;
+/// Movement in an on canal: the user's, from first principles, in place of
+/// Quake's (whose air acceleration, the wall resetting your speed into it
+/// every step, gave speed along the canal without end for holding one
+/// strafe key; and every guard against that tried, a remembered push,
+/// scaled caps, killed the fun or the keys).
+/// - Each key pushes its own way: W where you look, A and D square to it.
+/// - A push's part across the pipe only until your speed the key's way
+///   reaches a run (the wall resets that: pressing into a wall never ends).
+/// - A push's part along the pipe only until your speed along it, that
+///   way, reaches a run: holding keys gets you a run's worth, no more.
+/// - Turning against the strafe (D turning left, A turning right), the
+///   counter-rotation that aims the strafe down the pipe the way you move,
+///   gives speed along the pipe, `turn_gain` units a degree, while the view
+///   is within `turn_window` degrees of that way and turns no faster than
+///   `turn_max` degrees a second: past a run, this and the pump are the
+///   only ways. (Spinning gained without end; counting only turns back
+///   towards that way broke it all, the user; too fast a turn counting for
+///   nothing stopped it.)
+fn pipe_move(v: &mut Vec3, along: Vec3, steer: Steer, dt: f32, ride: Ride) {
+    let push = ride.accel * MAX_SPEED * dt;
+    for (dir, key) in [(steer.view, steer.wish.y), (steer.right, steer.wish.x)] {
+        if key == 0.0 {
+            continue;
+        }
+        let d = dir * key.signum();
+        let part_along = along * d.dot(along);
+        let part_across = d - part_along;
+        let room = MAX_SPEED - v.dot(d);
+        if room > 0.0 {
+            *v += part_across * push.min(room);
+        }
+        let way = part_along.normalize_or_zero();
+        if way != Vec3::ZERO {
+            let room = MAX_SPEED - v.dot(way);
+            if room > 0.0 {
+                *v += way * (part_along.length() * push).min(room);
+            }
+        }
     }
-    let mut push = (accel * dt * wishspeed).min(add);
-    let against = -memory.dot(wishdir);
-    if against > 0.0 {
-        let undo = push.min(against);
-        *memory += wishdir * undo;
-        push -= undo;
+    let strafe = steer.wish.x.signum();
+    if strafe != 0.0 && steer.turn * strafe > 0.0 && along != Vec3::ZERO {
+        let ahead = v.dot(along);
+        let way = if ahead.abs() > 0.1 { along * ahead.signum() } else { along * steer.view.dot(along).signum() };
+        let rate = steer.turn.abs().to_degrees() / dt;
+        if rate <= ride.turn_max && steer.view.angle_between(way).to_degrees() <= ride.turn_window {
+            *v += way * ride.turn_gain * 0.032 * steer.turn.abs().to_degrees();
+        }
     }
-    *v += wishdir * push;
 }
 
 /// One movement step inside a canal's half-pipe. The feet ride the exact
@@ -503,19 +551,16 @@ fn accelerate_remembering(v: &mut Vec3, memory: &mut Vec3, wishdir: Vec3, wishsp
 /// hull centre.
 ///
 /// Off, the pipe is stone like any other: friction, walking. On, it is
-/// slick, as in Quake 3 (Defrag's slick gliding): no friction and
-/// air-strength acceleration, so speed turns into height and back, down one
-/// wall and up the other, and with enough speed out above the lip; gravity a
-/// little weaker (`glide`), so arcs off the walls hang longer; a swing across
-/// the pipe slowly dying away (`damp`). Either way the wall remembers what it
-/// takes of your push (`accelerate_remembering`): holding one way gains
-/// nothing; gaining takes Quake's skill, the push turned ahead of the motion,
-/// weaving across the pipe from strafe to strafe. And on, coming down a wall
-/// while strafing towards the middle, the way you are swinging, gives back
-/// `pump` more than the fall alone: a pump in time with the swing, as a
-/// skater pumps a bowl (on every descent whatever you did, it was free: a
-/// swing kept going fed itself).
-fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, jump: bool, dt: f32, ride: Ride) -> Vec3 {
+/// slick: no friction, and the canal's own movement (`pipe_move`), so speed
+/// turns into height and back, down one wall and up the other, and with
+/// enough speed out above the lip; gravity a little weaker (`glide`), so
+/// arcs off the walls hang longer; a swing across the pipe slowly dying away
+/// (`damp`). And on, coming down a wall while strafing towards the middle,
+/// the way you are swinging, gives back `pump` more than the fall alone: a
+/// pump in time with the swing, as a skater pumps a bowl (on every descent
+/// whatever you did, it was free: a swing kept going fed itself).
+#[allow(clippy::too_many_arguments)]
+fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3, steer: Steer, jump: bool, dt: f32, ride: Ride) -> Vec3 {
     let radius = worldgen::canal::PIPE_RADIUS as f32;
     // Below the lip, standing is the feet on the pipe's cylinder, where it
     // is walkable, not moving off it. (The physics' ground test cannot tell:
@@ -524,8 +569,10 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
     // friction and a swing across it, or speed along it, never died, the
     // user; and just under the lip it touched the ground beyond, so you
     // stood on a wall.)
+    let mut along = Vec3::ZERO;
     if let Some(pipe) = world.canal_at(center.x, center.z) {
         let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
+        along = Vec3::new(-across.z, 0.0, across.x);
         let (o, h) = (pipe.offset, center.y - HEIGHT * 0.5 - (pipe.floor + radius));
         if h < 0.0 {
             let r = (o * o + h * h).sqrt();
@@ -541,7 +588,9 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         player.velocity += player.ground_normal * JUMP_SPEED;
         player.grounded = false;
     }
-    if !ride.on && player.grounded {
+    if ride.on {
+        pipe_move(&mut player.velocity, along, steer, dt, ride);
+    } else if player.grounded {
         // (Friction along the surface, whichever way it slopes.)
         let speed = player.velocity.length();
         if speed > 0.0 {
@@ -550,8 +599,7 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         }
         accelerate(&mut player.velocity, wishdir, MAX_SPEED, GROUND_ACCEL, dt);
     } else {
-        let accel = if ride.on { AIR_ACCEL * ride.airaccel } else { AIR_ACCEL };
-        accelerate_remembering(&mut player.velocity, &mut player.pipe_memory, wishdir, MAX_SPEED, accel, dt);
+        accelerate(&mut player.velocity, wishdir, MAX_SPEED, AIR_ACCEL, dt);
     }
     // (Standing on an off pipe, no gravity, as on any walkable ground: with
     // it you crept down the canal's grade.)
@@ -574,13 +622,6 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
         let into = player.velocity.dot(outward);
         if into > 0.0 {
             player.velocity -= outward * into;
-            // What it took of your push, remembered (no more than a run's
-            // worth).
-            let taken = Vec3::new(outward.x, 0.0, outward.z) * into;
-            let pushed = taken.dot(wishdir);
-            if pushed > 0.0 {
-                player.pipe_memory = (player.pipe_memory + wishdir * pushed).clamp_length_max(MAX_SPEED);
-            }
         }
         let normal = -outward;
         if normal.y >= MIN_WALK_NORMAL {
@@ -599,11 +640,6 @@ fn ride_pipe(world: &WorldGen, player: &mut Player, center: Vec3, wishdir: Vec3,
             }
         }
     }
-    // (The memory kept all the while in the pipe, touching or not: faded
-    // off the wall, skimming just over it (barely touching for seconds)
-    // let it go, the push came back and speed along the canal grew again,
-    // 22 to 57 m/s holding one strafe key (the user's ride log). Out of the
-    // pipe, over the lip, it is forgotten: see `walk`.)
     if ride.on {
         // The swing across dying away; along the canal, nothing lost.
         let along = Vec3::new(-across.z, 0.0, across.x);
@@ -704,6 +740,12 @@ pub fn walk(
     let forward = Vec3::new(-sin, 0.0, -cos);
     let right = Vec3::new(cos, 0.0, -sin);
     let wishdir = (forward * input.wish.y + right * input.wish.x).normalize_or_zero();
+    // (How far the view turned since last frame, left positive.)
+    let turned = player.last_yaw.map_or(0.0, |last| {
+        let d = (fly.yaw - last).rem_euclid(std::f32::consts::TAU);
+        if d > std::f32::consts::PI { d - std::f32::consts::TAU } else { d }
+    });
+    player.last_yaw = Some(fly.yaw);
     let jump = input.jump;
 
     let mover = Mover {
@@ -769,10 +811,10 @@ pub fn walk(
                 pull_towards(&mut player.velocity, point - center, dt);
             }
             let ride = Ride::of(&args, canals_on.as_deref(), pipe.map_or(0, |p| p.canal));
-            center = ride_pipe(&world, &mut player, center, wishdir, jump, dt, ride);
+            let steer = Steer { view: forward, right, wish: input.wish, turn: turned / steps as f32 };
+            center = ride_pipe(&world, &mut player, center, wishdir, steer, jump, dt, ride);
             continue;
         }
-        player.pipe_memory = Vec3::ZERO;
         if player.grounded {
             // The tether's pull drags you along the ground rather than
             // fighting friction.
@@ -875,14 +917,14 @@ pub fn walk(
         }
     }
     // `--opt ridelog`: in a canal, a line a frame to target/ridelog.csv:
-    // how you move in it, what you press, what the wall remembers.
+    // how you move in it, what you press, how fast you turn.
     if args.opt("ridelog")
         && let Some(pipe) = world.canal_at(center.x, center.z)
     {
         use std::io::Write;
         let file = ridelog.get_or_insert_with(|| {
             let mut f = std::fs::File::create("target/ridelog.csv").expect("writing target/ridelog.csv");
-            let _ = writeln!(f, "t,offset,height,along,across,up,speed,wish_x,wish_y,yaw_off,grounded,in_canal,memory_along,memory_across,canal,on");
+            let _ = writeln!(f, "t,offset,height,along,across,up,speed,wish_x,wish_y,yaw_off,turn_rate,grounded,in_canal,canal,on");
             f
         });
         let across = Vec3::new(pipe.across.x, 0.0, pipe.across.y);
@@ -893,7 +935,7 @@ pub fn walk(
         let on = canals_on.as_deref().and_then(|o| o.0.get(pipe.canal).copied()).unwrap_or(false);
         let _ = writeln!(
             file,
-            "{:.3},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{:.1},{},{},{:.2},{:.2},{},{}",
+            "{:.3},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{:.1},{:.0},{},{},{},{}",
             time.elapsed_secs(),
             pipe.offset,
             center.y - HEIGHT * 0.5 - pipe.floor,
@@ -904,10 +946,9 @@ pub fn walk(
             input.wish.x,
             input.wish.y,
             yaw_off,
+            turned.to_degrees() / total.max(1e-4),
             player.grounded,
             player.in_canal,
-            player.pipe_memory.dot(along),
-            player.pipe_memory.dot(across),
             pipe.canal,
             on,
         );
