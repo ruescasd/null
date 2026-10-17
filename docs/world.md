@@ -137,6 +137,23 @@ daises, pillars, crowns, needles, ruins, terraces and the units above).
 inside the rock. It has the region (`--opt region`), the room lab, and the
 orb, paintings, planetarium rotundas and ichor pool among its places.
 
+## Known issues
+
+- **Earthwork rims: the mesh and the height function disagree.** Where a
+  site's or colossus's earthwork meets the natural ground, a sloped plate's
+  top is drawn as flat facets between its corners, while the height
+  function (`height_at`, the walls' sampling, `--cam` placement, bots)
+  follows the earthwork's smooth curve; where the curve bends the two
+  differ by over 15 m (seen at the rim of the hanging city at (9413,
+  11527), near (9550, 12190), in facets of 45 to 65 degrees). No holes
+  come of it as far as a ray test from points on the mesh shows, but
+  anything placed by height there stands inside or above the ground.
+- **Holes onto the void (fixed 2026-10-18, `a4eda67`).** Walls between
+  plates sampled the ground beyond them too sparsely: tilted neighbours
+  and station courts were missed. A ray test (from every station's court,
+  and down at a slant from 600 points standing on the mesh in the tiers,
+  uplands and highlands) now finds none.
+
 ## Removed, worth revisiting
 
 See `docs/removed.md`: stepped ziggurat sites, racks and pipe networks,
