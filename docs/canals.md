@@ -59,10 +59,16 @@ should feel lost, even afraid, and each lit station feels safer for it.
      | `canal_pump` | 0.25 | Reward for the swing's rhythm |
      | `canal_glide` | 0.85 | Gravity in the pipe |
      | `canal_damp` | 0.06 | How fast a swing dies |
-     | `canal_cap` | 60 m/s | Top speed |
+     | `canal_cap` | 90 m/s | Top speed (was 60; raised for more progression) |
 
-   - Items could raise them: better boots, say, `turn_gain` 3 (see
-     item progression).
+   - How it plays (the user, 2026-10-17): the pump and the turning
+     reinforce each other, with a trade-off between them. Too much turning
+     at the bottom of the pipe loses the pump's gains; too many long swings
+     up the walls means fewer turning boosts. The best balance shifts with
+     speed: from slow, swing more; when fast, turn tighter. `turn_gain` 2.2
+     reaches the top speed within a reasonable share of a canal's length.
+   - Items could raise them: better boots, say, `turn_gain` 3, and the top
+     speed (see item progression).
    - Tests: the movement bot holds one strafe for a set time and weaves
      (`--opt bot --opt strafeonly --opt canals_on`, `--set strafe_time`,
      `strafe_yaw`); it neither turns nor times, so it says little about
@@ -87,8 +93,7 @@ should feel lost, even afraid, and each lit station feels safer for it.
 
 ## Open
 
-- **Riding.** The pump and the turning together are new; how they combine
-  wants playing. Whether steep ordinary ground (earthworks, slanted plates)
+- **Riding.** Whether steep ordinary ground (earthworks, slanted plates)
   allows Quake's surf trick: not checked.
 
 - **Stations need real architecture.** They are their own kind of place,

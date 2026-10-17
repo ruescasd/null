@@ -485,7 +485,8 @@ impl Ride {
             on: on.and_then(|o| o.0.get(canal).copied()).unwrap_or(false),
             pump: args.num("canal_pump", 0.25),
             glide: args.num("canal_glide", 0.85),
-            cap: args.num("canal_cap", 60.0),
+            // (90 m/s: room for more progression, the user; it was 60.)
+            cap: args.num("canal_cap", 90.0),
             damp: args.num("canal_damp", 0.06),
             accel: args.num("pipe_accel", 1.0),
             turn_gain: args.num("turn_gain", 2.2),
