@@ -32,6 +32,33 @@ Within any district: **mesas** (raised big plates) and **pits** (sunken
 ones), dark or light **marker** plates, and **pillars** grown from the
 `pillar` form.
 
+## Experiment: rolling terrain (Slopes)
+
+`--opt slopes` turns the whole world into one test district whose plates
+tilt to follow a rolling landform (to set gradients, about 5–19 degrees,
+and eight headings), keeping their steps so the land reads as built.
+`--set slopes_version=1|2|3` and `--set slopes_relief=N` (the hills' total
+height; 1 is today's scale) choose the variant.
+
+| Version | Plates | Steps | Level crests | Relief |
+|---|---|---|---|---|
+| 1 | big | 1 m | no | 2 |
+| 2 | big | 1.75 m | yes | 2.5 |
+| 3 | big | 2.5 m | yes | 3 |
+
+**Findings so far (the user, 2026-10-17):**
+- Version 2 works better for reliefs 1 to 2; version 1 works better for
+  reliefs 3 and up.
+- These variants suit the terrain of biomes: kinds of land that districts
+  are made from, alongside Floor, Tiers, Stacks and Broken.
+- Small plates with big steps read as the Broken district, and distant
+  coarse plates as blocks of houses: rejected.
+- Taller hills than the steepest tilt (19 degrees) can follow turn into
+  stacked walls; steeper tilts, up to about 40 degrees (still walkable),
+  are untried.
+- Full daylight washes the slopes out. Judge them at a low sun
+  (`--time 60`) or darker (`--set ev=12`).
+
 ## Landmarks in the open world
 
 Set in `data/structures.ron`.
