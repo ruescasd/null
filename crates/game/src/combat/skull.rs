@@ -4,14 +4,20 @@
 //! out an egg (and before it, heads of stacked rings read as toys: a torch,
 //! a bulb, a duck): a head's shape is authored, not generated.
 //!
-//! Flat shaded, pale outside; the faces turned in, towards its hollow, black
-//! (shaded only, they washed out pale in the sun), so the cage reads dark
-//! inside through its openings.
+//! Flat shaded and inked: its struts' outer faces pale, their sides and
+//! the faces turned in, towards its hollow, black (shaded only, they washed
+//! out pale in the sun), so it reads as white lines drawn on black, dark
+//! inside through its openings. (Of all pale, inked, the body's black
+//! rising to a pale crown, and black with pale highlights, the user chose
+//! inked; and no eyes, its face its openings: see the commit before this
+//! one for the others, and eyes.)
 //!
 //! In two, cut at its narrow waist, the joint: the skull above turns with
-//! the head, the legs below stand on the neck, fastened to the body by
-//! cables (see `hunter/cables.rs`). (Whole on the head, its legs swung round
-//! with it as it turned and looked down, dragging the cables, the user.)
+//! the head; below, its four struts (its legs) stand on the neck and are
+//! the neck, sunk into the top of the torso (see `struts_in_the_torso`).
+//! (Whole on the head, they swung round with it as it turned and looked
+//! down; held to the body by cables or shard tendons as well, and the
+//! hunters' neck shards, it had three necks, the user.)
 //!
 //! Baked in its own frame (x right, y up, z forward, the face; height 1
 //! from its lowest point, centred across); the skull returned in the head
@@ -29,8 +35,9 @@ const WAIST: f32 = 0.34;
 /// The skull's middle, up from its lowest point (of its height): what the
 /// faces turn in towards, along its axis between `WAIST` and the crown.
 const HOLLOW: (f32, f32) = (0.45, 0.8);
-/// How far a face must turn in to be black (the cosine).
-const INWARD: f32 = -0.2;
+/// How far a face must turn out to be pale (the cosine; less, a strut's
+/// side or inside, black).
+const OUTWARD: f32 = 0.75;
 
 /// A part of the cage: its pale mesh and its black.
 pub(super) struct Piece {
@@ -62,12 +69,8 @@ fn placed(v: Vec3) -> Vec3 {
     (v - Vec3::Y * WAIST) * HEIGHT
 }
 
-/// The skull and the legs (see the module's notes), in black and white by
-/// `tone` (`--set cagetone`, to judge): 0 pale, its inside black; 1 inked,
-/// the struts' outer faces pale, their sides black; 2 the body's black
-/// rising up its struts and lower skull to a pale crown; 3 black, pale only
-/// where a strut faces straight out.
-pub(super) fn build(tone: u32) -> (Piece, Piece) {
+/// The skull and the legs (see the module's notes).
+pub(super) fn build() -> (Piece, Piece) {
     let mut pieces: [(Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>, Vec<[f32; 3]>, Vec<[f32; 3]>); 2] = Default::default();
     for [a, b, c] in baked() {
         let n = (b - a).cross(c - a);
@@ -83,14 +86,7 @@ pub(super) fn build(tone: u32) -> (Piece, Piece) {
         let corners = [a, b, c].map(|p| frame(placed(p)).to_array());
         let normal = frame(n).to_array();
         let (pale, pale_normals, colors, dark, dark_normals) = &mut pieces[legs as usize];
-        let black = facing < INWARD
-            || match tone {
-                1 => facing < 0.75,
-                2 => middle.y < 0.55,
-                3 => facing < 0.92,
-                _ => false,
-            };
-        if black {
+        if facing < OUTWARD {
             dark.extend(corners);
             dark_normals.extend([normal; 3]);
         } else {
@@ -112,10 +108,11 @@ pub(super) fn build(tone: u32) -> (Piece, Piece) {
     (skull, legs)
 }
 
-/// The tips of its legs (front, back, left, right), where the neck's cables
-/// fasten, in the neck's frame from its end (m): each the middle of the
-/// corners within a little of its lowest point, by the way it reaches out.
-pub(in crate::combat) fn legs() -> [Vec3; 4] {
+/// The tips of its legs (front, back, left, right), in the neck's frame
+/// from its end (m): each the middle of the corners within a little of its
+/// lowest point, by the way it reaches out.
+#[cfg(test)]
+fn legs() -> [Vec3; 4] {
     static LEGS: std::sync::OnceLock<[Vec3; 4]> = std::sync::OnceLock::new();
     *LEGS.get_or_init(|| {
         let mut sums = [(Vec3::ZERO, 0.0f32); 4];

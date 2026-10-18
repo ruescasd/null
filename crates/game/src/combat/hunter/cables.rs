@@ -1,8 +1,9 @@
 //! Cables on a hunter: strands hung on its bones, all of a hunter's drawn as
-//! one mesh of tubes rebuilt every frame. Every hunter with a head has its
-//! neck's: thin cables from the top of its chest into the base of its
-//! skull, tendons (the user: a solid neck would not work as one; dressed in
-//! a few sprung shards only, the head floated). And `--set cables=N`:
+//! one mesh of tubes rebuilt every frame. Every hunter with a head but the
+//! stalker has its neck's: thin cables from the top of its chest into the
+//! base of its skull, tendons (the user: a solid neck would not work as
+//! one; dressed in a few sprung shards only, the head floated). And `--set
+//! cables=N`:
 //!
 //! 1. Muscles: cables strung between bones (body to thigh, across each knee,
 //!    up the neck), taut when the limb is stretched, sagging when it folds.
@@ -48,9 +49,7 @@ impl Anchor {
 
 enum Kind {
     /// Between two anchors, `length` long (0: as far apart as they are at
-    /// first, a little slack; `TAUT`: straight between them, wherever they
-    /// are, tendons; swinging, they hung and trailed as it walked, the
-    /// user).
+    /// first, a little slack).
     Strung { from: Anchor, to: Anchor, length: f32 },
     /// From an anchor, its other end free.
     Hanging { from: Anchor, length: f32 },
@@ -83,8 +82,6 @@ pub(in crate::combat) struct Cables {
 
 /// Points along a strung or hanging strand.
 const NODES: usize = 9;
-/// A strung strand's length, kept taut (see `Kind::Strung`).
-const TAUT: f32 = -1.0;
 /// Points along a wound strand, per bone.
 const WOUND_NODES: usize = 10;
 
@@ -108,7 +105,7 @@ pub(in crate::combat) fn run(
         })
         .clone();
     for (entity, hunter) in &added {
-        let mut strands = strands(variant, hunter, entity.index_u32(), args.opt("palecables"), args.opt("shardneck") || args.opt("bareneck"));
+        let mut strands = strands(variant, hunter, entity.index_u32());
         // (None, no mesh: the renderer does not take an empty one.)
         if strands.is_empty() {
             continue;
@@ -148,7 +145,7 @@ pub(in crate::combat) fn run(
 }
 
 /// The strands for a variant, laid out on the hunter's bones as they are.
-fn strands(variant: u32, hunter: &Hunter, seed: u32, pale: bool, shardneck: bool) -> Vec<Strand> {
+fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
     let plan = &hunter.rig.plan;
     let bones = &hunter.rig.bones;
     let limbs = plan.legs.len() + plan.arms.len();
@@ -162,36 +159,8 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32, pale: bool, shardneck: bool
     let a = |bone: usize, along: f32, offset: Vec3| Anchor { bone, along, offset };
     // The neck (every hunter with a head; the first variant has its own):
     // thin dark cables, taut as the head reaches out, slack as it draws in.
-    if plan.style == crate::rig::Style::Stilt && shardneck {
-        // (Held by shards instead, or bare: see `hunter.rs`, the stalker's
-        // head.)
-    } else if plan.style == crate::rig::Style::Stilt && bones.len() > 4 {
-        // The stalker's: its head stands on four legs (see `skull.rs`),
-        // each held down by two cables from its tip, fastened into it, to
-        // the chest, the side legs' down from its shoulders: taut, tendons
-        // (slack, they looped out like hoses, the head not held by them,
-        // the user; short, from legs ending at its shoulders, they read as
-        // hooks). (`--opt palecables`: pale as the head, its struts running
-        // on into the body; to judge against dark.)
-        let neck = bones[3].radius;
-        for (leg, tip) in crate::combat::skull::legs().into_iter().enumerate() {
-            // (Its place on the chest: forward is z on the chest, as on the
-            // neck the legs stand on.)
-            let (out, along) = match leg {
-                0 => (Vec3::new(0.0, 0.0, 0.8), 0.55),
-                1 => (Vec3::new(0.0, 0.0, -0.8), 0.55),
-                2 => (Vec3::new(-0.9, 0.0, 0.0), 0.75),
-                _ => (Vec3::new(0.9, 0.0, 0.0), 0.75),
-            };
-            for j in 0..2 {
-                k += 1;
-                let spread = Quat::from_rotation_y((j as f32 - 0.5) * 0.5 + r(k, 0) * 0.15);
-                // (A little up inside the leg's end: out of it, not on it.)
-                let into = tip + Vec3::Y * 0.012;
-                add(Kind::Strung { from: a(2, along + r(k, 1) * 0.05, spread * out), to: a(3, 1.0, into / neck), length: TAUT }, (0.009, 0.006), if pale { 0.75 } else { 0.06 });
-            }
-        }
-    } else if !plan.radial && variant != 1 && bones.len() > 4 {
+    // (Not the stalker's: its neck is its head's own struts, see `skull.rs`.)
+    if !plan.radial && plan.style != crate::rig::Style::Stilt && variant != 1 && bones.len() > 4 {
         for j in 0..7 {
             k += 1;
             let t = j as f32 / 7.0 * std::f32::consts::TAU + r(k, 0) * 0.3;
@@ -268,9 +237,7 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32, pale: bool, shardneck: bool
         match s.kind {
             Kind::Strung { from, to, ref mut length } => {
                 let (p, q) = (from.at(bones).unwrap_or_default(), to.at(bones).unwrap_or_default());
-                if *length == 0.0 {
-                    *length = p.distance(q) * 1.03;
-                }
+                *length = p.distance(q) * 1.03;
                 s.points = (0..NODES).map(|i| p.lerp(q, i as f32 / (NODES - 1) as f32)).collect();
             }
             Kind::Hanging { from, length } => {
@@ -353,12 +320,5 @@ fn step(s: &mut Strand, bones: &[crate::rig::Bone], floor: &dyn Fn(Vec3) -> f32,
     };
     let Some(start) = from.at(bones) else { return };
     let end = to.and_then(|t| t.at(bones));
-    if let (Some(end), TAUT) = (end, length) {
-        let n = s.points.len();
-        for (i, p) in s.points.iter_mut().enumerate() {
-            *p = start.lerp(end, i as f32 / (n - 1) as f32);
-        }
-        return;
-    }
     rope(&mut s.points, &mut s.previous, start, end, length, floor, dt);
 }
