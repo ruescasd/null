@@ -253,6 +253,29 @@ pub(super) struct Part {
     stiffness: f32,
 }
 
+/// A part drawn between two places on the bones each frame, its root at the
+/// part's own (its bone, along it, out from it in metres), its tip at
+/// `to`: a shard stretched as a tendon (the stalker's neck, `--opt
+/// shardneck`; sized once, they hung in the air as its neck stretched).
+#[derive(Component)]
+pub(super) struct Tendon {
+    to: (usize, f32, Vec3),
+    width: f32,
+}
+
+/// Each tendon from its root to its tip as the bones are now.
+pub(super) fn tendons(hunters: Query<&Hunter>, mut tendons: Query<(&Part, &Tendon, &mut Transform)>) {
+    for (part, tendon, mut transform) in &mut tendons {
+        let Ok(h) = hunters.get(part.hunter) else { continue };
+        let at = |bone: usize, along: f32, offset: Vec3| h.rig.bones.get(bone).map(|b| b.a.lerp(b.b, along) + b.rotation() * offset);
+        let (Some(from), Some(to)) = (at(part.bone, part.along, part.offset), at(tendon.to.0, tendon.to.1, tendon.to.2)) else { continue };
+        let way = to - from;
+        transform.translation = from;
+        transform.rotation = Quat::from_rotation_arc(Vec3::Y, way.normalize_or(Vec3::Y));
+        transform.scale = Vec3::new(tendon.width / 0.025, way.length() / 0.7, tendon.width / 0.025);
+    }
+}
+
 /// `spawn KIND [N]` at the console (see `console::Spawns`): hunters and buds
 /// a metre before you (several, side by side), in a built place on the floor
 /// nearest there.
@@ -360,7 +383,16 @@ pub(super) struct Heads {
     /// tiles, pebbles, wedges and spheres, tried for it, are in the notes on
     /// pieces.)
     rods: (Handle<Mesh>, Handle<Mesh>),
+    /// The stalker's gun (see `lance.rs`).
+    lance: super::lance::Kit,
+    /// The stalker's head: its cage's skull and legs, each pale and black,
+    /// and their finishes (see `setup`).
+    stalker_head: ([(Handle<Mesh>, Handle<Mesh>); 2], Handle<StandardMaterial>, Handle<StandardMaterial>),
+    /// Its eyes, if any (`--opt cageeyes`): flat upright rhombuses, in the
+    /// head's frame.
+    cage_eye: Handle<Mesh>,
 }
+
 
 /// A porter's load, following its back (see `loads`).
 #[derive(Component)]
@@ -447,7 +479,7 @@ fn rings_mesh(rings: &[(f32, f32, f32, f32)]) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
 }
 
-pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub(super) fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     // A long, narrow, angular head: a ridge of cranium behind, the brow low
     // over the eyes, a long muzzle; nothing round about it.
     let beast = rings_mesh(&[(0.0, 0.5, 0.65, 0.1), (0.2, 0.68, 0.8, 0.22), (0.42, 0.55, 0.5, 0.06), (0.72, 0.38, 0.34, -0.04), (1.0, 0.16, 0.18, -0.1)]);
@@ -467,8 +499,21 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
     // its root to its length along +Y, so a shard's scaling fits them.)
     let rods = (meshes.add(Cylinder::new(0.012, 0.75).mesh().resolution(6).build().translated_by(Vec3::Y * 0.325)), meshes.add(Cylinder::new(0.035, 0.5).mesh().resolution(6).build()));
     let load = super::slab::build(&mut commands, &mut meshes, &mut materials);
+    let lance = super::lance::build(&mut meshes, &mut materials);
+    // The stalker's head: an open lattice cage, pale, dark inside (see
+    // `skull.rs`; the user: an optic on it read as a torch stuck in a head,
+    // its sighting is now the gun's scope).
+    let (skull, legs) = super::skull::build(args.num("cagetone", 0.0) as u32);
+    let bone_white = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.77), perceptual_roughness: 0.6, reflectance: 0.3, ..default() });
+    let black = materials.add(StandardMaterial { base_color: Color::BLACK, perceptual_roughness: 1.0, reflectance: 0.0, ..default() });
+    let stalker_head = ([skull, legs].map(|p| (meshes.add(p.pale), meshes.add(p.dark))), bone_white, black);
+    // (Its face along the head, forward: up is -z in the head's frame.)
+    let cage_eye = meshes.add(Extrusion::new(Rhombus::new(CAGE_EYE.0, CAGE_EYE.1), CAGE_EYE.2).mesh().build().rotated_by(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)));
     commands.insert_resource(Heads {
         rods,
+        lance,
+        stalker_head,
+        cage_eye,
         load,
         beast: vec![(meshes.add(beast), beast_jaw), (meshes.add(angler), meshes.add(angler_jaw))],
         biped: (meshes.add(biped), meshes.add(biped_jaw)),
@@ -480,6 +525,15 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
         ),
     });
 }
+
+/// The stalker's eyes in its cage (`--opt cageeyes`): across and up (head
+/// radii), along the head (0..1), as `Eye::at`; inside the skull, behind
+/// the pair of openings in its front that see straight out (found by rays
+/// from inside: elsewhere they hid behind its struts).
+const CAGE_EYES: Vec3 = Vec3::new(0.69, 2.68, 0.04);
+/// Each a flat upright rhombus: wide, tall, thick (m). (Small: round,
+/// larger, they read as lamps; the user: upright, not lying flat.)
+const CAGE_EYE: (f32, f32, f32) = (0.012, 0.03, 0.004);
 
 /// One of a hunter's eyes (each hunter's pair shares a material, which
 /// flares as it looks at you).
@@ -705,6 +759,7 @@ fn spawn_hunter(
     // (The biped candidates: no voice; see `Hunter::silent`.)
     let silent = matches!(plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter);
     let porter = plan.style == crate::rig::Style::Porter;
+    let stilt = plan.style == crate::rig::Style::Stilt;
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
@@ -716,6 +771,10 @@ fn spawn_hunter(
             Visibility::default(),
         ))
         .id();
+    // The stalker's gun (`--opt nolance` for none; see `lance.rs`).
+    if stilt && !args.opt("nolance") {
+        super::lance::spawn(commands, materials, &heads.lance, hunter, feet + Vec3::Y * 2.0);
+    }
     // The porter's load: a plain slab on its back (see `loads`).
     if porter {
         let k = args.num("slab", 0.0) as usize;
@@ -822,6 +881,45 @@ fn spawn_hunter(
                     MeshMaterial3d(assets.dark.clone()),
                     Transform::from_translation(bone.b).with_scale(Vec3::splat(bone.radius * 3.2)),
                 ));
+            }
+            continue;
+        }
+        if i == 4 && stilt {
+            // The stalker's head (see `setup`), no jaw (it is silent), no
+            // lights: a lattice cage, its skull on the head, its legs on the
+            // neck, from the neck's end.
+            let (pieces, white, black) = &heads.stalker_head;
+            for ((pale, dark), (on, along)) in pieces.iter().zip([(i, 0.0), (i - 1, 1.0)]) {
+                for (mesh, finish) in [(pale, white), (dark, black)] {
+                    commands.spawn((
+                        Part { hunter, bone: on, along, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(finish.clone()),
+                        Transform::from_translation(bone.a),
+                    ));
+                }
+            }
+            // (`--opt shardneck`, to judge against the cables: the legs held
+            // by long thin shards instead, two each, rising out of the
+            // chest into its tips, see `Tendon`. Rooted in the top of the
+            // torso, in its frame: below the chest along the upright neck,
+            // they started in the air before the hunched torso, the user.)
+            if args.opt("shardneck") && !args.opt("bareneck") {
+                let finish = if args.opt("palecables") { white.clone() } else { assets.dark.clone() };
+                for (leg, tip) in super::skull::legs().into_iter().enumerate() {
+                    for j in 0..2 {
+                        let jitter = hash01(seed as i32, leg as i32, j, 0x5e7) - 0.5;
+                        let out = Quat::from_rotation_y((j as f32 - 0.5) * 0.5 + jitter * 0.15) * Vec3::new(tip.x, 0.0, tip.z).normalize_or(Vec3::Z);
+                        let start = out * (0.09 + jitter * 0.02);
+                        commands.spawn((
+                            Part { hunter, bone: i - 2, along: 0.55, offset: start, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                            Tendon { to: (i - 1, 1.0, tip + Vec3::Y * 0.012), width: 0.014 },
+                            Mesh3d(assets.shard.clone()),
+                            MeshMaterial3d(finish.clone()),
+                            Transform::from_translation(bone.a),
+                        ));
+                    }
+                }
             }
             continue;
         }
@@ -942,6 +1040,9 @@ fn spawn_hunter(
             continue;
         }
         let count = ((length / 0.11) * (bone.radius / 0.12).clamp(0.6, 2.2)).round().clamp(3.0, 40.0) as usize;
+        // (`--opt bareneck`: the stalker's neck its head's own struts alone,
+        // see `skull.rs`; to judge against the shards, tendons, cables.)
+        let count = if i == 3 && stilt && args.opt("bareneck") { 0 } else { count };
         for k in 0..count {
             let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b2) - 0.5;
             let along = k as f32 / count as f32 + r(0) / count as f32;
@@ -966,7 +1067,9 @@ fn spawn_hunter(
             let p = bone.a.lerp(bone.b, along) + bone.rotation() * offset;
             let (mesh, scale) = if long { (blade.clone(), Vec3::new(size * 3.0, size * 1.4, size * 3.0)) } else { (knot.clone(), Vec3::splat(size * 1.6)) };
             commands.spawn((
-                Part { hunter, bone: i, along, offset, rotation, velocity: Vec3::ZERO, stiffness: STIFFNESS },
+                // (A neck's shards stiffer: sprung loose, they let the head
+                // drift off the body.)
+                Part { hunter, bone: i, along, offset, rotation, velocity: Vec3::ZERO, stiffness: if i == 3 { STIFFNESS * 4.0 } else { STIFFNESS } },
                 Mesh3d(mesh),
                 MeshMaterial3d(assets.dark.clone()),
                 Transform::from_translation(p).with_scale(scale),
@@ -1027,7 +1130,19 @@ fn spawn_hunter(
             ));
         }
     } else {
-        for side in [-1.0f32, 1.0] {
+        // (The stalker's: none, or with `--opt cageeyes` two inside its
+        // cage's skull, seen through it, to judge; see its head.)
+        if stilt && args.opt("cageeyes") {
+            for side in [-1.0f32, 1.0] {
+                commands.spawn((
+                    Eye { hunter, bone: 4, at: CAGE_EYES * Vec3::new(side, 1.0, 1.0), material: eyes.clone() },
+                    Mesh3d(heads.cage_eye.clone()),
+                    MeshMaterial3d(eyes.clone()),
+                    Transform::from_translation(feet),
+                ));
+            }
+        }
+        for side in [-1.0f32, 1.0].into_iter().filter(|_| !stilt) {
             commands.spawn((
                 Eye { hunter, bone: 4, at: Vec3::new(side * across, up, along), material: eyes.clone() },
                 Mesh3d(assets.core.clone()),
@@ -1359,10 +1474,14 @@ pub(super) fn hunt(
             h.rig.grab = None;
         }
         let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
+        h.rig.quick_head = args.opt("quickhead");
         if args.opt("specimen") {
             // Straight ahead from its body (not its head, or each glance
-            // would turn it), and dead still.
-            intent.look = h.rig.root + Vec3::new(h.rig.heading.sin(), 1.4, h.rig.heading.cos()) * 8.0;
+            // would turn it), level from its chest, and dead still. (It was
+            // aimed up, 1.4 m a metre: the stalker stared at the sky, its
+            // face never seen.)
+            let level = Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos()) * 8.0;
+            intent.look = Vec3::new(h.rig.root.x + level.x, h.rig.chest().y, h.rig.root.z + level.z);
             intent.stretch = args.num("stretch", 0.0);
             intent.still = true;
         } else if stunned {
@@ -1507,9 +1626,14 @@ pub(super) fn hunt(
                     if h.gesture == Gesture::None && h.gesture_in <= 0.0 {
                         let pick = r(5);
                         let side = if r(7) < 0.5 { -1.0 } else { 1.0 };
+                        // (A stare, the head level: rolled over, it was a
+                        // pet's cocked head, cute, the user; and no
+                        // twitches, a creep instead. `--opt quickhead`, as
+                        // they were.)
+                        let quick = args.opt("quickhead");
                         h.gesture = if pick < 0.3 {
-                            Gesture::Tilt(1.4 + 1.2 * r(6), side * (0.5 + 0.4 * r(9)))
-                        } else if pick < 0.6 {
+                            Gesture::Tilt(1.4 + 1.2 * r(6), if quick { side * (0.5 + 0.4 * r(9)) } else { 0.0 })
+                        } else if pick < 0.6 && quick {
                             Gesture::Twitch(0.25, side)
                         } else if pick < 0.85 {
                             Gesture::Creep(1.5 + 1.5 * r(6))
@@ -1801,6 +1925,30 @@ pub(super) fn hunt(
             intent.look = porter + Vec3::Y * 1.6;
             intent.crouch = 0.0;
         }
+        // The stalker's gun on its free arm (its second): carried; or, for
+        // judging its poses (`--set lance_cycle=S`), planted and aimed at
+        // you for S seconds, then carried for S, and so on.
+        if h.rig.plan.style == crate::rig::Style::Stilt && !args.opt("nolance") {
+            let cycle = args.num("lance_cycle", 0.0);
+            let aim = if cycle > 0.0 {
+                // (Planting it over the first second of its aiming half,
+                // lifting it over the first of its carrying half.)
+                let t = (time.elapsed_secs() / cycle) % 2.0;
+                if t < 1.0 { (t * cycle).min(1.0) } else { (1.0 - (t - 1.0) * cycle).max(0.0) }
+            } else {
+                0.0
+            };
+            let from = h.rig.chest();
+            // (`--opt lance_ahead`: aimed level ahead of it, not at you, to
+            // see it from the side.)
+            let ahead = args.opt("lance_ahead");
+            let dir = if ahead { h.rig.facing() } else { (target - from).normalize_or(Vec3::Z) };
+            h.rig.gun = Some(crate::rig::GunHold { arm: 1, aim, dir });
+            if aim > 0.0 && !ahead {
+                intent.look = target;
+                intent.velocity *= 1.0 - aim;
+            }
+        }
         if h.rig.plan.style == crate::rig::Style::Porter {
             let root = h.rig.root;
             if h.trail.back().is_none_or(|p| p.distance(root) > 0.15) {
@@ -1832,7 +1980,7 @@ pub(super) fn flesh(
     mut materials: ResMut<Assets<StandardMaterial>>,
     camera: Single<&Transform, (With<FlyCam>, Without<Part>, Without<Eye>)>,
     mut hunters: Query<&mut Hunter>,
-    mut parts: Query<(&mut Part, &mut Transform, Has<Jaw>), (Without<Eye>, Without<FlyCam>)>,
+    mut parts: Query<(&mut Part, &mut Transform, Has<Jaw>), (Without<Eye>, Without<FlyCam>, Without<Tendon>)>,
     mut eyes: Query<(&Eye, &mut Transform), (Without<Part>, Without<FlyCam>)>,
 ) {
     let dt = time.delta_secs().min(0.05);

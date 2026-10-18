@@ -154,13 +154,16 @@ pub struct Plan {
 /// On stilts, its body sways on its hips (a creature's motion, neither a
 /// robot's nor a man's: every motion with a cause in the body): its chest
 /// sprung after where it would be (how stiff, how damped: a little under,
-/// so it overshoots), leaning away from a stilt swinging out (m); its head
-/// held still in the world, aimed at what it looks at, the body moving
-/// under it, till the neck has been carried this far (m) and it catches up
-/// to its new place (how fast). (Held 18 cm, caught up at 30/s, it seemed
-/// to teleport after the body, the user: now short holds, eased.)
+/// so it overshoots), leaning away from a stilt swinging out (m). (Its head
+/// was held still in the world, the body moving under it, catching up in
+/// eased snaps: at any hold its head lagged behind its body, the line from
+/// its torso up through its neck to its head bent, the user. Its head now
+/// goes with its body, on its line: see `neck_end`.)
 const STILT_SWAY: (f32, f32, f32) = (120.0, 10.0, 0.035);
-const HEAD_HOLD: (f32, f32) = (0.06, 10.0);
+/// How far the stalker tips its head up or down to look (radians), and how
+/// much of a stretch it reaches its neck out.
+const STALKER_PITCH: f32 = 0.3;
+const STALKER_STRETCH: f32 = 0.25;
 /// On stilts, its arms hang dead from its shoulders, carried only by its
 /// body's motion (the user: held out for balance they read as a tightrope,
 /// awkward; it is impaired but used to it, its arms long given up): its
@@ -251,8 +254,14 @@ impl Plan {
             torso_profile: [0.8, 0.85, 1.1],
             rump: 0.0,
             neck_radius: 0.05,
-            neck: (0.2, 0.2, 1.0),
-            head: (0.25, 0.11),
+            // (Short, on along its torso's line: see `neck_end`; its head's
+            // struts, its neck, sunk well into its torso, see `skull.rs`.
+            // Leaning out, 0.2 forward and 0.2 long, the head sat too far
+            // forward of the body; 0.15, the struts too far out of it, the
+            // user.)
+            neck: (0.08, 0.0, 1.0),
+            // (Its head is a cage: see `skull.rs`.)
+            head: (0.27, 0.09),
             legs: vec![leg(-0.13), leg(0.13)],
             arms: vec![arm(-0.21), arm(0.21)],
             tail: (0, 0.0),
@@ -559,8 +568,9 @@ pub struct Rig {
     /// Dangling or gripping hands, sprung (where, how fast); the last
     /// frame's length.
     hands: Vec<(Vec3, Vec3)>,
-    /// On stilts: its chest swaying on its hips (where, how fast); its head
-    /// held in the world (where), and snapping to its new place.
+    /// On stilts: its chest swaying on its hips (where, how fast); the
+    /// porter's head held in the world (where), and snapping to its new
+    /// place.
     sway: Option<(Vec3, Vec3)>,
     head_at: Option<Vec3>,
     head_snap: bool,
@@ -595,6 +605,11 @@ pub struct Rig {
     head_dir: Vec3,
     glance: Vec3,
     glance_in: f32,
+    /// How fast the head is turning now (radians a second; see `HEAD_TURN`).
+    head_spin: f32,
+    /// The old quick head (`--opt quickhead`): darting glances, snapping
+    /// turns. For comparing; see `HEAD_TURN`.
+    pub quick_head: bool,
     tail: Vec<Vec3>,
     time: f32,
     crouch: f32,
@@ -622,8 +637,57 @@ pub struct Rig {
     /// An arm holding something before it (the stalker's, its porter's
     /// chain): its upper arm hanging, its forearm level, square to it.
     pub holding: Option<usize>,
+    /// A long gun on one arm (the stalker's), carried or planted; and where
+    /// it is, as posed (see `GunHold`, `GunFrame`).
+    pub gun: Option<GunHold>,
+    pub gun_frame: Option<GunFrame>,
+    /// The ground's height under the gun's monopod (last frame's place).
+    gun_ground: f32,
     pub bones: Vec<Bone>,
 }
+
+/// A long gun on one arm's shoulder (the stalker's, too big for it: the
+/// user, its fragility against it): carried resting on the shoulder, or
+/// planted on its monopod before it and aimed. `aim`: 0 carried, 1 planted
+/// and aimed along `dir`.
+#[derive(Clone, Copy, Debug)]
+pub struct GunHold {
+    pub arm: usize,
+    pub aim: f32,
+    pub dir: Vec3,
+}
+
+/// Where the gun is: its grip (its frame's origin), along it to the
+/// muzzle, its up; where its monopod is hinged, and where the monopod's
+/// foot is (on the ground, planted; folded back under it, carried).
+#[derive(Clone, Copy, Debug)]
+pub struct GunFrame {
+    pub grip: Vec3,
+    pub axis: Vec3,
+    pub up: Vec3,
+    pub hinge: Vec3,
+    pub foot: Vec3,
+}
+
+/// A head's turn (the user: slow and deliberate): at most `HEAD_TURN`
+/// radians a second (about 70 degrees), slowing as it nears where it looks
+/// (`HEAD_EASE` times the angle left), gathering and losing speed at no
+/// more than `HEAD_SPIN_UP` radians a second each second.
+const HEAD_TURN: f32 = 1.2;
+const HEAD_EASE: f32 = 2.5;
+const HEAD_SPIN_UP: f32 = 4.0;
+
+/// The gun's measures along it from the grip (m): where it rests on the
+/// shoulder, carried; where its monopod is hinged; how high its bore over
+/// the grip; how long its monopod folded; its tilt carried (radians up).
+pub const GUN_REST: f32 = -0.45;
+pub const GUN_HINGE: f32 = 1.2;
+pub const GUN_BORE: f32 = 0.14;
+const GUN_FOLDED: f32 = 1.0;
+/// The monopod's hinge over the grip: just under the barrel (its bore
+/// `GUN_BORE` up, the shroud 0.09 round it).
+const GUN_UNDER: f32 = GUN_BORE - 0.1;
+const GUN_TILT: f32 = 0.5;
 
 /// Two-bone IK: where the middle joint goes so that a limb from `a` of
 /// lengths `l1`, `l2` reaches `target`, bending towards `pole`.
@@ -685,6 +749,8 @@ impl Rig {
             head_dir: Vec3::new(heading.sin(), 0.0, heading.cos()),
             glance: Vec3::ZERO,
             glance_in: 1.0,
+            head_spin: 0.0,
+            quick_head: false,
             time: 0.0,
             crouch: 0.0,
             seed,
@@ -696,6 +762,9 @@ impl Rig {
             step_scale: 1.0,
             stilt_tune: (STILT_VAULT, STILT_GATHER.0, STILT_BEAT_SCALE),
             holding: None,
+            gun: None,
+            gun_frame: None,
+            gun_ground: root.y,
             bones: Vec::new(),
         };
         rig.stilt = rig.plan.hips.1;
@@ -815,6 +884,7 @@ impl Rig {
     /// (`sweep`: where the body gets to, moved from where it is by a step:
     /// what is built stops it.)
     pub fn update(&mut self, dt: f32, intent: Intent, ground: &impl Fn(f32, f32) -> f32, sweep: &impl Fn(Vec3, Vec3) -> Vec3) {
+        let was = self.root;
         self.time += dt;
         self.dt = dt;
         self.crouch += (intent.crouch - self.crouch) * (1.0 - (-dt * 8.0).exp());
@@ -1144,9 +1214,12 @@ impl Rig {
         }
 
         // The neck stretches fast and draws back slowly; stillness sets in
-        // slowly and breaks at once.
-        let k = if intent.stretch > self.stretch { 12.0 } else { 3.0 };
-        self.stretch += (intent.stretch - self.stretch) * (1.0 - (-dt * k).exp());
+        // slowly and breaks at once. (The stalker's a little: its cage head
+        // reaching half a metre out before its body sat too far forward,
+        // the user.)
+        let stretch = if self.plan.style == Style::Stilt { intent.stretch * STALKER_STRETCH } else { intent.stretch };
+        let k = if stretch > self.stretch { 12.0 } else { 3.0 };
+        self.stretch += (stretch - self.stretch) * (1.0 - (-dt * k).exp());
         self.alive = if intent.still { self.alive * (-dt * 2.5).exp() } else { 1.0 };
         // The head: towards the target, with lag; now and then a glance (not
         // when still).
@@ -1155,7 +1228,8 @@ impl Rig {
         if self.glance_in <= 0.0 {
             let r = |k: i32| hash01(self.seed as i32, (self.time * 10.0) as i32, k, 0x61a) - 0.5;
             self.glance = if r(0) > 0.1 { Vec3::new(r(1), r(2) * 0.4, r(3)) * 1.6 } else { Vec3::ZERO };
-            self.glance_in = 0.6 + 2.2 * (r(4) + 0.5);
+            // (Rarely: a deliberate look away, not darting glances.)
+            self.glance_in = if self.quick_head { 0.6 + 2.2 * (r(4) + 0.5) } else { 5.0 + 7.0 * (r(4) + 0.5) };
         }
         // The stalker's and the porter's chest sprung after where it would
         // be, leading into its motion, leaning away from a leg swinging
@@ -1189,9 +1263,35 @@ impl Rig {
         let want = ((intent.look - chest).normalize_or(self.forward_of(self.chest_yaw)) + self.glance * 0.35).normalize_or(Vec3::Z);
         // (The porter's head low, watching its way.)
         let want = if self.plan.style == Style::Porter { (self.forward_of(self.chest_yaw) * 0.85 - Vec3::Y * 0.5).normalize() } else { want };
+        // (The stalker's near level: its head a cage, tipped to look up or
+        // down at you it read as thrown back, the user.)
+        let want = if self.plan.style == Style::Stilt {
+            let level = Vec3::new(want.x, 0.0, want.z).normalize_or(self.forward_of(self.chest_yaw));
+            let pitch = want.y.clamp(-1.0, 1.0).asin().clamp(-STALKER_PITCH, STALKER_PITCH);
+            level * pitch.cos() + Vec3::Y * pitch.sin()
+        } else {
+            want
+        };
         // In a leap the head is thrown at its prey.
         let rate = if self.airborne.is_some() { 25.0 } else if intent.head_rate > 0.0 { intent.head_rate } else if self.plan.style == Style::Porter { PORTER_LOLL } else if self.plan.style == Style::Stilt { 12.0 } else { 7.0 };
-        self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
+        // Slow and deliberate (the user: quick glances and snapping turns
+        // read as cute, a pet's curiosity, not menace): turning at no more
+        // than `HEAD_TURN`, gathering speed and easing to a stop, a sweep.
+        // Quick only when it is thrown: a leap, an attack's snap; the
+        // porter's loll its own.
+        let quick = self.quick_head || self.airborne.is_some() || intent.head_rate > 0.0 || self.plan.style == Style::Porter;
+        if quick {
+            self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
+            self.head_spin = 0.0;
+        } else {
+            let angle = self.head_dir.angle_between(want);
+            let wanted = (angle * HEAD_EASE).min(HEAD_TURN);
+            self.head_spin += (wanted - self.head_spin).clamp(-HEAD_SPIN_UP * dt, HEAD_SPIN_UP * dt);
+            if angle > 1e-4 {
+                let t = (self.head_spin * dt / angle).clamp(0.0, 1.0);
+                self.head_dir = self.head_dir.slerp(want, t).normalize_or(want);
+            }
+        }
         self.tilt += (intent.tilt - self.tilt) * (1.0 - (-dt * 3.0).exp());
         // The head's height follows the body's slowly: steady while it bobs.
         // (Running, it follows the body, and pumps deeper still as the
@@ -1200,17 +1300,23 @@ impl Rig {
         let pump = 0.1 * self.gallop * moving * (0.4 + 1.2 * self.vary(3)) * (1.0 - (self.bound() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
         let raw = self.neck_end().y - pump;
         let rate = 4.0 + 26.0 * self.gallop;
-        self.head_y = Some(match self.head_y {
-            Some(y) => raw + (y + (raw - y) * (1.0 - (-dt * rate).exp()) - raw).clamp(-0.15, 0.15),
-            None => raw,
-        });
-        // The stalker's and the porter's head held where it is in the world,
-        // the body moving under it, till the neck has been carried too far;
-        // then it catches up, and holds again.
-        if self.sways() {
+        // (Not the stalker's: see `STILT_SWAY`.)
+        self.head_y = match self.head_y {
+            _ if self.plan.style == Style::Stilt => None,
+            Some(y) => Some(raw + (y + (raw - y) * (1.0 - (-dt * rate).exp()) - raw).clamp(-0.15, 0.15)),
+            None => Some(raw),
+        };
+        // The porter's head held where it is in the world, the body moving
+        // under it, till the neck has been carried too far; then it catches
+        // up, and holds again. (Carried along as the whole body goes: held
+        // against its sway only. Held against its going too, the stalker's
+        // trailed behind as it walked, by its speed over the rate it caught
+        // up at, the user.)
+        if self.plan.style == Style::Porter {
             let natural = self.neck_end();
             let at = self.head_at.get_or_insert(natural);
-            let hold = if self.plan.style == Style::Porter { PORTER_HOLD } else { HEAD_HOLD };
+            *at += self.root - was;
+            let hold = PORTER_HOLD;
             if !self.head_snap && at.distance(natural) > hold.0 {
                 self.head_snap = true;
             }
@@ -1239,6 +1345,10 @@ impl Rig {
             }
         }
 
+        // (The ground under the gun's monopod, where it was.)
+        if let Some(f) = self.gun_frame {
+            self.gun_ground = ground(f.hinge.x, f.hinge.z);
+        }
         self.solve();
     }
 
@@ -1264,13 +1374,23 @@ impl Rig {
         if let Some(y) = self.head_y {
             neck_end.y = y;
         }
-        // (On stilts, where it holds it.)
-        if let (true, Some(at)) = (self.sways(), self.head_at) {
+        // (The porter's, where it holds it.)
+        if let (Style::Porter, Some(at)) = (self.plan.style, self.head_at) {
             neck_end = at;
         }
         bones.push(Bone { a: chest, b: neck_end, radius: self.plan.neck_radius, side: right });
-        let head_end = neck_end + self.head_dir * self.plan.head.0;
-        let tilted = Quat::from_axis_angle(self.head_dir.normalize_or(forward), self.tilt) * right;
+        // (The stalker's head stands on its neck's line, turning about it
+        // to look, not tipping: see `neck_end`. Its side square to both:
+        // level, the head tipped off the neck's line as it looked aside,
+        // the user.)
+        let up = (neck_end - chest).normalize_or(Vec3::Y);
+        let head_dir = if self.plan.style == Style::Stilt { (self.head_dir - up * self.head_dir.dot(up)).normalize_or(forward) } else { self.head_dir };
+        let head_end = neck_end + head_dir * self.plan.head.0;
+        // (Level and square to where it looks, its own: taken from the
+        // chest's, it twisted with every stride, the head turning as it
+        // walked, quirky, the user.)
+        let head_right = if self.plan.style == Style::Stilt { up.cross(head_dir) } else { Vec3::new(head_dir.z, 0.0, -head_dir.x) }.normalize_or(right);
+        let tilted = Quat::from_axis_angle(head_dir.normalize_or(forward), self.tilt) * head_right;
         bones.push(Bone { a: neck_end, b: head_end, radius: self.plan.head.1, side: tilted });
         // Legs.
         for i in 0..self.plan.legs.len() {
@@ -1308,6 +1428,30 @@ impl Rig {
             bones.push(Bone { a: hip, b: knee, radius: leg.radius.0, side: right });
             bones.push(Bone { a: knee, b: end, radius: leg.radius.1, side: right });
         }
+        // The gun, if it carries one: resting on its shoulder, or planted
+        // before it, its monopod on the ground, aimed.
+        self.gun_frame = self.gun.map(|g| {
+            let arm = &self.plan.arms[g.arm];
+            let shoulder = chest + right * arm.side - forward * 0.05;
+            let up_of = |axis: Vec3| (Vec3::Y - axis * axis.y).normalize_or(Vec3::Y);
+            // Carried: tilted up ahead, its back resting on the shoulder.
+            let carried = (forward * GUN_TILT.cos() + Vec3::Y * GUN_TILT.sin()).normalize();
+            let carried_grip = shoulder + Vec3::Y * 0.06 + right * arm.side.signum() * 0.03 - carried * GUN_REST - up_of(carried) * GUN_BORE;
+            // Planted: hinged on its monopod a metre before the shoulder,
+            // lower, aimed.
+            let aimed = g.dir.normalize_or(forward);
+            let hinge = shoulder + forward * 0.95 - Vec3::Y * 0.45;
+            let aimed_grip = hinge - aimed * GUN_HINGE - up_of(aimed) * GUN_UNDER;
+            let t = g.aim.clamp(0.0, 1.0);
+            let t = t * t * (3.0 - 2.0 * t);
+            let axis = carried.slerp(aimed, t).normalize_or(forward);
+            let up = up_of(axis);
+            let grip = carried_grip.lerp(aimed_grip, t);
+            let hinge = grip + axis * GUN_HINGE + up * GUN_UNDER;
+            let planted = Vec3::new(hinge.x + forward.x * 0.15, self.gun_ground, hinge.z + forward.z * 0.15);
+            let folded = hinge - axis * GUN_FOLDED;
+            GunFrame { grip, axis, up, hinge, foot: folded.lerp(planted, t) }
+        });
         // Arms: hanging and swinging opposite the legs; reaching forward in
         // a crouch.
         for (k, arm) in self.plan.arms.iter().enumerate() {
@@ -1344,7 +1488,17 @@ impl Rig {
             } else {
                 hand
             };
-            let (elbow, end) = ik(shoulder, hand, arm.upper, arm.lower, if holds { -forward - Vec3::Y * 0.5 } else { -forward + Vec3::Y * 0.2 });
+            // (Its gun's: gripping it, not sprung.)
+            let gripping = self.gun.filter(|g| g.arm == k).and(self.gun_frame);
+            let hand = gripping.map_or(hand, |f| f.grip - f.up * 0.1);
+            let pole = if gripping.is_some() {
+                -forward - Vec3::Y * 0.6 + right * arm.side.signum() * 0.6
+            } else if holds {
+                -forward - Vec3::Y * 0.5
+            } else {
+                -forward + Vec3::Y * 0.2
+            };
+            let (elbow, end) = ik(shoulder, hand, arm.upper, arm.lower, pole);
             bones.push(Bone { a: shoulder, b: elbow, radius: arm.radius.0, side: right });
             bones.push(Bone { a: elbow, b: end, radius: arm.radius.1, side: right });
         }
@@ -1363,6 +1517,10 @@ impl Rig {
         let (neck_len, neck_fwd, neck_up) = self.plan.neck;
         let base = Vec3::new(neck_fwd, neck_up, 0.0).normalize_or(Vec3::Y);
         let neck_dir = (forward * base.x + Vec3::Y * base.y).lerp(self.head_dir, 0.4).normalize_or(Vec3::Y);
+        // (The stalker's on from its torso, one line: set apart, its neck
+        // upright over the hunched torso and its head level on top, they
+        // zigzagged, the user.)
+        let neck_dir = if self.plan.style == Style::Stilt { (chest - self.anchor(Root::Hips)).normalize_or(Vec3::Y) } else { neck_dir };
         let neck_dir = (neck_dir - Vec3::Y * 0.5 * self.crouch).normalize_or(forward);
         // Stretched, the neck reaches along where it looks.
         let neck_dir = neck_dir.lerp(self.head_dir, self.stretch * 0.8).normalize_or(forward);
@@ -1371,9 +1529,10 @@ impl Rig {
 
     /// The head's tip and the direction it faces (for eyes).
     pub fn head(&self) -> (Vec3, Vec3) {
-        // (Three torso segments, the neck, then the head.)
-        let head = self.bones[4];
-        (head.b, (head.b - head.a).normalize_or(Vec3::Z))
+        // (Three torso segments, the neck, then the head; facing where it
+        // looks: the stalker's head bone stands square to its neck, not its
+        // gaze.)
+        (self.bones[4].b, self.head_dir)
     }
 
     /// Which way a leg is set out from the body: to its side; a tripod's,
@@ -1410,6 +1569,11 @@ impl Rig {
         }
         let (middle, up, behind, across) = self.back();
         Some((middle + behind * (self.plan.torso_radius + LOAD_SIZE.z * 0.5), Quat::from_mat3(&Mat3::from_cols(across, up, -behind)), LOAD_SIZE))
+    }
+
+    /// Which way its chest faces, across the ground.
+    pub fn facing(&self) -> Vec3 {
+        self.forward_of(self.chest_yaw)
     }
 
     /// The chest as it is: swaying on its hips (the stalker's, the
@@ -1577,6 +1741,46 @@ mod stalker {
     /// asked (its steps rounded short read as a wall, its speed bled away to
     /// nothing, on the user's machine).
     #[test]
+    fn head_on_its_neck() {
+        // The stalker's head stands on its neck's line (its down along it)
+        // wherever it looks: ahead, aside, behind.
+        for look in [Vec3::new(0.0, 1.5, 5.0), Vec3::new(4.0, 1.0, 1.0), Vec3::new(-3.0, 3.0, -2.0)] {
+            let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
+            for _ in 0..600 {
+                let intent = Intent { velocity: Vec3::Z * 1.0, look: rig.root + look, ..Default::default() };
+                rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
+            }
+            let (neck, head) = (rig.bones[3], rig.bones[4]);
+            let along = (neck.b - neck.a).normalize();
+            let off = (head.rotation() * Vec3::NEG_Z).angle_between(along);
+            assert!(off < 0.01, "looking at {look}: the head {off} rad off its neck's line");
+        }
+    }
+
+    #[test]
+    fn head_keeps_up() {
+        // Walking, the stalker's head stays on its neck, not trailing
+        // behind as it goes.
+        for pace in [0.8, 1.6, 2.5] {
+            let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
+            let (mut sum, mut worst, mut n) = (0.0, 0.0f32, 0);
+            for k in 0..1000 {
+                let intent = Intent { velocity: Vec3::Z * pace, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
+                rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
+                if k >= 500 {
+                    let lag = rig.bones[4].a.distance(rig.neck_end());
+                    sum += lag;
+                    worst = worst.max(lag);
+                    n += 1;
+                }
+            }
+            let mean = sum / n as f32;
+            println!("pace {pace}: lag mean {mean:.3} m, worst {worst:.3} m");
+            assert!(mean < 0.05 && worst < 0.1, "at {pace} m/s the head trails {mean} m (worst {worst} m)");
+        }
+    }
+
+    #[test]
     fn keeps_its_pace_far_out() {
         let mut rig = Rig::new(Plan::stalker(), Vec3::new(1200.0, 0.0, 900.0), std::f32::consts::FRAC_PI_2, 3, &|_, _| 0.0);
         let start = rig.root;
@@ -1588,10 +1792,3 @@ mod stalker {
         assert!(pace > 1.0, "it went {pace} m/s, asked 1.6");
     }
 }
-
-
-
-
-
-
-
