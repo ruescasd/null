@@ -54,6 +54,19 @@ listed. The rest was judged in review and dropped.
 - **The angler's lure** (a stalk with a bulb that flared like the eyes):
   too on the nose.
 
+## The stalker's head (2026-10-18)
+
+- **The cage's other finishes** (all pale; the body's black rising to a pale
+  crown; black with pale highlights only), **eyes** (upright rhombuses
+  behind its front openings, flaring as it looks at you; round ones before),
+  and **other necks** (shard tendons from the torso into its struts, taut
+  cables, pale or dark). Chosen: inked, no eyes, its own struts as its neck.
+  All at `38826c1` (`--set cagetone`, `--opt cageeyes`, `--opt shardneck`,
+  `--opt palecables`).
+- **The skull built by formula** (`skull.rs` before the cage): a sphere
+  pushed in and out came out an egg. A head's shape is authored (concept,
+  reconstruction, bake), not generated.
+
 ## Weapons
 
 - **The shard shotgun with a turning cage** (a barrel whose middle was an
