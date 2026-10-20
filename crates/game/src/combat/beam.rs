@@ -1,7 +1,8 @@
 //! The stalker's shot: from its muzzle along its aim, to the ground or as
 //! far as it reaches, a ray of light (see `beam.wgsl`); a flash, held, gone.
-//! Where it lands, on the ground or on what is built, a dome (`envelop.rs`):
-//! aimed at what you stand on, it lands by you, or where you were. (Drawn as the comet
+//! Where it lands, on the ground or on what is built, it strikes, and the
+//! ground is electrified under a pillar of light (`envelop.rs`): aimed at
+//! what you stand on, it lands by you, or where you were. (Drawn as the comet
 //! itself, a flat pale band at the sky's depth, it showed only against the
 //! sky, and did not work, the user.)
 
@@ -129,11 +130,8 @@ pub(super) fn reach(ground: &crate::ground::Ground, from: Vec3, dir: Vec3) -> Op
 
 /// Fires a shot from `from` along `dir` (a unit), to where it first meets
 /// the ground or what is built, or `RANGE`. Where it lands, it strikes
-/// (`strike.rs`), and a dome stands there (`envelop.rs`), or (`--opt
-/// groundzone`, to judge against it) the ground there is electrified, and
-/// (`--opt pillar`) a pillar of light stands there besides, stone hanging
-/// in it.
-/// (`--opt noray`: not drawn, only where it lands, to judge that alone.)
+/// (`strike.rs`): the ground there electrified, a pillar of light over it,
+/// stone hanging in it (`envelop.rs`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fire(
     commands: &mut Commands,
@@ -157,18 +155,9 @@ pub(super) fn fire(
         let height = |dx: f32, dz: f32| ground.at(at + Vec3::new(dx, 0.5, dz));
         let up = Vec3::new(height(-0.6, 0.0) - height(0.6, 0.0), 1.2, height(0.0, -0.6) - height(0.0, 0.6)).normalize_or(Vec3::Y);
         super::strike::strike(commands, meshes, materials, strikes, at, dir, up, args.num("ray_hold", FLASH.1));
-        if args.opt("pillar") {
-            super::envelop::electrify(commands, at);
-            super::envelop::raise(commands, layers, at);
-            super::strike::levitate(commands, strikes, ground, at, 3.0);
-        } else if args.opt("groundzone") {
-            super::envelop::electrify(commands, at);
-        } else {
-            super::envelop::land(commands, at);
-        }
-    }
-    if args.opt("noray") {
-        return;
+        super::envelop::electrify(commands, at);
+        super::envelop::raise(commands, layers, at);
+        super::strike::levitate(commands, strikes, ground, at, 3.0);
     }
     let ray = rays.add(Ray { shape: Vec4::new(WIDTH, 1.5, 0.0, 0.0), light: Vec4::ZERO });
     commands.spawn((

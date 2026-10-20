@@ -67,12 +67,41 @@ listed. The rest was judged in review and dropped.
   pushed in and out came out an egg. A head's shape is authored (concept,
   reconstruction, bake), not generated.
 
+## The stalker's gun and shot (2026-10-20)
+
+All at `e2701d5` (`git show e2701d5:<path>`).
+
+- **Other lance designs** (`combat/lance.rs`, `--set lance=N`): 0 the first
+  gun a quarter shorter (box receiver, grooved plates, scope, shroud, a cage
+  of rails round a pale core; the first, 3.6 m, was too large and blocky);
+  2 a spine (a rod threaded with hex vertebrae spinning up); 3 a truss
+  (three rails braced to a point, a crystal behind); 4 lenses (rings
+  between two rails). Chosen: 1, tines, four blades round a square cavity.
+- **Carried on the shoulder** (`rig.rs`, `GunHold::drag` false): resting on
+  it tilted up, shouldered to aim. Chosen: dragged, its tip on the ground,
+  heaved up to aim.
+- **The dome** (`combat/envelop.rs`, the default before `--opt pillar`): a
+  faint pale shell where a shot landed, 4 m, inside it the comet, with
+  fractal lightning growing slowly over it (`fractal`, `Bolt::new`,
+  `on_dome`: ten arcs, each its own way, its tip creeping on along it,
+  blinking out together). Read as a science experiment, not a weapon's
+  impact. The lightning itself is "a cool effect in our toolbox" (the
+  user): the ground zone's bolts are the same, laid flat. Also the ground
+  zone alone (`--opt groundzone`). Chosen: the pillar, electrified ground
+  and black stones floating.
+- **Isolating switches**: `--opt noray` (no beam, only where it lands),
+  `--set envelop` (the comet held), `--set envelop_layers` (one layer).
+
 ## Weapons
 
 - **The shard shotgun with a turning cage** (a barrel whose middle was an
   open cage of six rails turning a sixth per shot, shards lying in it, its
   front and back shrouded): replaced by the pump-action, kept as a basis for
   a rotary cannon. Git tag `rotary-cage` (`git show rotary-cage:crates/game/src/combat/weapon.rs`).
+- **The shotgun's first shots** (2026-10-20, at `e2701d5`): a pistol's
+  report (`gun_shot`, "Perdition 1911 pistol", 82365), then a dry blast
+  (`gun_shot_blast`, "080902_shotgun", 39753). Chosen: a blast rolling
+  away (`gun_shot_rolling`). Downloads in `samples/used/`.
 
 ## The creature
 

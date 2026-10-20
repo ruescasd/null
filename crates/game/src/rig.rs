@@ -678,21 +678,19 @@ pub struct Rig {
     pub ragdoll: Option<crate::ragdoll::Ragdoll>,
 }
 
-/// A long gun on one arm's shoulder (the stalker's, too big for it: the
-/// user, its fragility against it): carried resting on the shoulder, or
-/// shouldered and aimed, its other hand under the barrel. `aim`: 0
-/// carried, 1 aimed along `dir`. (Planted on a monopod to aim, it did not
-/// work, the user.) How long it is, from the grip to its tip along the
-/// bore (m); and whether it is dragged, not carried: hanging from its hand,
-/// its tip trailing on the ground behind (weak, struggling with it, the
-/// user's idea).
+/// A long gun in one arm's hand (the stalker's, too big for it: the user,
+/// its fragility against it): dragged, hanging from its hand, its tip
+/// trailing on the ground behind (weak, struggling with it, the user's
+/// idea; carried on its shoulder before), or heaved up, shouldered and
+/// aimed, its other hand under the barrel. `aim`: 0 dragged, 1 aimed along
+/// `dir`. (Planted on a monopod to aim, it did not work, the user.) How long
+/// it is, from the grip to its tip along the bore (m).
 #[derive(Clone, Copy, Debug)]
 pub struct GunHold {
     pub arm: usize,
     pub aim: f32,
     pub dir: Vec3,
     pub length: f32,
-    pub drag: bool,
     /// Its aim set at once, not turned to (a stalker's at its lock, onto
     /// where it fires).
     pub snap: bool,
@@ -718,15 +716,12 @@ const HEAD_TURN: f32 = 1.2;
 const HEAD_EASE: f32 = 2.5;
 const HEAD_SPIN_UP: f32 = 4.0;
 
-/// The gun's measures along it from the grip (m): where it rests on the
-/// shoulder, carried; where the other hand holds it, aimed (`GUN_HOLD`
-/// under the bore); how high its bore over the grip; its tilt carried
-/// (radians up); how far before the shoulder its grip is, aimed.
-pub const GUN_REST: f32 = -0.45;
+/// The gun's measures along it from the grip (m): where the other hand
+/// holds it, aimed (`GUN_HOLD` under the bore); how high its bore over the
+/// grip; how far before the shoulder its grip is, aimed.
 pub const GUN_FORE: f32 = 0.6;
 pub const GUN_HOLD: f32 = 0.1;
 pub const GUN_BORE: f32 = 0.14;
-const GUN_TILT: f32 = 0.5;
 const GUN_SHOULDERED: f32 = 0.5;
 /// How fast a gun's aim turns after where it is told to aim (rad/s at most,
 /// about 80 degrees), easing to a stop (of the angle left, per s) and
@@ -1386,7 +1381,7 @@ impl Rig {
                 if let Some(s) = self.stepping(i) {
                     let lift = (s * std::f32::consts::PI).sin();
                     // (Dragging its gun, steadied by its weight.)
-                    let steadied = if self.gun.is_some_and(|g| g.drag) { GUN_SWAYS } else { 1.0 };
+                    let steadied = if self.gun.is_some() { GUN_SWAYS } else { 1.0 };
                     target -= right * leg.side.signum() * sway.2 * lift * steadied;
                     target += fwd * heave.1 * lift;
                 }
@@ -1529,7 +1524,7 @@ impl Rig {
     /// it up, overshooting and settling; told to lower it, it eases it down,
     /// then lets it drop, its muzzle before it (`GUN_AHEAD`).
     fn hoist(&mut self, dt: f32) {
-        let Some(g) = self.gun.filter(|g| g.drag) else {
+        let Some(g) = self.gun else {
             self.hoisted = (0.0, 0.0, 0.0);
             return;
         };
@@ -1582,7 +1577,7 @@ impl Rig {
     /// hand along the line between them, as a dragged weight (tractrix): in
     /// line behind it, going straight; swinging round after it, turning.
     fn drag(&mut self, dt: f32, ground: &impl Fn(f32, f32) -> f32) {
-        let Some(g) = self.gun.filter(|g| g.drag) else {
+        let Some(g) = self.gun else {
             self.dragging = None;
             return;
         };
@@ -1689,27 +1684,21 @@ impl Rig {
             bones.push(Bone { a: hip, b: knee, radius: leg.radius.0, side: right });
             bones.push(Bone { a: knee, b: end, radius: leg.radius.1, side: right });
         }
-        // The gun, if it carries one: resting on its shoulder, or
-        // shouldered, aimed, its other hand under the barrel.
+        // The gun, if it carries one: dragged, or heaved up, shouldered,
+        // aimed, its other hand under the barrel.
         self.gun_frame = self.gun.map(|g| {
             let arm = &self.plan.arms[g.arm];
             let shoulder = chest + right * arm.side - forward * 0.05;
             let up_of = |axis: Vec3| (Vec3::Y - axis * axis.y).normalize_or(Vec3::Y);
-            // Carried: tilted up ahead, its back resting on the shoulder.
-            let carried = (forward * GUN_TILT.cos() + Vec3::Y * GUN_TILT.sin()).normalize();
-            let carried_grip = shoulder + Vec3::Y * 0.06 + right * arm.side.signum() * 0.03 - carried * GUN_REST - up_of(carried) * GUN_BORE;
             // Aimed: shouldered, its bore a little under the shoulder.
             let aimed = self.gun_aim.unwrap_or(g.dir).normalize_or(forward);
             let aimed_grip = shoulder + aimed * GUN_SHOULDERED - up_of(aimed) * (GUN_BORE + 0.02);
-            let t = g.aim.clamp(0.0, 1.0);
-            let t = t * t * (3.0 - 2.0 * t);
-            // (Dragged, as heaved: see `hoist`; past its aim, its muzzle
-            // high.)
-            let t = if g.drag { self.hoisted.0.clamp(0.0, 1.0) } else { t };
-            let over = if g.drag { (self.hoisted.0 - 1.0).max(0.0) } else { 0.0 };
+            // (As heaved: see `hoist`; past its aim, its muzzle high.)
+            let t = self.hoisted.0.clamp(0.0, 1.0);
+            let over = (self.hoisted.0 - 1.0).max(0.0);
             let aimed = (aimed + Vec3::Y * over * 1.5).normalize();
             let aimed_grip = aimed_grip + Vec3::Y * over * 0.2;
-            let (axis, grip) = if g.drag {
+            let (axis, grip) = {
                 // Dragged: from its hand to its tip on the ground (see
                 // `drag`), its grip under its bore.
                 let out = right * arm.side.signum();
@@ -1732,8 +1721,6 @@ impl Rig {
                     let axis = if t < 0.5 { dragged.slerp(side, t * 2.0) } else { side.slerp(aimed, t * 2.0 - 1.0) };
                     (axis.normalize_or(forward), grip.lerp(aimed_grip, t))
                 }
-            } else {
-                (carried.slerp(aimed, t).normalize_or(forward), carried_grip.lerp(aimed_grip, t))
             };
             let up = up_of(axis);
             GunFrame { grip, axis, up, fore: grip + axis * GUN_FORE + up * (GUN_BORE - GUN_HOLD), aim: t }
@@ -2089,7 +2076,7 @@ mod stalker {
         for dir in [Vec3::Z, Vec3::new(0.8, 0.0, 1.0), Vec3::new(-0.8, 0.0, 1.0), Vec3::new(0.0, 0.35, 1.0), Vec3::new(0.0, -0.35, 1.0)] {
             let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
             for _ in 0..400 {
-                rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir: dir.normalize(), length: 2.2, drag: false, snap: false });
+                rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir: dir.normalize(), length: 2.2, snap: false });
                 let intent = Intent { velocity: Vec3::ZERO, look: rig.root + dir * 10.0 + Vec3::Y * 2.0, ..Default::default() };
                 rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
             }
@@ -2119,7 +2106,7 @@ mod stalker {
         let mut was_down = true;
         for k in 0..2000 {
             let aim = if (100..400).contains(&k) { 1.0 } else { 0.0 };
-            rig.gun = Some(GunHold { arm: 1, aim, dir: rig.facing(), length: 2.2, drag: true, snap: false });
+            rig.gun = Some(GunHold { arm: 1, aim, dir: rig.facing(), length: 2.2, snap: false });
             let intent = Intent { velocity: Vec3::Z * 0.8, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
             rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
             let f = rig.gun_frame.expect("a gun frame");
@@ -2169,7 +2156,7 @@ mod stalker {
         let (mut gap, mut under) = (0.0f32, f32::MAX);
         for k in 0..500 {
             let aim = if (100..300).contains(&k) { 1.0 } else { 0.0 };
-            rig.gun = Some(GunHold { arm: 1, aim, dir: rig.facing(), length: 2.2, drag: true, snap: false });
+            rig.gun = Some(GunHold { arm: 1, aim, dir: rig.facing(), length: 2.2, snap: false });
             let intent = Intent { velocity: Vec3::ZERO, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
             rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
             trace.push(rig.hoisted.0);
@@ -2204,7 +2191,7 @@ mod stalker {
         let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
         let (mut grips, mut tips, mut angle, mut gap) = (Vec::new(), Vec::new(), 0.0f32, 0.0f32);
         for k in 0..1200 {
-            rig.gun = Some(GunHold { arm: 1, aim: 0.0, dir: rig.facing(), length: 2.2, drag: true, snap: false });
+            rig.gun = Some(GunHold { arm: 1, aim: 0.0, dir: rig.facing(), length: 2.2, snap: false });
             let intent = Intent { velocity: Vec3::Z * 1.0, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
             rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
             if k < 300 {
@@ -2230,7 +2217,7 @@ mod stalker {
         for k in 0..2000 {
             let t = k as f32 / 100.0 * 0.35;
             let way = Vec3::new(t.sin(), 0.0, t.cos());
-            rig.gun = Some(GunHold { arm: 1, aim: 0.0, dir: rig.facing(), length: 2.2, drag: true, snap: false });
+            rig.gun = Some(GunHold { arm: 1, aim: 0.0, dir: rig.facing(), length: 2.2, snap: false });
             let intent = Intent { velocity: way * 1.0, look: rig.root + way * 5.0 + Vec3::Y * 1.5, ..Default::default() };
             rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
             let f = rig.gun_frame.expect("a gun frame");
@@ -2261,7 +2248,7 @@ mod stalker {
         let mut fastest = 0.0f32;
         for k in 0..400 {
             let dir = if k < 100 { Vec3::Z } else { Vec3::X };
-            rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir, length: 2.2, drag: false, snap: false });
+            rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir, length: 2.2, snap: false });
             let before = rig.gun_aim;
             rig.update(1.0 / 100.0, Intent { look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() }, &|_, _| 0.0, &|from, step| from + step);
             if let (Some(a), Some(b)) = (before, rig.gun_aim) {
@@ -2286,7 +2273,7 @@ mod stalker {
                 let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &ground);
                 for k in 0..180 {
                     let you = Vec3::new(0.0, 1.6, 30.0);
-                    rig.gun = Some(GunHold { arm: 1, aim: if walking { 0.0 } else { 1.0 }, dir: (you - rig.chest()).normalize(), length: 2.2, drag: walking, snap: false });
+                    rig.gun = Some(GunHold { arm: 1, aim: if walking { 0.0 } else { 1.0 }, dir: (you - rig.chest()).normalize(), length: 2.2, snap: false });
                     let intent = Intent { velocity: if walking && k > 30 { Vec3::Z * 1.0 } else { Vec3::ZERO }, look: you, ..Default::default() };
                     rig.update(1.0 / 60.0, intent, &ground, &|from, step| from + step);
                 }
@@ -2334,7 +2321,7 @@ mod stalker {
                 let a = k as f32 / 100.0 * 1.6;
                 let you = Vec3::new(a.sin() * 5.0, 1.6, a.cos() * 5.0);
                 let bore = rig.gun_frame.map_or(rig.chest(), |f| f.grip + f.up * GUN_BORE);
-                rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir: (you - Vec3::Y * 0.5 - bore).normalize(), length: 2.2, drag: true, snap: false });
+                rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir: (you - Vec3::Y * 0.5 - bore).normalize(), length: 2.2, snap: false });
                 let intent = Intent { look: you, head_rate: if combat > 0.5 { 10.0 } else { 0.0 }, combat, ..Default::default() };
                 rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
                 for i in 0..2 {
@@ -2367,16 +2354,16 @@ mod stalker {
 
     #[test]
     fn walks_aimed() {
-        // Walking towards what it aims at (dragged or carried, the gun up),
-        // the stalker keeps both hands on its gun, the gun clear of its legs.
-        for drag in [false, true] {
+        // Walking towards what it aims at, the gun heaved up, the stalker
+        // keeps both hands on its gun, the gun clear of its legs.
+        {
             let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
             let (mut gap, mut near) = (0.0f32, f32::MAX);
             for k in 0..800 {
                 let goal = Vec3::new(4.0, 1.7, 30.0);
                 let f = rig.gun_frame;
                 let bore = f.map_or(rig.chest(), |f| f.grip + f.up * GUN_BORE);
-                rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir: (goal - bore).normalize(), length: 2.2, drag, snap: false });
+                rig.gun = Some(GunHold { arm: 1, aim: 1.0, dir: (goal - bore).normalize(), length: 2.2, snap: false });
                 let intent = Intent { velocity: Vec3::new(goal.x - rig.root.x, 0.0, goal.z - rig.root.z).normalize() * 1.0, look: goal, ..Default::default() };
                 rig.update(1.0 / 100.0, intent, &|_, _| 0.0, &|from, step| from + step);
                 if k < 200 {
@@ -2396,7 +2383,7 @@ mod stalker {
                     }
                 }
             }
-            println!("walking aimed (dragged {drag}): hands off the gun up to {gap:.3} m, nearest a leg {near:.3} m");
+            println!("walking aimed: hands off the gun up to {gap:.3} m, nearest a leg {near:.3} m");
             assert!(gap < 0.01, "walking aimed, a hand {gap} m off the gun");
             assert!(near > 0.05, "walking aimed, the gun {near} m from a leg");
         }
@@ -2412,7 +2399,7 @@ mod stalker {
             let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &|x, z| ground(x, z));
             let (mut low, mut high, mut near, mut behind) = (f32::MAX, f32::MIN, f32::MAX, f32::MAX);
             for k in 0..800 {
-                rig.gun = Some(GunHold { arm: 1, aim: 0.0, dir: rig.facing(), length: 2.2, drag: true, snap: false });
+                rig.gun = Some(GunHold { arm: 1, aim: 0.0, dir: rig.facing(), length: 2.2, snap: false });
                 let intent = Intent { velocity: Vec3::Z * 1.0, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
                 rig.update(1.0 / 100.0, intent, &|x, z| ground(x, z), &|from, step| from + step);
                 if k < 100 {
@@ -2441,7 +2428,7 @@ mod stalker {
             let mut under = f32::MAX;
             for k in 0..400 {
                 let aim = 1.0 - ((k as f32 / 200.0) - 1.0).abs();
-                rig.gun = Some(GunHold { arm: 1, aim, dir: rig.facing(), length: 2.2, drag: true, snap: false });
+                rig.gun = Some(GunHold { arm: 1, aim, dir: rig.facing(), length: 2.2, snap: false });
                 let intent = Intent { velocity: Vec3::ZERO, look: rig.root + Vec3::new(0.0, 1.5, 5.0), ..Default::default() };
                 rig.update(1.0 / 100.0, intent, &|x, z| ground(x, z), &|from, step| from + step);
                 let f = rig.gun_frame.expect("a gun frame");

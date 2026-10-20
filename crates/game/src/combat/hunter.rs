@@ -525,7 +525,7 @@ fn rings_mesh(rings: &[(f32, f32, f32, f32)]) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
 }
 
-pub(super) fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
     // A long, narrow, angular head: a ridge of cranium behind, the brow low
     // over the eyes, a long muzzle; nothing round about it.
     let beast = rings_mesh(&[(0.0, 0.5, 0.65, 0.1), (0.2, 0.68, 0.8, 0.22), (0.42, 0.55, 0.5, 0.06), (0.72, 0.38, 0.34, -0.04), (1.0, 0.16, 0.18, -0.1)]);
@@ -545,7 +545,7 @@ pub(super) fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<
     // its root to its length along +Y, so a shard's scaling fits them.)
     let rods = (meshes.add(Cylinder::new(0.012, 0.75).mesh().resolution(6).build().translated_by(Vec3::Y * 0.325)), meshes.add(Cylinder::new(0.035, 0.5).mesh().resolution(6).build()));
     let load = super::slab::build(&mut commands, &mut meshes, &mut materials);
-    let lance = super::lance::build(&mut meshes, &mut materials, args.num("lance", 0.0) as u32);
+    let lance = super::lance::build(&mut meshes, &mut materials);
     // The stalker's head: an open lattice cage, pale, dark inside (see
     // `skull.rs`; the user: an optic on it read as a torch stuck in a head,
     // its sighting is now the gun's scope).
@@ -1994,9 +1994,9 @@ pub(super) fn hunt(
             intent.look = porter + Vec3::Y * 1.6;
             intent.crouch = 0.0;
         }
-        // The stalker's gun on its free arm (its second): carried; or, for
+        // The stalker's gun on its free arm (its second): dragged; or, for
         // judging its poses (`--set lance_cycle=S`), aimed for S seconds,
-        // then carried for S, and so on.
+        // then dragged for S, and so on.
         if h.rig.plan.style == crate::rig::Style::Stilt && !args.opt("nolance") {
             let cycle = args.num("lance_cycle", 0.0);
             let minded = h.mind.as_ref().map(|m| m.mode);
@@ -2015,8 +2015,6 @@ pub(super) fn hunt(
             // the side, the user; aiming at you comes with its attack. It
             // stands to aim and fire, the user. `--opt lance_at_you`: at
             // you, to be shot, to judge.)
-            // (`--opt lancedrag`: dragged, not carried; to judge.)
-            let design = args.num("lance", 0.0) as u32;
             // (At you, its bore on what you stand on, by your feet: on you,
             // it could not miss, and its dome meant nothing, the user; over
             // the void, or high in a leap, on your chest. Locked, about to
@@ -2048,7 +2046,7 @@ pub(super) fn hunt(
             h.on_you = Some(on_you);
             let towards = h.locked.unwrap_or(on_you);
             let dir = if at_you { (towards - bore).normalize_or(Vec3::Z) } else { h.rig.facing() };
-            h.rig.gun = Some(crate::rig::GunHold { arm: 1, aim, dir, length: super::lance::tip(design), drag: args.opt("lancedrag"), snap: h.locked.is_some() });
+            h.rig.gun = Some(crate::rig::GunHold { arm: 1, aim, dir, length: super::lance::TIP, snap: h.locked.is_some() });
             if minded.is_none() {
                 intent.velocity *= 1.0 - aim;
                 // (Judging its poses: it may fire whenever it aims.)

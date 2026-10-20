@@ -134,7 +134,7 @@ pub(super) fn spawn(commands: &mut Commands, materials: &mut Assets<StandardMate
 }
 
 /// The veins' light at time `t`, for a layer of phase `q`: swells and
-/// quick shivers, quicker than the niche's (the arch's, and a dome's).
+/// quick shivers, quicker than the niche's (the arch's).
 pub(super) fn waver(t: f32, q: f32) -> f32 {
     let swell = 0.6 + 0.4 * ((t * 1.3 + q).sin() * 0.6 + (t * 0.47 + q * 1.3).sin() * 0.4);
     let shiver = 1.0 + 0.4 * (t * 17.0 + q).sin() * (t * 0.9 + q).sin().max(0.0).powi(2);
@@ -187,7 +187,7 @@ pub(super) fn animate(
             let lock = LOCK.0 + (LOCK_CLOSE - LOCK.0) * h.rig().combat();
             let locking = halo.charge >= 1.0 - lock * GATHER.0;
             if let (1.0, Some(f), Some(_)) = (halo.charge, frame, hold) {
-                let emitter = super::lance::emitter(args.num("lance", 0.0) as u32);
+                let emitter = super::lance::EMITTER;
                 super::beam::fire(&mut commands, &mut rays, &mut meshes, &mut materials, &shot, &strikes, &layers, &args, &ground, f.grip + f.up * GUN_BORE + f.axis * emitter, f.axis, (halo.hunter, emitter));
                 halo.fired = true;
                 halo.since = 0.0;
@@ -211,7 +211,7 @@ pub(super) fn animate(
         }
         // Its searchlight: from its gun onto where it aims, while it hunts,
         // its gun up; dark from its lock till its shot is gone.
-        let emitter = super::lance::emitter(args.num("lance", 0.0) as u32);
+        let emitter = super::lance::EMITTER;
         let on = frame.filter(|f| f.aim > 0.98 && h.hunting() && !h.locked() && !(halo.fired && halo.since < BACK_ON));
         let black = args.num("searchlight", 0.0) > 0.5;
         let ray = *halo.light.get_or_insert_with(|| {

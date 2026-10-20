@@ -12,9 +12,7 @@ it became):
 - `hunter_growl3`–`hunter_growl6`: freesound_community, "Angry creature" (38085) (`hunter_growls_b`).
 - `hunter_pounce`: alesiadavina, "Threatening monster growl, dark creature" (541136).
 - `hunter_bite`: freesound_community, "Monster bite" (44538).
-- `gun_shot`: freesound_community, "Perdition 1911 pistol" (82365).
-- `gun_shot_blast`: freesound_community, "080902_shotgun" (39753), from 0.04 s to 1.35 s, levelled to `gun_shot`'s blast.
-- `gun_shot_rolling`: freesound_community, "Shotgun firing 3" (14483), from 0.045 s to 1.6 s (the last 0.25 s faded), levelled to `gun_shot`'s blast.
+- `gun_shot_rolling`: freesound_community, "Shotgun firing 3" (14483), from 0.045 s to 1.6 s (the last 0.25 s faded), levelled to the first shot's blast.
 - `gun_reload`: freesound_community, "Assault rifle manipulation 01" (102921), the first take.
 - `player_pain`: freesound_community, "Male hurt 7" (48124).
 - `player_step0`–`player_step5`: six steps cut from a download (`player_steps`; its author not recorded).

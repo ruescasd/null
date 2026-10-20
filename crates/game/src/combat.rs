@@ -72,8 +72,6 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/stalker_shot.wav");
         embedded_asset!(app, "sounds/stalker_impact.wav");
         embedded_asset!(app, "sounds/hunter_pounce.wav");
-        embedded_asset!(app, "sounds/gun_shot.wav");
-        embedded_asset!(app, "sounds/gun_shot_blast.wav");
         embedded_asset!(app, "sounds/gun_shot_rolling.wav");
         embedded_asset!(app, "sounds/gun_reload.wav");
         embedded_asset!(app, "sounds/hunter_bite.wav");
@@ -387,13 +385,9 @@ fn setup(
         bright: bright.clone(),
         dark: dark.clone(),
         pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
-        // (`--set shot_sound`, to compare: 0 the first shot, a pistol's; 1
-        // a blast; 2 a blast rolling away.)
-        gun: load(match args.num("shot_sound", 2.0) as u32 {
-            0 => "gun_shot",
-            1 => "gun_shot_blast",
-            _ => "gun_shot_rolling",
-        }),
+        // (A blast rolling away; a pistol's first, then a dry blast: see
+        // docs/removed.md.)
+        gun: load("gun_shot_rolling"),
         reload: load("gun_reload"),
         shatter: load("shard_break"),
         assemble: load("swarm_assemble"),
