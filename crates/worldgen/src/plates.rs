@@ -270,6 +270,32 @@ impl PlateWorld {
         plate.top(self, p)
     }
 
+    /// The ground's solid top at a point, for the walls beside it: as
+    /// `surface`, but where a pillar is grown (see `grows_pillars`), its
+    /// base. (The pillar's form is open, stacked slabs: a wall stopped at
+    /// the pillar's top was left out beside it, and the void under the world
+    /// showed between its slabs, the user's hole.)
+    fn solid(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> f64 {
+        let p = DVec2::new(x, z);
+        if !self.lab
+            && let Some(h) = self.canals.surface(p, &|c| self.canal_floor(c))
+        {
+            return h;
+        }
+        let plate = self.plate_at(cache, x, z, max_level);
+        if plate.sloped {
+            return self.slope_at(p);
+        }
+        let top = plate.top(self, p);
+        if plate.pillar > 0.0 && self.grows_pillars(max_level) { top - plate.pillar } else { top }
+    }
+
+    /// Whether pillars are grown from the library's form (at full detail),
+    /// not drawn as plain prisms.
+    fn grows_pillars(&self, max_level: usize) -> bool {
+        max_level == 2 && self.library.as_ref().is_some_and(|l| l.forms.contains_key(PILLAR_FORM))
+    }
+
     /// The height of an earthwork's slope at a point: its surface inside a
     /// site, the smooth landform beyond it. Continuous, so the tilted plates
     /// that sample it at their corners meet seamlessly.
@@ -715,10 +741,9 @@ impl PlateWorld {
     ) {
         // At full detail a pillar is grown from the `pillar` form on its
         // base, rather than drawn as one plain prism.
-        if max_level == 2
-            && plate.pillar > 0.0
+        if plate.pillar > 0.0
+            && self.grows_pillars(max_level)
             && let Some(library) = &self.library
-            && library.forms.contains_key(PILLAR_FORM)
         {
             let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, ..*plate };
             self.emit_prism(cache, mesh, poly, &base, max_level, origin);
@@ -760,7 +785,7 @@ impl PlateWorld {
                 let ts = [inset, 1.0 - inset].into_iter().chain((0..between).map(|k| (k as f64 + 0.5) / between as f64));
                 for t in ts {
                     let p = a + edge * t + out * 0.3;
-                    edge_low = edge_low.min(self.surface(cache, p.x, p.y, max_level));
+                    edge_low = edge_low.min(self.solid(cache, p.x, p.y, max_level));
                 }
                 // (A station's court cuts the plates along its sides' lines
                 // drawn on past it, so a wall facing it may be 50 m long and

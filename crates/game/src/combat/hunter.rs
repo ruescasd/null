@@ -52,6 +52,25 @@ const FLANK_ANGLE: f32 = 2.1;
 const FLANK_OFF: f32 = 9.0;
 const FLANK_SPEED: f32 = 9.9;
 const DART_SPEED: f32 = 17.6;
+/// How loud a stalker's footfall.
+const STEP_LOUD: f32 = 0.65;
+/// A stalker cries out at a blow: this much damage taken lately (its
+/// shards land over a few frames, so summed, fading by half every so
+/// often, s), not again for so long (s), and how loud. (A full blast close
+/// is near 29 of its 45; a few stray shards, a few.)
+const PAIN: (f32, f32, f32, f32) = (10.0, 0.2, 1.5, 2.64);
+/// The stalker leading you: it aims where you will be,
+/// your way on for up to so long (s), how much of that each shot its own
+/// (none: where you are). Moving on as you were, it finds you; turn after
+/// its lock (the gun swinging ahead of you shows it). (Aimed where you
+/// were, any motion beat it, the user.)
+const LEAD: f32 = 1.2;
+/// Nearer than this (m), hunting you, the stalker is in close combat.
+const CLOSE: f32 = 12.0;
+/// Tracking you, its gun and its searchlight on you, not quite steady: how
+/// far it wanders off you (m), how quickly it follows you (per s).
+const WANDER: f32 = 0.8;
+const FOLLOW: f32 = 12.0;
 /// How long it hangs back with no way round you before it comes at you
 /// anyway, seen or not (s).
 const HUNG: f32 = 2.5;
@@ -130,6 +149,15 @@ enum Aware {
 
 /// How many of a broken hunter's parts burst, flinging pieces and ichor.
 const BURSTS: usize = 12;
+/// Killed, the stalker falls (see `ragdoll.rs`): pushed by each shard of the
+/// blow (m/s, all of it) up to so much, and each shard's bone by so much
+/// more; lying so long (s) before it is gone.
+const FALL: (f32, f32, f32, f32) = (0.15, 2.5, 0.6, 90.0);
+/// Killed by a blast of this many shards or more (point-blank: 3 m or
+/// nearer always, 4 m at times, never from 5 m; see
+/// `combat::tests::shards_on_a_stalker`), the stalker bursts, not falls:
+/// the death by the blow's force (the user). `--set overkill`.
+pub(super) const OVERKILL: usize = 10;
 
 #[derive(Component)]
 pub(crate) struct Hunter {
@@ -164,6 +192,23 @@ pub(crate) struct Hunter {
     hung: f32,
     /// `--opt tame_line`: the line it walks (its z, where it first was).
     line: Option<f32>,
+    /// The stalker's mind (see `stalker.rs`), and whether it may fire now;
+    /// where it aims, at what you stand on (as it tracks you), and where
+    /// its aim is locked, about to fire (see `halo.rs`).
+    mind: Option<super::stalker::Mind>,
+    may_fire: bool,
+    aiming: Vec3,
+    locked: Option<Vec3>,
+    /// How many shots it has fired (each its own lead, see `LEAD`).
+    shots: i32,
+    /// Its health as last felt, the damage it took lately, and when it may
+    /// cry out again (see `PAIN`).
+    felt: f32,
+    hurt_lately: f32,
+    pain_in: f32,
+    /// Where it tracks you (its gun, its searchlight along it: see
+    /// `WANDER`).
+    on_you: Option<Vec3>,
     /// Where it has walked, lately (each point a little on from the last,
     /// the newest last): a kept porter's, for its stalker to follow.
     trail: std::collections::VecDeque<Vec3>,
@@ -209,6 +254,31 @@ impl Hunter {
     /// Its rig (for what it wears: see `clothlab.rs`).
     pub(super) fn rig(&self) -> &Rig {
         &self.rig
+    }
+
+    /// A stalker's aim locked where it is aiming now, about to fire; and
+    /// let go, fired or lowered.
+    pub(super) fn lock(&mut self, on: bool) {
+        if !on && self.locked.is_some() {
+            self.shots += 1;
+        }
+        self.locked = if on { self.locked.or(Some(self.aiming)) } else { None };
+    }
+
+    pub(super) fn locked(&self) -> bool {
+        self.locked.is_some()
+    }
+
+    /// Whether a stalker hunts you (minded, it hunts; judging its poses,
+    /// always).
+    pub(super) fn hunting(&self) -> bool {
+        self.mind.as_ref().is_none_or(|m| m.mode == super::stalker::Mode::Hunt)
+    }
+
+    /// Whether a stalker may fire now (its mind says so: standing, you in
+    /// its sight and reach; or judging its poses, always).
+    pub(super) fn may_fire(&self) -> bool {
+        self.may_fire
     }
 
     /// The biped candidates (the stalker, the porter) make no sound till
@@ -362,6 +432,8 @@ pub(super) struct Heads {
     rods: (Handle<Mesh>, Handle<Mesh>),
     /// The stalker's gun (see `lance.rs`).
     lance: super::lance::Kit,
+    /// The stalker's arch, its warning (see `halo.rs`).
+    halo: super::halo::Kit,
     /// The stalker's head: its cage's skull and legs, each pale and black,
     /// and their finishes (see `setup`).
     stalker_head: ([(Handle<Mesh>, Handle<Mesh>); 2], Handle<StandardMaterial>, Handle<StandardMaterial>),
@@ -379,7 +451,7 @@ pub(super) struct Load(Entity);
 /// through, the user).
 pub(super) fn bodies(hunters: Query<&Hunter>, mut bodies: ResMut<crate::player::Bodies>) {
     bodies.0.clear();
-    for h in &hunters {
+    for h in hunters.iter().filter(|h| h.rig.ragdoll.is_none()) {
         match h.rig.plan.style {
             crate::rig::Style::Stilt => bodies.0.push((h.rig.root, 0.35, 2.6)),
             crate::rig::Style::Porter => bodies.0.push((h.rig.root, 0.55, 2.4)),
@@ -453,7 +525,7 @@ fn rings_mesh(rings: &[(f32, f32, f32, f32)]) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
 }
 
-pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub(super) fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
     // A long, narrow, angular head: a ridge of cranium behind, the brow low
     // over the eyes, a long muzzle; nothing round about it.
     let beast = rings_mesh(&[(0.0, 0.5, 0.65, 0.1), (0.2, 0.68, 0.8, 0.22), (0.42, 0.55, 0.5, 0.06), (0.72, 0.38, 0.34, -0.04), (1.0, 0.16, 0.18, -0.1)]);
@@ -473,7 +545,7 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
     // its root to its length along +Y, so a shard's scaling fits them.)
     let rods = (meshes.add(Cylinder::new(0.012, 0.75).mesh().resolution(6).build().translated_by(Vec3::Y * 0.325)), meshes.add(Cylinder::new(0.035, 0.5).mesh().resolution(6).build()));
     let load = super::slab::build(&mut commands, &mut meshes, &mut materials);
-    let lance = super::lance::build(&mut meshes, &mut materials);
+    let lance = super::lance::build(&mut meshes, &mut materials, args.num("lance", 0.0) as u32);
     // The stalker's head: an open lattice cage, pale, dark inside (see
     // `skull.rs`; the user: an optic on it read as a torch stuck in a head,
     // its sighting is now the gun's scope).
@@ -485,6 +557,7 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
     commands.insert_resource(Heads {
         rods,
         lance,
+        halo: super::halo::build(&mut meshes, &mut images),
         stalker_head,
         load,
         beast: vec![(meshes.add(beast), beast_jaw), (meshes.add(angler), meshes.add(angler_jaw))],
@@ -726,10 +799,11 @@ fn spawn_hunter(
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
-    let health = HUNTER_HEALTH * if args.opt("tough") { 10.0 } else { 1.0 };
+    // (`--set hunter_health`: its health, to see it killed sooner.)
+    let health = args.num("hunter_health", HUNTER_HEALTH) * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, trail: std::collections::VecDeque::new() },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, on_you: None, trail: std::collections::VecDeque::new() },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -862,6 +936,8 @@ fn spawn_hunter(
                     ));
                 }
             }
+            // Its arch, round its head, dark till it is about to fire.
+            super::halo::spawn(commands, materials, &heads.halo, hunter, bone.a, || Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID });
             continue;
         }
         if i == 4 {
@@ -1130,6 +1206,47 @@ pub(super) fn hunt(
     // (And where a kept porter has walked: its stalker follows its steps.)
     let trails: std::collections::HashMap<Entity, Vec<Vec3>> = hunters.iter().filter(|(.., k)| k.is_some()).filter_map(|(_, _, _, k)| k.map(|k| k.0)).filter_map(|p| hunters.get(p).ok().map(|(_, h, ..)| (p, h.trail.iter().copied().collect()))).collect();
     for (entity, mut h, mut transform, keeps) in &mut hunters {
+        // Killed, the stalker falls (`--set shatter on`: bursts, as the others;
+        // and blasted point-blank, see `OVERKILL`): limp, pushed by the blow,
+        // letting go of its lance; struck again, knocked about; after a
+        // while, gone.
+        let overkill = h.shards as f32 >= args.num("overkill", OVERKILL as f32);
+        if h.health <= 0.0 && h.rig.plan.style == crate::rig::Style::Stilt && !args.opt("shatter") && (h.rig.ragdoll.is_some() || !overkill) {
+            let shards = std::mem::take(&mut h.shards) as f32;
+            let blast = std::mem::take(&mut h.blast);
+            if h.rig.ragdoll.is_none() {
+                commands.spawn((
+                    AudioPlayer::new(assets.death.clone()),
+                    PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
+                    Transform::from_translation(h.rig.chest()),
+                ));
+                director.kills += 1;
+                info!("a stalker falls: {shards} shards, {:.1} m off", h.rig.chest().distance(target));
+                let push = h.rig.knock + blast.with_y(0.0).normalize_or_zero() * (shards * FALL.0).min(FALL.1);
+                h.rig.collapse(push);
+                h.may_fire = false;
+                h.locked = None;
+            }
+            for (b, dir) in h.hits.clone() {
+                h.rig.strike(b, dir * FALL.2);
+            }
+            // (Not through what is built.)
+            let wall = |from: Vec3, to: Vec3| {
+                let (d, l) = ((to - from).normalize_or_zero(), from.distance(to));
+                ground.hit(from, d, l + 0.05).map_or(to, |t| from + d * (t - 0.05).max(0.0))
+            };
+            h.rig.fall(dt, &|p| ground.at(p), &wall);
+            transform.translation = h.rig.chest();
+            if h.rig.ragdoll.as_ref().is_some_and(|d| d.age > FALL.3) {
+                for (e, part, _) in &parts {
+                    if part.hunter == entity {
+                        commands.entity(e).despawn();
+                    }
+                }
+                commands.entity(entity).despawn();
+            }
+            continue;
+        }
         if h.health <= 0.0 {
             // Broken: the whole body bursts at once.
             let at = h.rig.chest();
@@ -1159,7 +1276,7 @@ pub(super) fn hunt(
                 }
             }
             director.kills += 1;
-            info!("a hunter is broken");
+            info!("a hunter is broken: {} shards, {:.1} m off", h.shards, h.rig.chest().distance(target));
             commands.entity(entity).despawn();
             continue;
         }
@@ -1404,9 +1521,11 @@ pub(super) fn hunt(
         if !matches!(h.stance, Stance::Reach | Stance::Haul(_)) {
             h.rig.grab = None;
         }
-        let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false };
+        let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false, combat: 0.0 };
         h.rig.quick_head = args.opt("quickhead");
-        if args.opt("specimen") {
+        // (`--opt roam`: the specimen left to itself, as in play, to watch
+        // it from noclip, where none are spawned.)
+        if args.opt("specimen") && !args.opt("roam") {
             // Straight ahead from its body (not its head, or each glance
             // would turn it), level from its chest, and dead still. (It was
             // aimed up, 1.4 m a metre: the stalker stared at the sky, its
@@ -1452,6 +1571,25 @@ pub(super) fn hunt(
                 let way = Vec3::X * if leg < 1.0 { 1.0 } else { -1.0 };
                 let off = Vec3::Z * ((line - root.z) / 3.0).clamp(-1.0, 1.0);
                 intent.velocity = (way + off).normalize_or(way) * pace;
+            }
+            // (The stalker, minded: see `stalker.rs`; tame, as before, with
+            // `--opt tame` or `tame_line`, to judge its gait and poses.)
+            if stalker && !args.opt("tame") && !args.opt("tame_line") {
+                let (eye, head) = h.rig.head();
+                let mind = h.mind.get_or_insert_with(|| super::stalker::Mind::new(root, entity.index_u32() as i32));
+                let you = target - Vec3::Y * 0.6;
+                let senses = super::stalker::Senses { clear: ground.sight(eye, you), speed: player.1.velocity.with_y(0.0).length(), shot };
+                let orders = mind.think(dt, root, eye, head, you, senses);
+                intent.velocity = orders.velocity;
+                intent.look = orders.look;
+                let hunting = mind.mode == super::stalker::Mode::Hunt;
+                h.may_fire = orders.fire;
+                // (Near, hunting you: a stronger nature revealed, braced,
+                // quick, turning on wide-set feet; see `rig::COMBAT`.)
+                if hunting && Vec2::new(target.x - root.x, target.z - root.z).length() < CLOSE {
+                    intent.combat = 1.0;
+                    intent.head_rate = 10.0;
+                }
             }
             intent.crouch = if pace < 3.0 && !stalker { 0.35 } else { 0.0 };
         } else if sprawl {
@@ -1857,11 +1995,15 @@ pub(super) fn hunt(
             intent.crouch = 0.0;
         }
         // The stalker's gun on its free arm (its second): carried; or, for
-        // judging its poses (`--set lance_cycle=S`), planted and aimed at
-        // you for S seconds, then carried for S, and so on.
+        // judging its poses (`--set lance_cycle=S`), aimed for S seconds,
+        // then carried for S, and so on.
         if h.rig.plan.style == crate::rig::Style::Stilt && !args.opt("nolance") {
             let cycle = args.num("lance_cycle", 0.0);
-            let aim = if cycle > 0.0 {
+            let minded = h.mind.as_ref().map(|m| m.mode);
+            let hunting = minded == Some(super::stalker::Mode::Hunt);
+            let aim = if let Some(mode) = minded {
+                if mode == super::stalker::Mode::Wander { 0.0 } else { 1.0 }
+            } else if cycle > 0.0 {
                 // (Planting it over the first second of its aiming half,
                 // lifting it over the first of its carrying half.)
                 let t = (time.elapsed_secs() / cycle) % 2.0;
@@ -1869,15 +2011,51 @@ pub(super) fn hunt(
             } else {
                 0.0
             };
-            let from = h.rig.chest();
-            // (`--opt lance_ahead`: aimed level ahead of it, not at you, to
-            // see it from the side.)
-            let ahead = args.opt("lance_ahead");
-            let dir = if ahead { h.rig.facing() } else { (target - from).normalize_or(Vec3::Z) };
-            h.rig.gun = Some(crate::rig::GunHold { arm: 1, aim, dir });
-            if aim > 0.0 && !ahead {
-                intent.look = target;
+            // (Aimed level along its body, not turning to you: judged from
+            // the side, the user; aiming at you comes with its attack. It
+            // stands to aim and fire, the user. `--opt lance_at_you`: at
+            // you, to be shot, to judge.)
+            // (`--opt lancedrag`: dragged, not carried; to judge.)
+            let design = args.num("lance", 0.0) as u32;
+            // (At you, its bore on what you stand on, by your feet: on you,
+            // it could not miss, and its dome meant nothing, the user; over
+            // the void, or high in a leap, on your chest. Locked, about to
+            // fire, where it was. Along the line from its chest, the gun
+            // aside of it, its beams all passed you on one side, the user.)
+            let at_you = args.opt("lance_at_you") || hunting;
+            // (`--set lance_miss=M`: its aim M m short of you, towards it, to
+            // see its shots land from outside.)
+            let miss = Vec3::new(root.x - target.x, 0.0, root.z - target.z).normalize_or(Vec3::X) * args.num("lance_miss", 0.0);
+            let lead = if hunting { LEAD * hash01(entity.index_u32() as i32, h.shots, 0, 0x1ead) } else { 0.0 };
+            let ahead = player.1.velocity.with_y(0.0) * lead;
+            let feet = target - Vec3::Y * crate::player::EYE + miss + ahead;
+            let bore = h.rig.gun_frame.map_or(h.rig.chest(), |f| f.grip + f.up * crate::rig::GUN_BORE);
+            // (What you stand on, if the gun can reach it: from afar, low,
+            // its line skimmed the ground and struck it short of you; then
+            // your middle, which it sees.)
+            let middle = target - Vec3::Y * 0.5 + miss + ahead;
+            h.aiming = ground.floor(feet, 8.0).map(|y| Vec3::new(feet.x, y, feet.z)).filter(|&f| ground.sight(bore, f + Vec3::Y * 0.15)).unwrap_or(middle);
+            // (Tracking you, on you, not quite steady, as its searchlight;
+            // at its lock, snapped onto where it fires, leading you. Aimed
+            // where it would lead you all along, it and its searchlight
+            // pointed apart, the user.)
+            let q = (entity.index_u32() % 97) as f32;
+            let t = time.elapsed_secs();
+            let wander = Vec3::new((t * 0.7 + q).sin() * 0.6 + (t * 1.9 + q * 2.0).sin() * 0.4, (t * 0.5 + q * 3.0).sin() * 0.4, (t * 0.9 + q * 1.7).sin() * 0.6 + (t * 1.3 + q).sin() * 0.4) * WANDER;
+            let you = target - Vec3::Y * 0.5;
+            let was = h.on_you.unwrap_or(you);
+            let on_you = was + (you + wander - was) * (1.0 - (-dt * FOLLOW).exp());
+            h.on_you = Some(on_you);
+            let towards = h.locked.unwrap_or(on_you);
+            let dir = if at_you { (towards - bore).normalize_or(Vec3::Z) } else { h.rig.facing() };
+            h.rig.gun = Some(crate::rig::GunHold { arm: 1, aim, dir, length: super::lance::tip(design), drag: args.opt("lancedrag"), snap: h.locked.is_some() });
+            if minded.is_none() {
                 intent.velocity *= 1.0 - aim;
+                // (Judging its poses: it may fire whenever it aims.)
+                h.may_fire = true;
+            }
+            if at_you && aim > 0.0 {
+                intent.look = target;
             }
         }
         if h.rig.plan.style == crate::rig::Style::Porter {
@@ -2021,6 +2199,34 @@ pub(super) fn voice(
             Transform::default(),
         ));
         voice.next = length / speed + pause.start + (pause.end - pause.start) * r(2);
+    }
+}
+
+/// A stalker's stilts coming down, heard where they land, each a little
+/// higher or lower; and its pain, at a blow (see `PAIN`).
+pub(super) fn footfalls(mut commands: Commands, time: Res<Time>, assets: Res<Assets3>, mut hunters: Query<(Entity, &mut Hunter)>) {
+    let dt = time.delta_secs();
+    for (entity, mut h) in &mut hunters {
+        if h.rig.plan.style == crate::rig::Style::Stilt {
+            let took = (h.felt - h.health).max(0.0);
+            h.felt = h.health;
+            h.hurt_lately = h.hurt_lately * (0.5f32).powf(dt / PAIN.1) + took;
+            h.pain_in -= dt;
+            if h.hurt_lately >= PAIN.0 && h.pain_in <= 0.0 && h.health > 0.0 {
+                h.pain_in = PAIN.2;
+                h.hurt_lately = 0.0;
+                let head = h.rig.head().0;
+                commands.spawn((AudioPlayer::new(assets.stalker_pain.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(PAIN.3)), Transform::from_translation(head)));
+            }
+        }
+        for (k, at) in h.rig.footfalls().into_iter().enumerate() {
+            let r = hash01(entity.index_u32() as i32, (at.x * 7.0 + at.z * 13.0) as i32, k as i32, 0x5f1);
+            commands.spawn((
+                AudioPlayer::new(assets.stalker_step.clone()),
+                PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(STEP_LOUD)).with_speed(0.9 + 0.2 * r),
+                Transform::from_translation(at),
+            ));
+        }
     }
 }
 

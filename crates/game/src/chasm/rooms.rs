@@ -28,7 +28,7 @@ pub(super) mod orb;
 pub(super) mod pool;
 pub(super) mod painting;
 pub(super) mod projector;
-pub(super) mod shimmer;
+pub(crate) mod shimmer;
 pub(super) mod roots;
 pub(in crate::chasm) mod tiles;
 

@@ -9,6 +9,12 @@
 //! DirectX 12 (`--opt dx12`), whose compiler is slow, the window showed with
 //! the main surfaces' and the post-processing's still compiling, and things
 //! appeared late.)
+//!
+//! And the game held till then (the user: the creatures ran, hunted, fired
+//! while you waited for it to load): its clock paused, so nothing moves or
+//! counts down, and the creatures' systems not run at all (see `playing`),
+//! so none comes or acts. Loading itself goes by real time. (Unattended
+//! runs, never shown, play from the start.)
 
 use std::sync::{
     Arc,
@@ -33,15 +39,33 @@ const EVEN_FOR: f32 = 0.5;
 const EVEN: f32 = 1.0 / 40.0;
 const AT_MOST: f32 = 15.0;
 
+/// Whether the game is on: the window shown (or an unattended run).
+#[derive(Resource, Default)]
+pub(crate) struct Playing(pub(crate) bool);
+
+/// A run condition: only once the game is on.
+pub(crate) fn playing(on: Res<Playing>) -> bool {
+    on.0
+}
+
 pub struct LoadingPlugin;
 
 impl Plugin for LoadingPlugin {
     fn build(&self, app: &mut App) {
         let compiling = Compiling::default();
-        app.insert_resource(compiling.clone()).add_systems(Update, show);
+        app.insert_resource(compiling.clone()).init_resource::<Playing>().add_systems(Startup, hold).add_systems(Update, show);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.insert_resource(compiling).add_systems(Render, count.in_set(RenderSystems::Cleanup));
         }
+    }
+}
+
+/// Till it is shown, the game held (an unattended run plays at once).
+fn hold(args: Res<Args>, mut clock: ResMut<Time<Virtual>>, mut on: ResMut<Playing>) {
+    if args.unattended() {
+        on.0 = true;
+    } else {
+        clock.pause();
     }
 }
 
@@ -61,6 +85,8 @@ fn show(
     mut shown: Local<bool>,
     building: Query<(), With<crate::structures::Building>>,
     mut said: Local<(f32, String)>,
+    mut clock: ResMut<Time<Virtual>>,
+    mut on: ResMut<Playing>,
 ) {
     if *shown || args.unattended() {
         return;
@@ -85,6 +111,8 @@ fn show(
     *even = if ready && dt < EVEN { *even + dt } else { 0.0 };
     if *even >= EVEN_FOR || time.elapsed_secs() > AT_MOST {
         *shown = true;
+        clock.unpause();
+        on.0 = true;
         window.visible = true;
         window.focused = true;
         // (Borderless fullscreen (the user: clicking the window's border

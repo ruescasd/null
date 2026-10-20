@@ -186,7 +186,7 @@ fn setup_notice(mut commands: Commands) {
 #[allow(clippy::too_many_arguments)]
 fn watch(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     args: Res<Args>,
     world: Res<WorldGen>,
     mut state: ResMut<Watch>,
@@ -430,10 +430,11 @@ fn choose_levels(
 }
 
 /// Twice a second: builds the sites that came into range in the background
-/// and drops those that left it.
+/// and drops those that left it. (By real time: the game's clock is paused while it
+/// loads, see `loading.rs`.)
 fn stream_sites(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     args: Res<Args>,
     world: Res<WorldGen>,
     mut state: ResMut<Watch>,
@@ -498,7 +499,7 @@ fn stream_sites(
     }
 }
 
-fn fade_notice(time: Res<Time>, mut notice: Single<(&mut TextColor, &Notice)>) {
+fn fade_notice(time: Res<Time<Real>>, mut notice: Single<(&mut TextColor, &Notice)>) {
     let (color, note) = &mut *notice;
     let age = time.elapsed_secs() - note.shown_at;
     let alpha = (1.0 - (age - 6.0) / 2.0).clamp(0.0, 1.0);

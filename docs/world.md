@@ -153,6 +153,18 @@ orb, paintings, planetarium rotundas and ichor pool among its places.
   and station courts were missed. A ray test (from every station's court,
   and down at a slant from 600 points standing on the mesh in the tiers,
   uplands and highlands) now finds none.
+- **Holes beside pillars (fixed 2026-10-20).** A wall sampled a pillar's
+  nominal top beyond it and was left out, but at full detail a pillar is
+  its open form on a low base: the void showed between its slabs (the
+  user's, at (16305, 16372), in a site at the world's corner; the corner
+  was chance). Walls now sample a pillar's base (`PlateWorld::solid`). The
+  probe: `cargo run -p worldgen --release --example holes -- X Y Z` (Y
+  `auto` to stand on the ground), rays down from a spot through ground
+  meshed as the game does; 462 rays through there before, none now; over
+  40 spots scattered across the world, 3 rays at 2 spots remain.
+- **Hairline cracks between plates.** Those 3 rays: skimming a flat top
+  (at (2499, 14212), 7 cm over it), a ray slipped between two plates
+  meeting at one height. Not seen in play.
 
 ## Removed, worth revisiting
 

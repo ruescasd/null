@@ -535,7 +535,9 @@ fn pipe_move(v: &mut Vec3, along: Vec3, steer: Steer, dt: f32, ride: Ride) {
             }
         }
     }
-    let strafe = steer.wish.x.signum();
+    // (No strafe key, none: `signum` of nothing is 1, so it was D held, and
+    // turning left with no keys sped you on, the user.)
+    let strafe = if steer.wish.x == 0.0 { 0.0 } else { steer.wish.x.signum() };
     if strafe != 0.0 && steer.turn * strafe > 0.0 && along != Vec3::ZERO {
         let ahead = v.dot(along);
         let way = if ahead.abs() > 0.1 { along * ahead.signum() } else { along * steer.view.dot(along).signum() };
@@ -1086,4 +1088,33 @@ fn update_hud(
     }
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     readout.0 = format!("{speed:4.1} m/s   {:4.0} ups", speed / 0.032);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turning_alone_gives_nothing() {
+        // In an on canal, going along it, turning the view either way with
+        // no keys held gives no speed; with a strafe key, turning against
+        // it does (the user: turning left alone sped you on).
+        let ride = Ride { on: true, pump: 0.25, glide: 0.85, cap: 90.0, damp: 0.06, accel: 1.0, turn_gain: 2.2, turn_window: 70.0, turn_max: 350.0 };
+        let along = Vec3::Z;
+        let run = |wish: Vec2, turn: f32| {
+            let mut v = along * 12.0;
+            let dt = 1.0 / 120.0;
+            for _ in 0..240 {
+                let steer = Steer { view: along, right: Vec3::NEG_X, wish, turn: turn.to_radians() * dt };
+                pipe_move(&mut v, along, steer, dt, ride);
+            }
+            v.dot(along)
+        };
+        for turn in [90.0, -90.0] {
+            let gained = run(Vec2::ZERO, turn) - 12.0;
+            assert!(gained.abs() < 1e-4, "turning {turn} deg/s with no keys gained {gained} m/s");
+        }
+        assert!(run(Vec2::X, 90.0) > 12.5, "D held, turning left, gained nothing");
+        assert!(run(Vec2::NEG_X, -90.0) > 12.5, "A held, turning right, gained nothing");
+    }
 }

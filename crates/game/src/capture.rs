@@ -475,9 +475,10 @@ fn auto_shot(
 ) {
     let Some(path) = &args.shot else { return };
     // Later shots: a pair 5 frames apart (`<path>_b.png`), or a burst of
-    // one every 3 frames (`<path>_1.png`, `_2`...).
+    // one every 3 frames (`<path>_1.png`, `_2`...; `--set burst_gap`, every
+    // so many).
     let pair = args.opt("shotpair");
-    let (more, gap) = if pair { (1, 5) } else { ((args.num("burst", 1.0) as u32).saturating_sub(1), 3) };
+    let (more, gap) = if pair { (1, 5) } else { ((args.num("burst", 1.0) as u32).saturating_sub(1), args.num("burst_gap", 3.0).max(1.0) as u32) };
     if state.saved && state.more_saved < more {
         state.after += 1;
         if state.after % gap == 0 && state.after / gap <= more {

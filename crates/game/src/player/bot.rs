@@ -64,6 +64,67 @@ pub struct BotState {
     wall: usize,
     wall_since: Option<f32>,
     wall_samples: Vec<Vec3>,
+    /// The turn test (`--opt turnbot`): which trial, since when, its
+    /// fastest along the canal.
+    turn: usize,
+    turn_since: Option<f32>,
+    turn_peak: f32,
+}
+
+/// The turn test (`--opt turnbot`, with `--opt canals_on`; the user: in a
+/// canal, turning one way sped you up, without a strafe key; the other way
+/// not): in a canal's middle, going along it at `--set turn_speed` m/s
+/// (12), the view turning steadily one way, then the other, at each rate,
+/// with forward held and not, `--set turn_secs` s (4) each; its speed along
+/// the canal at the end, and its fastest. Should be alike both ways.
+#[allow(clippy::too_many_arguments)]
+fn turns(
+    time: &Time,
+    args: &Args,
+    world: &WorldGen,
+    log: &mut Option<ResMut<BotLog>>,
+    state: &mut BotState,
+    input: &mut MoveInput,
+    exit: &mut MessageWriter<AppExit>,
+    transform: &mut Transform,
+    fly: &mut FlyCam,
+    player: &mut Player,
+) {
+    const TRIALS: [(f32, f32); 8] = [(90.0, 1.0), (-90.0, 1.0), (90.0, 0.0), (-90.0, 0.0), (200.0, 1.0), (-200.0, 1.0), (30.0, 1.0), (-30.0, 1.0)];
+    if !player.ready {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let p = transform.translation;
+    let Some((center, dir, floor)) = world.nearest_canal(p.x, p.z) else {
+        say(log, "bot turn: no canal near".into());
+        exit.write(AppExit::Success);
+        return;
+    };
+    let along = Vec3::new(dir.x, 0.0, dir.y);
+    let Some(&(rate, forward)) = TRIALS.get(state.turn) else {
+        exit.write(AppExit::Success);
+        return;
+    };
+    let since = *state.turn_since.get_or_insert_with(|| {
+        transform.translation = Vec3::new(center.x, floor + super::EYE + super::HALF_WIDTH + 0.1, center.y);
+        player.velocity = along * args.num("turn_speed", 12.0);
+        fly.yaw = (-dir.x).atan2(-dir.y);
+        fly.pitch = 0.0;
+        now
+    });
+    let speed = player.velocity.dot(along);
+    state.turn_peak = state.turn_peak.max(speed);
+    if now - since >= args.num("turn_secs", 4.0) {
+        say(log, format!("bot turn: {rate:+.0} deg/s ({}), forward {forward}: along {speed:.1} m/s at the end, fastest {:.1}; across {:.1}", if rate > 0.0 { "left, counter-clockwise" } else { "right, clockwise" }, state.turn_peak, (player.velocity - along * speed).length()));
+        state.turn += 1;
+        state.turn_since = None;
+        state.turn_peak = 0.0;
+        return;
+    }
+    *input = MoveInput::default();
+    input.wish = Vec2::new(0.0, forward);
+    fly.yaw += rate.to_radians() * time.delta_secs();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -95,6 +156,10 @@ pub fn drive(
     }
     if args.opt("pushbot") {
         push(&time, &args, &mut log, &mut state, &mut input, &mut exit, &transform, &player);
+        return;
+    }
+    if args.opt("turnbot") {
+        turns(&time, &args, &world, &mut log, &mut state, &mut input, &mut exit, &mut transform, &mut fly, &mut player);
         return;
     }
     if args.opt("stairbot") {

@@ -83,8 +83,8 @@ pub(crate) fn animate(time: Res<Time>, layers: Query<&Layer>, mut materials: Res
 
 /// A tile of fine veins: ridged noise, each octave's ridges thinned to
 /// lines, summed, over a bent plane; tiling, so it can drift without a
-/// seam.
-fn veins(seed: u32) -> Image {
+/// seam. (The stalker's arch too, `combat::halo`.)
+pub(crate) fn veins(seed: u32) -> Image {
     let n = TILE as usize;
     let mut data = Vec::with_capacity(n * n * 4);
     for y in 0..n {

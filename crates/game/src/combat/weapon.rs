@@ -38,8 +38,10 @@ pub(super) struct Viewmodel;
 #[derive(Component)]
 pub(super) struct Pump;
 
-/// How far the pump racks back, metres.
+/// How far the pump racks back, metres; and when, into the reload's sound
+/// (s): back, then forward, each stroke taking so long.
 const STROKE: f32 = 0.05;
+const PUMP: (f32, f32, f32) = (0.06, 0.39, 0.21);
 
 /// A prong of the muzzle's crown, at this angle round the axis.
 #[derive(Component)]
@@ -282,9 +284,8 @@ pub(super) fn animate(
     model.translation = REST + Vec3::new(sway.x + bob.x, -sway.y + bob.y - *dip - r * 0.3, r);
     model.rotation = Quat::from_rotation_x(r * 2.0 + *dip * 2.0) * Quat::from_rotation_y(sway.x * 2.0) * Quat::from_rotation_z(-sway.x * 3.0);
 
-    // Since the last shot, 0..1 of the reload.
+    // Since the last shot.
     let since = (RELOAD - gun.cooldown).max(0.0);
-    let progress = (since / RELOAD).clamp(0.0, 1.0);
     // The prongs flare open as it fires and snap shut.
     let flare = (-since * 14.0).exp() * (gun.shots > 0) as i32 as f32;
     for (prong, mut t) in &mut prongs {
@@ -292,13 +293,15 @@ pub(super) fn animate(
         let dir = Vec3::new(prong.0.cos() * out, prong.0.sin() * out, -1.0).normalize();
         t.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
     }
-    // The pump racks back, then forward, as the reload is heard; quick out,
-    // a hard stop at each end.
+    // The pump racks back, then forward, as the reload is heard (from when
+    // its sound starts: timed by the cooldown, it raced ahead of it once the
+    // sound was put later, the user); quick out, a hard stop at each end.
     let ease = |x: f32| {
         let x = x.clamp(0.0, 1.0);
         1.0 - (1.0 - x).powi(3)
     };
-    let back = if gun.shots > 0 { ease((progress - 0.12) / 0.14) - ease((progress - 0.34) / 0.14) } else { 0.0 };
+    let heard = since - gun.reload_at;
+    let back = if gun.shots > 0 { ease((heard - PUMP.0) / PUMP.2) - ease((heard - PUMP.1) / PUMP.2) } else { 0.0 };
     pump.translation = Vec3::Z * STROKE * back;
 }
 

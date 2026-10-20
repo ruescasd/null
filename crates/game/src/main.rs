@@ -18,6 +18,7 @@ mod options {
 }
 mod look;
 mod player;
+mod ragdoll;
 mod rig;
 mod rope;
 mod cloth;
@@ -53,7 +54,7 @@ impl Args {
 
     /// A measurement or capture, running with nobody playing.
     pub fn unattended(&self) -> bool {
-        self.opt("bench") || self.opt("flybench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("pushbot") || self.opt("walkbot") || self.opt("wallbot") || self.opt("labshots") || self.opt("roomshots") || self.opt("viewbench")
+        self.opt("bench") || self.opt("flybench") || self.shot.is_some() || self.opt("bot") || self.opt("stairbot") || self.opt("pushbot") || self.opt("walkbot") || self.opt("wallbot") || self.opt("turnbot") || self.opt("labshots") || self.opt("roomshots") || self.opt("viewbench")
     }
 
     /// A tuning number, overridable with `--set name=value`.
@@ -120,7 +121,7 @@ pub(crate) static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::
 
 /// `--opt startlog`: from the process's start, each half second
 /// the frames, the worst, whether the ground has settled.
-fn startlog(args: Res<Args>, time: Res<Time>, streamer: Res<terrain::Streamer>, compiling: Res<loading::Compiling>, mut state: Local<(f32, u32, f32, bool)>) {
+fn startlog(args: Res<Args>, time: Res<Time<Real>>, streamer: Res<terrain::Streamer>, compiling: Res<loading::Compiling>, mut state: Local<(f32, u32, f32, bool)>) {
     if !args.opt("startlog") {
         return;
     }

@@ -70,6 +70,43 @@ impl Ground<'_, '_> {
             .position
     }
 
+    /// What is under feet at `feet`, within `reach` below: the terrain, or
+    /// anything built over it (a ledge, a roof); `None` if nothing is (over
+    /// the void, high in a leap). (Where a stalker aims, at what you stand
+    /// on: your feet's ground alone missed ledges, the user.)
+    pub fn floor(&self, feet: Vec3, reach: f32) -> Option<f32> {
+        let from = feet - Vec3::Y * 0.05;
+        let built = self.spatial.cast_ray(from, Dir3::NEG_Y, reach, true, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance);
+        let terrain = (!self.args.opt("chasm")).then(|| self.world.ground_height(feet.x, feet.z)).filter(|&h| h > feet.y - reach);
+        match (built, terrain) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Whether `a` sees `b`: nothing built between, and the ground nowhere
+    /// over the line (sampled every 2 m; `clear` alone, outdoors, saw
+    /// through hills).
+    pub fn sight(&self, a: Vec3, b: Vec3) -> bool {
+        if !self.clear(a, b) {
+            return false;
+        }
+        if self.args.opt("chasm") {
+            return true;
+        }
+        let n = ((a.distance(b) / 2.0).ceil() as usize).clamp(2, 150);
+        (1..n).all(|k| {
+            let p = a.lerp(b, k as f32 / n as f32);
+            self.world.ground_height(p.x, p.z) < p.y - 0.1
+        })
+    }
+
+    /// How far along `dir` from `from` a ray first meets what is built,
+    /// within `max`.
+    pub fn hit(&self, from: Vec3, dir: Vec3, max: f32) -> Option<f32> {
+        Dir3::new(dir).ok().and_then(|d| self.spatial.cast_ray(from, d, max, true, &SpatialQueryFilter::default()).map(|hit| hit.distance))
+    }
+
     /// The ground's height under `p`, or far below it over the void (what
     /// stands there falls).
     pub fn at(&self, p: Vec3) -> f32 {

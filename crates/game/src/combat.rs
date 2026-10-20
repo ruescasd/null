@@ -31,6 +31,11 @@ mod hunter;
 mod clothlab;
 mod slab;
 mod lance;
+mod halo;
+mod beam;
+mod envelop;
+mod strike;
+mod stalker;
 mod skull;
 mod chain;
 /// A hunter, for what counts them from outside (the benches).
@@ -52,7 +57,8 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/swarm_voice.wav");
         embedded_asset!(app, "sounds/ground_hum.wav");
         embedded_asset!(app, "sounds/swarm_assemble.wav");
-        embedded_asset!(app, "sounds/shard_hit.wav");
+        embedded_asset!(app, "sounds/shard_hit_synth.wav");
+        embedded_asset!(app, "sounds/shard_hit_stab.wav");
         embedded_asset!(app, "sounds/hunter_death.wav");
         embedded_asset!(app, "sounds/hunter_growl0.wav");
         embedded_asset!(app, "sounds/hunter_growl1.wav");
@@ -61,8 +67,14 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/hunter_growl4.wav");
         embedded_asset!(app, "sounds/hunter_growl5.wav");
         embedded_asset!(app, "sounds/hunter_growl6.wav");
+        embedded_asset!(app, "sounds/stalker_step.wav");
+        embedded_asset!(app, "sounds/stalker_pain.wav");
+        embedded_asset!(app, "sounds/stalker_shot.wav");
+        embedded_asset!(app, "sounds/stalker_impact.wav");
         embedded_asset!(app, "sounds/hunter_pounce.wav");
         embedded_asset!(app, "sounds/gun_shot.wav");
+        embedded_asset!(app, "sounds/gun_shot_blast.wav");
+        embedded_asset!(app, "sounds/gun_shot_rolling.wav");
         embedded_asset!(app, "sounds/gun_reload.wav");
         embedded_asset!(app, "sounds/hunter_bite.wav");
         embedded_asset!(app, "sounds/bishop_cast.wav");
@@ -80,27 +92,48 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/player_step5.wav");
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
+        embedded_asset!(app, "combat/beam.wgsl");
+        embedded_asset!(app, "combat/envelop.wgsl");
+        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default()));
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
         app.init_resource::<Gun>()
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
-            .add_systems(Startup, (ichor::setup, hunter::setup, forms::setup, bishop::settle, clothlab::hang))
+            .add_systems(Startup, (ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, clothlab::hang))
             .add_systems(
                 Update,
                 (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
                     .chain()
-                    .after(crate::player::walk),
+                    .after(crate::player::walk)
+                    .run_if(crate::loading::playing),
             )
-            .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm))
-            .add_systems(Update, footsteps.after(crate::player::walk)).add_systems(Update, hunter::bodies.before(crate::player::walk))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn))
+            // (Not till the game is on: see `loading.rs`.)
+            .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
+            .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
 
+/// Shard `k` of shot `shot`, from a view looking along `forward`: a ring
+/// pattern with a little jitter, so a shot reads the same way every time (as
+/// in Quake 3) but never quite repeats.
+fn shard_dir(shot: u32, k: usize, forward: Vec3, right: Vec3, up: Vec3) -> Vec3 {
+    let r = |j: i32| hash01(shot as i32, k as i32, j, 0x5ad);
+    let ring = if k == 0 { 0.0 } else if k < 7 { 0.5 } else { 1.0 };
+    let a = k as f32 / if k < 7 { 6.0 } else { 9.0 } * std::f32::consts::TAU + r(0) * 0.6;
+    let off = (ring + (r(1) - 0.5) * 0.25) * SPREAD;
+    (forward + right * a.cos() * off + up * a.sin() * off).normalize()
+}
+
 /// Seconds between shots.
 const RELOAD: f32 = 1.5;
+/// How far into the reload's sound its last clack has died away (s): it
+/// is started so as to end as you may fire again, telling you so (the
+/// user); `--set reload_at`, how long after the shot it starts instead.
+/// (Started 0.12 s after the shot, it was done halfway through the wait.)
+const RELOAD_SOUND: f32 = 0.8;
 /// Shards per shot, the cone they spread in (radians, half-angle), how far
 /// they reach and how fast they are drawn flying.
 const SHARDS: usize = 16;
@@ -148,8 +181,10 @@ struct Gun {
     shots: u32,
     /// The view's shake, 0..1, decaying.
     shake: f32,
-    /// Seconds until the reload is heard.
+    /// Seconds until the reload is heard, and how long after the shot it is
+    /// (the pump racks with it: see `weapon::animate`).
     reload_in: Option<f32>,
+    reload_at: f32,
 }
 
 /// Keeps the score, and when the swarm may next assemble.
@@ -164,8 +199,10 @@ struct Director {
     /// Seconds left of the "you died" message, and what it says.
     notice: f32,
     last: String,
-    /// The hurt flash, 0..1.
+    /// The hurt flash, 0..1; and a white one (a stalker's shot striking
+    /// near, see `strike.rs`).
     hurt: f32,
+    white: f32,
 }
 
 #[derive(Resource)]
@@ -186,6 +223,9 @@ struct Assets3 {
     death: Handle<AudioSource>,
     /// A hunter's growls: phrases cut from recordings, and their lengths.
     growls: Vec<(Handle<AudioSource>, f32)>,
+    /// A stalker's stilt coming down; its pain.
+    stalker_step: Handle<AudioSource>,
+    stalker_pain: Handle<AudioSource>,
     pounce: Handle<AudioSource>,
     bite: Handle<AudioSource>,
     /// The bishop's cast (a swell, its peak as its motes are loosed) and its
@@ -347,13 +387,23 @@ fn setup(
         bright: bright.clone(),
         dark: dark.clone(),
         pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
-        gun: load("gun_shot"),
+        // (`--set shot_sound`, to compare: 0 the first shot, a pistol's; 1
+        // a blast; 2 a blast rolling away.)
+        gun: load(match args.num("shot_sound", 2.0) as u32 {
+            0 => "gun_shot",
+            1 => "gun_shot_blast",
+            _ => "gun_shot_rolling",
+        }),
         reload: load("gun_reload"),
         shatter: load("shard_break"),
         assemble: load("swarm_assemble"),
-        hit: load("shard_hit"),
+        // (`--set hit`: 0 the synthesised, 1 a stab cut from a recording;
+        // to compare, the user: a very important part of the gun's feel.)
+        hit: load(if args.num("hit", 0.0) > 0.5 { "shard_hit_stab" } else { "shard_hit_synth" }),
         death: load("hunter_death"),
         growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("hunter_growl{k}")), l)).collect(),
+        stalker_step: load("stalker_step"),
+        stalker_pain: load("stalker_pain"),
         pounce: load("hunter_pounce"),
         bite: load("hunter_bite"),
         bishop_cast: load("bishop_cast"),
@@ -467,8 +517,9 @@ fn fire(
     gun.recoil += 0.11;
     gun.shots += 1;
     light.intensity = 1.2e7;
-    commands.spawn((AudioPlayer::new(assets.gun.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.96))));
-    gun.reload_in = Some(0.12);
+    commands.spawn((AudioPlayer::new(assets.gun.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.9))));
+    gun.reload_at = args.num("reload_at", RELOAD - RELOAD_SOUND);
+    gun.reload_in = Some(gun.reload_at);
 
     let eye = transform.translation;
     let (right, up, forward) = (transform.right(), transform.up(), transform.forward());
@@ -477,13 +528,7 @@ fn fire(
     let muzzle = eye + right * weapon::MUZZLE_VIEW.x + up * weapon::MUZZLE_VIEW.y - forward * weapon::MUZZLE_VIEW.z;
     weapon::fire(&mut commands, &fx, *viewmodel, muzzle, *forward, *right, *up, gun.shots);
     for k in 0..SHARDS {
-        // A ring pattern with a little jitter, so a shot reads the same way
-        // every time (as in Quake 3) but never quite repeats.
-        let r = |j: i32| hash01(gun.shots as i32, k as i32, j, 0x5ad);
-        let ring = if k == 0 { 0.0 } else if k < 7 { 0.5 } else { 1.0 };
-        let a = k as f32 / if k < 7 { 6.0 } else { 9.0 } * std::f32::consts::TAU + r(0) * 0.6;
-        let off = (ring + (r(1) - 0.5) * 0.25) * SPREAD;
-        let dir = (*forward + *right * a.cos() * off + *up * a.sin() * off).normalize();
+        let dir = shard_dir(gun.shots, k, *forward, *right, *up);
         let wall = spatial
             .cast_ray(eye, Dir3::new(dir).unwrap_or(Dir3::NEG_Z), RANGE, true, &default())
             .map_or(RANGE, |h| h.distance);
@@ -855,8 +900,18 @@ fn sparks(commands: &mut Commands, assets: &Assets3, at: Vec3, back: Vec3, seed:
     }
 }
 
-/// What landed this frame: one impact sound (louder and lower the more
-/// shards struck), and a flash where they struck.
+/// The shards' impact sound, played again in quick succession the more
+/// struck (the user's experiment: many shards hitting): so many times for
+/// every so many, at most so many lots, so far apart (s), each a little
+/// higher or lower.
+const HITS: (u32, u32, u32, f32) = (2, 4, 3, 0.035);
+/// How much louder the repeats than the single hit was (halfway between
+/// it and twice it, overdone to hear them at all, the user).
+const HITS_LOUD: f32 = 1.15;
+
+/// What landed this frame: its impact sound (louder and lower the more
+/// shards struck, again the more, see `HITS`), and a flash where they
+/// struck.
 #[allow(clippy::type_complexity)]
 fn feedback(
     mut commands: Commands,
@@ -864,15 +919,26 @@ fn feedback(
     assets: Res<Assets3>,
     mut feedback: ResMut<Feedback>,
     mut light: Single<(&mut Transform, &mut PointLight), With<ImpactLight>>,
+    mut queued: Local<Vec<(f32, f32, f32)>>,
 ) {
     let dt = time.delta_secs();
+    // Those still to sound: (when, how loud, how fast).
+    queued.retain_mut(|(at, volume, speed)| {
+        *at -= dt;
+        if *at > 0.0 {
+            return true;
+        }
+        commands.spawn((AudioPlayer::new(assets.hit.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(*volume)).with_speed(*speed)));
+        false
+    });
     let n = feedback.hits;
     if n > 0 {
         let k = n.min(12) as f32;
-        commands.spawn((
-            AudioPlayer::new(assets.hit.clone()),
-            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.45 + 0.07 * k)).with_speed(1.15 - 0.025 * k),
-        ));
+        let times = n.div_ceil(HITS.1).min(HITS.2) * HITS.0;
+        for t in 0..times {
+            let r = hash01(n as i32, t as i32, 0, 0x5d1) - 0.5;
+            queued.push((HITS.3 * t as f32 + 0.012 * r, (0.45 + 0.07 * k) * HITS_LOUD, (1.15 - 0.025 * k) * (1.0 + 0.08 * r)));
+        }
         light.0.translation = feedback.at / n as f32;
         light.1.intensity = light.1.intensity.max(4.0e5 * k);
         feedback.hits = 0;
@@ -959,7 +1025,8 @@ fn hud(
 ) {
     let dt = time.delta_secs();
     director.hurt = (director.hurt - dt * 2.5).max(0.0);
-    flash.0 = Color::srgba(0.0, 0.0, 0.0, director.hurt * 0.55);
+    director.white *= (-dt * 9.0).exp();
+    flash.0 = if director.white > 0.01 { Color::srgba(1.0, 1.0, 1.0, director.white) } else { Color::srgba(0.0, 0.0, 0.0, director.hurt * 0.55) };
     director.notice -= dt;
     score.0 = if director.notice > 0.0 {
         director.last.clone()
@@ -986,5 +1053,37 @@ fn kick(time: Res<Time>, mut gun: ResMut<Gun>, mut camera: Single<(&mut Transfor
     transform.rotate_local_z(s * 1.5 * (t * 71.0).cos());
     if let Projection::Perspective(p) = &mut **projection {
         p.fov = (65.0 + 5.0 * gun.shake).to_radians();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shards_on_a_stalker() {
+        // How many of a shot's shards strike a stalker standing square to
+        // you, aimed at its chest, from near to far: what "point-blank"
+        // means for its death (see `hunter::OVERKILL`).
+        let rig = crate::rig::Rig::new(crate::rig::Plan::stalker(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
+        let chest = rig.chest();
+        for d in [2.0f32, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0] {
+            let eye = chest + rig.facing() * d;
+            let forward = (chest - eye).normalize();
+            let right = forward.cross(Vec3::Y).normalize();
+            let up = right.cross(forward);
+            let hits: Vec<usize> = (0..20u32)
+                .map(|shot| (0..SHARDS).filter(|&k| rig.bones.iter().any(|b| b.ray(eye, shard_dir(shot, k, forward, right, up), RANGE).is_some())).count())
+                .collect();
+            let mean = hits.iter().sum::<usize>() as f32 / hits.len() as f32;
+            println!("{d:4.0} m: {mean:4.1} of {SHARDS} shards on average, {}..{}", hits.iter().min().unwrap(), hits.iter().max().unwrap());
+            let (least, most) = (*hits.iter().min().unwrap(), *hits.iter().max().unwrap());
+            if d <= 3.0 {
+                assert!(least >= hunter::OVERKILL, "at {d} m as few as {least} shards: not always overkill");
+            }
+            if d >= 5.0 {
+                assert!(most < hunter::OVERKILL, "at {d} m as many as {most} shards: overkill");
+            }
+        }
     }
 }
