@@ -98,6 +98,10 @@ All at `e2701d5` (`git show e2701d5:<path>`).
   open cage of six rails turning a sixth per shot, shards lying in it, its
   front and back shrouded): replaced by the pump-action, kept as a basis for
   a rotary cannon. Git tag `rotary-cage` (`git show rotary-cage:crates/game/src/combat/weapon.rs`).
+- **The stalker's first pain sound** (2026-10-20, at `e2701d5`): a ship's
+  creak ("Ship creaks 2", 107801), 2.4 s; it "kind of works as a hurt
+  sound" (the user), but long for one heard often. Chosen: a gooey slime
+  monster's first burst. Download `samples/used/stalker_pain.mp3`.
 - **The shotgun's first shots** (2026-10-20, at `e2701d5`): a pistol's
   report (`gun_shot`, "Perdition 1911 pistol", 82365), then a dry blast
   (`gun_shot_blast`, "080902_shotgun", 39753). Chosen: a blast rolling

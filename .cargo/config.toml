@@ -1,0 +1,4 @@
+# Faster builds (see docs/building.md): rust-lld links the game, Bevy and all,
+# in a fraction of MSVC link.exe's time (some 3 s of every rebuild).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

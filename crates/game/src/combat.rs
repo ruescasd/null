@@ -69,6 +69,8 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/hunter_growl6.wav");
         embedded_asset!(app, "sounds/stalker_step.wav");
         embedded_asset!(app, "sounds/stalker_pain.wav");
+        embedded_asset!(app, "sounds/stalker_death.wav");
+        embedded_asset!(app, "sounds/stalker_fall_cry.wav");
         embedded_asset!(app, "sounds/stalker_shot.wav");
         embedded_asset!(app, "sounds/stalker_impact.wav");
         embedded_asset!(app, "sounds/hunter_pounce.wav");
@@ -109,7 +111,7 @@ impl Plugin for CombatPlugin {
             // (Not till the game is on: see `loading.rs`.)
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -224,6 +226,8 @@ struct Assets3 {
     /// A stalker's stilt coming down; its pain.
     stalker_step: Handle<AudioSource>,
     stalker_pain: Handle<AudioSource>,
+    stalker_death: Handle<AudioSource>,
+    stalker_fall_cry: Handle<AudioSource>,
     pounce: Handle<AudioSource>,
     bite: Handle<AudioSource>,
     /// The bishop's cast (a swell, its peak as its motes are loosed) and its
@@ -397,7 +401,11 @@ fn setup(
         death: load("hunter_death"),
         growls: [1.40, 2.10, 1.55, 1.10, 1.10, 1.40, 1.15].iter().enumerate().map(|(k, &l)| (load(&format!("hunter_growl{k}")), l)).collect(),
         stalker_step: load("stalker_step"),
+        // (`--set pain_sound 0`: the ship's creak, to compare.)
         stalker_pain: load("stalker_pain"),
+        stalker_death: load("stalker_death"),
+        // (Its cry falling: a screech.)
+        stalker_fall_cry: load("stalker_fall_cry"),
         pounce: load("hunter_pounce"),
         bite: load("hunter_bite"),
         bishop_cast: load("bishop_cast"),
@@ -901,7 +909,7 @@ fn sparks(commands: &mut Commands, assets: &Assets3, at: Vec3, back: Vec3, seed:
 const HITS: (u32, u32, u32, f32) = (2, 4, 3, 0.035);
 /// How much louder the repeats than the single hit was (halfway between
 /// it and twice it, overdone to hear them at all, the user).
-const HITS_LOUD: f32 = 1.15;
+const HITS_LOUD: f32 = 1.05;
 
 /// What landed this frame: its impact sound (louder and lower the more
 /// shards struck, again the more, see `HITS`), and a flash where they

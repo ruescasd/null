@@ -2281,6 +2281,7 @@ mod stalker {
                 rig.collapse(Vec3::new(0.3, 0.0, -1.5));
                 let floor = |p: Vec3| ground(p.x, p.z);
                 let (mut deepest, mut stretched, mut rest_at) = (0.0f32, 0.0f32, None);
+                let (mut last_points, mut moving_till): (Option<Vec<Vec3>>, f32) = (None, 0.0);
                 for k in 0..480 {
                     rig.fall(1.0 / 60.0, &floor, &|_, to| to);
                     let doll = rig.ragdoll.as_ref().unwrap();
@@ -2290,6 +2291,14 @@ mod stalker {
                     for (b, l) in rig.bones.iter().zip(&lengths) {
                         stretched = stretched.max((b.a.distance(b.b) - l).abs() / l);
                     }
+                    let now: Vec<Vec3> = doll.points().map(|(p, _)| p).collect();
+                    if let Some(was) = &last_points {
+                        let fastest = now.iter().zip(was.iter()).map(|(a, b): (&Vec3, &Vec3)| a.distance(*b) * 60.0).fold(0.0f32, f32::max);
+                        if fastest > 0.5 {
+                            moving_till = k as f32 / 60.0;
+                        }
+                    }
+                    last_points = Some(now);
                     if rest_at.is_none() && doll.at_rest() {
                         rest_at = Some(k as f32 / 60.0);
                     }
@@ -2298,7 +2307,7 @@ mod stalker {
                 let low = chest.y - floor(chest);
                 let gun = rig.gun_frame.unwrap();
                 let gun_low = (gun.grip + gun.up * GUN_BORE).y - floor(gun.grip);
-                println!("{name}, {}: deepest {deepest:.3} m into the ground, bones stretched {:.1}%, chest {low:.2} m up, gun {gun_low:.2} m up, still at {rest_at:?} s", if walking { "walking" } else { "aimed" }, stretched * 100.0);
+                println!("{name}, {}: deepest {deepest:.3} m into the ground, bones stretched {:.1}%, chest {low:.2} m up, gun {gun_low:.2} m up, still at {rest_at:?} s, last moving at {moving_till:.2} s", if walking { "walking" } else { "aimed" }, stretched * 100.0);
                 assert!(deepest < 0.03, "{name}: {deepest} m into the ground");
                 assert!(stretched < 0.03, "{name}: bones stretched {stretched}");
                 assert!(low < 0.6, "{name}: its chest still {low} m up");

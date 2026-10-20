@@ -1,3 +1,7 @@
+# (Nightly cargo: per-package rustflags in a profile, see `profile.fast`
+# and docs/building.md.)
+cargo-features = ["profile-rustflags"]
+
 [workspace]
 resolver = "3"
 members = ["crates/worldgen", "crates/game"]
@@ -27,3 +31,10 @@ opt-level = 3
 inherits = "release"
 incremental = true
 codegen-units = 256
+
+# Our own crate without the thin local LTO across its codegen units: about
+# a third of each rebuild, for no frame time we could measure (its
+# dependencies keep theirs, done once; off for them too, frames were 13%
+# slower). See docs/building.md.
+[profile.fast.package.game]
+rustflags = ["-Clto=off"]

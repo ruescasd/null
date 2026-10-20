@@ -53,12 +53,64 @@ const FLANK_OFF: f32 = 9.0;
 const FLANK_SPEED: f32 = 9.9;
 const DART_SPEED: f32 = 17.6;
 /// How loud a stalker's footfall.
-const STEP_LOUD: f32 = 0.65;
+const STEP_LOUD: f32 = 0.3;
 /// A stalker cries out at a blow: this much damage taken lately (its
 /// shards land over a few frames, so summed, fading by half every so
 /// often, s), not again for so long (s), and how loud. (A full blast close
-/// is near 29 of its 45; a few stray shards, a few.)
-const PAIN: (f32, f32, f32, f32) = (10.0, 0.2, 1.5, 2.64);
+/// is near 29 of its 45; four shards, 7.2: always within 5 m, mostly at 6,
+/// at times at 8, see `combat::tests::shards_on_a_stalker`. Six, it was
+/// heard only near.)
+const PAIN: (f32, f32, f32, f32) = (7.0, 0.2, 1.5, 9.5);
+/// How long after the blow it cries out (s): after the shards' impacts,
+/// heard over them (the user; at once, it was lost under them).
+const PAIN_DELAY: f32 = 0.2;
+/// How loud its death: its cry, and a great metal door shutting (see
+/// `stalker_dies`); and, falling, when the door begins (s after the
+/// blow): a moment after its screech, so it ends as its fall
+/// does, some 1.5 s on (see `rig::tests::collapses`, last moving; the
+/// door's 1.26 s, its click at the end left out).
+const DEATH_LOUD: f32 = 6.5;
+const DOOR_AT: f32 = 0.25;
+
+/// A stalker fallen, lying (its ragdoll): no longer one of those about (a
+/// new one may come at once, as after a burst).
+#[derive(Component)]
+pub(super) struct Fallen;
+
+/// A sound to come, here, in so long (s): what outlives the one it is for
+/// (a stalker's death, bursting, gone at once).
+#[derive(Component)]
+pub(super) struct Later {
+    sound: Handle<AudioSource>,
+    volume: f32,
+    wait: f32,
+}
+
+/// Each sound to come, played when it is time.
+pub(super) fn later(mut commands: Commands, time: Res<Time>, mut waiting: Query<(Entity, &mut Later, &Transform)>) {
+    for (entity, mut l, transform) in &mut waiting {
+        l.wait -= time.delta_secs();
+        if l.wait <= 0.0 {
+            commands.spawn((AudioPlayer::new(l.sound.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(l.volume)), *transform));
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// A stalker's death heard (the user's): a great metal door shutting;
+/// falling, timed to end with its fall (see `DOOR_AT`), after a screech at
+/// once (its pain there before); bursting, after the shards' impacts
+/// (see `PAIN_DELAY`), no cry (its pain there was taken out, the user: a
+/// sound of its own may come, at once, as the screech).
+fn stalker_dies(commands: &mut Commands, assets: &Assets3, at: Vec3, falls: bool) {
+    let mut sounds = vec![(assets.stalker_death.clone(), DEATH_LOUD, if falls { DOOR_AT } else { PAIN_DELAY })];
+    if falls {
+        sounds.push((assets.stalker_fall_cry.clone(), PAIN.3, 0.0));
+    }
+    for (sound, volume, wait) in sounds {
+        commands.spawn((Later { sound, volume, wait }, Transform::from_translation(at)));
+    }
+}
 /// The stalker leading you: it aims where you will be,
 /// your way on for up to so long (s), how much of that each shot its own
 /// (none: where you are). Moving on as you were, it finds you; turn after
@@ -201,11 +253,12 @@ pub(crate) struct Hunter {
     locked: Option<Vec3>,
     /// How many shots it has fired (each its own lead, see `LEAD`).
     shots: i32,
-    /// Its health as last felt, the damage it took lately, and when it may
-    /// cry out again (see `PAIN`).
+    /// Its health as last felt, the damage it took lately, when it may cry
+    /// out again (see `PAIN`), and when it will, struck (see `PAIN_DELAY`).
     felt: f32,
     hurt_lately: f32,
     pain_in: f32,
+    pain_due: Option<f32>,
     /// Where it tracks you (its gun, its searchlight along it: see
     /// `WANDER`).
     on_you: Option<Vec3>,
@@ -599,7 +652,9 @@ pub(super) fn gather(
     mut director: ResMut<Director>,
     player: Single<&Transform, (With<Player>, Without<Swarmer>)>,
     mut assemblies: Query<(Entity, &mut Assembly)>,
-    hunters: Query<(), With<Hunter>>,
+    // (Not those fallen, lying: a body kept a new one from coming for as
+    // long as it lay, 90 s.)
+    hunters: Query<(), (With<Hunter>, Without<Fallen>)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(0.05);
@@ -803,7 +858,7 @@ fn spawn_hunter(
     let health = args.num("hunter_health", HUNTER_HEALTH) * if args.opt("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, on_you: None, trail: std::collections::VecDeque::new() },
+            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new() },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -1215,11 +1270,8 @@ pub(super) fn hunt(
             let shards = std::mem::take(&mut h.shards) as f32;
             let blast = std::mem::take(&mut h.blast);
             if h.rig.ragdoll.is_none() {
-                commands.spawn((
-                    AudioPlayer::new(assets.death.clone()),
-                    PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
-                    Transform::from_translation(h.rig.chest()),
-                ));
+                stalker_dies(&mut commands, &assets, h.rig.head().0, true);
+                commands.entity(entity).insert(Fallen);
                 director.kills += 1;
                 info!("a stalker falls: {shards} shards, {:.1} m off", h.rig.chest().distance(target));
                 let push = h.rig.knock + blast.with_y(0.0).normalize_or_zero() * (shards * FALL.0).min(FALL.1);
@@ -1250,11 +1302,15 @@ pub(super) fn hunt(
         if h.health <= 0.0 {
             // Broken: the whole body bursts at once.
             let at = h.rig.chest();
-            commands.spawn((
-                AudioPlayer::new(assets.death.clone()),
-                PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
-                Transform::from_translation(at),
-            ));
+            if h.rig.plan.style == crate::rig::Style::Stilt {
+                stalker_dies(&mut commands, &assets, h.rig.head().0, false);
+            } else {
+                commands.spawn((
+                    AudioPlayer::new(assets.death.clone()),
+                    PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 2.0 })),
+                    Transform::from_translation(at),
+                ));
+            }
             let knock = h.rig.knock + h.blast.with_y(0.0) * SHOVE;
             // (A dozen parts burst, spread over the body, each spraying
             // more: a third of them all, a hound's some 80 bursts and 1700
@@ -2213,8 +2269,18 @@ pub(super) fn footfalls(mut commands: Commands, time: Res<Time>, assets: Res<Ass
             if h.hurt_lately >= PAIN.0 && h.pain_in <= 0.0 && h.health > 0.0 {
                 h.pain_in = PAIN.2;
                 h.hurt_lately = 0.0;
-                let head = h.rig.head().0;
-                commands.spawn((AudioPlayer::new(assets.stalker_pain.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(PAIN.3)), Transform::from_translation(head)));
+                h.pain_due = Some(PAIN_DELAY);
+            }
+            // (Not if the blow, or one after it, killed it.)
+            if let Some(t) = h.pain_due.as_mut() {
+                *t -= dt;
+                if *t <= 0.0 {
+                    h.pain_due = None;
+                    if h.health > 0.0 {
+                        let head = h.rig.head().0;
+                        commands.spawn((AudioPlayer::new(assets.stalker_pain.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(PAIN.3)), Transform::from_translation(head)));
+                    }
+                }
             }
         }
         for (k, at) in h.rig.footfalls().into_iter().enumerate() {
