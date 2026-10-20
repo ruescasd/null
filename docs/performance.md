@@ -93,6 +93,12 @@ About 6 ms of a 10 ms frame by day. The options, from least to most work:
 - **Simplified shadow geometry for pillars and structures.** Coarse
   stand-ins cast the shadows instead of the full meshes.
 
+To measure these, switches for the map's size, each sun's cascade count
+and reach, and one sun's shadows alone (`shadowmap`, `cascades0/1`,
+`shadow_far0/1`, `onesunshadow` in `look.rs`) were tried and removed
+(2026-10-21, never committed): a few lines to add again. A later check
+found the two suns' shadow setup about 3 ms of a frame together.
+
 ### 2. The material while moving
 
 The terrain material still changes every frame while the camera moves (the
