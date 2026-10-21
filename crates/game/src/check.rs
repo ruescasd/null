@@ -140,6 +140,7 @@ fn walk_check(kind: &str, seed: u32, catalogue: bool) -> (bool, String, Vec<Stri
         shot: None,
         seed,
         focus: None,
+        ground: None,
     };
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)

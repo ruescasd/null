@@ -165,9 +165,11 @@ pub fn load_library() -> Result<Library, String> {
         .and_then(|t| Library::parse(&t))
 }
 
-fn setup_notice(mut commands: Commands) {
+fn setup_notice(mut commands: Commands, args: Res<Args>) {
     commands.spawn((
         Notice { shown_at: f32::MIN },
+        // (Not in clean captures, `--opt clean`.)
+        if args.opt("clean") { Visibility::Hidden } else { Visibility::Visible },
         Text::new(""),
         TextFont { font_size: FontSize::Px(15.0), ..default() },
         TextColor(Color::srgb(0.9, 0.9, 0.9)),
@@ -227,6 +229,7 @@ fn watch(
     if !args.opt("nosites")
         && !args.opt("lab")
         && !args.opt("chasm")
+        && args.ground.is_none()
     {
         let mut new = PlateWorld::new(old.size(), args.seed);
         new.canals.stones = old.canals.stones;
@@ -444,7 +447,7 @@ fn stream_sites(
 ) {
     let plates = &world.0;
     let Some(library) = state.library.clone() else { return };
-    if args.opt("nosites") || args.opt("lab") || args.opt("chasm") {
+    if args.opt("nosites") || args.opt("lab") || args.opt("chasm") || args.ground.is_some() {
         return;
     }
     let now = time.elapsed_secs();

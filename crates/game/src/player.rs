@@ -707,6 +707,7 @@ pub fn walk(
     move_and_slide: MoveAndSlide,
     bodies: Res<Bodies>,
     canals_on: Option<Res<crate::beams::CanalsOn>>,
+    lab: Option<Res<crate::groundlab::LabGround>>,
     camera: Single<(&mut Transform, &mut FlyCam, Option<&mut Player>)>,
     mut ridelog: Local<Option<std::fs::File>>,
 ) {
@@ -776,6 +777,8 @@ pub fn walk(
         // above the ground: there, put on the ground, you were in the world
         // under the plan, and the GPU ran out of memory.)
         let floor = if args.opt("chasm") && !args.opt("rooms") && !args.opt("plan") { crate::chasm::rim(args.seed, p.x, p.z).unwrap_or(ground_height) } else { ground_height };
+        // (On the ground lab's, on its top there.)
+        let floor = lab.as_ref().map_or(floor, |g| floor.max(g.height(p.x, p.z)));
         if !(args.opt("chasm") && (args.opt("rooms") || args.opt("region"))) {
             transform.translation.y = floor + EYE + 0.3;
         }

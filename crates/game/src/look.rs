@@ -188,12 +188,15 @@ fn setup(
     mut commands: Commands,
     args: Res<Args>,
     world: Res<WorldGen>,
+    lab: Option<Res<crate::groundlab::LabGround>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") && args.opt("region") { crate::chasm::plan::network::region::start(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"), args.opt("inside")) } else if args.opt("chasm") && args.opt("plan") { crate::chasm::plan::start(args.seed) } else if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::start(args.seed, crate::chasm::rooms::Show::of(&args)) } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
-    let ground = world.ground_height(x, z);
+    // (Over the ground lab's, its top; `--opt camfloor`, over the lab's
+    // flat ground under it, to look from under its decks.)
+    let ground = lab.as_ref().filter(|_| !args.opt("camfloor")).map_or(world.ground_height(x, z), |g| g.height(x, z).max(world.ground_height(x, z)));
     let fly = FlyCam {
         yaw: yaw.to_radians(),
         pitch: pitch.to_radians(),

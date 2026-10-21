@@ -32,7 +32,9 @@ impl Ground<'_, '_> {
     /// The ground's height under `p`; `None` over the void (nothing within
     /// `BELOW`), only in a built place.
     pub fn under(&self, p: Vec3) -> Option<f32> {
-        if !self.args.opt("chasm") {
+        // (In the chasm, and on the ground lab's, what is built is the
+        // ground.)
+        if !self.args.opt("chasm") && self.args.ground.is_none() {
             return Some(self.world.ground_height(p.x, p.z));
         }
         // (A thin ball, not a ray: a ray found a hairline crack between a

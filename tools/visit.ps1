@@ -14,11 +14,8 @@ param([string]$Place, [string]$Name, [Parameter(ValueFromRemainingArguments)][st
 # name = x, height above the ground, z, yaw, pitch (degrees)
 $places = [ordered]@{
     "horizon"     = "1200,30,900,-87.6,6.1"
-    "needles"     = "2381,40,1094,-58.2,22.0"
-    "shafts"      = "4372,60,3397,-59.0,13.5"
-    "towers"      = "2450,30,560,-59.3,-4.0"
     "pillars"     = "2350,25,1150,108.4,-2.7"
-    "spire"       = "2333,30,2204,-56.3,17.0"
+    "spire"       = "1637,15,1350,0,6"
     # The first hanging city in the world (a Floor colossus).
     "city"        = "3250,2,2721,140,14"
     "city_air"    = "2132,380,4054,-40,-16"

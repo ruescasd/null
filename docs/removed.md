@@ -20,6 +20,24 @@ listed. The rest was judged in review and dropped.
 - **Stepped mountain and walled enclosure colossi.** These are colossus
   forms, removed in favour of the needles, the shattered shafts and the
   cities.
+- **The towers site and the needles colossus** (2026-10-21, at `0c9c366`).
+  Towers on a round mound at (2698, 413) and the needles on a square mound
+  at (2801, 834), both in the Stacks: the towers site was lost among the
+  district's own pillars at ground level, and the needles were a near-twin
+  of the spire, which the user named the significant landmark. Gone with
+  them: the `colossus_needles`, `needles`, `needle`, `needle_spire` and
+  `needle_tall` forms and the `needle` box style. The `towers` form stays
+  (the ordered site uses it).
+- **The shattered shafts** (2026-10-21, at `0c9c366`): the `colossus_ruin`
+  colossus, a cluster of thick banded shafts 45 m apart, leaning a little
+  band to band, with broken stubs at their foot, on a low round mound at
+  (4872, 3097). Squeezed out by a canal since the canals came; seen again
+  moved clear, the user: not good enough to keep, something better will
+  come. Gone with them: their forms (`colossus_ruin`, `ruin_shaft`,
+  `r_band`, `r_next`, `r_groove`, `ruin_stub`) and the colossal banding
+  they alone used (`c_band`, `c_band_next`, `c_groove`, `c_setback`,
+  `c_crown`, `c_crown_split`, `c_crown_piece`, `c_crown_more`,
+  `c_crown_up`): facade bands with grooves, setbacks and a split crown.
 
 ## Look
 

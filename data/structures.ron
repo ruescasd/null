@@ -181,17 +181,6 @@
     },
 
     styles: {
-        "needle": (
-            divisions: (3, 5, 3), keep: Lattice, depth: 3, gap: 0.9, twist: 6,
-            stop_chance: 0.3, albedo: 0.1,
-            leaves: [
-                (on: Corner, module: "needle", weight: 1),
-                (on: Corner, module: "box", weight: 1),
-                (on: Edge, module: "blade", weight: 1, turn: Random),
-                (on: Edge, module: "louvres", weight: 1),
-                (on: Early, module: "box", weight: 3),
-            ],
-        ),
         // Town buildings: a lattice of floors, needles and blades at the
         // corners and edges, louvres on the faces, cages inside.
         "tower_block": (
@@ -296,27 +285,6 @@
         "ruin": Choose([(3, "paving"), (1, "court"), (3, "nothing"), (1, "low_block"), (1, "dais")]),
         "terrace": Choose([(2, "paving"), (1, "court"), (2, "dais"), (1, "low_block")]),
 
-        // Colossi: hundreds of metres, with detail at every scale.
-        // Bands with grooves between them, now and then a setback, and a
-        // crown when they stop.
-        "c_band": Facade(height: (14, 32), panel: 8, storey: 6, depth: (0.8, 3), fill: 0.5, then: "c_band_next"),
-        "c_band_next": Choose([(14, "c_groove"), (3, "c_setback"), (1, "c_crown")]),
-        "c_groove": Neck(by: (1.2, 2.5), height: (2, 4), then: "c_band"),
-        "c_setback": Inset(by: (4, 12), then: "c_band"),
-        "c_crown": Choose([(2, "c_crown_split"), (1, "nothing")]),
-        "c_crown_split": Split(depth: 2, gap: 3, min_width: 10, then: "c_crown_piece"),
-        "c_crown_piece": Extrude(height: (6, 40), then: "c_crown_more"),
-        "c_crown_more": Choose([(2, "nothing"), (1, "c_crown_up")]),
-        "c_crown_up": Inset(by: (2, 5), then: "c_crown_piece"),
-
-        // Stacks: colossal spires of the box style that works in the spire
-        // site, two or so side by side, straight out of the mound.
-        "colossus_needles": Inset(by: (5, 15), then: "needles"),
-        "needles": Split(depth: 1, gap: 12, min_width: 35, then: "needle"),
-        "needle": Choose([(4, "needle_spire"), (1, "needle_tall")]),
-        "needle_spire": Structure(style: "needle", proportion: (4, 7)),
-        "needle_tall": Structure(style: "needle", proportion: (7, 10)),
-
         "complex_mixed": Compose(steps: 260, core: ((40, 27), 0.5, 24)),
         "city_tall": Lattice(cell: (96, 45), levels: 14, bars: 0.5, content: 8, cluster: 0.7, thin: 0.15, cores: 0.35),
         "unit_court": Cell(kind: "court"),
@@ -332,12 +300,6 @@
         "reactor_square": Lattice(cell: (96, 45), levels: 24, bars: 0.5, content: 8, cluster: 0.7, thin: 0.06, cores: 0.45, void: 1000, reactor: true, cables: 30),
         "reactor_round": Lattice(cell: (96, 45), levels: 24, bars: 0.5, content: 8, cluster: 0.7, thin: 0.06, cores: 0.45, fill: 0.3, radial: Some((600, 3)), arcs: 4, reactor: true, cables: 30),
         "mg_tower": Tower(height: (170, 170)),
-        "colossus_ruin": Cells(size: 45, gap: 6, then: "ruin_shaft"),
-        "ruin_shaft": Choose([(2, "c_band"), (2, "r_band"), (2, "ruin_stub"), (2, "nothing")]),
-        "r_band": Extrude(height: (14, 32), lean: 3, then: "r_next"),
-        "r_next": Choose([(10, "r_groove"), (1, "c_crown")]),
-        "r_groove": Neck(by: (1, 2), height: (2, 4), then: "r_band"),
-        "ruin_stub": Extrude(height: (10, 60), taper: (0, 0.4), lean: 6, then: "c_crown_split"),
     },
 
     site_grid: (spacing: 768, chance: 0.55),
@@ -348,18 +310,10 @@
         // axes, the plates around it regular, the order fading outwards.
         (at: (2633, 2004), style: "spire", size: ((40, 200, 40), (80, 420, 80)), plates: "towers",
             terraces: "ruin", terrace_chance: 0.2, lift: (10, 16), rings: 4, ring_width: 20, step: 3, order: 300),
-        // Towers on a round mound among the stacks' pillars.
-        (at: (2698, 413), plates: "towers", terraces: "ruin", core: (50, 100), lift: (4, 10), earthwork: (shape: Round)),
     ],
 
     colossus_grid: (spacing: 2048, chance: 0.85),
     colossi: [
-        // Needles from a square mound with ramps, and shattered shafts from
-        // a low mound: one placed example of each.
-        (at: (2801, 834), form: "colossus_needles", footprint: (90, 160), lift: (12, 25), rings: 3, ring_width: 30,
-            terraces: "ruin", earthwork: (shape: Square, ramps: 0.6)),
-        (at: (4872, 3097), form: "colossus_ruin", footprint: (140, 220), lift: (8, 18), rings: 3, ring_width: 30,
-            terraces: "ruin", earthwork: (shape: Round, ramps: 0.3)),
         // A few hanging cities (the lab's city_tall) in the open floor, on
         // low square platforms with ramps.
         (district: Floor, form: "city_tall", footprint: (560, 600), square: true, lift: (2, 5), rings: 2,

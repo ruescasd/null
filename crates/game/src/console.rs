@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn unknown_names_said_so() {
-        let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None };
+        let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None, ground: None };
         let said = run("shadowmaps", &mut args);
         assert!(said[0].contains("not a setting") && said[0].contains("shadowed"), "{said:?}");
         assert_eq!(run("shadowed", &mut args)[0], "shadowed 8 (default)");

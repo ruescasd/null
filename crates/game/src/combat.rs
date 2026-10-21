@@ -423,8 +423,9 @@ fn setup(
     // The gun in view (see `weapon.rs`), and the flash at its muzzle.
     let gun = weapon::spawn(&mut commands, &mut meshes, &mut materials, &mut images, assets.pale.clone());
     commands.entity(*camera).add_child(gun);
-    // (Not in the room lab's captures: the rooms alone.)
-    if args.opt("roomshots") {
+    // (Not in the room lab's captures, the rooms alone, nor in clean ones,
+    // `--opt clean`: the world alone, for docs/world.md.)
+    if args.opt("roomshots") || args.opt("clean") {
         commands.entity(gun).insert(Visibility::Hidden);
     }
     commands.entity(*camera).with_children(|parent| {
