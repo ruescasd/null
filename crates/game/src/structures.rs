@@ -233,6 +233,7 @@ fn watch(
         new.canals.rise = old.canals.rise;
         new.canals.relief = old.canals.relief;
         new.districts.force = old.districts.force;
+        new.slabs = old.slabs;
         let new = new.with_sites(&library);
         if !old.same_ground(&new) {
             info!("sites changed: regenerating the terrain");

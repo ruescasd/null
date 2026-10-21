@@ -51,7 +51,13 @@ pub struct PlateWorld {
     library: Option<Arc<Library>>,
     /// The lab's ground: flat plates, no canals (see `lab.rs`).
     lab: bool,
+    /// Slabs thrust up out of the ground, of which kind (see `slabs.rs`; 0
+    /// none; the game's `--set slabs N`, to judge).
+    pub slabs: u8,
 }
+
+mod slabs;
+pub use slabs::SlabInfo;
 
 /// Flow inside a canal at a point.
 #[derive(Clone, Copy, Debug)]
@@ -148,6 +154,7 @@ impl PlateWorld {
             sites: SiteTable::default(),
             library: None,
             lab: false,
+            slabs: 0,
         }
     }
 
@@ -168,7 +175,7 @@ impl PlateWorld {
     /// meshed for one is wrong for the other).
     pub fn same_ground(&self, other: &PlateWorld) -> bool {
         let forms = |w: &PlateWorld| w.library.as_ref().map(|l| format!("{:?}", l.forms));
-        self.sites == other.sites && forms(self) == forms(other)
+        self.sites == other.sites && forms(self) == forms(other) && self.slabs == other.slabs
     }
 
     /// The world's seed (scrambled), for things derived from it.
@@ -626,6 +633,13 @@ impl PlateWorld {
         poly
     }
 
+    /// Big plate `g`'s outline (its level-0 Voronoi cell).
+    fn big_cell(&self, g: (i32, i32)) -> Vec<DVec2> {
+        let (s, g0) = (self.site(0, g), GRID[0]);
+        let square = [s + DVec2::new(-3.0, -3.0) * g0, s + DVec2::new(3.0, -3.0) * g0, s + DVec2::new(3.0, 3.0) * g0, s + DVec2::new(-3.0, 3.0) * g0];
+        self.cell(0, g, &square)
+    }
+
     /// Meshes every plate whose level-0 site lies in the given column. At
     /// coarser LODs plates are not split as deeply.
     pub fn mesh_column(&self, lod: u32, cx: i32, cz: i32) -> ColumnMesh {
@@ -645,15 +659,12 @@ impl PlateWorld {
                 if s.x < x0 || s.x >= x0 + size || s.y < z0 || s.y >= z0 + size {
                     continue;
                 }
-                let square = [
-                    s + DVec2::new(-3.0, -3.0) * g0,
-                    s + DVec2::new(3.0, -3.0) * g0,
-                    s + DVec2::new(3.0, 3.0) * g0,
-                    s + DVec2::new(-3.0, 3.0) * g0,
-                ];
-                let poly = self.cell(0, g, &square);
+                let poly = self.big_cell(g);
                 let mut sites = [g, (0, 0), (0, 0)];
                 self.emit_split(&mut cache, &mut mesh, &poly, &mut sites, 0, max_level, (x0, z0));
+                if let Some(slab) = self.slab(&mut cache, g, &poly) {
+                    self.emit_slab(&mut mesh, &slab, (x0, z0));
+                }
             }
         }
         let scale = 4f64.powi(lod as i32);

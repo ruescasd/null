@@ -76,6 +76,9 @@ impl Plugin for TerrainPlugin {
             world.canals.stones = stones(args);
             world.canals.rise = rise(args);
             world.canals.relief = args.num("canal_relief", 1.5) as f64;
+            // (`--set slabs N`: 1 slabs, 2 cliff blocks; see worldgen's
+            // slabs.rs.)
+            world.slabs = args.num("slabs", 0.0) as u8;
             // (`--set district=N`: one district everywhere, in the order of
             // `District::ALL`: 0 floor, 1 tiers, 2 stacks, 3 broken, 4
             // uplands, 5 highlands.)
@@ -83,10 +86,22 @@ impl Plugin for TerrainPlugin {
             if only >= 0.0 {
                 world.districts.force = worldgen::district::District::ALL.get(only as usize).copied();
             }
-            match crate::structures::load_library() {
+            let world = match crate::structures::load_library() {
                 Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
                 _ => WorldGen(Arc::new(world)),
+            };
+            // (Slabs on: those near where it starts, to find and judge them,
+            // each its own steepness and length.)
+            if world.0.slabs > 0 {
+                let [x, _, z, ..] = args.cam.unwrap_or([0.0; 5]);
+                let mut near = world.0.slabs_near(x as f64, z as f64, 1500.0);
+                let off = |s: &worldgen::plates::SlabInfo| (s.middle.x - x as f64).hypot(s.middle.y - z as f64);
+                near.sort_by(|a, b| off(a).total_cmp(&off(b)));
+                for s in near {
+                    info!("slab at {:.0},{:.0}: {:.0} deg, {:.0} m long, {:.0} m wide, {} piece(s)", s.middle.x, s.middle.y, s.tilt, s.length, s.width, s.pieces);
+                }
             }
+            world
         };
         embedded_asset!(app, "terrain.wgsl");
         embedded_asset!(app, "terrain_vertex.wgsl");
