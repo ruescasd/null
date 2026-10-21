@@ -451,6 +451,9 @@ impl PlateWorld {
             }
             albedo += rules.albedo_spread * 0.6 * (self.rand(2, sites[2], 6) - 0.5);
         }
+        if rules.terrace {
+            height = step(self.landform_at_site(cache, level, sites[level]), rules.quantum);
+        }
         if rules.tilt {
             // Its own height, in the district's steps, and the land's slope
             // at its middle, to the nearest set gradient and heading:

@@ -71,25 +71,33 @@ impl District {
                 tilt: false,
                 crest: false,
                 pieces: 8.0,
+                terrace: false,
             },
+            // (Terraces along the contours: plates split only where the
+            // land rises a step across them, by chance never; flat ground
+            // keeps its big plates, a slope breaks into small ones whose
+            // risers follow the contours. Split by chance and stepped from
+            // their parents' heights, they were a jumble like the Broken,
+            // the user could not tell them apart.)
             District::Tiers => Rules {
-                relief: 1.3,
+                relief: 2.5,
                 albedo: 0.17,
                 albedo_spread: 0.04,
-                split: [0.5, 0.4],
+                split: [0.0, 0.0],
                 split_mask_gain: [0.0, 0.0],
-                split_rise: [7.0, 4.0],
+                split_rise: [2.0, 2.0],
                 quantum0: 2.0,
                 quantum: 2.0,
                 nudge: 0.0,
                 pillar_chance: 0.0,
                 pillar_height: (0.0, 0.0),
-                mesa_chance: 0.004,
-                pit_chance: 0.004,
+                mesa_chance: 0.0,
+                pit_chance: 0.0,
                 marking_chance: 0.01,
                 tilt: false,
                 crest: false,
                 pieces: 8.0,
+                terrace: true,
             },
             District::Stacks => Rules {
                 relief: 0.6,
@@ -109,6 +117,7 @@ impl District {
                 tilt: false,
                 crest: false,
                 pieces: 8.0,
+                terrace: false,
             },
             District::Broken => Rules {
                 relief: 1.0,
@@ -128,6 +137,7 @@ impl District {
                 tilt: false,
                 crest: false,
                 pieces: 8.0,
+                terrace: false,
             },
             District::Uplands => tilted(1.5, 0.19, [0.2, 0.12], [0.15, 0.15], 1.75, true, 8.0),
             District::Highlands => tilted(3.0, 0.15, [0.35, 0.15], [0.3, 0.3], 1.0, false, 32.0),
@@ -159,6 +169,7 @@ fn tilted(relief: f64, albedo: f64, split: [f64; 2], split_mask_gain: [f64; 2], 
         tilt: true,
         crest,
         pieces,
+        terrace: false,
     }
 }
 
@@ -199,6 +210,10 @@ pub struct Rules {
     /// 32 for broader, quieter ground (the user, torn between the two: a
     /// district's own).
     pub pieces: f64,
+    /// Each plate at the landform's height at its own middle, in the
+    /// district's steps (not stepped from its parents'): plates on a tread
+    /// level with each other, terraces along the contours.
+    pub terrace: bool,
 }
 
 /// The rules blended across district borders.
@@ -281,7 +296,7 @@ impl DistrictMap {
     /// Relief, base albedo and ridges, blended smoothly across district
     /// borders.
     pub fn blended(&self, x: f64, z: f64) -> Blend {
-        let ridges = |r: &Rules| if r.tilt { 0.0 } else { 1.0 };
+        let ridges = |r: &Rules| if r.tilt || r.terrace { 0.0 } else { 1.0 };
         if let Some(d) = self.force {
             let r = d.rules();
             return Blend { relief: r.relief, albedo: r.albedo, ridges: ridges(&r) };
