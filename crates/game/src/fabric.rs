@@ -725,6 +725,52 @@ mod tests {
         assert!(fastest < 0.05, "still moving at {fastest} m/s");
     }
 
+    /// A sheet dropped on a ball and on a box on a table (what the cloth
+    /// lab, `--opt clothlab`, showed live, now judged here): it never passes
+    /// into either, nor below the table, is not stretched, and lies still.
+    /// (Turned a little and held a little off level, as the lab dropped it:
+    /// not dead square on.)
+    #[test]
+    fn drapes_ball_and_box() {
+        const SIDE: usize = 38;
+        const SPACING: f32 = 0.04;
+        let turn = Quat::from_rotation_y(0.4);
+        let bodies = [("ball", Body::Capsule(Vec3::Y * 0.3, Vec3::Y * 0.3, 0.3)), ("box", Body::Box(Vec3::Y * 0.22, turn, Vec3::new(0.3, 0.22, 0.3)))];
+        for (name, body) in bodies {
+            let under = match body {
+                Body::Capsule(a, ..) => a,
+                Body::Box(c, ..) => c,
+            };
+            let tilt = Quat::from_rotation_y(0.3) * Quat::from_rotation_x(0.08);
+            let half = (SIDE - 1) as f32 * SPACING * 0.5;
+            let mut f = Fabric::sheet(SIDE, SIDE, |c, r| under + Vec3::Y * 0.75 + tilt * Vec3::new(c as f32 * SPACING - half, 0.0, r as f32 * SPACING - half), Weave { thickness: SPACING * 0.8, ..Weave::default() });
+            // (Into it: deeper than this past its surface; the cloth is kept
+            // half its thickness off it.)
+            let into = |p: Vec3| -> f32 {
+                match body {
+                    Body::Capsule(a, _, r) => r - p.distance(a),
+                    Body::Box(c, q, h) => {
+                        let l = q.inverse() * (p - c);
+                        (h - l.abs()).min_element()
+                    }
+                }
+            };
+            let mut deepest = f32::MIN;
+            for _ in 0..480 {
+                f.step(&[], &[body], 0.0, 1.0 / 60.0);
+                for i in 0..f.len() {
+                    let p = f.point(i);
+                    deepest = deepest.max(into(p)).max(-p.y);
+                }
+            }
+            let worst = f.edges.iter().map(|&(a, b, l)| f.points[a as usize].distance(f.points[b as usize]) / l).fold(0.0f64, f64::max);
+            println!("{name}: deepest {deepest:.4} m into it, stretched {worst:.3}, still moving at {:.4} m/s", f.stir());
+            assert!(deepest < 0.005, "{name}: the cloth {deepest} m into it");
+            assert!(worst < 1.1, "{name}: stretched to {worst}");
+            assert!(f.stir() < 0.05, "{name}: still moving at {} m/s", f.stir());
+        }
+    }
+
     /// A wide sheet hung by its top, out in the world (1200 m out), hangs
     /// still (rigid, it shook as if in a gale: see `Weave`).
     #[test]

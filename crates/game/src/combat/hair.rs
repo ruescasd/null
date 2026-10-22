@@ -1,5 +1,5 @@
-//! Hair (`--opt hair`): thin black strands from round the back of every bud
-//! (and the lab's). Awake, they hang, swinging as it moves, streaming out
+//! Hair (a bud's or a grove's `hair` option): thin black strands from round
+//! the back of a bud. Awake, they hang, swinging as it moves, streaming out
 //! behind it when it flies, settling when it stops: free-hanging ropes, the
 //! case simple rope physics does well. Asleep in a grove, they stand up
 //! stiff as feelers, swaying a little, as if listening.
@@ -11,7 +11,6 @@ use super::{
     forms::{Asleep, Gazed},
     hunter::cables::{rope, tubes},
 };
-use crate::Args;
 
 /// Strands on each, how far out round its back they hang from (metres), and
 /// their length.
@@ -31,19 +30,15 @@ pub(super) struct Hair {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hair(
     mut commands: Commands,
-    args: Res<Args>,
     time: Res<Time>,
     ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut material: Local<Option<Handle<StandardMaterial>>>,
-    added: Query<(Entity, &Transform), Added<Gazed>>,
+    added: Query<(Entity, &Transform, Option<&crate::traits::Traits>), Added<Gazed>>,
     owners: Query<(&Transform, Has<Asleep>), With<Gazed>>,
     mut hair: Query<(Entity, &mut Hair)>,
 ) {
-    if !args.opt("hair") {
-        return;
-    }
     let dt = time.delta_secs().clamp(0.001, 1.0 / 30.0);
     let material = material
         // (Matte: thin glossy strands catch the light and read pale.)
@@ -53,7 +48,10 @@ pub(super) fn hair(
         tubes(mesh, strands.iter().map(|(_, _, points, _, shade)| (&points[..], (0.012, 0.003), *shade)));
     };
 
-    for (owner, transform) in &added {
+    for (owner, transform, traits) in &added {
+        if !traits.is_some_and(|t| t.has("hair")) {
+            continue;
+        }
         let seed = owner.index_u32() as i32;
         let mut strands = Vec::new();
         for k in 0..STRANDS {

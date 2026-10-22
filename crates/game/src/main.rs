@@ -26,6 +26,7 @@ mod fabric;
 mod groundlab;
 mod structures;
 mod terrain;
+mod traits;
 
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, window::PresentMode};
 

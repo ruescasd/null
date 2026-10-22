@@ -3,7 +3,7 @@
 //! wakes them: a shot within 35 m, or running (not walking, Shift) within
 //! 12 m. A bud waking is thrown open, tears free of its roots (they fall
 //! slack and wither) and takes to the air; and it wakes those near it, a
-//! moment later, so a grove can go up all at once. (`--opt lonewake`: now
+//! moment later, so a grove can go up all at once. (Its `lonewake` option: now
 //! and then one also wakes by itself, alone, more often the nearer you are,
 //! so you cannot linger by them however quiet you are.)
 
@@ -16,7 +16,6 @@ use super::{
     hunter::cables::{rope, tubes},
 };
 use crate::{
-    Args,
     player::{Player, WALK_SPEED},
 };
 
@@ -27,7 +26,7 @@ const RUN_HEARD: f32 = 12.0;
 /// How far a waking bud wakes others, and how soon.
 const SPREAD: f32 = 7.0;
 const SPREAD_DELAY: (f32, f32) = (0.25, 0.8);
-/// `--opt lonewake`: within `LONE_NEAR` of you a bud wakes by itself about
+/// `lonewake`: within `LONE_NEAR` of you a bud wakes by itself about
 /// once in `LONE_EVERY` seconds, less and less often further out, never
 /// beyond `LONE_FAR`.
 const LONE_NEAR: f32 = 15.0;
@@ -61,7 +60,6 @@ fn base(bud: &Transform) -> Vec3 {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn grove(
     mut commands: Commands,
-    args: Res<Args>,
     time: Res<Time>,
     terrain: crate::ground::Ground,
     gun: Res<Gun>,
@@ -74,6 +72,7 @@ pub(super) fn grove(
     planted: Query<(Entity, &Transform), Added<Asleep>>,
     mut buds: Query<(Entity, &Transform, &mut Swarmer, &mut Gazed, Option<&mut Waking>, Has<Asleep>)>,
     mut roots: Query<(Entity, &mut Roots)>,
+    traits: Query<&crate::traits::Traits>,
 ) {
     let dt = time.delta_secs().clamp(0.001, 1.0 / 30.0);
     let material = material
@@ -136,8 +135,8 @@ pub(super) fn grove(
             }
             None => false,
         };
-        // (Now and then, alone, by itself.)
-        let lone = args.opt("lonewake") && {
+        // (Now and then, alone, by itself: its grove's `lonewake` option.)
+        let lone = traits.get(bud).is_ok_and(|t| t.has("lonewake")) && {
             let near = ((LONE_FAR - transform.translation.distance(ear)) / (LONE_FAR - LONE_NEAR)).clamp(0.0, 1.0);
             hash01(bud.index_u32() as i32, (time.elapsed_secs() * 1000.0) as i32, 0, 0x6f3) < near * near * dt / LONE_EVERY
         };

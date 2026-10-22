@@ -100,31 +100,15 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               ground its own turn of it; --set tile=2 metres, paving_contrast=0.18,
                                               paved=0.45 (share of the ground)
     --opt swarm                               the swarm alone: it never assembles into hunters
-    --set cables=1|2|3                        hunters with cables: 1 muscles strung between bones, 2 fibres hanging, 3 a cable
-                                              waist between a solid hips and chest
-    (no creatures come by themselves: `spawn KIND [N]` at the console places them; `spawn grove`: 7 buds asleep and
-                                              rooted, until a shot within 35 m or running within 12 m wakes them; one
-                                              waking wakes those near it)
-    --opt lonewake                            with a grove: now and then a bud wakes by itself, alone (within 15 m of
-                                              you about once in 90 s, never beyond 30 m)
-    --opt leech                               a bud waiting within 14 m (seen or not) may shoot a black cable
-                                              into you and drink (1 health a second, short pale lengths of it running up)
-                                              until it is destroyed or you get 15 m away
-    --opt hair                                strands hanging from each bud, swinging and trailing
-    --opt swarmlab                            a bud in front of you, close (--set gaze=0..1 holds it between closed and
-                                              open, gloom=0..1 holds the darkness)
+    (no creatures come by themselves: `spawn KIND [N] [OPTION ...]` at the console places them, with their own
+                                              options; `spawn KIND --help` lists a kind's. `spawn grove`: 7 buds asleep
+                                              and rooted, until a shot within 35 m or running within 12 m wakes them;
+                                              one waking wakes those near it)
+    --set gloom=0..1                          the swarm's darkness held there, to judge it
     --set gloom_near=M --set gloom_each=K     the swarm's darkness: M metres seen at its darkest (4), K how much one bud
                                               close by does (0.4); --set gloom_dim=S, how many stops the light dims (2.5)
-    --opt fight|holdfire|huntfire|god|tough|tame|watch   for captures: keep the swarm in a capture and fire by
-                                              itself / don't fire / fire only at a hunter / never die / hunters ten
-                                              times tougher / hunters circle at a distance (--set tame_at=14,
-                                              tame_pace: fixed speed, else prowl/trot/gallop in turn, the porter
-                                              0.7; --opt tame_line: back and forth along a straight line before
-                                              you instead, tame_span=16 m long; all live at the console) / face the
-                                              nearest hunter
-    --set porter_step=2                       how long the porter's steps take (live at the console)
-    --opt bones                               a hunter's pieces hidden, its bones drawn as lines (to see its limbs move)
-    --opt bishopgrey                          bishops all flat grey (their outline)
+    --opt fight|holdfire|huntfire|god|watch   for captures: keep the swarm in a capture and fire by itself / don't
+                                              fire / fire only at a hunter / never die / face the nearest hunter
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nosites|nosubdiv   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
@@ -220,10 +204,8 @@ its own ground:
 | broken | the original mixed terrain |
 
 For now, pending the game's direction, the world holds only what passed
-review: a few hanging cities on the floor, one placed example each of the
-other kinds (the spire by the spawn point, a spire site and a towers site in
-the stacks, a needles colossus and a shattered-shafts colossus), and the
-stacks' pillars.
+review: a few hanging cities on the floor, the spire by the spawn point,
+and the stacks' pillars (see docs/world.md).
 
 Structures come from fractal *rules* (`ifs.rs`) filled with
 hand-designed modules (`structure.rs`). A style splits a block into a grid,
@@ -284,8 +266,8 @@ hundreds of metres tall and seen from 4.5 km: a form grown on a whole
 footprint (the big plate there, scaled up, or a square). The hanging city
 is one: a sparse lattice of decks (most cells empty) carrying composed
 units, on a low square platform, in some of the floor districts' slots
-(`tools\visit.ps1 city`, or `city_air`). The needles colossus and the
-shattered shafts are placed once each. Ordinary sites keep clear of them.
+(`tools\visit.ps1 city`, or `city_air`). Ordinary sites keep clear of
+them.
 
 Site ground keeps its full detail at every distance, and everything built
 reaches a few metres into its plate, so nothing floats when seen from afar.
@@ -363,7 +345,7 @@ and settles. Its head is one faceted skull (the beast's long, narrow and
 angular, with two rows of pale needle teeth on both jaws, bared when it
 opens, and pinprick eyes) with a hinged jaw that opens as it crouches and
 gapes, far wider than an animal's, as it strikes; the beast's neck stretches
-out in the strike, the head reaching ahead of the body. `--opt wiry` builds bodies of thin long fibres instead, with gaps
+out in the strike, the head reaching ahead of the body. A beast's `wiry` option builds its body of thin long fibres instead, with gaps
 between them and spines bristling out. A hunter growls now and then, a
 phrase picked at random from recorded growls, a little higher or lower each
 time: every few seconds as it prowls, quieter and rarer creeping, one after

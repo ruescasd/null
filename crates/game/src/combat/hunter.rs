@@ -203,13 +203,15 @@ const FALL: (f32, f32, f32, f32) = (0.15, 2.5, 0.6, 90.0);
 /// Killed by a blast of this many shards or more (point-blank: 3 m or
 /// nearer always, 4 m at times, never from 5 m; see
 /// `combat::tests::shards_on_a_stalker`), the stalker bursts, not falls:
-/// the death by the blow's force (the user). `--set overkill`.
+/// the death by the blow's force (the user). Its `overkill` option.
 pub(super) const OVERKILL: usize = 10;
 
 #[derive(Component)]
 pub(crate) struct Hunter {
     kind: Kind,
     rig: Rig,
+    /// Its options, given when it was spawned (see `traits.rs`).
+    pub(crate) traits: crate::traits::Traits,
     /// Its bones last frame (the pieces on them are carried along with
     /// them; see `flesh`).
     last_bones: Vec<crate::rig::Bone>,
@@ -237,7 +239,7 @@ pub(crate) struct Hunter {
     /// How long it has hung back with no way round to your back (a flight,
     /// a narrow way): past a while it comes at you anyway.
     hung: f32,
-    /// `--opt tame_line`: the line it walks (its z, where it first was).
+    /// Its `tame_line` option: the line it walks (its z, where it first was).
     line: Option<f32>,
     /// The stalker's mind (see `stalker.rs`), and whether it may fire now;
     /// where it aims, at what you stand on (as it tracks you), and where
@@ -283,23 +285,14 @@ enum Gesture {
     None,
     /// Stopped, staring, the head slowly tilting over (radians).
     Tilt(f32, f32),
-    /// The head snapping aside and back (-1 left, 1 right).
-    Twitch(f32, f32),
     /// Very low and slow.
     Creep(f32),
     /// A short trot.
     Burst(f32),
 }
 
-impl Heads {
-    /// The kinds of load (see `slab.rs`).
-    pub(super) fn loads(&self) -> &[super::slab::Kind] {
-        &self.load
-    }
-}
-
 impl Hunter {
-    /// Its rig (for what it wears: see `clothlab.rs`).
+    /// Its rig (for what it wears: see `cape.rs`).
     pub(super) fn rig(&self) -> &Rig {
         &self.rig
     }
@@ -378,7 +371,6 @@ pub(super) struct Part {
 pub(super) fn spawn(
     mut commands: Commands,
     time: Res<Time>,
-    args: Res<Args>,
     ground: crate::ground::Ground,
     nav: Option<Res<crate::chasm::nav::Nav>>,
     assets: Res<Assets3>,
@@ -390,10 +382,10 @@ pub(super) fn spawn(
 ) {
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
-    for (kind, count) in std::mem::take(&mut spawns.creatures) {
+    for (kind, count, traits) in std::mem::take(&mut spawns.creatures) {
         // (Bishops are the bishops' to make: see `bishop::arrive`.)
         if kind == "bishop" {
-            spawns.creatures.push((kind, count));
+            spawns.creatures.push((kind, count, traits));
             continue;
         }
         for n in 0..count {
@@ -406,8 +398,11 @@ pub(super) fn spawn(
                 at = nav.nodes[j as usize];
             }
             let seed = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
-            if kind == "bud" {
-                super::spawn_bud(&mut commands, &kit, &mut materials, at + Vec3::Y * 1.6, seed);
+            if kind == "bud" && traits.has("asleep") {
+                // (A plant: on the floor under it, as a grove's.)
+                super::spawn_sleeper(&mut commands, &kit, &mut materials, at, seed, &traits);
+            } else if kind == "bud" {
+                super::spawn_bud(&mut commands, &kit, &mut materials, at + Vec3::Y * 1.6, seed, &traits);
             } else if kind == "grove" {
                 // Seven asleep, scattered over a few metres a little further
                 // on, each on the floor under it.
@@ -415,16 +410,16 @@ pub(super) fn spawn(
                     let r = |j: i32| hash01(seed as i32, k, j, 0x5a4) - 0.5;
                     let p = at + forward * 4.0 + Vec3::new(r(0), 0.0, r(1)) * 7.0;
                     let p = nav.as_deref().and_then(|nav| nav.nearest(p, 8).map(|j| nav.nodes[j as usize])).unwrap_or(Vec3::new(p.x, ground.at(p), p.z));
-                    super::spawn_sleeper(&mut commands, &kit, &mut materials, p, seed.wrapping_mul(31).wrapping_add(k as u32));
+                    super::spawn_sleeper(&mut commands, &kit, &mut materials, p, seed.wrapping_mul(31).wrapping_add(k as u32), &traits);
                 }
             } else if kind == "chained" {
                 // A porter kept on a chain by a stalker: beside it to start,
                 // behind it once they walk (see `chain.rs`).
-                let porter = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some("porter"));
-                let stalker = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed + 1, at + across * 2.0, camera.translation, Some("stalker"));
+                let porter = spawn_hunter(&mut commands, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some("porter"), &traits);
+                let stalker = spawn_hunter(&mut commands, &ground, &assets, &heads, &mut materials, seed + 1, at + across * 2.0, camera.translation, Some("stalker"), &traits);
                 commands.entity(stalker).insert(super::chain::Keeps(porter));
             } else {
-                spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some(&kind));
+                spawn_hunter(&mut commands, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some(&kind), &traits);
             }
         }
     }
@@ -475,10 +470,10 @@ pub(super) struct Heads {
     biped: (Handle<Mesh>, Handle<Mesh>),
     /// A beast's leg segments: the upper, and the lower tapering to a prong.
     legs: (Handle<Mesh>, Handle<Mesh>),
-    /// The porter's loads, each kind its parts (`--set slab`: see
+    /// The porter's loads, each kind its parts (its `slab` option: see
     /// `slab.rs`).
     load: Vec<super::slab::Kind>,
-    /// The porter's body pieces, other than shards (`--set piece=4`): rods
+    /// The porter's body pieces, other than shards (its `piece=4` option): rods
     /// (the user keeps shards or rods for it, till one is settled on, or two
     /// kinds of porter), a blade the size of a shard and a knot. (Blocks,
     /// tiles, pebbles, wedges and spheres, tried for it, are in the notes on
@@ -738,7 +733,7 @@ pub(super) fn gather(
             commands.entity(e).despawn();
         }
         commands.entity(entity).despawn();
-        spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation, None);
+        spawn_hunter(&mut commands, &ground, &assets, &heads, &mut materials, entity.index_u32(), assembly.centre, player.translation, None, &crate::traits::Traits::default());
     }
 }
 
@@ -746,7 +741,6 @@ pub(super) fn gather(
 #[allow(clippy::too_many_arguments)]
 fn spawn_hunter(
     commands: &mut Commands,
-    args: &Args,
     ground: &crate::ground::Ground,
     assets: &Assets3,
     heads: &Heads,
@@ -755,6 +749,7 @@ fn spawn_hunter(
     centre: Vec3,
     player: Vec3,
     want: Option<&str>,
+    traits: &crate::traits::Traits,
 ) -> Entity {
     // (`want`: a kind asked for, at the console: harrow, angler, biped,
     // sprawl, stalker, porter; none, woven by the swarm: a beast, a harrow
@@ -797,23 +792,23 @@ fn spawn_hunter(
     let mut rig = Rig::new(plan, feet, to.x.atan2(to.z), seed, &floor);
     rig.lost = vec![false; rig.plan.legs.len()];
     let bones = rig.bones.clone();
-    // (`--set hunter_health`: its health, to see it killed sooner.)
-    let health = args.num("hunter_health", HUNTER_HEALTH) * if args.opt("tough") { 10.0 } else { 1.0 };
+    // (Its `health` and `tough` options: to see it killed sooner, or not.)
+    let health = traits.value("health", HUNTER_HEALTH) * if traits.has("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new() },
+            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new() },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
         .id();
-    // The stalker's gun (`--opt nolance` for none; see `lance.rs`).
-    if stilt && !args.opt("nolance") {
+    // The stalker's gun (its `nolance` option, none; see `lance.rs`).
+    if stilt && !traits.has("nolance") {
         super::lance::spawn(commands, materials, &heads.lance, hunter, feet + Vec3::Y * 2.0);
     }
     // The porter's load: a plain slab on its back (see `loads`).
     if porter {
-        let k = args.num("slab", 0.0) as usize;
-        let parts = heads.load.iter().find(|(id, _)| *id == k).map(|(_, parts)| parts).unwrap_or_else(|| panic!("--set slab={k}: the porter's loads are {:?}", heads.load.iter().map(|(id, _)| *id).collect::<Vec<_>>()));
+        let k = traits.value("slab", 0.0) as usize;
+        let parts = heads.load.iter().find(|(id, _)| *id == k).map(|(_, parts)| parts).unwrap_or_else(|| panic!("slab={k}: the porter's loads are {:?}", heads.load.iter().map(|(id, _)| *id).collect::<Vec<_>>()));
         let load = commands.spawn((Load(hunter), Transform::from_translation(feet + Vec3::Y * 2.0), Visibility::default())).id();
         for (mesh, material) in parts {
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), ChildOf(load)));
@@ -828,13 +823,14 @@ fn spawn_hunter(
     // Its body: shards along every bone, thicker bones more and bigger,
     // with pale markings.
     let seed = seed;
-    // (`--set piece=4`: the porter built of rods instead of shards: the
-    // shape of its pieces as its own (the user). Its markings stay shards.)
-    let piece = if porter { args.num("piece", 0.0) as i32 } else { 0 };
+    // (Its `piece=4` option: the porter built of rods instead of shards:
+    // the shape of its pieces as its own (the user). Its markings stay
+    // shards.)
+    let piece = if porter { traits.value("piece", 0.0) as i32 } else { 0 };
     let (blade, knot) = match piece {
         0 => (assets.shard.clone(), assets.swarmer.clone()),
         4 => heads.rods.clone(),
-        k => panic!("--set piece={k}: the porter's pieces are 0 (shards) or 4 (rods); the others were taken out (their recipes are in the notes)"),
+        k => panic!("piece={k}: the porter's pieces are 0 (shards) or 4 (rods); the others were taken out (their recipes are in the notes)"),
     };
     let pale = |commands: &mut Commands, bone: usize, along: f32, offset: Vec3, dir: Vec3, length: f32, width: f32| {
         commands.spawn((
@@ -846,7 +842,7 @@ fn spawn_hunter(
     };
     for (i, bone) in bones.iter().enumerate() {
         // (Woven cable instead; see `cables.rs`.)
-        if cables::replaces(args, i) {
+        if cables::replaces(traits, i) {
             continue;
         }
         // (A tripod: no neck nor head; its eyes are round its body.)
@@ -1024,7 +1020,7 @@ fn spawn_hunter(
             }
             continue;
         }
-        if args.opt("wiry") {
+        if traits.has("wiry") {
             // Fibres: thin, long, bundled along the bone and splaying from
             // it, gaps between them; now and then a spine bristling out.
             let count = ((length / 0.06) * (bone.radius / 0.12).clamp(0.6, 2.0)).round().clamp(4.0, 40.0) as usize;
@@ -1208,8 +1204,8 @@ pub(super) fn hunt(
         // and blasted point-blank, see `OVERKILL`): limp, pushed by the blow,
         // letting go of its lance; struck again, knocked about; after a
         // while, gone.
-        let overkill = h.shards as f32 >= args.num("overkill", OVERKILL as f32);
-        if h.health <= 0.0 && h.rig.plan.style == crate::rig::Style::Stilt && !args.opt("shatter") && (h.rig.ragdoll.is_some() || !overkill) {
+        let overkill = h.shards as f32 >= h.traits.value("overkill", OVERKILL as f32);
+        if h.health <= 0.0 && h.rig.plan.style == crate::rig::Style::Stilt && !h.traits.has("shatter") && (h.rig.ragdoll.is_some() || !overkill) {
             let shards = std::mem::take(&mut h.shards) as f32;
             let blast = std::mem::take(&mut h.blast);
             if h.rig.ragdoll.is_none() {
@@ -1507,18 +1503,13 @@ pub(super) fn hunt(
         let around = Vec3::new(-toward.z, 0.0, toward.x);
         let r = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 7.0) as i32, k, 0x6b5);
         h.rig.rear = if matches!(h.stance, Stance::Rear | Stance::Reach) { 1.0 } else { 0.0 };
-        // (`porter_step`: the porter's steps that many times as long, 2
-        // else: slower, and so further, at the same pace; live, at the
-        // console too.)
-        h.rig.step_scale = args.num("porter_step", 2.0);
-        // (`stilt_vault`, `stilt_creep`, `stilt_beat`: the stalker's walk,
-        // live: see `Rig::stilt_tune`.)
-        h.rig.stilt_tune = (args.num("stilt_vault", crate::rig::STILT_VAULT), args.num("stilt_creep", crate::rig::STILT_GATHER.0), args.num("stilt_beat", crate::rig::STILT_BEAT_SCALE));
+        // (The porter's `step` option: its steps that many times as long, 2
+        // else: slower, and so further, at the same pace.)
+        h.rig.step_scale = h.traits.value("step", 2.0);
         if !matches!(h.stance, Stance::Reach | Stance::Haul(_)) {
             h.rig.grab = None;
         }
         let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false, combat: 0.0 };
-        h.rig.quick_head = args.opt("quickhead");
         if stunned {
         } else if h.stance == Stance::Stagger {
             // Low, sliding on with the shove; once down (and the time up), on
@@ -1528,13 +1519,13 @@ pub(super) fn hunt(
                 h.stance = Stance::Stalk;
                 h.timer = 0.4;
             }
-        } else if args.opt("tame") || matches!(h.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter) {
+        } else if h.traits.has("tame") || matches!(h.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter) {
             // (The stalker and the porter never hunt: their only motion, for
             // now, what has been tuned in tame mode, the user.)
-            // (`--opt tame`, for captures: it circles at a distance, side on,
-            // its pace changing every 8 s: prowl, trot, gallop.)
-            let keep = args.num("tame_at", 14.0);
-            let fixed = args.num("tame_pace", 0.0);
+            // (Its `tame` option: it circles at a distance, side on, its
+            // pace changing every 8 s: prowl, trot, gallop.)
+            let keep = h.traits.value("tame_at", 14.0);
+            let fixed = h.traits.value("tame_pace", 0.0);
             // (The porter at its own walking pace, the user's: 0.7 m/s; the
             // stalker at its own, 1 m/s, upright: at the hounds' paces,
             // crouched, its gait was wrong, the user.)
@@ -1542,24 +1533,24 @@ pub(super) fn hunt(
             let stalker = h.rig.plan.style == crate::rig::Style::Stilt;
             let pace = if fixed > 0.0 { fixed } else if porter { 0.7 } else if stalker { 1.0 } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
             intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
-            // (`--opt tame_line`: back and forth along a straight line across
+            // (Its `tame_line` option: back and forth along a straight line across
             // in front of you instead (along x, `tame_at` off in z), `tame_span`
             // m long (16), turning
             // at each end: to judge a walk straight on.)
-            if args.opt("tame_line") {
+            if h.traits.has("tame_line") {
                 // (Its line through where it first was: kept to one `tame_at`
                 // off before you, it first went aslant to it, and seemed to
                 // keep turning, the user.)
                 let line = *h.line.get_or_insert(root.z);
-                let span = args.num("tame_span", 16.0);
+                let span = h.traits.value("tame_span", 16.0);
                 let leg = (time.elapsed_secs() * pace / span).rem_euclid(2.0);
                 let way = Vec3::X * if leg < 1.0 { 1.0 } else { -1.0 };
                 let off = Vec3::Z * ((line - root.z) / 3.0).clamp(-1.0, 1.0);
                 intent.velocity = (way + off).normalize_or(way) * pace;
             }
             // (The stalker, minded: see `stalker.rs`; tame, as before, with
-            // `--opt tame` or `tame_line`, to judge its gait and poses.)
-            if stalker && !args.opt("tame") && !args.opt("tame_line") {
+            // its `tame` or `tame_line` option, to judge its gait and poses.)
+            if stalker && !h.traits.has("tame") && !h.traits.has("tame_line") {
                 let (eye, head) = h.rig.head();
                 let mind = h.mind.get_or_insert_with(|| super::stalker::Mind::new(root, entity.index_u32() as i32));
                 let you = target - Vec3::Y * 0.6;
@@ -1679,16 +1670,11 @@ pub(super) fn hunt(
                     h.gesture_in -= dt;
                     if h.gesture == Gesture::None && h.gesture_in <= 0.0 {
                         let pick = r(5);
-                        let side = if r(7) < 0.5 { -1.0 } else { 1.0 };
                         // (A stare, the head level: rolled over, it was a
                         // pet's cocked head, cute, the user; and no
-                        // twitches, a creep instead. `--opt quickhead`, as
-                        // they were.)
-                        let quick = args.opt("quickhead");
+                        // twitches, a creep instead.)
                         h.gesture = if pick < 0.3 {
-                            Gesture::Tilt(1.4 + 1.2 * r(6), if quick { side * (0.5 + 0.4 * r(9)) } else { 0.0 })
-                        } else if pick < 0.6 && quick {
-                            Gesture::Twitch(0.25, side)
+                            Gesture::Tilt(1.4 + 1.2 * r(6), 0.0)
                         } else if pick < 0.85 {
                             Gesture::Creep(1.5 + 1.5 * r(6))
                         } else {
@@ -1696,7 +1682,6 @@ pub(super) fn hunt(
                         };
                         h.gesture_in = 1.5 + 3.0 * r(8);
                     }
-                    let forward = Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos());
                     h.gesture = match h.gesture {
                         Gesture::Tilt(t, angle) => {
                             // Stopped dead, staring, the head rolling over.
@@ -1705,14 +1690,6 @@ pub(super) fn hunt(
                             intent.tilt = angle;
                             intent.still = true;
                             if t > dt { Gesture::Tilt(t - dt, angle) } else { Gesture::None }
-                        }
-                        Gesture::Twitch(t, side) => {
-                            // A sudden snap of the head aside, and back.
-                            let aside = Vec3::new(-forward.z, 0.0, forward.x) * side * 3.0 + forward;
-                            intent.look = if t > 0.12 { root + aside + Vec3::Y * 1.0 } else { look };
-                            intent.head_rate = 45.0;
-                            intent.velocity *= 0.3;
-                            if t > dt { Gesture::Twitch(t - dt, side) } else { Gesture::None }
                         }
                         Gesture::Creep(t) => {
                             intent.velocity *= 0.45;
@@ -1748,9 +1725,9 @@ pub(super) fn hunt(
                     intent.velocity = toward * if chasing { 18.0 } else { 14.0 };
                     intent.crouch = 0.1;
                     let speed = h.rig.speed();
-                    // (`--opt pounce`: the hound's leap, kept; the user: it
+                    // (Its `pounce` option: the hound's leap, kept; the user: it
                     // sort of works for the harrow too.)
-                    let pounce = args.opt("pounce");
+                    let pounce = h.traits.has("pounce");
                     if pounce && speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
                         // A quick gather, still running.
                         h.stance = Stance::Windup;
@@ -1978,44 +1955,31 @@ pub(super) fn hunt(
             intent.look = porter + Vec3::Y * 1.6;
             intent.crouch = 0.0;
         }
-        // The stalker's gun on its free arm (its second): dragged; or, for
-        // judging its poses (`--set lance_cycle=S`), aimed for S seconds,
-        // then dragged for S, and so on.
-        if h.rig.plan.style == crate::rig::Style::Stilt && !args.opt("nolance") {
-            let cycle = args.num("lance_cycle", 0.0);
+        // The stalker's gun on its free arm (its second): dragged.
+        if h.rig.plan.style == crate::rig::Style::Stilt && !h.traits.has("nolance") {
             let minded = h.mind.as_ref().map(|m| m.mode);
             let hunting = minded == Some(super::stalker::Mode::Hunt);
-            let aim = if let Some(mode) = minded {
-                if mode == super::stalker::Mode::Wander { 0.0 } else { 1.0 }
-            } else if cycle > 0.0 {
-                // (Planting it over the first second of its aiming half,
-                // lifting it over the first of its carrying half.)
-                let t = (time.elapsed_secs() / cycle) % 2.0;
-                if t < 1.0 { (t * cycle).min(1.0) } else { (1.0 - (t - 1.0) * cycle).max(0.0) }
-            } else {
-                0.0
+            let aim = match minded {
+                Some(mode) if mode != super::stalker::Mode::Wander => 1.0,
+                _ => 0.0,
             };
             // (Aimed level along its body, not turning to you: judged from
             // the side, the user; aiming at you comes with its attack. It
-            // stands to aim and fire, the user. `--opt lance_at_you`: at
-            // you, to be shot, to judge.)
+            // stands to aim and fire, the user.)
             // (At you, its bore on what you stand on, by your feet: on you,
             // it could not miss, and its dome meant nothing, the user; over
             // the void, or high in a leap, on your chest. Locked, about to
             // fire, where it was. Along the line from its chest, the gun
             // aside of it, its beams all passed you on one side, the user.)
-            let at_you = args.opt("lance_at_you") || hunting;
-            // (`--set lance_miss=M`: its aim M m short of you, towards it, to
-            // see its shots land from outside.)
-            let miss = Vec3::new(root.x - target.x, 0.0, root.z - target.z).normalize_or(Vec3::X) * args.num("lance_miss", 0.0);
+            let at_you = hunting;
             let lead = if hunting { LEAD * hash01(entity.index_u32() as i32, h.shots, 0, 0x1ead) } else { 0.0 };
             let ahead = player.1.velocity.with_y(0.0) * lead;
-            let feet = target - Vec3::Y * crate::player::EYE + miss + ahead;
+            let feet = target - Vec3::Y * crate::player::EYE + ahead;
             let bore = h.rig.gun_frame.map_or(h.rig.chest(), |f| f.grip + f.up * crate::rig::GUN_BORE);
             // (What you stand on, if the gun can reach it: from afar, low,
             // its line skimmed the ground and struck it short of you; then
             // your middle, which it sees.)
-            let middle = target - Vec3::Y * 0.5 + miss + ahead;
+            let middle = target - Vec3::Y * 0.5 + ahead;
             h.aiming = ground.floor(feet, 8.0).map(|y| Vec3::new(feet.x, y, feet.z)).filter(|&f| ground.sight(bore, f + Vec3::Y * 0.15)).unwrap_or(middle);
             // (Tracking you, on you, not quite steady, as its searchlight;
             // at its lock, snapped onto where it fires, leading you. Aimed
@@ -2049,10 +2013,10 @@ pub(super) fn hunt(
                 }
             }
         }
-        intent.velocity *= args.num("huntpace", 1.0) * crippled;
-        // (`--opt still`: its body frozen as it first stands, not a sway,
-        // to see what moves of its own on it: its cloak.)
-        if !(args.opt("still") && !h.rig.bones.is_empty()) {
+        intent.velocity *= crippled;
+        // (Its `still` option: its body frozen as it first stands, not a
+        // sway, to see what moves of its own on it: its cloak.)
+        if !(h.traits.has("still") && !h.rig.bones.is_empty()) {
             h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
         }
         if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {
@@ -2222,17 +2186,20 @@ pub(super) fn footfalls(mut commands: Commands, time: Res<Time>, assets: Res<Ass
     }
 }
 
-/// `--opt bones` (to see how a body moves, its pieces hiding its limbs):
+/// A hunter's `bones` option (to see how a body moves, its pieces hiding its limbs):
 /// its pieces hidden, its bones drawn as lines, its joints as small balls.
-pub(super) fn skeleton(args: Res<Args>, hunters: Query<&Hunter>, mut parts: Query<&mut Visibility, With<Part>>, mut gizmos: Gizmos) {
-    if !args.opt("bones") {
+pub(super) fn skeleton(hunters: Query<(Entity, &Hunter)>, mut parts: Query<(&Part, &mut Visibility)>, mut gizmos: Gizmos) {
+    let shown: Vec<Entity> = hunters.iter().filter(|(_, h)| h.traits.has("bones")).map(|(e, _)| e).collect();
+    if shown.is_empty() {
         return;
     }
-    for mut v in &mut parts {
-        *v = Visibility::Hidden;
+    for (part, mut v) in &mut parts {
+        if shown.contains(&part.hunter) {
+            *v = Visibility::Hidden;
+        }
     }
     let colour = Color::srgb(1.0, 0.25, 0.05);
-    for h in &hunters {
+    for (_, h) in hunters.iter().filter(|(e, _)| shown.contains(e)) {
         for b in &h.rig.bones {
             gizmos.line(b.a, b.b, colour);
             gizmos.sphere(Isometry3d::from_translation(b.b), 0.06, colour);

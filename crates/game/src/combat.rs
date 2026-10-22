@@ -28,7 +28,7 @@ use crate::{
 };
 
 mod hunter;
-mod clothlab;
+mod cape;
 mod slab;
 mod lance;
 mod halo;
@@ -100,7 +100,7 @@ impl Plugin for CombatPlugin {
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .add_systems(PostStartup, setup)
-            .add_systems(Startup, (ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, clothlab::hang))
+            .add_systems(Startup, (ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, cape::hang))
             .add_systems(
                 Update,
                 (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
@@ -110,9 +110,9 @@ impl Plugin for CombatPlugin {
             )
             .add_systems(Update, choose.before(fire).run_if(crate::loading::playing))
             // (Not till the game is on: see `loading.rs`.)
-            .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
+            .add_systems(Update, (forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
-            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, clothlab::cloaks.after(hunter::flesh), clothlab::sheets, slab::pulse, slab::lab, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
+            .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, cape::cloaks.after(hunter::flesh), slab::pulse, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
 }
@@ -794,24 +794,29 @@ fn gloom(
     let target = 1.0 - (-args.num("gloom_each", 0.4) * sum).exp();
     let rate = if target > gloom.0 { 2.0 } else { 0.7 };
     gloom.0 += (target - gloom.0) * (rate * dt).min(1.0);
+    // (`--set gloom=0..1`: the darkness held there, to judge it.)
+    let held = args.num("gloom", -1.0);
+    if held >= 0.0 {
+        gloom.0 = held;
+    }
 }
 
 /// A grove's bud at `at` (on the ground), asleep on its roots, opening to
 /// the sky, leaning a little (see `grove.rs`).
-fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32) {
+fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32, traits: &crate::traits::Traits) {
     let r = |j: i32| hash01(seed as i32, j, 0, 0x5a2) - 0.5;
     let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
     let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
     let transform = Transform::from_translation(at + Vec3::Y * 0.55).looking_to(lean * Vec3::Y, Vec3::Z);
-    let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, transform, Visibility::default())).id();
+    let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, traits.clone(), transform, Visibility::default())).id();
     forms::build(commands, kit, materials, root);
 }
 
 /// A free bud at `at`, stalking (`spawn bud` at the console).
-fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32) {
+fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32, traits: &crate::traits::Traits) {
     let phase = hash01(seed as i32, 4, 0, 0x5a2) * 50.0;
     let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
-    let root = commands.spawn((swarmer, forms::Gazed::default(), Transform::from_translation(at), Visibility::default())).id();
+    let root = commands.spawn((swarmer, forms::Gazed::default(), traits.clone(), Transform::from_translation(at), Visibility::default())).id();
     forms::build(commands, kit, materials, root);
 }
 

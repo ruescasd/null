@@ -40,10 +40,11 @@ impl Plugin for ConsolePlugin {
     }
 }
 
-/// What `spawn` at the console asks for: creatures, their kind and how many.
+/// What `spawn` at the console asks for: creatures, their kind, how many,
+/// and their options (see `traits.rs`).
 #[derive(Resource, Default)]
 pub struct Spawns {
-    pub creatures: Vec<(String, u32)>,
+    pub creatures: Vec<(String, u32, crate::traits::Traits)>,
 }
 
 /// The kinds `spawn` knows.
@@ -139,14 +140,22 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                 } else if line.trim() == "quit" || line.trim() == "exit" {
                     exit.write(AppExit::Success);
                 } else if line.trim().starts_with("spawn") {
-                    // `spawn KIND [N]`: N of them (1) before you.
+                    // `spawn KIND [N] [option ...]`: N of them (1) before you,
+                    // with their options; `spawn KIND --help` (or `help`, `?`),
+                    // what it takes.
                     let words: Vec<&str> = line.split_whitespace().collect();
-                    let count = words.get(2).and_then(|n| n.parse::<u32>().ok()).unwrap_or(1).clamp(1, 20);
+                    let count = words.get(2).and_then(|n| n.parse::<u32>().ok());
+                    let options = &words[(2 + count.is_some() as usize).min(words.len())..];
                     match words.get(1) {
-                        Some(kind) if KINDS.contains(kind) => {
-                            spawns.creatures.push((kind.to_string(), count));
-                            console.lines.push(format!("{count} {kind} before you"));
-                        }
+                        Some(kind) if KINDS.contains(kind) && matches!(options, ["?"] | ["help"] | ["--help"]) => console.lines.push(crate::traits::help(kind)),
+                        Some(kind) if KINDS.contains(kind) => match crate::traits::Traits::parse(kind, options) {
+                            Ok(traits) => {
+                                let count = count.unwrap_or(1).clamp(1, 20);
+                                spawns.creatures.push((kind.to_string(), count, traits));
+                                console.lines.push(format!("{count} {kind} before you{}", if options.is_empty() { String::new() } else { format!(": {}", options.join(" ")) }));
+                            }
+                            Err(e) => console.lines.push(e),
+                        },
                         _ => console.lines.push(format!("spawn what? {}", KINDS.join(", "))),
                     }
                 } else if line.trim() == "where" {
@@ -195,10 +204,9 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
 }
 
 /// The switches that take effect as the game runs, and what each does.
-const SWITCHES: [(&str, &str); 7] = [
+const SWITCHES: [(&str, &str); 6] = [
     ("mute", "no sound"),
     ("god", "nothing hurts you (for testing)"),
-    ("bishop", "the bishop lab: on, one hangs before you, moving in turn (off and on again: before you where you are now)"),
     ("fullbright", "an even light from everywhere, no shadows: to see the shapes"),
     ("nolampshadows", "no shadows from lamps"),
     ("nocontact", "no contact shadows (screen space)"),
@@ -207,16 +215,9 @@ const SWITCHES: [(&str, &str); 7] = [
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
-fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 13] {
+fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 6] {
     [
-        ("tame_pace", "with tame on: how fast it walks (m/s; 0, its own: the porter 0.7, else changing every 8 s)", 0.0),
-        ("tame_at", "with tame on: how far from you it keeps (m)", 14.0),
-        ("porter_step", "how long the porter's steps take (times its own: longer, slower and further at the same pace)", 2.0),
-        ("stilt_vault", "how far the stalker rises over the stilt it stands on (of all the way: 0 level, 1 all of it)", crate::rig::STILT_VAULT),
-        ("stilt_creep", "how much of its pace the stalker keeps through its beat after each step (0 stopped, 1 all)", crate::rig::STILT_GATHER.0),
-        ("stilt_beat", "how long the stalker's beat after each step (times its own: 0 none)", crate::rig::STILT_BEAT_SCALE),
         ("volume", "how loud (1 as made, 0 silent)", 1.0),
-        ("huntpace", "how fast hunters move (1 as made)", 1.0),
         ("timescale", "how fast the game's time runs (1 real time; 4 four times as fast, 0.25 slow)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
@@ -261,8 +262,9 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "NAME VALUE           a number (--set NAME=VALUE); NAME default, back to its default".into(),
             "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
-            "spawn KIND [N]       N creatures 3 m before you: harrow, angler, biped, sprawl, stalker, porter,".into(),
-            "                     chained (a stalker keeping a porter on a chain), bud, grove (7 asleep), bishop".into(),
+            "spawn KIND [N] [OPTION ...]  N creatures 3 m before you, with their options (`spawn KIND --help`".into(),
+            "                     lists them): harrow, angler, biped, sprawl, stalker, porter, chained (a".into(),
+            "                     stalker keeping a porter on a chain), bud, grove (7 asleep), bishop".into(),
             "clear                clears this".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),

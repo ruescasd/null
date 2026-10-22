@@ -1,12 +1,12 @@
-//! The cloth lab: whether cloth can be done properly (the user: we don't
-//! know if cloth matters till we know it can be; a solid attempt). With
-//! `--opt clothlab`, two sheets dropped again and again on a table, one
-//! over a ball, one over a box: they should fall into clean folds, over
-//! themselves and never through, and lie still. With `--opt cape` (and
-//! `--opt porter`), the porter wears a cape, live: held along its
+//! Cloth worn: whether cloth can be done properly (the user: we don't know
+//! if cloth matters till we know it can be; a solid attempt). (The cloth
+//! lab, `--opt clothlab`, sheets dropped again and again on a ball and a box
+//! on a table, is now a test: `fabric::tests::drapes_ball_and_box`.) A
+//! porter spawned with its
+//! `cape` option (`spawn porter cape`) wears a cape, live: held along its
 //! shoulders, pinned under its load, falling from them under its own weight
 //! as it walks (bound to its body, a cloak pitched with its hunched torso
-//! and crumpled up over its head). Each logs what it costs, and how much it
+//! and crumpled up over its head). It logs what it costs, and how much it
 //! still moves.
 
 use std::time::Instant;
@@ -15,112 +15,13 @@ use bevy::prelude::*;
 
 use crate::{
     Args,
-    camera::FlyCam,
     fabric::{Body, Fabric, Weave},
     rig::Rig,
-    terrain::Streamer,
 };
-
-/// The sheets: points a side, how far apart (m); dropped again every so
-/// often (s).
-const SHEET: usize = 38;
-const SPACING: f32 = 0.04;
-const DROP: f32 = 8.0;
-
-/// A sheet in the lab: its cloth, what it falls on, its table, where it
-/// starts; since it was dropped (s); what it has cost since (s of stepping,
-/// frames, the worst frame).
-#[derive(Component)]
-pub(super) struct Sheet {
-    fabric: Fabric,
-    bodies: Vec<Body>,
-    floor: f32,
-    start: Vec<Vec3>,
-    since: f32,
-    cost: (f32, u32, f32),
-}
 
 /// A plain matte cloth, seen from both sides.
 fn cloth_material(materials: &mut Assets<StandardMaterial>, shade: Color) -> Handle<StandardMaterial> {
     materials.add(StandardMaterial { base_color: shade, perceptual_roughness: 0.95, reflectance: 0.2, double_sided: true, cull_mode: None, ..default() })
-}
-
-/// The sheets: set up in front of you once the world round you has loaded;
-/// stepped every frame, dropped again every `DROP` s.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn sheets(
-    mut commands: Commands,
-    args: Res<Args>,
-    time: Res<Time>,
-    streamer: Res<Streamer>,
-    camera: Single<&Transform, With<FlyCam>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut sheets: Query<(&mut Sheet, &Mesh3d, &mut Transform), Without<FlyCam>>,
-    mut settled_for: Local<f32>,
-    mut spawned: Local<bool>,
-) {
-    if !args.opt("clothlab") {
-        return;
-    }
-    let dt = time.delta_secs().min(1.0 / 30.0);
-    if !*spawned {
-        *settled_for = if streamer.near { *settled_for + time.delta_secs() } else { 0.0 };
-        if *settled_for < 1.0 {
-            return;
-        }
-        *spawned = true;
-        let eye = camera.translation;
-        let ahead = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::NEG_Z);
-        let across = Vec3::new(-ahead.z, 0.0, ahead.x);
-        let centre = eye + ahead * 2.6;
-        let top = eye.y - 0.75;
-        let stone = materials.add(StandardMaterial { base_color: Color::srgb(0.08, 0.08, 0.09), perceptual_roughness: 0.8, ..default() });
-        let turn = Quat::from_rotation_arc(Vec3::NEG_Z, ahead);
-        commands.spawn((Mesh3d(meshes.add(Cuboid::new(4.0, 0.1, 2.0))), MeshMaterial3d(stone.clone()), Transform::from_translation(Vec3::new(centre.x, top - 0.05, centre.z)).with_rotation(turn)));
-        let ball = (centre - across * 0.95, 0.3);
-        let block = (centre + across * 0.95, Vec3::new(0.3, 0.22, 0.3));
-        commands.spawn((Mesh3d(meshes.add(Sphere::new(ball.1 - 0.005).mesh().uv(48, 24))), MeshMaterial3d(stone.clone()), Transform::from_translation(Vec3::new(ball.0.x, top + ball.1, ball.0.z))));
-        commands.spawn((Mesh3d(meshes.add(Cuboid::from_size(block.1 * 2.0 - 0.01))), MeshMaterial3d(stone), Transform::from_translation(Vec3::new(block.0.x, top + block.1.y, block.0.z)).with_rotation(turn)));
-        let shade = cloth_material(&mut materials, Color::srgb(0.45, 0.16, 0.1));
-        for (under, body) in [(Vec3::new(ball.0.x, top + ball.1, ball.0.z), Body::Capsule(Vec3::ZERO, Vec3::ZERO, ball.1)), (Vec3::new(block.0.x, top + block.1.y, block.0.z), Body::Box(Vec3::ZERO, turn, block.1))] {
-            let body = match body {
-                Body::Capsule(_, _, r) => Body::Capsule(under, under, r),
-                Body::Box(_, q, h) => Body::Box(under, q, h),
-            };
-            // (Turned a little, held a little off level: not dropped dead
-            // square on it.)
-            let tilt = Quat::from_rotation_y(0.3) * Quat::from_rotation_x(0.08);
-            let half = (SHEET - 1) as f32 * SPACING * 0.5;
-            let at = |c: usize, r: usize| under + Vec3::Y * 0.75 + tilt * Vec3::new(c as f32 * SPACING - half, 0.0, r as f32 * SPACING - half);
-            let fabric = Fabric::sheet(SHEET, SHEET, at, Weave { thickness: SPACING * 0.8, ..Weave::default() });
-            let start: Vec<Vec3> = (0..fabric.len()).map(|i| fabric.point(i)).collect();
-            let mesh = meshes.add(fabric.mesh());
-            let fabric_origin = fabric.origin();
-            commands.spawn((Sheet { fabric, bodies: vec![body], floor: top, start, since: 0.0, cost: (0.0, 0, 0.0) }, Mesh3d(mesh), MeshMaterial3d(shade.clone()), Transform::from_translation(fabric_origin), bevy::camera::visibility::NoFrustumCulling));
-        }
-        return;
-    }
-    for (mut sheet, mesh, mut place) in &mut sheets {
-        let sheet = &mut *sheet;
-        sheet.since += dt;
-        if sheet.since > DROP {
-            let (spent, frames, worst) = sheet.cost;
-            info!("clothlab: a sheet of {} points: {:.3} ms a frame, the worst {:.3} ms; moving at {:.3} m/s on average", sheet.start.len(), spent * 1000.0 / frames.max(1) as f32, worst * 1000.0, sheet.fabric.stir());
-            sheet.since = 0.0;
-            sheet.cost = (0.0, 0, 0.0);
-            let start = sheet.start.clone();
-            sheet.fabric.set(|i| start[i]);
-        }
-        let begun = Instant::now();
-        sheet.fabric.step(&[], &sheet.bodies, sheet.floor, dt);
-        let took = begun.elapsed().as_secs_f32();
-        sheet.cost = (sheet.cost.0 + took, sheet.cost.1 + 1, sheet.cost.2.max(took));
-        place.translation = sheet.fabric.origin();
-        if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            sheet.fabric.draw(&mut m);
-        }
-    }
 }
 
 /// The cape: points across it and down it; how long it is, down its back
@@ -358,13 +259,12 @@ fn targets(rig: &Rig, held: &[(u32, Hold, Vec3)]) -> Vec<(u32, Vec3)> {
         .collect()
 }
 
-/// With `--opt cape`, each porter wears a cape (put on it as it first
+/// A porter with its `cape` option wears a cape (put on it as it first
 /// stands, as the cape is kept hung: see `hang`), stepped with it every
 /// frame; a porter gone, its cape is gone.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cloaks(
     mut commands: Commands,
-    args: Res<Args>,
     time: Res<Time>,
     hunters: Query<(Entity, &super::hunter::Hunter)>,
     mut cloaks: Query<(Entity, &mut Cloak, &Mesh3d, &mut Transform)>,
@@ -374,14 +274,12 @@ pub(super) fn cloaks(
     mut shade: Local<Option<Handle<StandardMaterial>>>,
     cape: Res<Cape>,
 ) {
-    if !args.opt("cape") {
-        return;
-    }
     let dt = time.delta_secs().min(1.0 / 30.0);
     // (Worn, matte, a dark warm grey: a thing its bearer has used.)
     let shade = shade.get_or_insert_with(|| cloth_material(&mut materials, Color::srgb(0.24, 0.22, 0.2))).clone();
     for (entity, h) in &hunters {
-        if worn.contains(&entity) || h.rig().load().is_none() || h.rig().bones.len() < 5 {
+        // (Those with the `cape` option.)
+        if worn.contains(&entity) || !h.traits.has("cape") || h.rig().load().is_none() || h.rig().bones.len() < 5 {
             continue;
         }
         worn.push(entity);
@@ -401,14 +299,7 @@ pub(super) fn cloaks(
         let cloak = &mut *cloak;
         let rig = h.rig();
         let begun = Instant::now();
-        if args.opt("cape_frozen") {
-            // (`--opt cape_frozen`: not simulated, the user's test: kept as
-            // it hangs, carried with its chest.)
-            let (at, turn) = frame(rig, Hold::Bone(2));
-            cloak.fabric.set(|i| at + turn * cape.0[i]);
-        } else {
-            cloak.fabric.step(&targets(rig, &cloak.held), &bodies(rig), rig.root.y, dt);
-        }
+        cloak.fabric.step(&targets(rig, &cloak.held), &bodies(rig), rig.root.y, dt);
         let took = begun.elapsed().as_secs_f32();
         cloak.cost = (cloak.cost.0 + took, cloak.cost.1 + 1, cloak.cost.2.max(took));
         cloak.since += dt;

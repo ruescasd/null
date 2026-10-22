@@ -17,10 +17,9 @@ use bevy::{
     shader::ShaderRef,
 };
 
-use crate::Args;
 use worldgen::noise::hash01;
 
-/// How pale the sky (`--set envelop_pale`; at 0.9 the stars were lost in
+/// How pale the sky (once `--set envelop_pale`; at 0.9 the stars were lost in
 /// it: in the beam they still showed, the user), how dark the world (of
 /// black), deep in a zone; and over how far its edge it eases out (m).
 const PALE: f32 = 0.35;
@@ -138,9 +137,9 @@ pub(super) struct Layers {
     pillar: (Handle<Mesh>, Handle<StandardMaterial>),
 }
 
-pub(super) fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut skies: ResMut<Assets<Sky>>, mut worlds: ResMut<Assets<World>>) {
+pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut skies: ResMut<Assets<Sky>>, mut worlds: ResMut<Assets<World>>) {
     let screen = meshes.add(Rectangle::new(2.0, 2.0));
-    let sky = skies.add(Sky { tone: Vec4::new(0.0, 1.0, args.num("envelop_pale", PALE), DARK) });
+    let sky = skies.add(Sky { tone: Vec4::new(0.0, 1.0, PALE, DARK) });
     let world = worlds.add(World { tone: Vec4::new(0.0, 0.0, PALE, DARK) });
     let layer = |commands: &mut Commands| commands.spawn((Mesh3d(screen.clone()), Transform::default(), Visibility::Hidden, NoFrustumCulling, NotShadowCaster, NotShadowReceiver)).id();
     let (a, b) = (layer(&mut commands), layer(&mut commands));

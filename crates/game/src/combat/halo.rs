@@ -9,7 +9,7 @@
 //! And its searchlight (the user's idea): hunting, its gun up, a ray along
 //! its gun, which tracks you, not quite steady (see `hunter.rs`), on till it meets
 //! the ground (ending at you, it felt off, the user). (A ring where it
-//! landed served no purpose, the user.) `--set searchlight`: 0 pale, as
+//! landed served no purpose, the user.) Its `searchlight` option: 0 pale, as
 //! the trail that lingered after a shot did; 1 black. (Faint and pale with
 //! a dark edge, it was hard to see, the user.) Dark at its lock (your cue to
 //! move), back on after its shot: whence it came, after the fact.
@@ -17,7 +17,7 @@
 use bevy::{asset::RenderAssetUsages, math::Affine2, mesh::PrimitiveTopology, prelude::*};
 
 use super::hunter::Hunter;
-use crate::{Args, rig::GUN_BORE};
+use crate::rig::GUN_BORE;
 
 /// The arch, in the head bone's frame (x right, y where it looks, z down):
 /// its middle up from the neck's end (m, where its eyes would be), its
@@ -40,7 +40,7 @@ const LOCK: (f32, f32) = (0.5, 1.8);
 /// are, much more accurate (the user).
 const LOCK_CLOSE: f32 = 0.2;
 /// Its shot's sound begins this long before it fires (s: a sound with a
-/// charge before its bang, as long as its charge; `--set shot_lead`, to
+/// charge before its bang, as long as its charge; once `--set shot_lead`, to
 /// tune it).
 const SHOT_LEAD: f32 = 0.01;
 /// Its searchlight: pale, how wide (m) and bright; black, how wide and how
@@ -148,7 +148,6 @@ pub(super) fn waver(t: f32, q: f32) -> f32 {
 pub(super) fn animate(
     mut commands: Commands,
     time: Res<Time>,
-    args: Res<Args>,
     ground: crate::ground::Ground,
     shot: Res<super::beam::Kit>,
     strikes: Res<super::strike::Kit>,
@@ -177,7 +176,7 @@ pub(super) fn animate(
             halo.charge = (halo.charge + GATHER.0 * dt).min(1.0);
             // Its shot's sound, begun as long before it fires as its charge
             // runs before its bang.
-            if !halo.sounded && (1.0 - halo.charge) / GATHER.0 <= args.num("shot_lead", SHOT_LEAD) {
+            if !halo.sounded && (1.0 - halo.charge) / GATHER.0 <= SHOT_LEAD {
                 halo.sounded = true;
                 let far = frame.map_or(0.0, |f| f.grip.distance(camera.translation));
                 commands.spawn((AudioPlayer::new(strikes.shot.clone()), PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(super::strike::loudness(super::strike::LOUD.0, far)))));
@@ -188,7 +187,7 @@ pub(super) fn animate(
             let locking = halo.charge >= 1.0 - lock * GATHER.0;
             if let (1.0, Some(f), Some(_)) = (halo.charge, frame, hold) {
                 let emitter = super::lance::EMITTER;
-                super::beam::fire(&mut commands, &mut rays, &mut meshes, &mut materials, &shot, &strikes, &layers, &args, &ground, f.grip + f.up * GUN_BORE + f.axis * emitter, f.axis, (halo.hunter, emitter));
+                super::beam::fire(&mut commands, &mut rays, &mut meshes, &mut materials, &shot, &strikes, &layers, &ground, f.grip + f.up * GUN_BORE + f.axis * emitter, f.axis, (halo.hunter, emitter));
                 halo.fired = true;
                 halo.since = 0.0;
                 // (Its aim let go at once: it carries on as it was, its zone
@@ -213,7 +212,8 @@ pub(super) fn animate(
         // its gun up; dark from its lock till its shot is gone.
         let emitter = super::lance::EMITTER;
         let on = frame.filter(|f| f.aim > 0.98 && h.hunting() && !h.locked() && !(halo.fired && halo.since < BACK_ON));
-        let black = args.num("searchlight", 0.0) > 0.5;
+        // (Its `searchlight` option: 1 black, else pale.)
+        let black = h.traits.value("searchlight", 0.0) > 0.5;
         let ray = *halo.light.get_or_insert_with(|| {
             let finish = if black { super::beam::Ray::dark(BLACK.0, BLACK.1) } else { super::beam::Ray::new(PALE.0, PALE.1) };
             commands.spawn((Mesh3d(shot.0.clone()), MeshMaterial3d(rays.add(finish)), Transform::default(), Visibility::Hidden, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver)).id()

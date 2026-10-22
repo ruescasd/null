@@ -1,4 +1,4 @@
-//! The porter's load (`--set slab N`): what it carries, unknown, holding
+//! The porter's load (its `slab=N` option): what it carries, unknown, holding
 //! energy (the user: the plain white slab too plain; it may detonate it,
 //! and its energy may be drained). Each kind built once, as a mesh or two
 //! (one for each finish), in the load's own frame: across it x, along the
@@ -32,7 +32,7 @@ const GLOW: f32 = 6.0;
 const BEAT: f32 = 1.7;
 const SWELL: f32 = 0.45;
 
-/// A kind of load: its number (`--set slab`), its parts, each a mesh and
+/// A kind of load: its number (its `slab` option), its parts, each a mesh and
 /// its finish.
 pub(super) type Kind = (usize, Vec<(Handle<Mesh>, Handle<StandardMaterial>)>);
 
@@ -223,56 +223,5 @@ pub(super) fn pulse(time: Res<Time>, glow: Option<Res<Glow>>, mut materials: Res
     let beat = (time.elapsed_secs() / BEAT * std::f32::consts::TAU).sin() * 0.5 + 0.5;
     if let Some(mut m) = materials.get_mut(&glow.0) {
         m.emissive = LinearRgba::gray(GLOW * (1.0 - SWELL + SWELL * beat * beat));
-    }
-}
-
-/// A load shown in the lab, turning slowly about its long axis.
-#[derive(Component)]
-pub(super) struct Shown(f32);
-
-/// `--opt slablab`: the kinds of load (but the plain) side by side before
-/// you at eye height, their outer faces to you, turning slowly to and fro.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn lab(
-    mut commands: Commands,
-    args: Res<crate::Args>,
-    time: Res<Time>,
-    streamer: Res<crate::terrain::Streamer>,
-    camera: Single<&Transform, (With<crate::camera::FlyCam>, Without<Shown>)>,
-    heads: Res<super::hunter::Heads>,
-    mut shown: Query<(&Shown, &mut Transform)>,
-    mut settled_for: Local<f32>,
-    mut spawned: Local<bool>,
-) {
-    if !args.opt("slablab") {
-        return;
-    }
-    if !*spawned {
-        *settled_for = if streamer.near { *settled_for + time.delta_secs() } else { 0.0 };
-        if *settled_for < 1.0 {
-            return;
-        }
-        *spawned = true;
-        let eye = camera.translation;
-        let ahead = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::NEG_Z);
-        let across = Vec3::new(-ahead.z, 0.0, ahead.x);
-        let kinds: Vec<_> = heads.loads().iter().filter(|(k, _)| *k != 0).collect();
-        let n = kinds.len();
-        for (j, (k, parts)) in kinds.into_iter().enumerate() {
-            let at = eye + ahead * 1.7 + across * (j as f32 - (n as f32 - 1.0) * 0.5) * 0.8 - Vec3::Y * 0.1;
-            let load = commands.spawn((Shown(*k as f32), Transform::from_translation(at).looking_to(-ahead, Vec3::Y), Visibility::default())).id();
-            for (mesh, material) in parts {
-                commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), ChildOf(load)));
-            }
-        }
-        return;
-    }
-    let t = time.elapsed_secs();
-    for (s, mut transform) in &mut shown {
-        let yaw = (t * 0.5 + s.0).sin() * 0.6;
-        let face = camera.translation - transform.translation;
-        let face = Vec3::new(face.x, 0.0, face.z).normalize_or(Vec3::Z);
-        // (Its outer face, -z, to you, turned to and fro.)
-        transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, face) * Quat::from_rotation_y(yaw);
     }
 }

@@ -28,7 +28,6 @@ use worldgen::noise::hash01;
 
 use super::Hunter;
 pub(in crate::combat) use crate::rope::{rope, tubes};
-use crate::Args;
 
 /// Where on a bone: how far along it (0..1) and out from it, in its frame
 /// (x to the body's right, y along the bone, z its other side: below, for
@@ -88,7 +87,6 @@ const WOUND_NODES: usize = 10;
 #[allow(clippy::too_many_arguments)]
 pub(in crate::combat) fn run(
     mut commands: Commands,
-    args: Res<Args>,
     time: Res<Time>,
     ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -98,13 +96,14 @@ pub(in crate::combat) fn run(
     hunters: Query<&Hunter>,
     mut cables: Query<(Entity, &mut Cables)>,
 ) {
-    let variant = args.num("cables", 0.0) as u32;
     let material = material
         .get_or_insert_with(|| {
             materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.35, reflectance: 0.5, ..default() })
         })
         .clone();
     for (entity, hunter) in &added {
+        // (A beast's `cables` option: which.)
+        let variant = hunter.traits.value("cables", 0.0) as u32;
         let mut strands = strands(variant, hunter, entity.index_u32());
         // (None, no mesh: the renderer does not take an empty one.)
         if strands.is_empty() {
@@ -254,10 +253,10 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
     out
 }
 
-/// Whether `--set cables` replaces a bone's shards: the cable waist, the
-/// middle of the body.
-pub(in crate::combat) fn replaces(args: &Args, bone: usize) -> bool {
-    args.num("cables", 0.0) as u32 == 3 && bone == 1
+/// Whether a hunter's `cables` option replaces a bone's shards: the cable
+/// waist, the middle of the body.
+pub(in crate::combat) fn replaces(traits: &crate::traits::Traits, bone: usize) -> bool {
+    traits.value("cables", 0.0) as u32 == 3 && bone == 1
 }
 
 /// One step: wound strands follow their bones; the others swing under

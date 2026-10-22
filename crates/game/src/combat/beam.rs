@@ -16,13 +16,12 @@ use bevy::{
     shader::ShaderRef,
 };
 
-use crate::Args;
 
 /// How far a shot reaches (m), how wide it is (m), and how bright.
 const RANGE: f32 = 300.0;
 const WIDTH: f32 = 0.35;
 const GLOW: f32 = 3.0;
-/// A shot's flash (s): up, held (`--set ray_hold`), and gone in. (Whence
+/// A shot's flash (s): up, held, and gone in. (Whence
 /// it came, after the fact: its searchlight back on you, see `halo.rs`; a
 /// trail lingering after it was too like the beam, the user.)
 pub(super) const FLASH: (f32, f32, f32) = (0.04, 0.4, 0.3);
@@ -141,7 +140,6 @@ pub(super) fn fire(
     kit: &Kit,
     strikes: &super::strike::Kit,
     layers: &super::envelop::Layers,
-    args: &Args,
     ground: &crate::ground::Ground,
     from: Vec3,
     dir: Vec3,
@@ -154,7 +152,7 @@ pub(super) fn fire(
         // (The ground's slope there, for its scar.)
         let height = |dx: f32, dz: f32| ground.at(at + Vec3::new(dx, 0.5, dz));
         let up = Vec3::new(height(-0.6, 0.0) - height(0.6, 0.0), 1.2, height(0.0, -0.6) - height(0.0, 0.6)).normalize_or(Vec3::Y);
-        super::strike::strike(commands, meshes, materials, strikes, at, dir, up, args.num("ray_hold", FLASH.1));
+        super::strike::strike(commands, meshes, materials, strikes, at, dir, up, FLASH.1);
         super::envelop::electrify(commands, at);
         super::envelop::raise(commands, layers, at);
         super::strike::levitate(commands, strikes, ground, at, 3.0);
@@ -177,13 +175,12 @@ pub(super) fn fire(
 pub(super) fn shots(
     mut commands: Commands,
     time: Res<Time>,
-    args: Res<Args>,
     ground: crate::ground::Ground,
     hunters: Query<&super::hunter::Hunter>,
     mut shots: Query<(Entity, &mut Shot, &mut Transform)>,
     mut rays: ResMut<Assets<Ray>>,
 ) {
-    let hold = args.num("ray_hold", FLASH.1);
+    let hold = FLASH.1;
     for (entity, mut shot, mut transform) in &mut shots {
         // From its gun as it is now, along its aim.
         if let Some(f) = hunters.get(shot.gun.0).ok().and_then(|h| h.rig().gun_frame) {

@@ -619,9 +619,6 @@ pub struct Rig {
     glance_in: f32,
     /// How fast the head is turning now (radians a second; see `HEAD_TURN`).
     head_spin: f32,
-    /// The old quick head (`--opt quickhead`): darting glances, snapping
-    /// turns. For comparing; see `HEAD_TURN`.
-    pub quick_head: bool,
     tail: Vec<Vec3>,
     time: f32,
     crouch: f32,
@@ -641,11 +638,6 @@ pub struct Rig {
     /// steps at the same pace are longer ones (the user: slower steps of
     /// greater reach; slowing its pace only made them shorter).
     pub step_scale: f32,
-    /// The stalker's walk, live (`stilt_vault`, `stilt_creep`,
-    /// `stilt_beat` at the console: how far it rises over the stilt it stands on,
-    /// how much of its pace it keeps through its beat, how long its beat,
-    /// times its own): the user, to tell the one from the other.
-    pub stilt_tune: (f32, f32, f32),
     /// An arm holding something before it (the stalker's, its porter's
     /// chain): its upper arm hanging, its forearm level, square to it.
     pub holding: Option<usize>,
@@ -866,7 +858,6 @@ impl Rig {
             glance: Vec3::ZERO,
             glance_in: 1.0,
             head_spin: 0.0,
-            quick_head: false,
             time: 0.0,
             crouch: 0.0,
             seed,
@@ -876,7 +867,6 @@ impl Rig {
             reared: 0.0,
             grab: None,
             step_scale: 1.0,
-            stilt_tune: (STILT_VAULT, STILT_GATHER.0, STILT_BEAT_SCALE),
             holding: None,
             gun: None,
             gun_frame: None,
@@ -1065,7 +1055,7 @@ impl Rig {
             let before = self.root;
             // (Gathering itself between steps, it all but holds where it is,
             // easing to it and out of it.)
-            let creep = if self.beat > STILT_BEAT.0 + STILT_BEAT.1 { STILT_LINGER.3 } else if self.beat > 0.0 { self.stilt_tune.1 } else { 1.0 };
+            let creep = if self.beat > STILT_BEAT.0 + STILT_BEAT.1 { STILT_LINGER.3 } else if self.beat > 0.0 { STILT_GATHER.0 } else { 1.0 };
             self.gather += (creep - self.gather) * (1.0 - (-STILT_GATHER.1 * dt).exp());
             let want = self.velocity * self.surge() * self.gather;
             self.root = sweep(self.root, (want + self.knock) * dt);
@@ -1286,7 +1276,7 @@ impl Rig {
                 if self.plan.style == Style::Stilt && speed > 0.3 {
                     let r = |j: u32| hash01(self.seed as i32, i as i32, self.steps[i] as i32, j);
                     let linger = if r(0x62f) < STILT_LINGER.0 { STILT_LINGER.1 + STILT_LINGER.2 * r(0x630) } else { 0.0 };
-                    self.beat = (STILT_BEAT.0 + STILT_BEAT.1 * r(0x61e)) * self.stilt_tune.2 + linger;
+                    self.beat = (STILT_BEAT.0 + STILT_BEAT.1 * r(0x61e)) * STILT_BEAT_SCALE + linger;
                 }
             } else if speed <= 0.3 && foot.planted.distance(home) > self.stride * (0.3 + COMBAT_STEP * self.combat) {
                 // Standing with a foot out of place: a settling step. (In
@@ -1336,7 +1326,7 @@ impl Rig {
                 self.dip = held;
                 held
             } else if top > f32::MIN {
-                held.min(self.dip + (top - self.dip).max(0.0) * self.stilt_tune.0)
+                held.min(self.dip + (top - self.dip).max(0.0) * STILT_VAULT)
             } else {
                 held
             };
@@ -1362,7 +1352,7 @@ impl Rig {
             let r = |k: i32| hash01(self.seed as i32, (self.time * 10.0) as i32, k, 0x61a) - 0.5;
             self.glance = if r(0) > 0.1 { Vec3::new(r(1), r(2) * 0.4, r(3)) * 1.6 } else { Vec3::ZERO };
             // (Rarely: a deliberate look away, not darting glances.)
-            self.glance_in = if self.quick_head { 0.6 + 2.2 * (r(4) + 0.5) } else { 5.0 + 7.0 * (r(4) + 0.5) };
+            self.glance_in = 5.0 + 7.0 * (r(4) + 0.5);
         }
         // The stalker's and the porter's chest sprung after where it would
         // be, leading into its motion, leaning away from a leg swinging
@@ -1414,7 +1404,7 @@ impl Rig {
         // than `HEAD_TURN`, gathering speed and easing to a stop, a sweep.
         // Quick only when it is thrown: a leap, an attack's snap; the
         // porter's loll its own.
-        let quick = self.quick_head || self.airborne.is_some() || intent.head_rate > 0.0 || self.plan.style == Style::Porter;
+        let quick = self.airborne.is_some() || intent.head_rate > 0.0 || self.plan.style == Style::Porter;
         if quick {
             self.head_dir = self.head_dir.lerp(want, 1.0 - (-dt * rate).exp()).normalize_or(want);
             self.head_spin = 0.0;

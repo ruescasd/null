@@ -1,15 +1,14 @@
 //! The swarmer's form, the bud: black petals closed round a light leaking
 //! through the seam; looked at (towards it, within about 35 degrees), it
 //! opens like an eye over a second and a half, pale inner petals and the
-//! light inside, and closes again slowly when you look away.
-//!
-//! The lab (`--opt swarmlab`, with `--opt peace`): one in front of you, close.
-//! `--set gaze=0..1` holds it at one point between closed and open (for
-//! captures), and `--set gloom=0..1` holds the swarm's darkness.
+//! light inside, and closes again slowly when you look away. A bud's `gaze`
+//! option (`spawn bud gaze=0.5`) holds it at one point between closed and
+//! open, to judge it. (The swarm lab, `--opt swarmlab`, one placed before
+//! you by itself, went with the spawning switches: `spawn bud` does it.)
 
 use bevy::prelude::*;
 
-use crate::{Args, camera::FlyCam, player::tether::shard_mesh, terrain::Streamer};
+use crate::{camera::FlyCam, player::tether::shard_mesh};
 
 /// The bud's size, closed and open.
 const BUD_CLOSED: f32 = 1.6;
@@ -89,61 +88,25 @@ fn aim(dir: Vec3, across: Vec3) -> Quat {
 }
 
 /// The lab: a bud in front of you, a moment after loading.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn lab(
-    mut commands: Commands,
-    args: Res<Args>,
-    time: Res<Time>,
-    streamer: Res<Streamer>,
-    kit: Res<Kit>,
-    camera: Single<&Transform, With<FlyCam>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut gloom: ResMut<crate::look::Gloom>,
-    mut settled_for: Local<f32>,
-    mut spawned: Local<bool>,
-) {
-    if !args.opt("swarmlab") {
-        return;
-    }
-    let held = args.num("gloom", -1.0);
-    if held >= 0.0 {
-        gloom.0 = held;
-    }
-    if *spawned {
-        return;
-    }
-    *settled_for = if streamer.near { *settled_for + time.delta_secs() } else { 0.0 };
-    if *settled_for < 1.0 {
-        return;
-    }
-    *spawned = true;
-    let eye = camera.translation;
-    let ahead = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::NEG_Z);
-    let at = eye + ahead * 1.6 - Vec3::Y * 0.1;
-    let root = commands.spawn((Gazed::default(), Transform::from_translation(at).looking_at(eye, Vec3::Y), Visibility::default())).id();
-    build(&mut commands, &kit, &mut materials, root);
-}
-
 /// How far each form has turned, following your gaze (quick to turn, slow to
-/// relax; or held with `--set gaze`), and its pieces and light placed to
+/// relax; or held by its `gaze` option), and its pieces and light placed to
 /// match.
 pub(super) fn gaze(
-    args: Res<Args>,
     time: Res<Time>,
     ground: crate::ground::Ground,
     camera: Single<&Transform, With<FlyCam>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut gazed: Query<(&GlobalTransform, &mut Gazed, Has<Asleep>)>,
+    mut gazed: Query<(&GlobalTransform, &mut Gazed, Has<Asleep>, Option<&crate::traits::Traits>)>,
     mut morphs: Query<(&Morph, &mut Transform), Without<FlyCam>>,
     glows: Query<&Glow>,
 ) {
     let dt = time.delta_secs().min(0.05);
-    let fixed = args.num("gaze", -1.0);
-    for (transform, mut g, asleep) in &mut gazed {
+    for (transform, mut g, asleep, traits) in &mut gazed {
         if asleep {
             g.gaze = 0.0;
             continue;
         }
+        let fixed = traits.map_or(-1.0, |t| t.value("gaze", -1.0));
         if fixed >= 0.0 {
             g.gaze = fixed;
             continue;
@@ -154,14 +117,14 @@ pub(super) fn gaze(
         g.gaze = if looked { (g.gaze + dt / 1.5).min(1.0) } else { (g.gaze - dt / 2.5).max(0.0) };
     }
     for (m, mut transform) in &mut morphs {
-        let Ok((_, g, _)) = gazed.get(m.of) else { continue };
+        let Ok((_, g, ..)) = gazed.get(m.of) else { continue };
         let k = g.gaze * g.gaze * (3.0 - 2.0 * g.gaze);
         transform.translation = m.rest.translation.lerp(m.gazed.translation, k);
         transform.rotation = m.rest.rotation.slerp(m.gazed.rotation, k);
         transform.scale = m.rest.scale.lerp(m.gazed.scale, k);
     }
     for glow in &glows {
-        let Ok((_, g, _)) = gazed.get(glow.of) else { continue };
+        let Ok((_, g, ..)) = gazed.get(glow.of) else { continue };
         if let Some(mut material) = materials.get_mut(&glow.material) {
             let e = glow.rest + (glow.gazed - glow.rest) * g.gaze;
             material.emissive = LinearRgba::rgb(e, e, e);

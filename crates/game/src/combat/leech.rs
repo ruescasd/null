@@ -1,4 +1,4 @@
-//! Leeches (`--opt leech`): a bud waiting near you (seen or not) may shoot a
+//! Leeches (a bud's `leech` option): a bud waiting near you (seen or not) may shoot a
 //! cable into you and drink: a little health a second,
 //! for as long as it holds. It snaps when the bud is destroyed or you get far
 //! enough away, whipping back and hanging before it goes. The cable is
@@ -13,7 +13,7 @@ use super::{
     Mode, Swarmer,
     hunter::cables::{rope, tubes},
 };
-use crate::{Args, camera::FlyCam, player::Player};
+use crate::{camera::FlyCam, player::Player};
 
 /// How near a bud must be to latch on, how often a waiting one does (about
 /// once in this many seconds), how many at once, and how far away its cable
@@ -85,7 +85,6 @@ fn chest(eye: &Transform) -> Vec3 {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn leech(
     mut commands: Commands,
-    args: Res<Args>,
     time: Res<Time>,
     ground: crate::ground::Ground,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -95,10 +94,8 @@ pub(super) fn leech(
     player: Single<(&Transform, &mut Player), With<FlyCam>>,
     swarm: Query<(Entity, &Transform, &Swarmer), Without<FlyCam>>,
     mut leeches: Query<(Entity, &mut Leech)>,
+    traits: Query<&crate::traits::Traits>,
 ) {
-    if !args.opt("leech") {
-        return;
-    }
     let dt = time.delta_secs().clamp(0.001, 1.0 / 30.0);
     // Black, matte; the gulps glow, not hazed.
     let (black, glow) = materials_shared
@@ -118,7 +115,7 @@ pub(super) fn leech(
         let t = (time.elapsed_secs() * 1000.0) as i32;
         for (bud, transform, s) in &swarm {
             let to = transform.translation - eye.translation;
-            if s.mode != Mode::Free || s.dark < 0.5 || to.length() > REACH || held.contains(&bud) {
+            if s.mode != Mode::Free || s.dark < 0.5 || to.length() > REACH || held.contains(&bud) || !traits.get(bud).is_ok_and(|t| t.has("leech")) {
                 continue;
             }
             // (Not through a wall or a floor.)

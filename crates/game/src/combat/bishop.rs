@@ -880,7 +880,6 @@ fn floor_near(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Na
 #[allow(clippy::too_many_arguments)]
 pub(super) fn arrive(
     mut commands: Commands,
-    args: Res<Args>,
     assets: Res<Assets3>,
     ground: crate::ground::Ground,
     camera: Single<&Transform, With<FlyCam>>,
@@ -893,21 +892,18 @@ pub(super) fn arrive(
     let camera = *camera;
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
-    let grey = args.opt("bishopgrey");
     let face = |at: Vec3| (camera.translation - at).x.atan2((camera.translation - at).z);
-    // (`spawn bishop [N]`: hunting, side by side.)
-    let mut asked = 0;
-    spawns.creatures.retain(|(kind, n)| {
-        if kind == "bishop" {
-            asked += n;
+    // (`spawn bishop [N]`: hunting, side by side; its `grey` option, all of
+    // it flat grey, its outline.)
+    let (asked, others): (Vec<_>, Vec<_>) = std::mem::take(&mut spawns.creatures).into_iter().partition(|(kind, ..)| kind == "bishop");
+    spawns.creatures = others;
+    for (_, count, traits) in asked {
+        for n in 0..count {
+            let aside = (n as f32 - (count - 1) as f32 * 0.5) * 1.8;
+            let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD + across * aside);
+            make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, traits.has("grey"), at, face(at));
+            info!("a bishop hangs at {:.1}", at);
         }
-        kind != "bishop"
-    });
-    for n in 0..asked {
-        let aside = (n as f32 - (asked - 1) as f32 * 0.5) * 1.8;
-        let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD + across * aside);
-        make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, grey, at, face(at));
-        info!("a bishop hangs at {:.1}", at);
     }
 }
 
