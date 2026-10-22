@@ -72,11 +72,6 @@ const PAIN_DELAY: f32 = 0.2;
 const DEATH_LOUD: f32 = 6.5;
 const DOOR_AT: f32 = 0.25;
 
-/// A stalker fallen, lying (its ragdoll): no longer one of those about (a
-/// new one may come at once, as after a burst).
-#[derive(Component)]
-pub(super) struct Fallen;
-
 /// A sound to come, here, in so long (s): what outlives the one it is for
 /// (a stalker's death, bursting, gone at once).
 #[derive(Component)]
@@ -422,6 +417,12 @@ pub(super) fn spawn(
                     let p = nav.as_deref().and_then(|nav| nav.nearest(p, 8).map(|j| nav.nodes[j as usize])).unwrap_or(Vec3::new(p.x, ground.at(p), p.z));
                     super::spawn_sleeper(&mut commands, &kit, &mut materials, p, seed.wrapping_mul(31).wrapping_add(k as u32));
                 }
+            } else if kind == "chained" {
+                // A porter kept on a chain by a stalker: beside it to start,
+                // behind it once they walk (see `chain.rs`).
+                let porter = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some("porter"));
+                let stalker = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed + 1, at + across * 2.0, camera.translation, Some("stalker"));
+                commands.entity(stalker).insert(super::chain::Keeps(porter));
             } else {
                 spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some(&kind));
             }
@@ -652,68 +653,14 @@ pub(super) fn gather(
     mut director: ResMut<Director>,
     player: Single<&Transform, (With<Player>, Without<Swarmer>)>,
     mut assemblies: Query<(Entity, &mut Assembly)>,
-    // (Not those fallen, lying: a body kept a new one from coming for as
-    // long as it lay, 90 s.)
-    hunters: Query<(), (With<Hunter>, Without<Fallen>)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(0.05);
-    if director.alive <= 0.0 {
-        return;
-    }
     director.next_gather -= dt;
-
-    // `--opt hunters`: no swarm, no assembly; a hunter, already built,
-    // appears a little way off whenever there is none (`--set crowd=N`: N of
-    // them at once, round you, for measuring their cost; `--set
-    // hunters_at=M`, M metres off, 25 else).
-    // `--opt specimen`: one hunter standing still in front of you, to look
-    // at (`--set specimen_at` metres ahead, `specimen_yaw` degrees turned
-    // from facing you, `jaw` radians open, `stretch` 0..1).
-    if args.opt("specimen") {
-        if hunters.is_empty() && director.next_gather <= 0.0 {
-            let ahead = player.forward();
-            let at = player.translation + Vec3::new(ahead.x, 0.0, ahead.z).normalize_or(Vec3::Z) * args.num("specimen_at", 3.5);
-            let face = at + Quat::from_rotation_y(args.num("specimen_yaw", 0.0).to_radians()) * (player.translation - at);
-            spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, 7, at, face, None);
-            director.next_gather = f32::MAX;
-        }
-        return;
-    }
-    if args.opt("hunters") {
-        if hunters.is_empty() && director.next_gather <= 0.0 {
-            let crowd = args.num("crowd", 1.0).max(1.0) as u32;
-            for n in 0..crowd {
-                let k = (time.elapsed_secs() * 1000.0) as u32 + n * 7919;
-                let a = hash01(k as i32, 1, 0, 0x6b8) * std::f32::consts::TAU;
-                let mut at = player.translation + Vec3::new(a.cos(), 0.0, a.sin()) * args.num("hunters_at", 25.0);
-                // (In a built place, on its floors, 15 to 40 m off.)
-                if let Some(nav) = nav.as_deref()
-                    && let Some(q) = nav.spot(player.translation, (15.0, 40.0), &|_| true, &|j| hash01(k as i32, j as i32, 2, 0x6b9), 400)
-                {
-                    at = q;
-                }
-                // (`--opt chained`: a porter kept on a chain by a stalker,
-                // beside it to start, behind it once they walk: see
-                // `chain.rs`.)
-                if args.opt("chained") {
-                    let porter = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation, Some("porter"));
-                    let ahead = (player.translation - at).with_y(0.0).normalize_or(Vec3::Z).cross(Vec3::Y);
-                    let stalker = spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k + 1, at + ahead * 2.0, player.translation, Some("stalker"));
-                    commands.entity(stalker).insert(super::chain::Keeps(porter));
-                } else {
-                    spawn_hunter(&mut commands, &args, &ground, &assets, &heads, &mut materials, k, at, player.translation, None);
-                }
-            }
-            director.next_gather = 4.0;
-        }
-        return;
-    }
 
     // Start one: enough free swarmers, wherever they are. (`--opt swarm`:
     // never; the swarm alone.)
-    let allowed = 1 + (director.alive / 90.0) as usize;
-    if !args.opt("swarm") && assemblies.is_empty() && hunters.iter().count() < allowed && director.next_gather <= 0.0 {
+    if !args.opt("swarm") && assemblies.is_empty() && director.next_gather <= 0.0 {
         let near: Vec<Entity> = swarm
             .iter()
             .filter(|(_, _, s)| s.mode == Mode::Free)
@@ -810,20 +757,13 @@ fn spawn_hunter(
     want: Option<&str>,
 ) -> Entity {
     // (`want`: a kind asked for, at the console: harrow, angler, biped,
-    // sprawl; or for a pair: stalker, porter.)
-    // A biped, or a beast: a harrow (a narrow head, two rows of
-    // needles) or an angler (a huge underbite jaw, uneven needles leaning
-    // in). `--opt biped`, `harrow`, `angler`, or `beast` (either beast).
-    let kind = if let Some(want) = want {
-        if matches!(want, "biped" | "stalker" | "porter") { Kind::Biped } else { Kind::Beast }
-    } else if args.opt("beast") || args.opt("harrow") || args.opt("angler") {
-        Kind::Beast
-    } else if args.opt("biped") || hash01(seed as i32, 0, 0, 0x6b1) < 1.0 / 3.0 {
-        Kind::Biped
-    } else {
-        Kind::Beast
-    };
-    let angler = kind == Kind::Beast && want.map_or(args.opt("angler") || (!args.opt("harrow") && hash01(seed as i32, 1, 0, 0x6b1) < 0.5), |w| w == "angler");
+    // sprawl, stalker, porter; none, woven by the swarm: a beast, a harrow
+    // or an angler by chance (the user: what the swarm weaves is a gameplay
+    // decision pending).)
+    // A biped, or a beast: a harrow (a narrow head, two rows of needles) or
+    // an angler (a huge underbite jaw, uneven needles leaning in).
+    let kind = if want.is_some_and(|w| matches!(w, "biped" | "stalker" | "porter")) { Kind::Biped } else { Kind::Beast };
+    let angler = kind == Kind::Beast && want.map_or(hash01(seed as i32, 1, 0, 0x6b1) < 0.5, |w| w == "angler");
     let feet = Vec3::new(centre.x, ground.at(centre), centre.z);
     let to = player - feet;
     let floor = |x: f32, z: f32| ground.at(Vec3::new(x, centre.y, z));
@@ -837,11 +777,14 @@ fn spawn_hunter(
     } else {
         Plan::biped()
     };
-    // (`--opt sprawl`: the beast moving another way; `--opt stalker`, the
-    // biped on stilts.)
-    let plan = if kind == Kind::Beast && want.map_or(args.opt("sprawl"), |w| w == "sprawl") { Plan::sprawl() } else { plan };
-    let plan = if kind == Kind::Biped && want.map_or(args.opt("stalker"), |w| w == "stalker") { Plan::stalker() } else { plan };
-    let plan = if kind == Kind::Biped && want.map_or(args.opt("porter"), |w| w == "porter") { Plan::porter() } else { plan };
+    // (The sprawl: the beast moving another way; the stalker, the biped on
+    // stilts; the porter, hunched under its load.)
+    let plan = match want {
+        Some("sprawl") => Plan::sprawl(),
+        Some("stalker") => Plan::stalker(),
+        Some("porter") => Plan::porter(),
+        _ => plan,
+    };
     // Bones: three of torso, the neck, the head, then two per leg and per
     // arm (upper, lower), then the tail.
     let limbs = 5..5 + 2 * (plan.legs.len() + plan.arms.len());
@@ -1271,8 +1214,6 @@ pub(super) fn hunt(
             let blast = std::mem::take(&mut h.blast);
             if h.rig.ragdoll.is_none() {
                 stalker_dies(&mut commands, &assets, h.rig.head().0, true);
-                commands.entity(entity).insert(Fallen);
-                director.kills += 1;
                 info!("a stalker falls: {shards} shards, {:.1} m off", h.rig.chest().distance(target));
                 let push = h.rig.knock + blast.with_y(0.0).normalize_or_zero() * (shards * FALL.0).min(FALL.1);
                 h.rig.collapse(push);
@@ -1331,7 +1272,6 @@ pub(super) fn hunt(
                     commands.entity(e).despawn();
                 }
             }
-            director.kills += 1;
             info!("a hunter is broken: {} shards, {:.1} m off", h.shards, h.rig.chest().distance(target));
             commands.entity(entity).despawn();
             continue;
@@ -1579,18 +1519,7 @@ pub(super) fn hunt(
         }
         let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false, combat: 0.0 };
         h.rig.quick_head = args.opt("quickhead");
-        // (`--opt roam`: the specimen left to itself, as in play, to watch
-        // it from noclip, where none are spawned.)
-        if args.opt("specimen") && !args.opt("roam") {
-            // Straight ahead from its body (not its head, or each glance
-            // would turn it), level from its chest, and dead still. (It was
-            // aimed up, 1.4 m a metre: the stalker stared at the sky, its
-            // face never seen.)
-            let level = Vec3::new(h.rig.heading.sin(), 0.0, h.rig.heading.cos()) * 8.0;
-            intent.look = Vec3::new(h.rig.root.x + level.x, h.rig.chest().y, h.rig.root.z + level.z);
-            intent.stretch = args.num("stretch", 0.0);
-            intent.still = true;
-        } else if stunned {
+        if stunned {
         } else if h.stance == Stance::Stagger {
             // Low, sliding on with the shove; once down (and the time up), on
             // again.
@@ -1985,7 +1914,6 @@ pub(super) fn hunt(
             Stance::Freeze => 0.15,
             _ => 0.06 + 0.04 * (time.elapsed_secs() * 1.3).sin(),
         };
-        let open = if args.opt("specimen") { args.num("jaw", 0.1) } else { open };
         h.jaw += (open - h.jaw) * (1.0 - (-dt * 10.0).exp());
         // An attack that reaches the player strikes once.
         if matches!(h.stance, Stance::Attack(_) | Stance::Haul(_)) && !h.struck && h.rig.chest().distance(target) < 2.2 {

@@ -13,7 +13,7 @@ small change rebuilds in about 5 s instead of 15. You can play as soon as the
 ground round you is in (a fraction of a second); the distance streams in after.
 
 The mouse is captured from the start; Esc releases it, a click captures it
-again. F1 toggles the help overlay.
+again. F1 toggles the status overlay (frame rate, position, time, shadows).
 
 | Keys | |
 |---|---|
@@ -22,6 +22,7 @@ again. F1 toggles the help overlay.
 | Space or Mouse 2 (hold) | jump; holding it bunny hops on landing |
 | (automatic) | mantle: in the air, push into a ledge whose top is within ~1.1 m of your feet to climb onto it (with a jump: ledges up to ~2.5 m). Small lips are stepped up even mid-air, and clipping an edge nudges you past it |
 | Mouse 1 | shard shotgun (hold to keep firing) |
+| 1 / 3 | nothing in your hands (to look at things with nothing in the way) / the shotgun |
 | E or Mouse 4/5 (hold) | tether: a spike flies out (60 m), roots where it hits and pulls you towards it; hold jump while pulled to lift a little over a lip in the way; release to keep the momentum. The crosshair grows when a surface is in reach |
 | V | noclip fly: Space/E and Ctrl/Q up/down, Shift fast, wheel speed |
 | T | pause / resume the suns |
@@ -29,7 +30,7 @@ again. F1 toggles the help overlay.
 | Up / Down | time speed |
 | P | soft / hard shadows |
 | F12 | screenshot to `screenshots/` |
-| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, bud, grove, bishop): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
+| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, stalker, porter, chained (a stalker keeping a porter on a chain), bud, grove, bishop): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam`. Esc or ~ puts it away; `--opt console` starts with it down |
 
 Command-line options, mostly for tuning and capturing reference frames (a switch, `--opt name`, can
 also be given as at the console, `--set name on` or `--set name off`; a number `--set name=value` or
@@ -121,27 +122,9 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               0.7; --opt tame_line: back and forth along a straight line before
                                               you instead, tame_span=16 m long; all live at the console) / face the
                                               nearest hunter
-    --opt biped|harrow|angler|beast           what the swarm assembles into (beast: either beast; otherwise any;
-                                              the harrow: four legs, hard, a spider's, the forelimbs hauling it on in
-                                              surges; the angler's body is the harrow's, 15% larger, with the same size
-                                              head); --opt sprawl: a beast moving another way (legs out from its sides,
-                                              knees high over a low body, gliding level); with --opt biped, the biped
-                                              prototypes (motion only, silent): --opt stalker, a thin body on
-                                              stilts from the knee down, struggling; --opt porter, hunched under a
-                                              slab on its back, its legs' steps moving it (--set porter_step=2: how
-                                              long its steps take, live at the console)
+    --set porter_step=2                       how long the porter's steps take (live at the console)
     --opt bones                               a hunter's pieces hidden, its bones drawn as lines (to see its limbs move)
-    --opt bishop                              the bishop lab: a robed thing of cloth hangs 3 m before you and
-                                              moves in turn, 8 s each (--set bishop_mode=N holds one: 0 still, 1 drifting, 2
-                                              jerking aside, 3 turning); bishop_yaw=D faces it D degrees off you; --opt bishopgrey
-                                              all of it flat grey (its outline); in a region, on the floor nearest; `bishop off`,
-                                              `spawn bishop` at the console hangs it before you afresh
-    --opt specimen                            one hunter standing still in front of you, to look at: --set
-                                              specimen_at=3.5 (metres), specimen_yaw (degrees from facing you),
-                                              jaw (radians open), stretch (0..1)
-    --opt hunters                             no swarm or assembly: a hunter, already built, appears 25 m away (--set hunters_at=M: M m)
-                                              whenever there is none (with biped|beast to choose)
-    --set crowd=N                             with --opt hunters: N of them at once, round you (for measuring their cost)
+    --opt bishopgrey                          bishops all flat grey (their outline)
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nosites|nosubdiv   switch features off
     --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
@@ -353,9 +336,10 @@ darkness (the nearer and the more of them, the closer the haze draws in and
 the stars go out), and they stalk you, faster than you run, moving only
 where you are not looking, to places behind you where they wait, dead still.
 Three of them awake shoot cables to each other and reel themselves in (you hear them, and have a few seconds to turn and break one, which
-snaps the weave); two shards break one. The time you last and what you
-destroyed show at the top. A finished weave becomes a creature: a tall biped with long arms, or a beast the size of
-a horse built like a big cat (`--opt biped`, `--opt beast` to choose). Its
+snaps the weave); two shards break one. A finished weave becomes a beast the size of
+a horse built like a big cat (what the swarm weaves is a gameplay decision still to make). Creatures
+come only from `spawn KIND [N]` at the console: the beasts (harrow, angler, sprawl), the bipeds (biped,
+stalker, porter, chained), buds, a grove, a bishop. Its
 body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
 coordinating the legs (the beast walks, trots and gallops, blending with its
 speed, rocking and flexing its spine in the gallop; speeding up and slowing

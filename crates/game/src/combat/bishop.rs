@@ -8,8 +8,7 @@
 //! cloth moves: the hem lagging a sudden move, swinging back, settling.
 //!
 //! It hunts you (see `float`): floating at a distance, facing you, blinking
-//! aside. `spawn bishop [N]` at the console; `--opt bishop` (with `--opt
-//! peace`) the lab's, which moves in turn instead.
+//! aside. `spawn bishop [N]` at the console.
 
 use super::*;
 use crate::cloth::Cloth;
@@ -150,8 +149,6 @@ pub(super) struct Bishop {
     /// Its shoulders and its turn this frame (its stiff parts follow).
     top: Vec3,
     place: Quat,
-    /// The lab's, moving in turn (`--opt bishop`); else it hunts.
-    lab: Option<Lab>,
     /// Hunting: where it drifts to and when it picks another spot; when it
     /// may blink again; how long you have held your aim on it; whether it
     /// was hit this frame.
@@ -178,19 +175,6 @@ pub(super) struct Bishop {
     charge: Option<f32>,
     next_cast: f32,
     casting: Option<f32>,
-}
-
-/// The lab's bishop: where it hangs from, its sideways, how far aside it is
-/// and wants to be (and how fast it goes), which way it wants to face, when
-/// it next moves.
-struct Lab {
-    home: Vec3,
-    side: Vec3,
-    aside: f32,
-    want_aside: f32,
-    pace: f32,
-    want_heading: f32,
-    next: f32,
 }
 
 impl Bishop {
@@ -719,7 +703,7 @@ pub(super) fn settle(mut commands: Commands, args: Res<Args>, mut exit: MessageW
 /// A bishop, floating over `at` (on the floor), facing `heading`: its cloth
 /// (robe, sleeves, hood and mantle), its horns, and the darkness in it.
 #[allow(clippy::too_many_arguments)]
-fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, assets: &Assets3, drapes: &Drapes, grey: bool, at: Vec3, heading: f32, lab: Option<Lab>) -> Entity {
+fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, assets: &Assets3, drapes: &Drapes, grey: bool, at: Vec3, heading: f32) -> Entity {
     let place = Quat::from_rotation_y(heading);
     let top = at + Vec3::Y * SHOULDERS;
     let shade = |v: f32| Color::srgb(v, v, v).to_linear().to_f32_array();
@@ -817,7 +801,6 @@ fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Asse
         time: 0.0,
         top,
         place,
-        lab,
         goal: at,
         next_goal: 1.0,
         next_blink: 0.3,
@@ -893,27 +876,21 @@ fn floor_near(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Na
     Vec3::new(from.x, ground.at(from), from.z)
 }
 
-/// Bishops arrive: the lab's (`--opt bishop`, once you are where you start;
-/// `bishop off` at the console takes it away, `bishop on` hangs it before
-/// you afresh), and those `spawn bishop [N]` asks for (hunting), 3 m before
-/// you.
+/// Bishops arrive: those `spawn bishop [N]` asks for, 3 m before you.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn arrive(
     mut commands: Commands,
-    time: Res<Time>,
     args: Res<Args>,
     assets: Res<Assets3>,
     ground: crate::ground::Ground,
-    camera: Single<(&Transform, &Player, &FlyCam)>,
+    camera: Single<&Transform, With<FlyCam>>,
     nav: Option<Res<crate::chasm::nav::Nav>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut spawns: ResMut<crate::console::Spawns>,
     drapes: Res<Drapes>,
-    bishops: Query<(Entity, &Bishop)>,
-    parts: Query<(Entity, &OfBishop)>,
 ) {
-    let (camera, player, fly) = *camera;
+    let camera = *camera;
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
     let grey = args.opt("bishopgrey");
@@ -929,37 +906,12 @@ pub(super) fn arrive(
     for n in 0..asked {
         let aside = (n as f32 - (asked - 1) as f32 * 0.5) * 1.8;
         let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD + across * aside);
-        make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, grey, at, face(at), None);
-        info!("a bishop hangs at {:.1}", at);
-    }
-    // The lab's.
-    let lab = bishops.iter().find(|(_, b)| b.lab.is_some()).map(|(e, _)| e);
-    if !args.opt("bishop") {
-        if let Some(e) = lab {
-            for (part, of) in &parts {
-                if of.0 == e {
-                    commands.entity(part).despawn();
-                }
-            }
-        }
-        return;
-    }
-    // (Once you are where you start: in a region of the plan you are put on
-    // its path a moment after it begins; flying, as in a capture, a second
-    // in.)
-    if lab.is_none() && (player.ready || (fly.noclip && time.elapsed_secs() > 1.0)) {
-        let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD);
-        let heading = face(at);
-        let lab = Lab { home: at, side: Vec3::new(forward.z, 0.0, -forward.x), aside: 0.0, want_aside: 0.0, pace: 0.0, want_heading: heading, next: 1.0 };
-        make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, grey, at, heading, Some(lab));
+        make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, grey, at, face(at));
         info!("a bishop hangs at {:.1}", at);
     }
 }
 
-/// Bishops float: the lab's moves in turn, eight seconds each (`--set
-/// bishop_mode=N` holds one: 0 still, 1 drifting, 2 jerking aside, 3
-/// turning, 4 hunting; `bishop_yaw=D` faces it D degrees off you); the others hunt
-/// you: drifting, never quite steadily, from spot to spot a little way off
+/// Bishops float, hunting you: drifting, never quite steadily, from spot to spot a little way off
 /// where you are in sight, always facing you; and blinking aside, gone and
 /// there in an instant, afterimages left along the way, when you shoot, or
 /// hold your aim on it, or it is hit, or now and then. Their cloth hangs on
@@ -976,7 +928,6 @@ pub(super) fn float(
     gun: Res<Gun>,
     assets: Res<Assets3>,
     ichor: Res<ichor::Ichor>,
-    mut director: ResMut<Director>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut bishops: Query<(Entity, &mut Bishop)>,
@@ -1039,7 +990,6 @@ pub(super) fn float(
             for (sleeve, _) in &mut b.sleeves {
                 sleeve.limp = true;
             }
-            director.kills += 1;
             info!("a bishop is broken");
         }
         if let Some(since) = b.broken.as_mut() {
@@ -1053,45 +1003,6 @@ pub(super) fn float(
                 commands.entity(entity).despawn();
                 continue;
             }
-        } else if let Some(lab) = b.lab.as_mut()
-            && args.num("bishop_mode", -1.0) != 4.0
-        {
-            // (`--set bishop_mode=4`: the lab's hunts, as a spawned one does.)
-            let mode = if args.num("bishop_mode", -1.0) >= 0.0 { args.num("bishop_mode", 0.0) as u32 } else { (b.time / 8.0) as u32 % 4 };
-            // (`--set bishop_yaw=D`: it faces D degrees off you, to see it
-            // from the side.)
-            let facing = facing + args.num("bishop_yaw", 0.0).to_radians();
-            match mode {
-                1 => lab.want_aside = 2.2 * (b.time * 0.55).sin(),
-                2 if b.time >= lab.next => {
-                    lab.next = b.time + 0.6 + 1.1 * r(0);
-                    lab.want_aside = (r(1) - 0.5) * 6.0;
-                }
-                3 if b.time >= lab.next => {
-                    lab.next = b.time + 0.9 + 0.8 * r(2);
-                    lab.want_heading = facing + (r(3) - 0.5) * 2.6;
-                }
-                0 => lab.want_aside = 0.0,
-                _ => {}
-            }
-            if mode != 3 {
-                lab.want_heading = facing;
-            }
-            // Drifting, it follows slowly; jerked aside, a lunge at up to 18
-            // m/s, braked hard (snapped there at once, 66 m/s at first, it
-            // flung its robe up over its head); turning, it snaps round.
-            if mode == 2 {
-                let want = ((lab.want_aside - lab.aside) * 12.0).clamp(-18.0, 18.0);
-                lab.pace += (want - lab.pace).clamp(-200.0 * dt, 200.0 * dt);
-                lab.aside += lab.pace * dt;
-            } else {
-                lab.pace = 0.0;
-                lab.aside += (lab.want_aside - lab.aside) * (1.0 - (-dt * 3.0).exp());
-            }
-            let turn = (lab.want_heading - b.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-            b.heading += turn * (1.0 - (-dt * if mode == 3 { 14.0 } else { 4.0 }).exp());
-            let base = lab.home + lab.side * lab.aside;
-            b.at = Vec3::new(base.x, ground.at(base), base.z);
         } else if let Some((t, to)) = b.transit.as_mut() {
             // On its way to you: nowhere (its shadow forming there); then
             // there, a flash, heard.

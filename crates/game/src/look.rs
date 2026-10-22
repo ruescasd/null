@@ -604,13 +604,10 @@ fn hud(
         .iter()
         .map(|s| format!("{:.0}", s.direction(sky.time).y.asin().to_degrees()))
         .collect();
+    // (Status only, the controls in the README: the user, to judge what is
+    // seen with little in the way.)
     text.0 = format!(
-        "{fps:.0} fps  {ms:.2} ms\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}{}\n\n\
-         click: capture mouse  esc: release  f1: this help  f11: fullscreen or window  f12: screenshot\n\
-         wasd: move  space or mouse 2 (hold): jump / bunny hop  mouse 1: shard shotgun\n\
-         e or mouse 4/5 (hold): tether - roots where you aim and pulls you in; let go to keep the momentum\n\
-         v: noclip fly (space/ctrl: up/down, shift: fast, wheel: speed)\n\
-         t: pause time  left/right: scrub time  up/down: time speed  p: soft shadows",
+        "{fps:.0} fps  {ms:.2} ms\npos {:.0} {:.0} {:.0}{}\ntime {:.0}s x{:.1}{}  sun elevations {}\nshadows {}",
         t.translation.x,
         t.translation.y,
         t.translation.z,
@@ -619,6 +616,6 @@ fn hud(
         sky.speed,
         if sky.paused { " (paused)" } else { "" },
         elevations.join(" / "),
-        if sky.soft_shadows { "" } else { "  (hard shadows)" },
+        if sky.soft_shadows { "soft" } else { "hard" },
     );
 }

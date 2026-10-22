@@ -108,6 +108,7 @@ impl Plugin for CombatPlugin {
                     .after(crate::player::walk)
                     .run_if(crate::loading::playing),
             )
+            .add_systems(Update, choose.before(fire).run_if(crate::loading::playing))
             // (Not till the game is on: see `loading.rs`.)
             .add_systems(Update, (forms::lab, forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
@@ -185,20 +186,35 @@ struct Gun {
     /// (the pump racks with it: see `weapon::animate`).
     reload_in: Option<f32>,
     reload_at: f32,
+    /// Nothing in your hands (the user: to judge what you see with nothing
+    /// in the way): key 1; the shotgun, key 3 (2 kept for the next weapon).
+    /// Nothing in clean captures (`--opt clean`) and the room lab's.
+    empty: bool,
 }
 
-/// Keeps the score, and when the swarm may next assemble.
+/// Keys 1 (nothing) and 3 (the shotgun) choose what is in your hands; the
+/// gun shows only if it is.
+fn choose(keys: Res<ButtonInput<KeyCode>>, mut gun: ResMut<Gun>, mut model: Single<&mut Visibility, With<weapon::Viewmodel>>) {
+    if keys.just_pressed(KeyCode::Digit1) {
+        gun.empty = true;
+    }
+    if keys.just_pressed(KeyCode::Digit3) {
+        gun.empty = false;
+    }
+    let shown = if gun.empty { Visibility::Hidden } else { Visibility::Inherited };
+    if **model != shown {
+        **model = shown;
+    }
+}
+
+/// When the swarm may next assemble, and the flashes. (No score, and no
+/// clock of how long you have lasted, which let more hunters come the
+/// longer it ran: there is no game yet; creatures come from `spawn` at the
+/// console, the user.)
 #[derive(Resource, Default)]
 struct Director {
-    /// Seconds survived in this life (from when the ground has loaded).
-    alive: f32,
     /// Seconds until the swarm may assemble again.
     next_gather: f32,
-    kills: u32,
-    best: f32,
-    /// Seconds left of the "you died" message, and what it says.
-    notice: f32,
-    last: String,
     /// The hurt flash, 0..1; and a white one (a stalker's shot striking
     /// near, see `strike.rs`).
     hurt: f32,
@@ -351,9 +367,6 @@ struct SwarmVoice;
 #[derive(Component)]
 struct HurtFlash;
 
-#[derive(Component)]
-struct Score;
-
 fn setup(
     mut commands: Commands,
     args: Res<Args>,
@@ -362,6 +375,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut held: ResMut<Gun>,
 ) {
     let load = |name: &str| server.load::<AudioSource>(format!("embedded://game/sounds/{name}.wav"));
     // A long thin shard, pointing along +Y.
@@ -423,9 +437,10 @@ fn setup(
     // The gun in view (see `weapon.rs`), and the flash at its muzzle.
     let gun = weapon::spawn(&mut commands, &mut meshes, &mut materials, &mut images, assets.pale.clone());
     commands.entity(*camera).add_child(gun);
-    // (Not in the room lab's captures, the rooms alone, nor in clean ones,
-    // `--opt clean`: the world alone, for docs/world.md.)
+    // (Nothing in your hands in the room lab's captures, the rooms alone,
+    // nor in clean ones, `--opt clean`: the world alone.)
     if args.opt("roomshots") || args.opt("clean") {
+        held.empty = true;
         commands.entity(gun).insert(Visibility::Hidden);
     }
     commands.entity(*camera).with_children(|parent| {
@@ -455,27 +470,12 @@ fn setup(
         PointLight { intensity: 0.0, range: 12.0, shadow_maps_enabled: false, ..default() },
         Transform::default(),
     ));
-    // A flash of black when bitten, and the score.
+    // A flash of black when bitten.
     commands.spawn((
         HurtFlash,
         Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
     ));
-    commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            top: px(20),
-            justify_content: JustifyContent::Center,
-            ..default()
-        })
-        .with_child((
-            Score,
-            Text::new(""),
-            TextFont { font_size: FontSize::Px(18.0), ..default() },
-            TextColor(Color::srgb(0.85, 0.85, 0.85)),
-            TextLayout::justify(Justify::Center),
-        ));
 }
 
 /// Mouse 1: a spray of shards, hitscan, against the world and the swarm.
@@ -511,7 +511,7 @@ fn fire(
     let (transform, fly, mut player) = camera.into_inner();
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
     let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|(_, b)| b.health > 0.0)));
-    if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 {
+    if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 || gun.empty {
         return;
     }
     gun.cooldown = RELOAD;
@@ -639,7 +639,6 @@ fn fly_shards(mut commands: Commands, time: Res<Time>, assets: Res<Assets3>, mut
 /// The swarm: each bud stalks the player (see `stalk`). None come by
 /// themselves (the user: waves of them were for testing them; creatures are
 /// placed by `spawn` at the console until they are placed properly).
-/// (Sets the clock you have lived by, which the weaving waits on.)
 #[allow(clippy::too_many_arguments)]
 fn swarm(
     time: Res<Time>,
@@ -647,7 +646,6 @@ fn swarm(
     streamer: Res<Streamer>,
     ground: crate::ground::Ground,
     nav: Option<Res<crate::chasm::nav::Nav>>,
-    mut director: ResMut<Director>,
     player: Single<(&Transform, &Player, &FlyCam)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
@@ -664,10 +662,9 @@ fn swarm(
     // (The labs, the rooms' and the plan's, in peace: they are for looking
     // at; a hound forming in one, the user. A region is fought in.)
     let lab = args.opt("chasm") && (args.opt("rooms") || args.opt("plan"));
-    if lab || capture || args.opt("bot") || !ready || (fly.noclip && !args.opt("specimen")) {
+    if lab || capture || args.opt("bot") || !ready || fly.noclip {
         return;
     }
-    director.alive += dt;
 
     let positions: Vec<Vec3> = swarm.iter().map(|(_, t, _)| t.translation).collect();
     for (_, mut transform, mut s) in &mut swarm {
@@ -853,7 +850,6 @@ fn die(
     mut commands: Commands,
     args: Res<Args>,
     assets: Res<Assets3>,
-    mut director: ResMut<Director>,
     ichor: Res<ichor::Ichor>,
     mut player: Single<&mut Player>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
@@ -863,7 +859,6 @@ fn die(
         if s.health > 0.0 {
             continue;
         }
-        director.kills += 1;
         ichor::spray(&mut commands, &ichor, transform.translation, s.velocity.normalize_or(Vec3::Y), 2.5, entity.index_u32());
         shatter(&mut commands, &assets, transform.translation, s.velocity, entity.index_u32());
         commands.entity(entity).despawn();
@@ -874,11 +869,6 @@ fn die(
         player.health = HEALTH_MAX;
     }
     if player.health <= 0.0 {
-        director.best = director.best.max(director.alive);
-        director.last = format!("broken after {:.0} s, {} destroyed", director.alive, director.kills);
-        director.notice = 4.0;
-        director.alive = 0.0;
-        director.kills = 0;
         player.health = HEALTH_MAX;
         for (entity, ..) in &swarm {
             commands.entity(entity).despawn();
@@ -1024,20 +1014,11 @@ fn hud(
     time: Res<Time>,
     mut director: ResMut<Director>,
     mut flash: Single<&mut BackgroundColor, With<HurtFlash>>,
-    mut score: Single<&mut Text, With<Score>>,
 ) {
     let dt = time.delta_secs();
     director.hurt = (director.hurt - dt * 2.5).max(0.0);
     director.white *= (-dt * 9.0).exp();
     flash.0 = if director.white > 0.01 { Color::srgba(1.0, 1.0, 1.0, director.white) } else { Color::srgba(0.0, 0.0, 0.0, director.hurt * 0.55) };
-    director.notice -= dt;
-    score.0 = if director.notice > 0.0 {
-        director.last.clone()
-    } else if director.alive > 0.0 {
-        format!("{:.0} s   {} destroyed   best {:.0} s", director.alive, director.kills, director.best)
-    } else {
-        String::new()
-    };
 }
 
 /// The view kicks up with each shot and settles back; it shakes for an

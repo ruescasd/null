@@ -161,17 +161,6 @@ impl Nav {
         Some((ahead, left))
     }
 
-    /// A spot to come from: between `near` and `far` from `from` across,
-    /// not more than a few storeys above or below, that `hidden` says is
-    /// out of sight; `None` after `tries` tries. (`pick(k)`, 0..1, chooses.)
-    pub fn spot(&self, from: Vec3, (near, far): (f32, f32), hidden: &dyn Fn(Vec3) -> bool, pick: &dyn Fn(u32) -> f32, tries: u32) -> Option<Vec3> {
-        (0..tries).find_map(|k| {
-            let q = self.nodes[((pick(k) * self.nodes.len() as f32) as usize).min(self.nodes.len() - 1)];
-            let d = Vec2::new(q.x - from.x, q.z - from.z).length();
-            ((near..far).contains(&d) && (q.y - from.y).abs() < 20.0 && hidden(q)).then_some(q)
-        })
-    }
-
     /// Of the spots reachable from `from`, the nearest to `to` (where the
     /// way gives out, when it does).
     pub fn closest_reach(&self, from: Vec3, to: Vec3) -> Option<Vec3> {

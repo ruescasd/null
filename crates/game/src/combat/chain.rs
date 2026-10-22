@@ -1,4 +1,4 @@
-//! The porter's leash (`--opt chained`; the user's idea: porters are
+//! The porter's leash (`spawn chained` at the console; the user's idea: porters are
 //! enslaved by stalkers, each kept by one on a chain to its neck; both
 //! struggle as they walk, slave and guard, and the two struggles could be
 //! one). The porter goes its own way ahead, the chain fast to its ankle (at
