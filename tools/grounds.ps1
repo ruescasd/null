@@ -27,7 +27,8 @@ $views = [ordered]@{
     "6 eye west" = @("8500,2,8000,90,2")
 }
 # Per kind, views replaced: canyons' eyes on their floors (4 m), looking
-# along them; stacked's and floors' on their floors, under their decks.
+# along them; stacked's and floors' on their floors, under their decks;
+# sunken's in its pits.
 $canyon = @{
     "4 eye"      = @("8303,6,8351,270,4", "--opt", "camfloor")
     "5 eye east" = @("7787,6,8747,248,4", "--opt", "camfloor")
@@ -35,7 +36,14 @@ $canyon = @{
 }
 $own = @{
     "canyons" = $canyon
-    "bridged" = $canyon
+    # (Bridged: one view in a canyon, two on the mesas' tops, among their pits.)
+    "bridged" = @{ "4 eye" = $canyon["4 eye"] }
+    # (Sunken's on three pits' floors, 82, 99 and 68 m up.)
+    "sunken" = @{
+        "4 eye"      = @("8787,84,7947,180,6", "--opt", "camfloor")
+        "5 eye east" = @("7957,101,8877,270,6", "--opt", "camfloor")
+        "6 eye west" = @("8683,70,7571,45,10", "--opt", "camfloor")
+    }
     "floors" = @{
         "4 eye"      = @("8192,6,8350,0,8", "--opt", "camfloor")
         "5 eye east" = @("7900,6,8100,270,8", "--opt", "camfloor")

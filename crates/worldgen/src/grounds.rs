@@ -11,8 +11,10 @@
 //! - `tilted`: the tilted-native ground (see `tilted.rs`).
 //! - `canyons`: a plateau cut by a network of straight-sided canyons, deep
 //!   and wide, branching into narrower and shallower ones (enclosure).
-//! - `bridged`: the canyons crossed by bridges and decks at several heights
-//!   (enclosure and levels).
+//! - `bridged`: the canyons with levels of their own (enclosure and
+//!   levels): natural bridges left across them, grooves round their walls
+//!   (strata), and their mesas' tops inverted, cut into pits with ribs
+//!   between them (against the blocky look).
 //! - `nested`: the structures' fractal rule run at the scale of the land:
 //!   plateaus within plateaus, channels between them; `sunken`, the same
 //!   cut downward (pits within pits, ribs between); `contrast`, most blocks
@@ -30,7 +32,10 @@
 //! nested by supertile: rubble; its cracks suggested the canyons); round 2's
 //! `turing` (a reaction-diffusion labyrinth raised into walls, traced by
 //! marching squares: from above its curves and sameness failed, between its
-//! walls it was promising; the canyons took its place).
+//! walls it was promising; the canyons took its place); and round 5's
+//! tops for the bridged mesas, tilted (each small block tipped its mesa's
+//! way) and spires (a sparse stone forest), "not convinced": the inverted
+//! tops took their place.
 
 mod canyons;
 mod floors;
@@ -79,9 +84,9 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
             b.top.fill(|p| tilted.height(p) + lift);
             return Ok(Patch { pieces, top: b.top });
         }
-        "canyons" => canyons::build(&mut b, seed),
+        "canyons" => canyons::build(&mut b, seed, &canyons::PLAIN),
         "bridged" => {
-            canyons::build(&mut b, seed);
+            canyons::build(&mut b, seed, &canyons::BRIDGED);
             canyons::bridges(&mut b, seed);
         }
         "nested" => nested::build(&mut b, seed, nested::RAISED),
@@ -345,4 +350,5 @@ mod tests {
         assert!(build("nothing", (centre.x, centre.y), 1).is_err());
     }
 }
+
 

@@ -254,12 +254,12 @@ cheap and rough on purpose; the code is `crates/worldgen/src/grounds/`.
 |---|---|---|
 | `tilted` | the tilted-native ground | the reference |
 | `canyons` | a plateau cut by straight-sided canyons in three levels, 70–100 m deep | what was imagined: enclosure |
-| `bridged` | the canyons crossed by bridges and decks at several heights | levels in the enclosure; the spans look polygonal and out of place |
+| `bridged` | the canyons with levels of their own: natural bridges near the rims, grooves round the walls at shared heights (strata), the mesas' tops cut into pits with ribs between | better than what we had so far. On the way: thin planks and ledges read as bars added on; tilted tops and spires did not convince |
 | `nested` | the structures' fractal rule at landscape scale: plateaus within plateaus | hints at an industrial sector, partial enclosure |
-| `sunken` | the same cut downward: pits within pits, ribs between | intriguing; from above a facade or roof grid |
+| `sunken` | the same cut downward from a 160 m plateau: pits within pits, some dropping 30–110 m, thick main ribs and thin minor ones | intriguing; from above still a grid; deep pits enclose from inside |
 | `contrast` | most blocks blank, a few split all the way down (knots) | boxy, but reads as an industrial area |
 | `stacked` | decks on pillars over a floor, voids between | levels as a district's identity; reads as a savanna |
-| `floors` | continuous decks over many pillars, each level turned its own way | still trees: trunk and crown |
+| `floors` | continuous decks over many supports (cores through several levels, walls under stretches of their edges, piers and clusters, ribs under them), each level turned its own way | improved; round 3's read as trees, trunk and crown |
 
 The two axes found: **levels** (several heights under a point) as a
 district's identity, not only a landmark's, and **enclosure**, full or

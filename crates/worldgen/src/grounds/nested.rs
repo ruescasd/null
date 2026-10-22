@@ -89,18 +89,23 @@ fn block(b: &mut Builder, seed: u32, mode: &Mode, id: &mut i32, middle: DVec2, h
 }
 
 /// How deep each depth's pits sink (m, least and most) under the ground
-/// they are cut from, the ribs between them (of a cell), and the chance a
-/// cell is cut (else left whole, at its parent's level).
-const SINK: [(f64, f64); 6] = [(0.0, 0.0), (18.0, 30.0), (8.0, 16.0), (4.0, 8.0), (2.0, 4.0), (1.0, 2.0)];
-const RIBS: (f64, f64) = (0.08, 0.2);
-const CUT: f64 = 0.7;
+/// they are cut from, the ribs between them by depth (of a cell: thick
+/// main ribs, thin minor ones), and the chance a cell is cut (else left
+/// whole, at its parent's level). (Round 3: one width of rib, shallow pits,
+/// most cells cut: from above, a facade's grid of windows. Now fewer pits,
+/// some dropping into shafts, the ribs a hierarchy.)
+const SINK: [(f64, f64); 6] = [(0.0, 0.0), (30.0, 110.0), (10.0, 40.0), (4.0, 12.0), (2.0, 5.0), (1.0, 2.0)];
+const RIBS: [(f64, f64); 3] = [(0.18, 0.3), (0.1, 0.18), (0.04, 0.1)];
+const CUT: f64 = 0.5;
+/// The plateau the pits are cut into (m).
+const PLATEAU: f64 = 160.0;
 
 /// The rule cut downward: from a plateau, each block split into a grid of
 /// pits sunk under it, ribs left standing between them at its level; pits
 /// split again inside; square (no turn), so the ribs run straight.
 pub fn sunken(b: &mut Builder, seed: u32) {
     let mut id = 0;
-    pit(b, seed, &mut id, b.centre, DVec2::splat(SPAN * 0.5), 90.0, 0);
+    pit(b, seed, &mut id, b.centre, DVec2::splat(SPAN * 0.5), PLATEAU, 0);
 }
 
 fn pit(b: &mut Builder, seed: u32, id: &mut i32, middle: DVec2, half: DVec2, top: f64, depth: u32) {
@@ -118,7 +123,8 @@ fn pit(b: &mut Builder, seed: u32, id: &mut i32, middle: DVec2, half: DVec2, top
     let d = (depth as usize + 1).min(5);
     let (nx, nz) = (2 + (r(2) * 3.0) as usize, 2 + (r(3) * 3.0) as usize);
     let cell = DVec2::new(half.x * 2.0 / nx as f64, half.y * 2.0 / nz as f64);
-    let rib = (RIBS.0 + (RIBS.1 - RIBS.0) * r(4)) * cell.min_element();
+    let ribs = RIBS[(depth as usize).min(2)];
+    let rib = (ribs.0 + (ribs.1 - ribs.0) * r(4)) * cell.min_element();
     // The ribs, at the block's level along its grid's lines; between them
     // its cells, each sunk (a pit, cut again) or left whole.
     let lo = middle - half;
