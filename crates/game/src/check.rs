@@ -160,6 +160,8 @@ fn walk_check(kind: &str, seed: u32, catalogue: bool) -> (bool, String, Vec<Stri
         .init_resource::<MoveInput>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<BotLog>()
+        // (The creatures' bodies the movement meets: none here.)
+        .init_resource::<player::Bodies>()
         .insert_resource(WorldGen(Arc::new(worldgen::plates::PlateWorld::lab(worldgen::WORLD_SIZE, seed))))
         .insert_resource({
             let mut streamer = Streamer::default();
