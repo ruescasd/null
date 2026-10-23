@@ -365,9 +365,11 @@ fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut sky: ResMu
 }
 
 /// How far the haze lets you see (`--set fog`; nearer in the chasm, where
-/// it hides the far ends and the floor).
+/// it hides the far ends and the floor, and over the ground lab's void,
+/// where it hides the floor 1.2 km down).
 fn haze(args: &Args) -> f32 {
-    args.num("fog", if args.opt("chasm") { 600.0 } else { 4500.0 })
+    let over_void = args.ground.as_deref().is_some_and(worldgen::grounds::over_void);
+    args.num("fog", if args.opt("chasm") { 600.0 } else if over_void { 1400.0 } else { 4500.0 })
 }
 
 /// The swarm's darkness (`--opt dark`; see `combat::gloom`): 0 clear, 1 all

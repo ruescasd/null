@@ -260,11 +260,15 @@ cheap and rough on purpose; the code is `crates/worldgen/src/grounds/`.
 | `contrast` | most blocks blank, a few split all the way down (knots) | boxy, but reads as an industrial area |
 | `stacked` | decks on pillars over a floor, voids between | levels as a district's identity; reads as a savanna |
 | `floors` | continuous decks over many supports (cores through several levels, walls under stretches of their edges, piers and clusters, ribs under them), each level turned its own way | improved; round 3's read as trees, trunk and crown |
+| `void_machine`, `void_web` | the user's: cylinders on a 150 m grid rising out of a void (the lab's ground 1.2 km down in the haze), spans collar to collar at shared levels, along the axes or also diagonal and ramped; joints defined once | looking down into the void and up from beneath the strong images; solid collars and spans read as hoops and pipes |
+| `void_lattice`, `void_tension`, `void_branch`, `void_mixed` | collars and spans as members: frames within frames, bundled stays, branching struts; mixed is lattice collars with branch spans | lattice best for collars (a de Chirico hint), branch for bridges; mixed better than expected |
+| `void_meander` | mixed, a darker path along each collar's members, a motif of 1, 2 or 4 bays round the ring (the user's, after the Greek meandros) | works: a weird factor that doesn't overwhelm the regular structure; patterns to tune. A technique for breaking up any regular structure |
 
 The two axes found: **levels** (several heights under a point) as a
 district's identity, not only a landmark's, and **enclosure**, full or
 partial. Removed along the way (see `grounds.rs`): reaction-diffusion
-labyrinths and spots, and a Penrose tiling.
+labyrinths and spots, a Penrose tiling, and the void's T-square fractal
+collars (in relief, as frames, as holes, as one outline band).
 
 ## The lab's catalogue, not yet placed
 

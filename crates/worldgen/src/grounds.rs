@@ -23,6 +23,14 @@
 //!   between them; `floors`, the decks continuous over many pillars, a
 //!   megastructure's floors.
 //!
+//! - `void_machine`, `void_web`: cylinders on a grid rising out of a void,
+//!   joined by spans collar to collar: along the grid's axes (the machine),
+//!   or also across its diagonals and up or down a level (the web);
+//!   `void_lattice`, `void_tension`, `void_branch`, the machine's collars and
+//!   spans made as members, not slabs, and `void_mixed`, lattice collars
+//!   with branching spans, and `void_meander` the same, a darker path
+//!   meandering along each collar's members (see `grounds/void.rs`).
+//!
 //! The axes found so far (the user, 2026-10-21): levels (several heights
 //! under a point) as a district's identity, not only a landmark's; and
 //! enclosure, full (canyons) or partial (nested).
@@ -35,12 +43,19 @@
 //! walls it was promising; the canyons took its place); and round 5's
 //! tops for the bridged mesas, tilted (each small block tipped its mesa's
 //! way) and spires (a sparse stone forest), "not convinced": the inverted
-//! tops took their place.
+//! tops took their place. And the void's T-square collars (2026-10-23):
+//! drums of flat faces under the decks, a T-square fractal on each, as
+//! plates in relief (greebles at three levels, an emblem at two), as frames
+//! of bars (fretwork, the best of them, but each square's bars its own), as
+//! holes in a plate, and as its merged outline in one band (a Greek key):
+//! none better than the plain lattice, the user; the meander, a path of
+//! tone along the lattice, took their place.
 
 mod canyons;
 mod floors;
 mod nested;
 mod stacked;
+mod void;
 
 use std::collections::HashMap;
 
@@ -49,7 +64,16 @@ use glam::{DVec2, DVec3};
 use crate::tilted::{SheetMesh, Tilted, clip, face, triangulate};
 
 /// The names `build` knows.
-pub const NAMES: [&str; 8] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors"];
+pub const NAMES: [&str; 15] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander"];
+
+/// Whether a kind stands over the void (its floor far below, lost in the
+/// haze: the game draws the haze nearer for it).
+pub fn over_void(name: &str) -> bool {
+    name.starts_with("void")
+}
+
+/// The void kinds' datum levels: the lowest (m), how far apart, how many.
+pub const VOID_LEVELS: (f64, f64, usize) = void::LEVEL;
 
 /// How wide a patch is (m), and its tiles (m).
 pub const SPAN: f64 = 2048.0;
@@ -94,6 +118,13 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
         "contrast" => nested::build(&mut b, seed, nested::CONTRAST),
         "stacked" => stacked::build(&mut b, seed),
         "floors" => floors::build(&mut b, seed),
+        "void_machine" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Solid),
+        "void_web" => void::build(&mut b, seed, void::Recipe::Web, void::Style::Solid),
+        "void_lattice" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Lattice),
+        "void_tension" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Tension),
+        "void_branch" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Branch),
+        "void_mixed" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Mixed),
+        "void_meander" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Meander),
         _ => return Err(format!("no ground called {name:?}: there are {}", NAMES.join(", "))),
     }
     Ok(b.finish())
@@ -247,6 +278,53 @@ impl Builder {
         m.tones.resize(m.positions.len(), tone);
     }
 
+    /// A beam from `p` to `q`: a tube of `sides` sides, `r0` m round at `p`
+    /// tapering to `r1` at `q`, its ends closed. (Members of any slant:
+    /// struts, stays, a lattice's bars.)
+    fn beam(&mut self, p: DVec3, q: DVec3, r0: f64, r1: f64, sides: usize) {
+        let axis = (q - p).normalize_or_zero();
+        if axis == DVec3::ZERO {
+            return;
+        }
+        let u = axis.any_orthonormal_vector();
+        let v = axis.cross(u);
+        let round = |c: DVec3, r: f64| -> Vec<DVec3> { (0..sides).map(|k| { let a = k as f64 * std::f64::consts::TAU / sides as f64; c + (u * a.cos() + v * a.sin()) * r }).collect() };
+        let (a, b) = (round(p, r0), round(q, r1));
+        let tone = self.tone;
+        let m = self.mesh(DVec2::new((p.x + q.x) * 0.5, (p.z + q.z) * 0.5));
+        for k in 0..sides {
+            let j = (k + 1) % sides;
+            let out = ((a[k] + a[j]) * 0.5 - p).normalize_or_zero();
+            face(m, [a[k], a[j], b[j]], out);
+            face(m, [a[k], b[j], b[k]], out);
+            if k > 0 && j > 0 {
+                face(m, [a[0], a[k], a[j]], -axis);
+                face(m, [b[0], b[k], b[j]], axis);
+            }
+        }
+        m.tones.resize(m.positions.len(), tone);
+    }
+
+    /// A deck from `a` (its top at `ya`) to `b` (at `yb`): `width` m wide,
+    /// `thick` m deep, level or sloping (a ramp), its ends square to it.
+    fn deck(&mut self, a: DVec2, ya: f64, b: DVec2, yb: f64, width: f64, thick: f64) {
+        let side = (b - a).perp().normalize_or_zero() * (width * 0.5);
+        let at = |p: DVec2, y: f64| DVec3::new(p.x, y, p.y);
+        let top = [at(a - side, ya), at(b - side, yb), at(b + side, yb), at(a + side, ya)];
+        let low = top.map(|p| p - DVec3::Y * thick);
+        let up = DVec3::Y;
+        let along = DVec3::new(b.x - a.x, 0.0, b.y - a.y).normalize_or_zero();
+        let out = DVec3::new(side.x, 0.0, side.y).normalize_or_zero();
+        let tone = self.tone;
+        let m = self.mesh((a + b) * 0.5);
+        for (quad, hint) in [(top, up), ([low[0], low[1], low[2], low[3]], -up), ([top[0], top[1], low[1], low[0]], -out), ([top[3], top[2], low[2], low[3]], out), ([top[0], top[3], low[3], low[0]], -along), ([top[1], top[2], low[2], low[1]], along)] {
+            face(m, [quad[0], quad[1], quad[2]], hint);
+            face(m, [quad[0], quad[2], quad[3]], hint);
+        }
+        m.tones.resize(m.positions.len(), tone);
+        self.top.raise(&[a - side, b - side, b + side, a + side], ya.max(yb));
+    }
+
     /// A prism: a polygon's top at `top`, its sides down to `bottom`, and
     /// its underside if it floats.
     fn prism(&mut self, outline: &[DVec2], top: f64, bottom: f64, floats: bool) {
@@ -350,5 +428,6 @@ mod tests {
         assert!(build("nothing", (centre.x, centre.y), 1).is_err());
     }
 }
+
 
 

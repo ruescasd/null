@@ -9,7 +9,7 @@
 # Close the game first: a running one locks the build.
 param([Parameter(ValueFromRemainingArguments)][string[]]$Kinds)
 
-if (-not $Kinds) { $Kinds = @("tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors") }
+if (-not $Kinds) { $Kinds = @("tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander") }
 Set-Location (Join-Path $PSScriptRoot "..")
 if (Get-Process game -ErrorAction SilentlyContinue) { "The game is running: close it first."; exit 1 }
 cargo build -p game --profile fast
@@ -34,6 +34,17 @@ $canyon = @{
     "5 eye east" = @("7787,6,8747,248,4", "--opt", "camfloor")
     "6 eye west" = @("8089,6,7785,68,4", "--opt", "camfloor")
 }
+# The void kinds stand 1200-1480 m up (worldgen's VOID_LEVELS): their views
+# by height over the lab's ground. Over the field; down a corridor between two
+# rows of cylinders; beside a collar; down into the void; up from beneath.
+$void = @{
+    "1 overview" = @("8192,1750,9300,0,-18", "--opt", "camfloor", "--time", "60")
+    "2 oblique"  = @("7542,1420,8642,305,-8", "--opt", "camfloor", "--time", "60")
+    "3 along"    = @("7600,1305,8267,270,0", "--opt", "camfloor", "--time", "60")
+    "4 eye"      = @("8225,1302,8192,270,2", "--opt", "camfloor")
+    "5 eye east" = @("8267,1300,8267,270,-60", "--opt", "camfloor")
+    "6 eye west" = @("8267,1150,8267,270,40", "--opt", "camfloor")
+}
 $own = @{
     "canyons" = $canyon
     # (Bridged: one view in a canyon, two on the mesas' tops, among their pits.)
@@ -44,6 +55,13 @@ $own = @{
         "5 eye east" = @("7957,101,8877,270,6", "--opt", "camfloor")
         "6 eye west" = @("8683,70,7571,45,10", "--opt", "camfloor")
     }
+    "void_machine" = $void
+    "void_web" = $void
+    "void_lattice" = $void
+    "void_tension" = $void
+    "void_branch" = $void
+    "void_mixed" = $void
+    "void_meander" = $void
     "floors" = @{
         "4 eye"      = @("8192,6,8350,0,8", "--opt", "camfloor")
         "5 eye east" = @("7900,6,8100,270,8", "--opt", "camfloor")
