@@ -18,7 +18,7 @@
 //! It stands high (the lab's flat ground, its floor, lies far below, lost in
 //! the haze, as the chasm's: see the game's `look.rs`).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use glam::{DVec2, DVec3};
 
@@ -63,6 +63,13 @@ pub enum Recipe {
 ///   best for collars, the branches for bridges).
 /// - `Meander`: mixed, a path along each collar's members darker than the
 ///   rest, a motif repeated round the ring (the user's).
+/// - `Inlay`: no collars (the user: even improved, they felt added on):
+///   at each level a span reaches, the cylinder cut back to a core, a
+///   groove round it to walk, a collar inlaid; each span the cylinders'
+///   own stone, an arch seen from above, its edges curving out into the
+///   cylinders, tangent to them (the user's sketch); carried as `Carry`
+///   says; the grooves with piers left standing in them, or not, as each
+///   cylinder's recipe has it.
 pub enum Style {
     Solid,
     Lattice,
@@ -70,7 +77,69 @@ pub enum Style {
     Branch,
     Mixed,
     Meander,
+    Inlay(Carry, Infill),
 }
+
+/// What fills an inlaid groove's openings, between its piers (the user: the
+/// piers alone read as a prison's bars, neither machine nor classical):
+/// nothing; a balcony out from the face, carried on a bay of the lattice
+/// collars' frame within a frame; or a screen across the opening, the chasm
+/// rooms' fretwork (both the user's). (Plain stone first, a parapet and a
+/// screen hung from the ceiling: the user meant patterns.)
+#[derive(Clone, Copy)]
+pub enum Infill {
+    Open,
+    Balcony,
+    Screen,
+}
+
+/// How an inlaid span is carried (the user, 2026-10-23: a ribbon, no weight
+/// or bearing): an arch beneath it, springing from the cylinders, or the
+/// branch spans' trees.
+#[derive(Clone, Copy)]
+pub enum Carry {
+    Arch,
+    Trees,
+}
+
+/// An inlaid span's half width (m) and the radius of the curves its edges
+/// sweep out on to meet the cylinders (m); the grooves, so deep (to the
+/// core) and so high (m). (On the way, the user's sketch read other ways:
+/// the span's band cut on into the cylinder, a notch, 6 m deep, hardly
+/// showing, past its middle a hall, read inverted; then the crescents
+/// beside the band cut, the band left solid, too shallow to walk round to
+/// another span; then a core with the band carried on in as a tongue, the
+/// tongue a block pushed into the groove, added on again.)
+const ARCH: (f64, f64) = (3.5, 20.0);
+pub(super) const NOTCH: (f64, f64) = (6.0, 7.0);
+/// An arched span's soffit: so far down under its deck where it meets the
+/// cylinders (m), rising to the deck's own depth at its middle.
+const SOFFIT: f64 = 20.0;
+/// Piers left standing in a groove: so many round it (each cylinder one of
+/// these, by chance; none where a span comes in), so wide (m).
+const PIERS: ([usize; 3], f64) = ([0, 8, 16], 3.0);
+/// A balcony: out from the face so far, its slab so thick, the frame under
+/// it so deep (m).
+const BALCONY: (f64, f64, f64) = (3.0, 0.8, 5.0);
+/// A screen: its fretwork drawn as for an opening so many times smaller (a
+/// room's, its bars then so much thicker), its bars so deep, set back so far
+/// from the face (m).
+const FRET: (f64, f64, f64) = (2.5, 0.3, 0.6);
+/// A screen's widest empty square, at most (in its drawing's units: wider,
+/// an opening with a gap in it, not a screen, the user). (Its bars darker
+/// than the stone, to read apart from it, the user's: lost against the
+/// dark gallery behind them; a metal, perhaps.)
+const GAP: f32 = 0.9;
+/// The cores' pulses: so far apart as they climb (m). The channels they run
+/// along the walkways in, from core to core: so wide, standing so far proud
+/// of the decks (m). A core's tone where no pulse climbs (see
+/// `core_glow.wgsl`).
+pub(super) const PULSE: f64 = 200.0;
+const CHANNEL: (f64, f64) = (0.6, 0.03);
+const STEADY: f32 = 2.0;
+/// The cylinders' stone, and the inlaid spans' (the cylinders' own: lighter,
+/// they looked added on, the user).
+const STONE: f32 = 0.12;
 
 /// A lattice collar's members, by bay (round the ring from its first post):
 /// the chord along its foot; the post at its left; a stay from its corner
@@ -140,7 +209,49 @@ pub fn build(b: &mut Builder, seed: u32, recipe: Recipe, style: Style) {
     }
     // Collars only where a span lands (the user: those nothing reached, a
     // ring round a cylinder for no reason, cluttered the field).
-    let reached: std::collections::HashSet<(i32, i32, usize)> = spans.iter().flat_map(|&(a, z)| [a, z]).collect();
+    let reached: HashSet<(i32, i32, usize)> = spans.iter().flat_map(|&(a, z)| [a, z]).collect();
+    // The pulses' network (inlaid; step 3 of the user's machine pass): a
+    // pulse climbing a core, at a walkway's level, runs along it in a
+    // channel to the next core and climbs on up it. So each core's pulses
+    // are its feeder's, later by the channel's length: fed out from roots
+    // (taken in a random order, each fed from the depths, its pulses at a
+    // phase of its own) to their neighbours, each by every walkway to it at
+    // or over where its feeder's own pulses start, its own starting at the
+    // lowest. (Each core's phase, the level its pulses start at; each
+    // span's channel, if it has one, whether it runs from its first end.)
+    let mut feed: HashMap<(i32, i32), (f64, usize)> = HashMap::new();
+    let mut lit: Vec<Option<bool>> = vec![None; spans.len()];
+    if matches!(style, Style::Inlay(..)) {
+        let mut order: Vec<(i32, i32)> = (-half..=half).flat_map(|j| (-half..=half).map(move |i| (i, j))).filter(|&(i, j)| present(i, j)).collect();
+        order.sort_by(|a, z| r(a.0, a.1, 403).total_cmp(&r(z.0, z.1, 403)));
+        // (From core face to core face.)
+        let length = |a: (i32, i32), z: (i32, i32)| centre(a.0, a.1).distance(centre(z.0, z.1)) - 2.0 * (RADIUS - NOTCH.0);
+        for root in order {
+            if feed.contains_key(&root) {
+                continue;
+            }
+            feed.insert(root, (r(root.0, root.1, 401), 0));
+            let mut queue = VecDeque::from([root]);
+            while let Some(x) = queue.pop_front() {
+                let (phase, entry) = feed[&x];
+                let mut fed: BTreeMap<(i32, i32), usize> = BTreeMap::new();
+                for (n, &((ai, aj, k), (zi, zj, k2))) in spans.iter().enumerate() {
+                    let to = if (ai, aj) == x { (zi, zj) } else if (zi, zj) == x { (ai, aj) } else { continue };
+                    assert_eq!(k, k2, "inlaid spans are level: the machine's");
+                    if k < entry || feed.contains_key(&to) {
+                        continue;
+                    }
+                    lit[n] = Some((ai, aj) == x);
+                    let lowest = fed.entry(to).or_insert(k);
+                    *lowest = (*lowest).min(k);
+                }
+                for (to, k) in fed {
+                    feed.insert(to, ((phase + length(x, to) / PULSE).fract(), k));
+                    queue.push_back(to);
+                }
+            }
+        }
+    }
     // The cylinders, out of the depths; their collars.
     for j in -half..=half {
         for i in -half..=half {
@@ -148,7 +259,24 @@ pub fn build(b: &mut Builder, seed: u32, recipe: Recipe, style: Style) {
                 continue;
             }
             let c = centre(i, j);
-            b.shade(seed, (i, j), 0.12, 0.015);
+            b.shade(seed, (i, j), STONE, 0.015);
+            if let Style::Inlay(_, infill) = style {
+                // (Each span's way out of this cylinder, by level.)
+                let ways: Vec<(usize, DVec2)> = spans
+                    .iter()
+                    .filter_map(|&((ai, aj, ak), (zi, zj, zk))| match ((ai, aj) == (i, j), (zi, zj) == (i, j)) {
+                        (true, _) => Some((ak, (centre(zi, zj) - c).normalize())),
+                        (_, true) => Some((zk, (centre(ai, aj) - c).normalize())),
+                        _ => None,
+                    })
+                    .collect();
+                let piers = PIERS.0[(r(i, j, 300) * PIERS.0.len() as f64) as usize];
+                // (The core's light: the machine shown, with restraint, where
+                // the grooves expose it, the user; its pulses as fed.)
+                let pattern = (r(i, j, 402) * 1e6) as u32;
+                inlaid(b, c, level(top(i, j)), &ways, &level, (piers, infill, pattern), feed[&(i, j)]);
+                continue;
+            }
             b.prism(&ring(c, RADIUS), level(top(i, j)), -1.0, false);
             for k in 0..LEVEL.2 {
                 if reached.contains(&(i, j, k)) {
@@ -157,8 +285,237 @@ pub fn build(b: &mut Builder, seed: u32, recipe: Recipe, style: Style) {
             }
         }
     }
-    for ((i, j, k), (ni, nj, k2)) in spans {
-        span(b, &style, centre(i, j), level(k), centre(ni, nj), level(k2));
+    for (n, ((i, j, k), (ni, nj, k2))) in spans.into_iter().enumerate() {
+        if let Style::Inlay(carry, _) = style {
+            arch(b, centre(i, j), centre(ni, nj), level(k), carry);
+            if let Some(forward) = lit[n] {
+                let (from, to) = if forward { ((i, j), (ni, nj)) } else { ((ni, nj), (i, j)) };
+                channel(b, centre(from.0, from.1), centre(to.0, to.1), level(k), feed[&from].0);
+            }
+        } else {
+            span(b, &style, centre(i, j), level(k), centre(ni, nj), level(k2));
+        }
+    }
+}
+
+/// An inlaid cylinder at `c`, its top at `top`: solid, but cut back
+/// `NOTCH.0` to a core, `NOTCH.1` high, at each level a span leaves it by
+/// (`ways`: the level and the span's way out); so many piers left standing
+/// round each groove, but where a span comes in, and between each two the
+/// infill (a screen's fretwork `pattern`, the same in every opening); its
+/// core where the grooves show it glowing (see `Patch::glows`), its pulses
+/// at `phase`, from the level `entry` up.
+#[allow(clippy::too_many_arguments)]
+fn inlaid(b: &mut Builder, c: DVec2, top: f64, ways: &[(usize, DVec2)], level: &dyn Fn(usize) -> f64, (piers, infill, pattern): (usize, Infill, u32), (phase, entry): (f64, usize)) {
+    let (deep, high) = NOTCH;
+    let round = ring(c, RADIUS);
+    let core = ring(c, RADIUS - deep);
+    let mut levels: Vec<usize> = ways.iter().map(|&(k, _)| k).collect();
+    levels.sort();
+    levels.dedup();
+    let mut bottom = -1.0;
+    let mut floats = false;
+    for k in levels {
+        let y = level(k);
+        b.prism(&round, y, bottom, floats);
+        let stone = b.tone;
+        b.tone = if k >= entry { phase as f32 } else { STEADY };
+        b.glow(|b| b.prism(&core, y + high, y, false));
+        b.tone = stone;
+        // Its piers: into the core, a little short of the face.
+        let width = PIERS.1 * 0.5;
+        let clear = mouth() + (width / RADIUS).atan() + 0.05;
+        let angle = |n: usize| n as f64 * std::f64::consts::TAU / piers as f64;
+        let standing = |n: usize| !ways.iter().any(|&(l, u)| l == k && DVec2::from_angle(angle(n)).angle_to(u).abs() < clear);
+        let face = RADIUS - 0.4;
+        for n in (0..piers).filter(|&n| standing(n)) {
+            let way = DVec2::from_angle(angle(n));
+            let aside = way.perp() * width;
+            let (inner, outer) = (c + way * (RADIUS - deep - 0.5), c + way * face);
+            b.prism(&[inner - aside, outer - aside, outer + aside, inner + aside], y + high, y, false);
+            // The infill to the next pier, if it stands: from one's side
+            // to the other's.
+            if !standing((n + 1) % piers) {
+                continue;
+            }
+            // (Between the piers' sides, at `r` from the middle.)
+            let between = |r: f64| {
+                let half = (width / r).asin();
+                (angle(n) + half, angle(n) + std::f64::consts::TAU / piers as f64 - half)
+            };
+            match infill {
+                Infill::Open => {}
+                Infill::Balcony => balcony(b, c, y, between(RADIUS)),
+                Infill::Screen => screen(b, c, y, high, between(face - FRET.2), pattern),
+            }
+        }
+        bottom = y + high;
+        floats = true;
+    }
+    b.prism(&round, top, bottom, floats);
+}
+
+/// The band between angles `from` and `to` round `c`, `inner` to `outer`
+/// from it, in steps of about `step` m along it.
+fn sector(c: DVec2, (from, to): (f64, f64), (inner, outer): (f64, f64), step: f64) -> Vec<DVec2> {
+    let steps = ((to - from) * outer / step).ceil().max(1.0) as usize;
+    let arc = |r: f64| (0..=steps).map(move |s| c + DVec2::from_angle(from + (to - from) * s as f64 / steps as f64) * r);
+    let mut outline: Vec<DVec2> = arc(outer).collect();
+    outline.extend(arc(inner).collect::<Vec<_>>().into_iter().rev());
+    outline
+}
+
+/// A balcony round the cylinder at `c` between angles `between`, its top at
+/// the groove's floor `y` (a hair under, never its plane): a slab out from
+/// the face, under it a bay of a lattice collar's frame, posts down from its
+/// ends to a chord, spokes back into the cylinder, the frame within the
+/// frame between.
+fn balcony(b: &mut Builder, c: DVec2, y: f64, (from, to): (f64, f64)) {
+    let (out, thick, deep) = BALCONY;
+    b.prism(&sector(c, (from, to), (RADIUS - 0.5, RADIUS + out), 2.0), y - 0.01, y - thick, true);
+    let (under, low) = (y - thick, y - thick - deep);
+    let rim = RADIUS + out - 0.8;
+    let (p, q) = (c + DVec2::from_angle(from) * rim, c + DVec2::from_angle(to) * rim);
+    let stone = b.tone;
+    b.tone = MEMBER;
+    b.beam(at(p, low), at(q, low), 0.6, 0.6, 6);
+    for e in [p, q] {
+        b.beam(at(e, under), at(e, low), 0.7, 0.7, 6);
+        b.beam(at(c + (e - c).normalize() * (RADIUS - 0.5), low), at(e, low), 0.6, 0.6, 6);
+    }
+    inner_frame(b, [at(p, under), at(q, under), at(q, low), at(p, low)], |_, _| MEMBER);
+    b.tone = stone;
+}
+
+/// A screen round the cylinder at `c` between angles `between`, from the
+/// groove's floor `y` to its ceiling, `high` over it: the chasm rooms'
+/// fretwork (`pattern` its seed), drawn on the arc, each bar `FRET.1` deep
+/// behind it, a little into the piers either side; the first of its seeds
+/// on from `pattern` with no gap wider than `GAP`.
+fn screen(b: &mut Builder, c: DVec2, y: f64, high: f64, (from, to): (f64, f64), pattern: u32) {
+    let (scale, deep, back) = FRET;
+    let r = RADIUS - 0.4 - back;
+    let (from, to) = (from - 0.1 / r, to + 0.1 / r);
+    let along = (to - from) * r;
+    let (w, h) = ((along / scale) as f32, (high / scale) as f32);
+    let bars = (pattern..pattern + 64)
+        .map(|seed| crate::fret::fret(w, h, seed))
+        .find(|bars| widest_gap(bars, w, h) <= GAP)
+        .expect("no fretwork without a gap in 64 seeds: GAP too strict for these openings");
+    for [u0, v0, u1, v1] in bars {
+        let [u0, v0, u1, v1] = [u0, v0, u1, v1].map(|x| x as f64 * scale);
+        let bar = sector(c, (from + u0 / r, from + u1 / r), (r - deep, r), 1.5);
+        b.prism(&bar, y + v1.min(high), y + v0, true);
+    }
+}
+
+/// A walkway's channel from the core at `from` to the one at `to`, at its
+/// level `y`, down its middle: a pulse leaving the first core's at its
+/// level (`phase`, its pulses') and running along it (see `Patch::glows`:
+/// a channel's tone is less than 0, its pulse's phase there, -1, the less).
+fn channel(b: &mut Builder, from: DVec2, to: DVec2, y: f64, phase: f64) {
+    let u = (to - from).normalize();
+    let (a, z) = (from + u * (RADIUS - NOTCH.0), to - u * (RADIUS - NOTCH.0));
+    let (wide, proud) = CHANNEL;
+    b.channel(a, z, y + proud, wide, proud + 0.3, |d| -(1.0 + phase + d / PULSE) as f32);
+}
+
+/// An inlaid span's end, round its cylinder: its edges' curves' middles
+/// (along the span from the cylinder's middle, out from its line), and
+/// where they touch the cylinder (likewise).
+fn sweeps() -> (DVec2, DVec2) {
+    let (half, sweep) = ARCH;
+    let along = ((RADIUS + sweep).powi(2) - (half + sweep).powi(2)).sqrt();
+    let middle = DVec2::new(along, half + sweep);
+    (middle, middle * RADIUS / (RADIUS + sweep))
+}
+
+/// How far round from a span's way its end meets its cylinder (radians).
+fn mouth() -> f64 {
+    sweeps().1.to_angle()
+}
+
+/// An inlaid span from the cylinder at `a` to the one at `z`, its top at
+/// `y` (a hair under the grooves' floors, never their plane): `ARCH.0`
+/// either side of its line, and at each end its edges swept out on curves
+/// of `ARCH.1` to meet the cylinder tangent to it, its end round the
+/// cylinder a little into it; carried as `carry` says.
+fn arch(b: &mut Builder, a: DVec2, z: DVec2, y: f64, carry: Carry) {
+    let (half, sweep) = ARCH;
+    let length = a.distance(z);
+    let (u, side) = ((z - a) / length, (z - a).perp() / length);
+    let (middle, touch) = sweeps();
+    assert!(2.0 * middle.x < length, "an inlaid span's curves overlap: cylinders too close for ARCH");
+    let steps = 12;
+    // One end's edge, on side `s` (1 or -1), from the line to the cylinder,
+    // in the span's terms (along it from `a`, across it).
+    let curve = |s: f64| -> Vec<DVec2> {
+        let middle = DVec2::new(middle.x, s * middle.y);
+        let (from, to) = ((-s * DVec2::Y).to_angle(), (-middle).to_angle());
+        let turn = (to - from + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+        (0..=steps).map(|n| middle + DVec2::from_angle(from + turn * n as f64 / steps as f64) * sweep).collect()
+    };
+    let place = |p: DVec2| a + u * p.x + side * p.y;
+    let far = |p: DVec2| DVec2::new(length - p.x, p.y);
+    // Round its end: from the cylinder's touch on one side to the other's,
+    // a little into it.
+    let end = |centre: DVec2, from: DVec2, to: DVec2, out: &mut Vec<DVec2>| {
+        let (p, q) = ((from - centre).to_angle(), (to - centre).to_angle());
+        let turn = (q - p + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+        for n in 0..=8 {
+            out.push(centre + DVec2::from_angle(p + turn * n as f64 / 8.0) * (RADIUS - 0.5));
+        }
+    };
+    let (low, high) = (curve(-1.0), curve(1.0));
+    let mut outline = Vec::new();
+    // Along the low edge from `a` to `z`, round `z`, back along the high
+    // edge, round `a`.
+    outline.extend(low.iter().rev().map(|&p| place(p)));
+    outline.extend(low.iter().map(|&p| place(far(p))));
+    end(z, place(far(low[steps])), place(far(high[steps])), &mut outline);
+    outline.extend(high.iter().rev().map(|&p| place(far(p))));
+    outline.extend(high.iter().map(|&p| place(p)));
+    end(a, place(high[steps]), place(low[steps]), &mut outline);
+    b.tone = STONE;
+    match carry {
+        Carry::Arch => {
+            // Deck and arch one solid, swept along it: as wide as the deck
+            // (from inside the cylinders, where its ends are hidden), its
+            // soffit an ellipse's half from face to face, meeting each
+            // upright, `SOFFIT` down, rising to the deck's depth midway.
+            let width = |x: f64| {
+                let x = x.min(length - x);
+                if x >= middle.x {
+                    half
+                } else if x >= touch.x {
+                    middle.y - (sweep * sweep - (x - middle.x).powi(2)).max(0.0).sqrt()
+                } else {
+                    touch.y
+                }
+            };
+            let gap = length * 0.5 - RADIUS;
+            let drop = |x: f64| {
+                let s = (x.min(length - x) - RADIUS).max(0.0);
+                SOFFIT * (1.0 - (1.0 - ((gap - s) / gap).powi(2)).max(0.0).sqrt())
+            };
+            let x0 = touch.x - 1.0;
+            let n = 96;
+            let sections: Vec<[DVec3; 4]> = (0..=n)
+                .map(|k| {
+                    // (Closer together near the ends, where it curves most.)
+                    let x = x0 + (length - 2.0 * x0) * (1.0 - (std::f64::consts::PI * k as f64 / n as f64).cos()) * 0.5;
+                    let (w, foot) = (width(x), y - DECK.1 - drop(x));
+                    let (l, r) = (place(DVec2::new(x, -w)), place(DVec2::new(x, w)));
+                    [at(l, y - 0.01), at(r, y - 0.01), at(r, foot), at(l, foot)]
+                })
+                .collect();
+            b.sweep(&sections);
+            b.raise(&outline, y - 0.01);
+        }
+        Carry::Trees => {
+            b.prism(&outline, y - 0.01, y - DECK.1, true);
+            trees(b, a, z, y, y, a + u * RADIUS, z - u * RADIUS, DECK.1, half - 0.6);
+        }
     }
 }
 
@@ -195,7 +552,7 @@ fn ring_collar(b: &mut Builder, style: &Style, c: DVec2, y: f64, turn: f64, pick
     b.tone = MEMBER;
     match style {
         // (Mixed is made as lattice or branch, above.)
-        Style::Solid | Style::Mixed | Style::Meander => {}
+        Style::Solid | Style::Mixed | Style::Meander | Style::Inlay(..) => {}
         Style::Lattice => {
             // Its chord a frame's depth down, posts to it every other side,
             // in each bay a frame within the frame, held at its corners;
@@ -260,7 +617,7 @@ fn span(b: &mut Builder, style: &Style, a: DVec2, ya: f64, z: DVec2, yz: f64) {
     let on = |t: f64, aside: f64, down: f64| at(p + (q - p) * t + side * aside, ya + (yz - ya) * t - down);
     match style {
         // (Mixed is made as lattice or branch, above.)
-        Style::Solid | Style::Mixed | Style::Meander => {}
+        Style::Solid | Style::Mixed | Style::Meander | Style::Inlay(..) => {}
         Style::Lattice => {
             // Chords a frame's depth down each side, posts at each bay, in
             // each bay a frame within the frame; ties across under it.
@@ -295,23 +652,31 @@ fn span(b: &mut Builder, style: &Style, a: DVec2, ya: f64, z: DVec2, yz: f64) {
                 }
             }
         }
-        Style::Branch => {
-            // From each cylinder, under the span's end, a trunk to a node
-            // under the deck; from it, branches to its underside, the
-            // middle one reaching the middle, where the two trees meet.
-            for (end, from, y) in [(a, 1.0, ya), (z, -1.0, yz)] {
-                let t0 = if from > 0.0 { 0.22 } else { 0.78 };
-                let root = at(end + along * from * (RADIUS - 0.5), y - 28.0);
-                let node = on(t0, 0.0, 10.0);
-                b.beam(root, node, 1.3, 1.0, 7);
-                b.beam(node - DVec3::Y * 0.9, node + DVec3::Y * 0.9, 1.5, 1.5, 7);
-                for (f, e) in [(0.1, -w), (0.1, w), (0.34, -w), (0.34, w)] {
-                    let t = if from > 0.0 { f } else { 1.0 - f };
-                    b.beam(node, on(t, e, thick - 0.3), 0.6, 0.35, 6);
-                }
-                b.beam(node, on(0.5, 0.0, thick + 0.4), 0.8, 0.5, 6);
-            }
+        Style::Branch => trees(b, a, z, ya, yz, p, q, thick, w),
+    }
+}
+
+/// The branch spans' trees under a deck from `p` (its top at `ya`) to `q`
+/// (`yz`), `thick` deep, `w` either side of its line, between the cylinders
+/// at `a` and `z`: from each cylinder, under the span's end, a trunk to a
+/// node under the deck; from it, branches to its underside, the middle one
+/// reaching the middle, where the two trees meet.
+#[allow(clippy::too_many_arguments)]
+fn trees(b: &mut Builder, a: DVec2, z: DVec2, ya: f64, yz: f64, p: DVec2, q: DVec2, thick: f64, w: f64) {
+    let along = (z - a).normalize();
+    let side = along.perp();
+    let on = |t: f64, aside: f64, down: f64| at(p + (q - p) * t + side * aside, ya + (yz - ya) * t - down);
+    for (end, from, y) in [(a, 1.0, ya), (z, -1.0, yz)] {
+        let t0 = if from > 0.0 { 0.22 } else { 0.78 };
+        let root = at(end + along * from * (RADIUS - 0.5), y - 28.0);
+        let node = on(t0, 0.0, 10.0);
+        b.beam(root, node, 1.3, 1.0, 7);
+        b.beam(node - DVec3::Y * 0.9, node + DVec3::Y * 0.9, 1.5, 1.5, 7);
+        for (f, e) in [(0.1, -w), (0.1, w), (0.34, -w), (0.34, w)] {
+            let t = if from > 0.0 { f } else { 1.0 - f };
+            b.beam(node, on(t, e, thick - 0.3), 0.6, 0.35, 6);
         }
+        b.beam(node, on(0.5, 0.0, thick + 0.4), 0.8, 0.5, 6);
     }
 }
 
@@ -390,3 +755,35 @@ fn bundle(b: &mut Builder, from: DVec3, to: DVec3) {
         b.beam(from + off, to + off, 0.22, 0.22, 5);
     }
 }
+
+/// The side of the largest square a fretwork's `bars` leave empty in its `w`
+/// by `h` opening (in its own units).
+fn widest_gap(bars: &[[f32; 4]], w: f32, h: f32) -> f32 {
+    const CELL: f32 = 0.05;
+    let (nx, ny) = ((w / CELL).ceil() as usize, (h / CELL).ceil() as usize);
+    let mut barred = vec![false; nx * ny];
+    for b in bars {
+        let span = |lo: f32, hi: f32, n: usize| ((lo / CELL).floor().max(0.0) as usize)..((hi / CELL).ceil() as usize).min(n);
+        for j in span(b[1], b[3], ny) {
+            for i in span(b[0], b[2], nx) {
+                barred[j * nx + i] = true;
+            }
+        }
+    }
+    // (Each cell's largest empty square with its corner there.)
+    let mut side = vec![0u32; nx * ny];
+    let mut widest = 0;
+    for j in 0..ny {
+        for i in 0..nx {
+            if barred[j * nx + i] {
+                continue;
+            }
+            let s = if i == 0 || j == 0 { 1 } else { 1 + side[j * nx + i - 1].min(side[(j - 1) * nx + i]).min(side[(j - 1) * nx + i - 1]) };
+            side[j * nx + i] = s;
+            widest = widest.max(s);
+        }
+    }
+    widest as f32 * CELL
+}
+
+

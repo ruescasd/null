@@ -11,6 +11,7 @@ pub mod compose;
 pub mod cull;
 pub mod district;
 pub mod forms;
+pub mod fret;
 pub mod grounds;
 pub mod ifs;
 pub mod lab;

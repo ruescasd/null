@@ -7,9 +7,12 @@ use std::sync::Arc;
 
 use avian3d::prelude::*;
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{RenderAssetUsages, embedded_asset},
     mesh::{Indices, PrimitiveTopology},
+    pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
+    render::render_resource::AsBindGroup,
+    shader::ShaderRef,
 };
 use worldgen::grounds::{self, Patch};
 
@@ -36,17 +39,63 @@ impl Plugin for GroundLabPlugin {
         let args = app.world().resource::<Args>();
         let Some(name) = args.ground.clone() else { return };
         let patch = grounds::build(&name, CENTRE, args.seed).unwrap_or_else(|e| panic!("--ground: {e}"));
-        app.insert_resource(LabGround(Arc::new(patch))).add_systems(Startup, build);
+        embedded_asset!(app, "core_glow.wgsl");
+        app.add_plugins(MaterialPlugin::<CoreMaterial>::default()).insert_resource(LabGround(Arc::new(patch))).add_systems(Startup, build);
+    }
+}
+
+/// What glows from within (the void's cores; see `core_glow.wgsl`).
+type CoreMaterial = ExtendedMaterial<StandardMaterial, CoreGlow>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+struct CoreGlow {
+    /// x: the light between pulses, y: a pulse's peak, z: their speed up
+    /// (m/s), w: how far apart (m).
+    #[uniform(100)]
+    light: Vec4,
+    /// x: the core's own tone; y: how the steady light gathers to a groove's
+    /// middle height (its spread, of the groove's height); z: a pulse's
+    /// tail (m), w: its head (m).
+    #[uniform(101)]
+    surface: Vec4,
+    /// The grooves: x the lowest's floor (m), y how far apart, z how high.
+    #[uniform(102)]
+    grooves: Vec4,
+}
+
+impl MaterialExtension for CoreGlow {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://game/core_glow.wgsl".into()
     }
 }
 
 /// The patch's meshes, each with its collider.
-fn build(mut commands: Commands, args: Res<Args>, ground: Res<LabGround>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+#[allow(clippy::too_many_arguments)]
+fn build(
+    mut commands: Commands,
+    args: Res<Args>,
+    ground: Res<LabGround>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cores: ResMut<Assets<CoreMaterial>>,
+) {
     // (White, its pieces' tones in their vertices' colours: each its own,
     // as the plates.)
     let material = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.9, reflectance: 0.3, ..default() });
+    // (Dim: the machine glimpsed, never lit up. Light as the structures'
+    // seams is, against the camera's exposure: theirs 3000. Matte and dark:
+    // glossy, a low sun shone off it and the wall seemed lit, not what is in
+    // it.)
+    let core = cores.add(ExtendedMaterial {
+        base: StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.95, reflectance: 0.1, ..default() },
+        extension: CoreGlow {
+            light: Vec4::new(args.num("core_glow", 40.0), args.num("core_pulse", 600.0), args.num("core_speed", 12.0), grounds::VOID_PULSE as f32),
+            surface: Vec4::new(args.num("core_tone", 0.03), args.num("core_spread", 0.18), args.num("core_tail", 15.0), args.num("core_head", 1.5)),
+            grooves: Vec4::new(grounds::VOID_LEVELS.0 as f32, grounds::VOID_LEVELS.1 as f32, grounds::VOID_GROOVE as f32, 0.0),
+        },
+    });
     let mut triangles = 0;
-    for piece in &ground.0.pieces {
+    for (piece, glows) in ground.0.pieces.iter().map(|p| (p, false)).chain(ground.0.glows.iter().map(|p| (p, true))) {
         triangles += piece.indices.len() / 3;
         let vertices: Vec<Vec3> = piece.positions.iter().map(|&p| Vec3::from(p)).collect();
         let tris: Vec<[u32; 3]> = piece.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
@@ -56,7 +105,12 @@ fn build(mut commands: Commands, args: Res<Args>, ground: Res<LabGround>, mut me
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, piece.normals.clone())
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, piece.tones.iter().map(|&t| [t, t, t, 1.0]).collect::<Vec<[f32; 4]>>())
             .with_inserted_indices(Indices::U32(piece.indices.clone()));
-        let mut e = commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone()), Transform::IDENTITY));
+        let mut e = commands.spawn((Mesh3d(meshes.add(mesh)), Transform::IDENTITY));
+        if glows {
+            e.insert(MeshMaterial3d(core.clone()));
+        } else {
+            e.insert(MeshMaterial3d(material.clone()));
+        }
         if let Ok(c) = collider {
             e.insert((RigidBody::Static, c));
         }

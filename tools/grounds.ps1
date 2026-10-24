@@ -9,7 +9,7 @@
 # Close the game first: a running one locks the build.
 param([Parameter(ValueFromRemainingArguments)][string[]]$Kinds)
 
-if (-not $Kinds) { $Kinds = @("tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander") }
+if (-not $Kinds) { $Kinds = @("tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander", "void_inlay", "void_inlay_balcony", "void_inlay_screen", "void_inlay_trees") }
 Set-Location (Join-Path $PSScriptRoot "..")
 if (Get-Process game -ErrorAction SilentlyContinue) { "The game is running: close it first."; exit 1 }
 cargo build -p game --profile fast
@@ -62,6 +62,10 @@ $own = @{
     "void_branch" = $void
     "void_mixed" = $void
     "void_meander" = $void
+    "void_inlay" = $void
+    "void_inlay_balcony" = $void
+    "void_inlay_screen" = $void
+    "void_inlay_trees" = $void
     "floors" = @{
         "4 eye"      = @("8192,6,8350,0,8", "--opt", "camfloor")
         "5 eye east" = @("7900,6,8100,270,8", "--opt", "camfloor")

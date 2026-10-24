@@ -29,7 +29,11 @@
 //!   `void_lattice`, `void_tension`, `void_branch`, the machine's collars and
 //!   spans made as members, not slabs, and `void_mixed`, lattice collars
 //!   with branching spans, and `void_meander` the same, a darker path
-//!   meandering along each collar's members (see `grounds/void.rs`).
+//!   meandering along each collar's members; and `void_inlay`, no collars,
+//!   a groove round a core where a span lands, each span an arch from above
+//!   swept into the cylinders and from the side, springing from them, and
+//!   `void_inlay_trees`, the spans on the branch spans' trees (see
+//!   `grounds/void.rs`).
 //!
 //! The axes found so far (the user, 2026-10-21): levels (several heights
 //! under a point) as a district's identity, not only a landmark's; and
@@ -64,7 +68,7 @@ use glam::{DVec2, DVec3};
 use crate::tilted::{SheetMesh, Tilted, clip, face, triangulate};
 
 /// The names `build` knows.
-pub const NAMES: [&str; 15] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander"];
+pub const NAMES: [&str; 19] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander", "void_inlay", "void_inlay_balcony", "void_inlay_screen", "void_inlay_trees"];
 
 /// Whether a kind stands over the void (its floor far below, lost in the
 /// haze: the game draws the haze nearer for it).
@@ -72,8 +76,11 @@ pub fn over_void(name: &str) -> bool {
     name.starts_with("void")
 }
 
-/// The void kinds' datum levels: the lowest (m), how far apart, how many.
+/// The void kinds' datum levels: the lowest (m), how far apart, how many;
+/// and how high a groove cut at a level is (m).
 pub const VOID_LEVELS: (f64, f64, usize) = void::LEVEL;
+pub const VOID_GROOVE: f64 = void::NOTCH.1;
+pub const VOID_PULSE: f64 = void::PULSE;
 
 /// How wide a patch is (m), and its tiles (m).
 pub const SPAN: f64 = 2048.0;
@@ -84,6 +91,9 @@ const CELL: f64 = 4.0;
 /// A patch of ground: its meshes, by tile, and its top.
 pub struct Patch {
     pub pieces: Vec<SheetMesh>,
+    /// What glows from within (the void's cores): each vertex's tone its
+    /// pulse's phase (0..1).
+    pub glows: Vec<SheetMesh>,
     top: Top,
 }
 
@@ -106,7 +116,7 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
             let tilted = Tilted::new(crate::WORLD_SIZE, seed);
             let pieces = tilted.patch((centre.x, centre.y), SPAN, lift, -1.0);
             b.top.fill(|p| tilted.height(p) + lift);
-            return Ok(Patch { pieces, top: b.top });
+            return Ok(Patch { pieces, glows: Vec::new(), top: b.top });
         }
         "canyons" => canyons::build(&mut b, seed, &canyons::PLAIN),
         "bridged" => {
@@ -125,6 +135,10 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
         "void_branch" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Branch),
         "void_mixed" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Mixed),
         "void_meander" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Meander),
+        "void_inlay" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Open)),
+        "void_inlay_balcony" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Balcony)),
+        "void_inlay_screen" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Screen)),
+        "void_inlay_trees" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Trees, void::Infill::Open)),
         _ => return Err(format!("no ground called {name:?}: there are {}", NAMES.join(", "))),
     }
     Ok(b.finish())
@@ -203,13 +217,16 @@ fn inside(poly: &[DVec2], p: DVec2) -> bool {
 struct Builder {
     centre: DVec2,
     tiles: HashMap<(i32, i32), SheetMesh>,
+    /// What glows (see `Patch::glows`), and whether what is built now does.
+    glows: HashMap<(i32, i32), SheetMesh>,
+    glowing: bool,
     top: Top,
     tone: f32,
 }
 
 impl Builder {
     fn new(centre: DVec2) -> Self {
-        Self { centre, tiles: HashMap::new(), top: Top::new(centre), tone: 0.18 }
+        Self { centre, tiles: HashMap::new(), glows: HashMap::new(), glowing: false, top: Top::new(centre), tone: 0.18 }
     }
 
     /// A tone round `base`, varied by `spread` with `k`'s hash.
@@ -223,9 +240,32 @@ impl Builder {
         d.x <= SPAN * 0.5 && d.y <= SPAN * 0.5
     }
 
+    /// What `build` builds glowing (see `Patch::glows`), its tone the glow's.
+    fn glow(&mut self, build: impl FnOnce(&mut Self)) {
+        self.glowing = true;
+        build(self);
+        self.glowing = false;
+    }
+
+    /// A glowing bar from `a` to `z` (as a deck: its top at `top`, `width`
+    /// wide, `thick` deep), each point's tone `tone` of how far along it.
+    fn channel(&mut self, a: DVec2, z: DVec2, top: f64, width: f64, thick: f64, tone: impl Fn(f64) -> f32) {
+        self.glowing = true;
+        let start = self.mesh((a + z) * 0.5).positions.len();
+        self.deck(a, top, z, top, width, thick);
+        let along = (z - a).normalize_or_zero();
+        let m = self.mesh((a + z) * 0.5);
+        for k in start..m.positions.len() {
+            let p = m.positions[k];
+            m.tones[k] = tone((DVec2::new(p[0] as f64, p[2] as f64) - a).dot(along));
+        }
+        self.glowing = false;
+    }
+
     fn mesh(&mut self, at: DVec2) -> &mut SheetMesh {
         let key = ((at.x / TILE).floor() as i32, (at.y / TILE).floor() as i32);
-        self.tiles.entry(key).or_insert_with(|| SheetMesh {
+        let tiles = if self.glowing { &mut self.glows } else { &mut self.tiles };
+        tiles.entry(key).or_insert_with(|| SheetMesh {
             middle: (DVec2::new(key.0 as f64, key.1 as f64) + 0.5) * TILE,
             positions: Vec::new(),
             normals: Vec::new(),
@@ -305,6 +345,39 @@ impl Builder {
         m.tones.resize(m.positions.len(), tone);
     }
 
+    /// A solid swept through `sections` (each its corners round: top left,
+    /// top right, foot right, foot left), its ends closed.
+    fn sweep(&mut self, sections: &[[DVec3; 4]]) {
+        let tone = self.tone;
+        let first = sections[0][0];
+        let m = self.mesh(DVec2::new(first.x, first.z));
+        let centre = |s: &[DVec3; 4]| (s[0] + s[1] + s[2] + s[3]) * 0.25;
+        for pair in sections.windows(2) {
+            let (s, t) = (pair[0], pair[1]);
+            let inside = (centre(&s) + centre(&t)) * 0.5;
+            for k in 0..4 {
+                let j = (k + 1) % 4;
+                let quad = [s[k], s[j], t[j], t[k]];
+                let hint = (quad[0] + quad[1] + quad[2] + quad[3]) * 0.25 - inside;
+                face(m, [quad[0], quad[1], quad[2]], hint);
+                face(m, [quad[0], quad[2], quad[3]], hint);
+            }
+        }
+        let n = sections.len();
+        for (s, next) in [(sections[0], sections[1]), (sections[n - 1], sections[n - 2])] {
+            let hint = centre(&s) - centre(&next);
+            face(m, [s[0], s[1], s[2]], hint);
+            face(m, [s[0], s[2], s[3]], hint);
+        }
+        m.tones.resize(m.positions.len(), tone);
+    }
+
+    /// The ground's top raised to `y` over a polygon (where something is
+    /// built whose top the patch's own meshes don't give).
+    fn raise(&mut self, outline: &[DVec2], y: f64) {
+        self.top.raise(outline, y);
+    }
+
     /// A deck from `a` (its top at `ya`) to `b` (at `yb`): `width` m wide,
     /// `thick` m deep, level or sloping (a ramp), its ends square to it.
     fn deck(&mut self, a: DVec2, ya: f64, b: DVec2, yb: f64, width: f64, thick: f64) {
@@ -345,7 +418,7 @@ impl Builder {
     }
 
     fn finish(self) -> Patch {
-        Patch { pieces: self.tiles.into_values().collect(), top: self.top }
+        Patch { pieces: self.tiles.into_values().collect(), glows: self.glows.into_values().collect(), top: self.top }
     }
 }
 
