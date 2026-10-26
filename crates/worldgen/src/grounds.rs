@@ -33,7 +33,13 @@
 //!   a groove round a core where a span lands, each span an arch from above
 //!   swept into the cylinders and from the side, springing from them, and
 //!   `void_inlay_trees`, the spans on the branch spans' trees (see
-//!   `grounds/void.rs`).
+//!   `grounds/void.rs`). And the scale lab: `void_inlay_screen` with its
+//!   cues cut into the cylinders' drums, `void_scale_courses` (see
+//!   `void::Cues`); and seams where the drums were assembled,
+//!   `void_seams_staves`, `void_seams_rings` (`void::Seams`); and a lamp at
+//!   each end of each walkway, `void_lamp_monolith`, `void_lamp_cradle`,
+//!   `void_lamp_pendant`, `void_lamp_echo` (`void::Lamp`), its foot in a
+//!   socket, `void_lamp_echo_socket` (`void::Foot`).
 //!
 //! The axes found so far (the user, 2026-10-21): levels (several heights
 //! under a point) as a district's identity, not only a landmark's; and
@@ -56,6 +62,7 @@
 //! tone along the lattice, took their place.
 
 mod canyons;
+mod cuts;
 mod floors;
 mod nested;
 mod stacked;
@@ -68,7 +75,7 @@ use glam::{DVec2, DVec3};
 use crate::tilted::{SheetMesh, Tilted, clip, face, triangulate};
 
 /// The names `build` knows.
-pub const NAMES: [&str; 19] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander", "void_inlay", "void_inlay_balcony", "void_inlay_screen", "void_inlay_trees"];
+pub const NAMES: [&str; 27] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander", "void_inlay", "void_inlay_balcony", "void_inlay_screen", "void_inlay_trees", "void_scale_courses", "void_seams_staves", "void_seams_rings", "void_lamp_monolith", "void_lamp_cradle", "void_lamp_pendant", "void_lamp_echo", "void_lamp_echo_socket"];
 
 /// Whether a kind stands over the void (its floor far below, lost in the
 /// haze: the game draws the haze nearer for it).
@@ -94,6 +101,8 @@ pub struct Patch {
     /// What glows from within (the void's cores): each vertex's tone its
     /// pulse's phase (0..1).
     pub glows: Vec<SheetMesh>,
+    /// Where lamps shine from (the void's: see `void::Lamp`).
+    pub lights: Vec<[f32; 3]>,
     top: Top,
 }
 
@@ -116,7 +125,7 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
             let tilted = Tilted::new(crate::WORLD_SIZE, seed);
             let pieces = tilted.patch((centre.x, centre.y), SPAN, lift, -1.0);
             b.top.fill(|p| tilted.height(p) + lift);
-            return Ok(Patch { pieces, glows: Vec::new(), top: b.top });
+            return Ok(Patch { pieces, glows: Vec::new(), lights: Vec::new(), top: b.top });
         }
         "canyons" => canyons::build(&mut b, seed, &canyons::PLAIN),
         "bridged" => {
@@ -135,10 +144,30 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
         "void_branch" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Branch),
         "void_mixed" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Mixed),
         "void_meander" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Meander),
-        "void_inlay" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Open)),
-        "void_inlay_balcony" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Balcony)),
-        "void_inlay_screen" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Screen)),
-        "void_inlay_trees" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Trees, void::Infill::Open)),
+        "void_inlay" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Open, void::Cues::default())),
+        "void_inlay_balcony" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Balcony, void::Cues::default())),
+        "void_inlay_screen" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Screen, void::Cues::default())),
+        "void_inlay_trees" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Trees, void::Infill::Open, void::Cues::default())),
+        "void_scale_courses" => {
+            let cues = void::Cues { courses: true, ..void::Cues::default() };
+            void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Screen, cues));
+        }
+        "void_seams_staves" | "void_seams_rings" => {
+            let seams = if name.ends_with("staves") { void::Seams::Staves } else { void::Seams::Rings };
+            let cues = void::Cues { seams: Some(seams), ..void::Cues::default() };
+            void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Screen, cues));
+        }
+        "void_lamp_monolith" | "void_lamp_cradle" | "void_lamp_pendant" | "void_lamp_echo" | "void_lamp_echo_socket" => {
+            let lamp = match name {
+                "void_lamp_monolith" => void::Lamp::Monolith,
+                "void_lamp_cradle" => void::Lamp::Cradle,
+                "void_lamp_pendant" => void::Lamp::Pendant,
+                "void_lamp_echo_socket" => void::Lamp::Echo(void::Foot::Socket),
+                _ => void::Lamp::Echo(void::Foot::Plain),
+            };
+            let cues = void::Cues { lamps: Some(lamp), ..void::Cues::default() };
+            void::build(&mut b, seed, void::Recipe::Machine, void::Style::Inlay(void::Carry::Arch, void::Infill::Screen, cues));
+        }
         _ => return Err(format!("no ground called {name:?}: there are {}", NAMES.join(", "))),
     }
     Ok(b.finish())
@@ -220,13 +249,15 @@ struct Builder {
     /// What glows (see `Patch::glows`), and whether what is built now does.
     glows: HashMap<(i32, i32), SheetMesh>,
     glowing: bool,
+    /// Where lamps shine from.
+    lights: Vec<DVec3>,
     top: Top,
     tone: f32,
 }
 
 impl Builder {
     fn new(centre: DVec2) -> Self {
-        Self { centre, tiles: HashMap::new(), glows: HashMap::new(), glowing: false, top: Top::new(centre), tone: 0.18 }
+        Self { centre, tiles: HashMap::new(), glows: HashMap::new(), glowing: false, lights: Vec::new(), top: Top::new(centre), tone: 0.18 }
     }
 
     /// A tone round `base`, varied by `spread` with `k`'s hash.
@@ -316,6 +347,46 @@ impl Builder {
         face(m, [a0, b0, b1], hint);
         face(m, [a0, b1, a1], hint);
         m.tones.resize(m.positions.len(), tone);
+    }
+
+    /// A flat quad (its corners in order round it), facing `out`.
+    fn quad(&mut self, q: [DVec3; 4], out: DVec3) {
+        let tone = self.tone;
+        let m = self.mesh(DVec2::new(q[0].x, q[0].z));
+        face(m, [q[0], q[1], q[2]], out);
+        face(m, [q[0], q[2], q[3]], out);
+        m.tones.resize(m.positions.len(), tone);
+    }
+
+    /// Whatever `build` makes in the mesh at `at`, shaded smooth: each of its
+    /// points' normals `normal` of where it is (a round thing's, faceted,
+    /// shaded as the curve it stands for).
+    fn smooth(&mut self, at: DVec2, normal: impl Fn(DVec3) -> DVec3, build: impl FnOnce(&mut Self)) {
+        let from = self.mesh(at).positions.len();
+        build(self);
+        let m = self.mesh(at);
+        for k in from..m.positions.len() {
+            let p = m.positions[k];
+            m.normals[k] = normal(DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64)).normalize().as_vec3().to_array();
+        }
+    }
+
+    /// A prism as `prism` makes it, its outline a cylinder's round `c`: its
+    /// sides shaded smooth.
+    fn cylinder(&mut self, c: DVec2, outline: &[DVec2], top: f64, bottom: f64, floats: bool) {
+        if outline.len() < 3 || top <= bottom {
+            return;
+        }
+        self.top(outline, top);
+        let out = |p: DVec3| DVec3::new(p.x - c.x, 0.0, p.z - c.y);
+        let n = outline.len();
+        for i in 0..n {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            self.smooth((a + b) * 0.5, out, |s| s.wall(a, b, bottom, top, (a + b) * 0.5 - c));
+        }
+        if floats {
+            self.underside(outline, bottom);
+        }
     }
 
     /// A beam from `p` to `q`: a tube of `sides` sides, `r0` m round at `p`
@@ -418,7 +489,8 @@ impl Builder {
     }
 
     fn finish(self) -> Patch {
-        Patch { pieces: self.tiles.into_values().collect(), glows: self.glows.into_values().collect(), top: self.top }
+        let lights = self.lights.iter().map(|p| p.as_vec3().to_array()).collect();
+        Patch { pieces: self.tiles.into_values().collect(), glows: self.glows.into_values().collect(), lights, top: self.top }
     }
 }
 
@@ -501,6 +573,4 @@ mod tests {
         assert!(build("nothing", (centre.x, centre.y), 1).is_err());
     }
 }
-
-
 

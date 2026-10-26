@@ -58,7 +58,8 @@ struct CoreGlow {
     /// tail (m), w: its head (m).
     #[uniform(101)]
     surface: Vec4,
-    /// The grooves: x the lowest's floor (m), y how far apart, z how high.
+    /// The grooves: x the lowest's floor (m), y how far apart, z how high;
+    /// w a lit lamp's light.
     #[uniform(102)]
     grooves: Vec4,
 }
@@ -68,6 +69,13 @@ impl MaterialExtension for CoreGlow {
         "embedded://game/core_glow.wgsl".into()
     }
 }
+
+/// The void's lamps: their glowing parts' light (as the cores'), the light
+/// they shine (lumens), how far (m) (`--set lamp_glow`, `lamp_light`,
+/// `lamp_range`).
+const LAMP: (f32, f32, f32) = (1500.0, 2.0e6, 30.0);
+/// The void's metal: how metallic, how rough, its tones brightened so much.
+const VOID_METAL: (f32, f32, f32) = (1.0, 0.5, 4.0);
 
 /// The patch's meshes, each with its collider.
 #[allow(clippy::too_many_arguments)]
@@ -81,7 +89,15 @@ fn build(
 ) {
     // (White, its pieces' tones in their vertices' colours: each its own,
     // as the plates.)
-    let material = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.9, reflectance: 0.3, ..default() });
+    // (The void's metal, the user: its cylinders are a machine's, not
+    // stone; its colour the tones brightened so much, a metal's being its
+    // reflection's. Rougher than 0.5, dull; smoother, glare. Others matte;
+    // any overridden by `--set metal=… rough=… metal_gain=…`. The walkways'
+    // tops once rougher and darker, a walked face: too subtle to look meant.)
+    let void = args.ground.as_deref().is_some_and(|g| g.starts_with("void"));
+    let (metal, rough, gain) = if void { VOID_METAL } else { (0.0, 0.9, 1.0) };
+    let (metal, rough, gain) = (args.num("metal", metal), args.num("rough", rough), args.num("metal_gain", gain));
+    let material = materials.add(StandardMaterial { base_color: Color::linear_rgb(gain, gain, gain), metallic: metal, perceptual_roughness: rough, reflectance: 0.3, ..default() });
     // (Dim: the machine glimpsed, never lit up. Light as the structures'
     // seams is, against the camera's exposure: theirs 3000. Matte and dark:
     // glossy, a low sun shone off it and the wall seemed lit, not what is in
@@ -91,7 +107,7 @@ fn build(
         extension: CoreGlow {
             light: Vec4::new(args.num("core_glow", 40.0), args.num("core_pulse", 600.0), args.num("core_speed", 12.0), grounds::VOID_PULSE as f32),
             surface: Vec4::new(args.num("core_tone", 0.03), args.num("core_spread", 0.18), args.num("core_tail", 15.0), args.num("core_head", 1.5)),
-            grooves: Vec4::new(grounds::VOID_LEVELS.0 as f32, grounds::VOID_LEVELS.1 as f32, grounds::VOID_GROOVE as f32, 0.0),
+            grooves: Vec4::new(grounds::VOID_LEVELS.0 as f32, grounds::VOID_LEVELS.1 as f32, grounds::VOID_GROOVE as f32, args.num("lamp_glow", LAMP.0)),
         },
     });
     let mut triangles = 0;
@@ -115,5 +131,10 @@ fn build(
             e.insert((RigidBody::Static, c));
         }
     }
+    // The lamps' light (no shadows, yet).
+    for &p in &ground.0.lights {
+        commands.spawn((PointLight { intensity: args.num("lamp_light", LAMP.1), range: args.num("lamp_range", LAMP.2), shadow_maps_enabled: false, ..default() }, Transform::from_translation(Vec3::from(p))));
+    }
+    info!("ground lab: {} lights", ground.0.lights.len());
     info!("ground lab: {} round ({:.0}, {:.0}), {} meshes, {triangles} triangles", args.ground.as_deref().unwrap_or(""), CENTRE.0, CENTRE.1, ground.0.pieces.len());
 }

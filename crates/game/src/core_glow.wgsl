@@ -14,7 +14,8 @@
 // reaches a walkway's level, running along it to the next core, there
 // climbing on (the void's network, its phases set so); a faint light
 // between them. Told apart by the tone: a channel's below 0 (its phase -1,
-// the less); a core's 2 where no pulse climbs it (below where it is fed).
+// the less); a core's 2 where no pulse climbs it (below where it is fed);
+// a lit lamp's 3 or more (steady).
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -42,7 +43,8 @@
 // groove's middle height (of its height), z: a pulse's tail (m), w: its
 // head (m).
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> surface: vec4<f32>;
-// The grooves: x the lowest's floor (m), y how far apart, z how high.
+// The grooves: x the lowest's floor (m), y how far apart, z how high; w a
+// lit lamp's light.
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> grooves: vec4<f32>;
 
 @fragment
@@ -56,6 +58,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let channel = tone < 0.0;
     let phase = select(tone, -tone - 1.0, channel);
     let pulsing = tone < 2.0;
+    let lamp = tone >= 3.0;
     pbr_input.material.base_color = vec4<f32>(vec3<f32>(surface.x), 1.0);
     // How far up its groove (0 its floor, 1 its ceiling): the steady light
     // gathered about the middle; a pulse's only eased off at the floor and
@@ -73,7 +76,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // (A channel's world height its level's: its pulse as far up the
     // climb as the vertex's phase puts it.)
     let core = light.x * gathered + light.y * pulse * eased * select(0.0, 1.0, pulsing);
-    let glow = select(core, light.x * 0.25 + light.y * pulse, channel);
+    let glow = select(select(core, light.x * 0.25 + light.y * pulse, channel), grooves.w, lamp);
     pbr_input.material.emissive = vec4<f32>(vec3<f32>(glow), 1.0);
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
