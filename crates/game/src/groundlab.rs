@@ -76,6 +76,8 @@ impl MaterialExtension for CoreGlow {
 const LAMP: (f32, f32, f32) = (1500.0, 2.0e6, 30.0);
 /// The void's metal: how metallic, how rough, its tones brightened so much.
 const VOID_METAL: (f32, f32, f32) = (1.0, 0.5, 4.0);
+/// What is glossy black's roughness and reflectance (the ichor's).
+const GLOSS: (f32, f32) = (0.12, 0.7);
 
 /// The patch's meshes, each with its collider.
 #[allow(clippy::too_many_arguments)]
@@ -98,6 +100,9 @@ fn build(
     let (metal, rough, gain) = if void { VOID_METAL } else { (0.0, 0.9, 1.0) };
     let (metal, rough, gain) = (args.num("metal", metal), args.num("rough", rough), args.num("metal_gain", gain));
     let material = materials.add(StandardMaterial { base_color: Color::linear_rgb(gain, gain, gain), metallic: metal, perceptual_roughness: rough, reflectance: 0.3, ..default() });
+    // (What is glossy black: the ichor's (`--set gloss_rough`,
+    // `gloss_reflect`; rougher, 0.35, black plastic).)
+    let gloss = materials.add(StandardMaterial { base_color: Color::srgb(0.01, 0.01, 0.01), perceptual_roughness: args.num("gloss_rough", GLOSS.0), reflectance: args.num("gloss_reflect", GLOSS.1), ..default() });
     // (Dim: the machine glimpsed, never lit up. Light as the structures'
     // seams is, against the camera's exposure: theirs 3000. Matte and dark:
     // glossy, a low sun shone off it and the wall seemed lit, not what is in
@@ -111,7 +116,8 @@ fn build(
         },
     });
     let mut triangles = 0;
-    for (piece, glows) in ground.0.pieces.iter().map(|p| (p, false)).chain(ground.0.glows.iter().map(|p| (p, true))) {
+    let solid = ground.0.pieces.iter().map(|p| (p, &material)).chain(ground.0.gloss.iter().map(|p| (p, &gloss)));
+    for (piece, look) in solid.map(|(p, m)| (p, Some(m))).chain(ground.0.glows.iter().map(|p| (p, None))) {
         triangles += piece.indices.len() / 3;
         let vertices: Vec<Vec3> = piece.positions.iter().map(|&p| Vec3::from(p)).collect();
         let tris: Vec<[u32; 3]> = piece.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
@@ -122,11 +128,11 @@ fn build(
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, piece.tones.iter().map(|&t| [t, t, t, 1.0]).collect::<Vec<[f32; 4]>>())
             .with_inserted_indices(Indices::U32(piece.indices.clone()));
         let mut e = commands.spawn((Mesh3d(meshes.add(mesh)), Transform::IDENTITY));
-        if glows {
-            e.insert(MeshMaterial3d(core.clone()));
-        } else {
-            e.insert(MeshMaterial3d(material.clone()));
-        }
+        // (Its material; the cores' if it glows.)
+        match look {
+            Some(m) => e.insert(MeshMaterial3d(m.clone())),
+            None => e.insert(MeshMaterial3d(core.clone())),
+        };
         if let Ok(c) = collider {
             e.insert((RigidBody::Static, c));
         }

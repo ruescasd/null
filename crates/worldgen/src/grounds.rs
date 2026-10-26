@@ -101,6 +101,9 @@ pub struct Patch {
     /// What glows from within (the void's cores): each vertex's tone its
     /// pulse's phase (0..1).
     pub glows: Vec<SheetMesh>,
+    /// What is glossy black, as the ichor is (the void's streetlights: the
+    /// world's black things against the machine's metal).
+    pub gloss: Vec<SheetMesh>,
     /// Where lamps shine from (the void's: see `void::Lamp`).
     pub lights: Vec<[f32; 3]>,
     top: Top,
@@ -125,7 +128,7 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
             let tilted = Tilted::new(crate::WORLD_SIZE, seed);
             let pieces = tilted.patch((centre.x, centre.y), SPAN, lift, -1.0);
             b.top.fill(|p| tilted.height(p) + lift);
-            return Ok(Patch { pieces, glows: Vec::new(), lights: Vec::new(), top: b.top });
+            return Ok(Patch { pieces, glows: Vec::new(), gloss: Vec::new(), lights: Vec::new(), top: b.top });
         }
         "canyons" => canyons::build(&mut b, seed, &canyons::PLAIN),
         "bridged" => {
@@ -249,6 +252,10 @@ struct Builder {
     /// What glows (see `Patch::glows`), and whether what is built now does.
     glows: HashMap<(i32, i32), SheetMesh>,
     glowing: bool,
+    /// What is glossy black (see `Patch::gloss`), and whether what is built
+    /// now is (but what glows, glows).
+    gloss: HashMap<(i32, i32), SheetMesh>,
+    glossy: bool,
     /// Where lamps shine from.
     lights: Vec<DVec3>,
     top: Top,
@@ -257,7 +264,7 @@ struct Builder {
 
 impl Builder {
     fn new(centre: DVec2) -> Self {
-        Self { centre, tiles: HashMap::new(), glows: HashMap::new(), glowing: false, lights: Vec::new(), top: Top::new(centre), tone: 0.18 }
+        Self { centre, tiles: HashMap::new(), glows: HashMap::new(), glowing: false, gloss: HashMap::new(), glossy: false, lights: Vec::new(), top: Top::new(centre), tone: 0.18 }
     }
 
     /// A tone round `base`, varied by `spread` with `k`'s hash.
@@ -278,6 +285,13 @@ impl Builder {
         self.glowing = false;
     }
 
+    /// What `build` builds glossy black (see `Patch::gloss`).
+    fn gloss(&mut self, build: impl FnOnce(&mut Self)) {
+        self.glossy = true;
+        build(self);
+        self.glossy = false;
+    }
+
     /// A glowing bar from `a` to `z` (as a deck: its top at `top`, `width`
     /// wide, `thick` deep), each point's tone `tone` of how far along it.
     fn channel(&mut self, a: DVec2, z: DVec2, top: f64, width: f64, thick: f64, tone: impl Fn(f64) -> f32) {
@@ -295,7 +309,13 @@ impl Builder {
 
     fn mesh(&mut self, at: DVec2) -> &mut SheetMesh {
         let key = ((at.x / TILE).floor() as i32, (at.y / TILE).floor() as i32);
-        let tiles = if self.glowing { &mut self.glows } else { &mut self.tiles };
+        let tiles = if self.glowing {
+            &mut self.glows
+        } else if self.glossy {
+            &mut self.gloss
+        } else {
+            &mut self.tiles
+        };
         tiles.entry(key).or_insert_with(|| SheetMesh {
             middle: (DVec2::new(key.0 as f64, key.1 as f64) + 0.5) * TILE,
             positions: Vec::new(),
@@ -490,7 +510,7 @@ impl Builder {
 
     fn finish(self) -> Patch {
         let lights = self.lights.iter().map(|p| p.as_vec3().to_array()).collect();
-        Patch { pieces: self.tiles.into_values().collect(), glows: self.glows.into_values().collect(), lights, top: self.top }
+        Patch { pieces: self.tiles.into_values().collect(), glows: self.glows.into_values().collect(), gloss: self.gloss.into_values().collect(), lights, top: self.top }
     }
 }
 

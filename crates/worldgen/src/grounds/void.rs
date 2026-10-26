@@ -226,10 +226,9 @@ const COURSES_FROM: f64 = 1000.0;
 const SHELLS: [usize; 3] = [2, 3, 4];
 const TAB: (f64, [(f64, f64, f64); 2]) = (5.0, [(0.2, 0.42, -1.0), (0.58, 0.8, 1.0)]);
 
-/// Lamps: a lit one's glowing part's tone (see `core_glow.wgsl`), an unlit
-/// one's; how far in from a walkway's edge one stands (m).
+/// Lamps: a lit one's glowing part's tone (see `core_glow.wgsl`); how far
+/// in from a walkway's edge one stands (m).
 const LAMP: f32 = 3.0;
-const UNLIT: f32 = 0.04;
 const KERB: f64 = 1.2;
 /// A monolith: so thick (along the walkway), so wide, so high; its slot
 /// from so high to so high, so wide; its rod so thick (m).
@@ -418,9 +417,13 @@ pub fn build(b: &mut Builder, seed: u32, recipe: Recipe, style: Style) {
             };
             arch(b, centre(i, j), centre(ni, nj), level(k), carry, &sockets);
             if let Some(kind) = cues.lamps {
-                b.tone = STONE;
-                lamp(b, kind, centre(i, j), centre(ni, nj), level(k), lit[n].is_some());
-                lamp(b, kind, centre(ni, nj), centre(i, j), level(k), lit[n].is_some());
+                // (Glossy black, as the ichor, the world's black things: the
+                // user's, black for contrast. A dark metal, a quarter the
+                // field's tone, still the machine's; flat black, a cut-out.)
+                b.gloss(|b| {
+                    lamp(b, kind, centre(i, j), centre(ni, nj), level(k), lit[n].is_some());
+                    lamp(b, kind, centre(ni, nj), centre(i, j), level(k), lit[n].is_some());
+                });
             }
             if let Some(forward) = lit[n] {
                 let (from, to) = if forward { ((i, j), (ni, nj)) } else { ((ni, nj), (i, j)) };
@@ -563,10 +566,7 @@ fn lamp(b: &mut Builder, kind: Lamp, c: DVec2, to: DVec2, y: f64, lit: bool) {
             b.tone = stone;
             b.lights.extend(light);
         } else {
-            let stone = b.tone;
-            b.tone = UNLIT;
             build(b);
-            b.tone = stone;
         }
     };
     let floor = y - 0.01;
