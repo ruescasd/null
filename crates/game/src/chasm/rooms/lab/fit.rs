@@ -731,7 +731,7 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 /// up, and light thrown back off the floor, strong enough to fill it.
 /// (Until review 87 the rooms were lit mostly by a sun 3 degrees up leaking
 /// in through their walls; by their own lamps alone they were near black.)
-/// A glass stepwell (a path's way out onto the chasm, step 3b): a long
+/// A glass stair (a path's way out onto the chasm, step 3b): a long
 /// room along the face, glazed on it (wall `glass`, as `Spec`'s walls;
 /// see `rooms::place`), a stair switching back and forth along it, a
 /// storey a flight, the first in a lane against the glass, the next in one
@@ -739,7 +739,7 @@ pub(in crate::chasm) fn cascade(spec: &Spec) -> Option<Room> {
 /// apart at each end in turn; its doors (at its lowest storey and its
 /// highest) onto the landings at their ends. The flights' steps a quarter
 /// of a metre up, their undersides stepped; walked on hidden slopes.
-pub(in crate::chasm) fn stepwell(spec: &Spec, glass: usize) -> Room {
+pub(in crate::chasm) fn glass_stair(spec: &Spec, glass: usize) -> Room {
     let (sx, sz) = (spec.size.x, spec.size.y);
     let along_x = glass >= 2;
     let (len, depth) = if along_x { (sx, sz) } else { (sz, sx) };
@@ -809,10 +809,88 @@ pub(in crate::chasm) fn stepwell(spec: &Spec, glass: usize) -> Room {
     }
     let mid = at(len * 0.5, depth * 0.5, level(storeys / 2) + 1.0);
     b.fill.push((mid, len + spec.height, strength(len + spec.height) * 3.0));
-    b.note(format!("{}: a glass stepwell {len:.0} m along the face, {} flights switching back", spec.name, storeys - 1));
+    b.note(format!("{}: a glass stair {len:.0} m along the face, {} flights switching back", spec.name, storeys - 1));
     b.view("stair", at(if first == 0 { T + 2.0 } else { len - T - 2.0 }, depth * 0.5, level(0) + 1.7), at(len * 0.5, depth * 0.5, level(storeys - 1) + 2.0));
     let mut room = b.finish(1.0);
     room.slopes = slopes;
+    room
+}
+
+/// A stepwell (the user's court: the chasm's, see `chasm.rs`, `Well`, and
+/// `lab::court`; a path's way out onto the chasm, step 3b), glazed on it
+/// (wall `glass`, as `Spec`'s; see `rooms::place_court`): a square court against
+/// its glass, against each wall a band, a landing at a corner and a flight
+/// down the wall from it to the next corner's, round once, the first along
+/// the glass, the last coming down under where it began; in the open well
+/// a basin with a fountain. In by a door in a side wall onto its top
+/// landing (which reaches on past the door, as a door's landing does), out
+/// by a door in the other side wall at its floor (or the other way round).
+/// Three cells square: its court 21 m, its band 4.5, so each flight goes
+/// down a storey (the chasm's was 14-18 m, its band 3.5, a flight 4.5 m).
+pub(in crate::chasm) fn court(spec: &Spec, glass: usize) -> Room {
+    let (sx, sy, sz) = (spec.size.x, spec.height, spec.size.y);
+    let along_x = glass >= 2;
+    let (len, depth) = if along_x { (sx, sz) } else { (sz, sx) };
+    let f = 1.0;
+    let flights = ((sy - 1.0) / 6.0).round() - 1.0;
+    let side = len - 2.0 * T;
+    let band = (side - 2.0 * 6.0) * 0.5;
+    assert!(flights == 4.0 && band >= 3.0 && depth >= side + T, "{}: a stepwell wants a court of four storeys, three cells square ({sx} by {sz}, {sy} high)", spec.name);
+    let top = f + 4.0 * 6.0;
+    // (The doors: in at the top, out at the floor.)
+    let by_sill = |a: &&(usize, f32, f32), b: &&(usize, f32, f32)| a.2.total_cmp(&b.2);
+    let (Some(&(wall_in, u_in, _)), Some(_)) = (spec.doors.iter().max_by(by_sill), spec.doors.iter().min_by(by_sill)) else {
+        panic!("{}: a stepwell has a door at its top and one at its floor", spec.name);
+    };
+    // (Worked in its own frame: along the face from the side it is come
+    // into at the top `u`, up `y`, in from the glass `n`; laid out in the
+    // grid's.)
+    let near = wall_in == if along_x { 0 } else { 2 };
+    let low = glass == 0 || glass == 2;
+    let at = move |p: Vec3| {
+        let u = if near { p.x } else { len - p.x };
+        let n = if low { p.z } else { depth - p.z };
+        if along_x { Vec3::new(u, p.y, n) } else { Vec3::new(n, p.y, u) }
+    };
+    let n_in = if low { u_in } else { depth - u_in };
+    let mut b = B::new(Vec3::new(sx, sy, sz), Detail { reveals: true, ..Default::default() });
+    let (p, q) = (at(Vec3::new(T, f, 0.0)), at(Vec3::new(T + side, sy - 1.0, side)));
+    b.carve(p.min(q), p.max(q));
+    for &(wall, u, y) in &spec.doors {
+        let (axis, n) = match wall {
+            0 => (0, 0.0),
+            1 => (0, sx - T),
+            2 => (2, 0.0),
+            _ => (2, sz - T),
+        };
+        b.door(axis, u - 1.0, 2.0, y, 2.5, n, T);
+    }
+    // (Its lamps the chasm's court's but ten times as strong: a region is
+    // lit by its rooms' own lamps alone, the chasm's court by more.)
+    const BRIGHT: f32 = 10.0;
+    let (_, ways) = super::round_flights_at(&mut b, &at, (T, 0.0), side, band, top, BRIGHT);
+    // (The top landing on past its door, 2.5 m beyond its middle.)
+    if n_in + 2.5 > band {
+        let (p, q) = (at(Vec3::new(T, top - 1.25, band)), at(Vec3::new(T + band, top, n_in + 2.5)));
+        b.solid(p.min(q), p.max(q));
+    }
+    let c = at(Vec3::new(T + side * 0.5, f, side * 0.5));
+    super::basin(&mut b, (c.x, c.z), side, band, f);
+    b.lamp(at(Vec3::new(T + band * 0.5, top + 2.5, band * 0.5)), side * 0.8, strength(side * 0.8) * 0.5 * BRIGHT);
+    b.lamp(at(Vec3::new(T + side * 0.5, top + 3.5, side * 0.5)), side + top, strength(side + top) * BRIGHT);
+    let mid = at(Vec3::new(T + side * 0.5, f + 12.0, side * 0.5));
+    b.fill.push((mid, side + sy, strength(side + sy) * 3.0));
+    b.note(format!("{}: a stepwell, a court {side:.0} m square against its glass, a flight down each wall a storey round it, to a basin with a fountain", spec.name));
+    let (cu, cn) = (T + side * 0.5, side * 0.5);
+    b.view("entry", at(Vec3::new(T + band - 0.25, top + 1.7, band - 0.25)), at(Vec3::new(cu + side * 0.3, f + 24.0 * 0.35, cn + side * 0.3)));
+    let r = half(((side - 2.0 * band) * 0.3).max(2.0));
+    b.view("bottom", at(Vec3::new(cu + r + 1.5, f + 1.7, cn + r + 1.0)), at(Vec3::new(cu - side * 0.3, top - 24.0 * 0.2, cn - side * 0.3)));
+    let mut room = b.finish(f);
+    // (Walked on hidden slopes over the flights.)
+    room.slopes = ways
+        .iter()
+        .map(|&(a, z, across)| [(a, a.y + LIFT), (z, z.y + LIFT)].into_iter().flat_map(|(p, y)| [1.0, -1.0].into_iter().flat_map(move |k| [Vec3::new(p.x, y, p.z) + across * k, Vec3::new(p.x, y - 0.5, p.z) + across * k])).collect())
+        .collect();
     room
 }
 

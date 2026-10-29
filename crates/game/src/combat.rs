@@ -48,6 +48,7 @@ mod ichor;
 mod leech;
 mod weapon;
 mod web;
+mod round;
 
 pub struct CombatPlugin;
 
@@ -99,11 +100,12 @@ impl Plugin for CombatPlugin {
         app.init_resource::<Gun>()
             .init_resource::<Director>()
             .init_resource::<Feedback>()
+            .init_resource::<round::Round>()
             .add_systems(PostStartup, setup)
-            .add_systems(Startup, (ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, cape::hang))
+            .add_systems(Startup, (round::setup, ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, cape::hang))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, die, feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, (round::track, die).chain(), feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk)
                     .run_if(crate::loading::playing),
@@ -657,7 +659,7 @@ fn swarm(
     // capturing, once everything is, so it happens in view.)
     // (A region of the plan stands high over the terrain, which is never
     // in round it: ready at once.)
-    let region = args.opt("chasm") && args.opt("region");
+    let region = args.opt("chasm") && (args.opt("region") || args.opt("arena"));
     let ready = region || if args.unattended() { streamer.settled } else { streamer.near };
     // (The labs, the rooms' and the plan's, in peace: they are for looking
     // at; a hound forming in one, the user. A region is fought in.)
@@ -857,6 +859,7 @@ fn die(
     assets: Res<Assets3>,
     ichor: Res<ichor::Ichor>,
     mut player: Single<&mut Player>,
+    mut spawns: ResMut<crate::console::Spawns>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
     bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>, With<hunter::Part>, With<hunter::Eye>)>>,
 ) {
@@ -873,7 +876,8 @@ fn die(
     if args.opt("god") {
         player.health = HEALTH_MAX;
     }
-    if player.health <= 0.0 {
+    // (Fallen, or `reset` at the console: you start again.)
+    if player.health <= 0.0 || std::mem::take(&mut spawns.reset) {
         player.health = HEALTH_MAX;
         for (entity, ..) in &swarm {
             commands.entity(entity).despawn();

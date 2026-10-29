@@ -10,6 +10,7 @@ mod ground;
 mod figure;
 mod beams;
 mod canal_light;
+mod streetlights;
 mod landmarks;
 mod loading;
 /// Every option name the game reads, gathered from its source by `build.rs`.
@@ -39,6 +40,7 @@ use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, window::PresentMo
 /// `--ground name` a patch of the ground lab's kind of ground (see `groundlab.rs`)
 /// `--opt name` (repeatable) switch a rendering experiment on or off
 /// `--set name=value` or `--set name value` (repeatable) override a tuning number
+/// `--do command` (repeatable) a console command, run once the game is on
 #[derive(Resource, Clone, Debug)]
 pub struct Args {
     pub opts: Vec<String>,
@@ -49,6 +51,7 @@ pub struct Args {
     pub seed: u32,
     pub focus: Option<String>,
     pub ground: Option<String>,
+    pub run: Vec<String>,
 }
 
 impl Args {
@@ -83,7 +86,7 @@ impl Args {
 
     fn parse() -> Self {
         let mut args =
-            Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None };
+            Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
         let mut it = std::env::args().skip(1);
         let floats = |s: Option<String>| -> Vec<f32> {
             s.unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect()
@@ -96,6 +99,7 @@ impl Args {
                 "--focus" => args.focus = it.next(),
                 "--ground" => args.ground = it.next(),
                 "--opt" => args.opts.extend(it.next()),
+                "--do" => args.run.extend(it.next()),
                 // `--set name=value`, or `--set name value`; a switch as at
                 // the console, `--set god on` (the same as `--opt god`), or
                 // off (the user: the command line's settings all one way).
@@ -116,6 +120,10 @@ impl Args {
                 "--seed" => args.seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(1),
                 other => eprintln!("ignoring unknown argument {other}"),
             }
+        }
+        // (The arena is one of the chasm's built places: it brings it.)
+        if args.opt("arena") && !args.opt("chasm") {
+            args.opts.push("chasm".into());
         }
         args
     }
@@ -251,8 +259,7 @@ fn main() {
             terrain::TerrainPlugin,
             camera::FlyCameraPlugin,
             look::LookPlugin,
-            beams::BeamsPlugin,
-            canal_light::CanalLightPlugin,
+            (beams::BeamsPlugin, canal_light::CanalLightPlugin, streetlights::StreetlightsPlugin),
             capture::CapturePlugin,
             combat::CombatPlugin,
             figure::FigurePlugin,

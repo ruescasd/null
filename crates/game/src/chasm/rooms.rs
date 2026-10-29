@@ -935,29 +935,48 @@ fn add(room: lab::Room, name: &str, parts: &mut Parts, fixtures: &mut Fixtures, 
 /// `plan::network::region`): what its doors make it (see `fit::chosen`; `k`
 /// the place's number, to vary it), its grid's corner at `origin`; its wall
 /// `glass` (numbered as `Spec`'s), if any, open on the chasm and glazed (a
-/// stepwell's). Built into `parts`, as `add`: a line on it.
+/// glass stair's). Built into `parts`, as `add`: a line on it.
 pub(in crate::chasm) fn place(spec: &Spec, origin: Vec3, k: usize, glass: Option<usize>, parts: &mut Parts, fixtures: &mut Fixtures, views: &mut RoomViews) -> String {
     let room = match glass {
-        Some(w) => lab::fit::stepwell(spec, w),
+        Some(w) => lab::fit::glass_stair(spec, w),
         None => lab::fit::fitted(spec, lab::fit::chosen(spec, k)),
     };
     let mut room = lab::Room { grid: Grid { origin, ..room.grid }, ..room };
     if let Some(w) = glass {
         // (Its wall on the chasm carved away, but a metre at each end and
-        // its slabs top and bottom; a pane just inside its face.)
+        // its slabs top and bottom.)
         let (sx, sy, sz) = (spec.size.x, spec.height, spec.size.y);
-        let (lo, hi, pane) = match w {
-            0 => (Vec3::new(0.0, 1.0, 1.0), Vec3::new(1.5, sy - 1.0, sz - 1.0), Vec3::new(0.05, 0.0, 0.0)),
-            1 => (Vec3::new(sx - 1.5, 1.0, 1.0), Vec3::new(sx, sy - 1.0, sz - 1.0), Vec3::new(sx - 0.05, 0.0, 0.0)),
-            2 => (Vec3::new(1.0, 1.0, 0.0), Vec3::new(sx - 1.0, sy - 1.0, 1.5), Vec3::new(0.0, 0.0, 0.05)),
-            _ => (Vec3::new(1.0, 1.0, sz - 1.5), Vec3::new(sx - 1.0, sy - 1.0, sz), Vec3::new(0.0, 0.0, sz - 0.05)),
+        let (lo, hi) = match w {
+            0 => (Vec3::new(0.0, 1.0, 1.0), Vec3::new(1.5, sy - 1.0, sz - 1.0)),
+            1 => (Vec3::new(sx - 1.5, 1.0, 1.0), Vec3::new(sx, sy - 1.0, sz - 1.0)),
+            2 => (Vec3::new(1.0, 1.0, 0.0), Vec3::new(sx - 1.0, sy - 1.0, 1.5)),
+            _ => (Vec3::new(1.0, 1.0, sz - 1.5), Vec3::new(sx - 1.0, sy - 1.0, sz)),
         };
         room.grid.fill(lo, hi, Filler::Empty);
-        let c = (lo + hi) * 0.5;
-        let c = Vec3::new(if w < 2 { pane.x } else { c.x }, c.y, if w >= 2 { pane.z } else { c.z });
-        let e = (hi - lo) * 0.5;
-        let e = Vec3::new(if w < 2 { 0.02 } else { e.x }, e.y, if w >= 2 { 0.02 } else { e.z });
-        parts.glass.oriented(origin + c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
+        pane(parts, spec, origin, w, 1.0);
     }
     add(room, &spec.name, parts, fixtures, views)
+}
+
+/// A stepwell in a region built for real (see `lab::fit::court`): its
+/// court glazed on the chasm on wall `glass`, its grid's corner at
+/// `origin`. Built into `parts`, as `add`: a line on it.
+pub(in crate::chasm) fn place_court(spec: &Spec, origin: Vec3, glass: usize, parts: &mut Parts, fixtures: &mut Fixtures, views: &mut RoomViews) -> String {
+    let room = lab::fit::court(spec, glass);
+    let room = lab::Room { grid: Grid { origin, ..room.grid }, ..room };
+    pane(parts, spec, origin, glass, lab::T);
+    add(room, &spec.name, parts, fixtures, views)
+}
+
+/// A pane of glass just inside a room's face on wall `w` (as `Spec`'s),
+/// from `ends` in from each end, between its slabs a metre thick.
+fn pane(parts: &mut Parts, spec: &Spec, origin: Vec3, w: usize, ends: f32) {
+    let (sx, sy, sz) = (spec.size.x, spec.height, spec.size.y);
+    let (c, e) = match w {
+        0 => (Vec3::new(0.05, sy * 0.5, sz * 0.5), Vec3::new(0.02, sy * 0.5 - 1.0, sz * 0.5 - ends)),
+        1 => (Vec3::new(sx - 0.05, sy * 0.5, sz * 0.5), Vec3::new(0.02, sy * 0.5 - 1.0, sz * 0.5 - ends)),
+        2 => (Vec3::new(sx * 0.5, sy * 0.5, 0.05), Vec3::new(sx * 0.5 - ends, sy * 0.5 - 1.0, 0.02)),
+        _ => (Vec3::new(sx * 0.5, sy * 0.5, sz - 0.05), Vec3::new(sx * 0.5 - ends, sy * 0.5 - 1.0, 0.02)),
+    };
+    parts.glass.oriented(origin + c, Vec3::X * e.x, Vec3::Y * e.y, Vec3::Z * e.z);
 }

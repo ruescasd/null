@@ -35,6 +35,8 @@ use crate::Args;
 
 /// Radius of each detail level's disc, in metres.
 pub const LOD_RADIUS: [f32; LOD_LEVELS as usize] = [450.0, 1700.0, 4800.0];
+/// How far each coarser level of detail is lowered (m, see `WorldGen::sink`).
+const SINK: f32 = 3.0;
 /// How far round the camera the finest terrain must be in place to play
 /// (`Streamer::near`); the rest streams in while you do.
 const NEAR: f32 = 80.0;
@@ -72,25 +74,7 @@ impl Plugin for TerrainPlugin {
             // chasm stands on them (see `chasm.rs`).
             WorldGen(Arc::new(PlateWorld::lab(WORLD_SIZE, args.seed)))
         } else {
-            // The sites in the structure library reshape the ground.
-            let mut world = PlateWorld::new(WORLD_SIZE, args.seed);
-            world.canals.stones = stones(args);
-            world.canals.rise = rise(args);
-            world.canals.relief = args.num("canal_relief", 1.5) as f64;
-            // (`--set slabs N`: 1 slabs, 2 cliff blocks; see worldgen's
-            // slabs.rs.)
-            world.slabs = args.num("slabs", 0.0) as u8;
-            // (`--set district=N`: one district everywhere, in the order of
-            // `District::ALL`: 0 floor, 1 tiers, 2 stacks, 3 broken, 4
-            // uplands, 5 highlands.)
-            let only = args.num("district", -1.0);
-            if only >= 0.0 {
-                world.districts.force = worldgen::district::District::ALL.get(only as usize).copied();
-            }
-            let world = match crate::structures::load_library() {
-                Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
-                _ => WorldGen(Arc::new(world)),
-            };
+            let world = plate_world(args);
             // (Slabs on: those near where it starts, to find and judge them,
             // each its own steepness and length.)
             if world.0.slabs > 0 {
@@ -115,6 +99,34 @@ impl Plugin for TerrainPlugin {
                 Update,
                 (receive_meshes, stream_columns, update_material).chain().in_set(StreamSet),
             );
+    }
+}
+
+/// The main world, as `args` asks for it: the plates, their canals and
+/// districts, reshaped by the sites in the structure library.
+pub fn plate_world(args: &Args) -> WorldGen {
+    let mut world = PlateWorld::new(WORLD_SIZE, args.seed);
+    world.canals.stones = stones(args);
+    world.canals.rise = rise(args);
+    world.canals.relief = args.num("canal_relief", 1.5) as f64;
+    // (`--set slabs N`: 1 slabs, 2 cliff blocks; see worldgen's
+    // slabs.rs.)
+    world.slabs = args.num("slabs", 0.0) as u8;
+    // (`--opt kerbs`: the ground's brick along the flat plates'
+    // edges; see worldgen's bricks.rs.)
+    world.kerbs = args.opt("kerbs");
+    // (`--set wall_least`: the lowest wall panelled, m; see worldgen.)
+    world.wall_least = args.num("wall_least", 1.5) as f64;
+    // (`--set district=N`: one district everywhere, in the order of
+    // `District::ALL`: 0 floor, 1 tiers, 2 stacks, 3 broken, 4
+    // uplands, 5 highlands.)
+    let only = args.num("district", -1.0);
+    if only >= 0.0 {
+        world.districts.force = worldgen::district::District::ALL.get(only as usize).copied();
+    }
+    match crate::structures::load_library() {
+        Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
+        _ => WorldGen(Arc::new(world)),
     }
 }
 
@@ -152,7 +164,7 @@ impl WorldGen {
     /// How far a coarse column is lowered so finer overlapping terrain wins:
     /// finer plates step at most a few metres from their parent.
     fn sink(&self, lod: u32) -> f32 {
-        3.0 * lod as f32
+        SINK * lod as f32
     }
 
     pub fn columns_per_side(&self, lod: u32) -> i32 {
@@ -188,6 +200,27 @@ pub struct TerrainExtension {
     /// of the joints' sides (degrees; 0, flat dark lines).
     #[uniform(104)]
     pub pieces: Vec4,
+    /// The plates' walls' panels (`--set walls N`, see `wall` in
+    /// terrain.wgsl): x on (0 off), y a course's height (m), z a joint's
+    /// width (m), w each piece's tone.
+    #[uniform(105)]
+    pub walls: Vec4,
+    /// The walls' panels: x the longest the smallest
+    /// pieces may be (in courses), y how much of the wall the big pieces
+    /// cover (1 about as much as each other size), z the chance one of the
+    /// biggest cuts is stepped.
+    #[uniform(106)]
+    pub layers: Vec4,
+    /// The panels' cuts: x the chance one is left open, y the chance one is
+    /// a curve; z how far each coarser level of detail is lowered (m,
+    /// `SINK`), so a wall's pattern is laid out where it stands.
+    #[uniform(107)]
+    pub marks: Vec4,
+    /// Walls round a middle (the arena's): xy the middle (x, z), w on (1).
+    /// A wall facing it, or away, is panelled along its curve, not each of
+    /// its facets along itself.
+    #[uniform(108)]
+    pub round: Vec4,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -269,8 +302,24 @@ fn setup_material(
     world: Res<WorldGen>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
-    // Albedo comes from vertex colours; the material only sets the surface response.
-    let make = |glow: f32, paving: f32| ExtendedMaterial {
+    // The ground may be paved; `glow` is the brightness of lit geometry.
+    let ground = surface(&args, world.size(), 0.0, args.num("paving", 0.0));
+    let structures = surface(&args, world.size(), args.num("glow", 3000.0), 0.0);
+    commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
+    commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
+}
+
+/// The ground's surface (the plates' pieces on their tops, panels on their
+/// walls), for a world `size` across; `glow` the brightness of lit
+/// geometry, `paving` the paving's pattern. Albedo comes from vertex
+/// colours (red; green the plate's code, see terrain.wgsl); the material
+/// only sets the surface response. Not bent round the camera until
+/// `update_material` makes it so (the ground's and the structures' only).
+pub fn surface(args: &Args, size: f32, glow: f32, paving: f32) -> TerrainMaterial {
+    // (The walls' preset, see `walls` below.)
+    let preset = args.num("walls", 1.0).round();
+    let glyphs = (preset == 2.0) as u8 as f32;
+    ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
@@ -283,7 +332,7 @@ fn setup_material(
             // `subdiv_largest`, `subdiv_tone`, `subdiv_tilt` and
             // `subdiv_joint`; the tone and tilt the canal stones'.)
             wrap: Vec4::new(
-                world.size(),
+                size,
                 if args.opt("nosubdiv") { 0.0 } else { 1.0 },
                 args.num("subdiv_split", 0.8),
                 args.num("subdiv_largest", 32.0),
@@ -294,13 +343,23 @@ fn setup_material(
             // the user, between 8 and 32 m perhaps a district's own;
             // `subdiv_groove`, the joints' slope.)
             pieces: Vec4::new(args.num("subdiv_smallest", 8.0), args.num("subdiv_groove", 45.0), 0.0, 0.0),
+            // (`--set walls N`, the panels' presets while they are judged:
+            // 0 none; 1 rectangles, the user's best (`wall_split` 1.5); 2
+            // glyphs, some cuts left open, some curved (`wall_open` 0.25,
+            // `wall_curve` 0.2), weirder. Each number its own too:
+            // `wall_course`, `wall_joint`, `wall_tone`, `wall_stretch`,
+            // `wall_split`, `wall_key`, `wall_open`, `wall_curve`.)
+            walls: Vec4::new(
+                (preset > 0.5) as u8 as f32,
+                args.num("wall_course", 1.0),
+                args.num("wall_joint", 0.06),
+                args.num("wall_tone", 0.12),
+            ),
+            layers: Vec4::new(args.num("wall_stretch", 4.0), args.num("wall_split", 1.5), args.num("wall_key", 0.0), 0.0),
+            marks: Vec4::new(args.num("wall_open", glyphs * 0.25), args.num("wall_curve", glyphs * 0.2), SINK, 0.0),
+            round: Vec4::ZERO,
         },
-    };
-    // The ground may be paved; `glow` is the brightness of lit geometry.
-    let ground = make(0.0, args.num("paving", 0.0));
-    let structures = make(args.num("glow", 3000.0), 0.0);
-    commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
-    commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
+    }
 }
 
 fn update_material(
@@ -513,7 +572,7 @@ fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh
     for (key, task) in streamer.pending.iter_mut() {
         if let Some((column, collider)) = check_ready(task) {
             let built = (!column.is_empty())
-                .then(|| Built { aabb: bounds(&column), mesh: meshes.add(to_bevy_mesh(column)), collider });
+                .then(|| Built { aabb: bounds(&column), mesh: meshes.add(to_bevy_mesh(column, key.0)), collider });
             done.push((*key, built));
         }
     }
@@ -551,10 +610,16 @@ pub fn column_collider(column: &ColumnMesh) -> Option<Collider> {
         .ok()
 }
 
-pub fn to_bevy_mesh(mut column: ColumnMesh) -> Mesh {
-    // Albedo in red, the plate (see `plate_code`) in green, glow in blue, sky
-    // visibility in alpha (read by terrain.wgsl).
+pub fn to_bevy_mesh(mut column: ColumnMesh, lod: u32) -> Mesh {
+    // Albedo in red, the plate (see `plate_code`, `wall_code`) and the level
+    // of detail drawing it in green, glow in blue, sky visibility in alpha
+    // (read by terrain.wgsl). (The level, as a coarser one is lowered, see
+    // `sink`: a wall's pattern is laid out where it stands, and changed as
+    // it was approached, the user.)
     column.plate.resize(column.positions.len(), 0.0);
+    for code in column.plate.iter_mut().filter(|c| **c > 0.0) {
+        *code += 131072.0 * lod as f32;
+    }
     column.glow.resize(column.positions.len(), 0.0);
     let colors: Vec<[f32; 4]> = column
         .albedo

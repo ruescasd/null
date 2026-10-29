@@ -897,10 +897,13 @@ pub(super) fn arrive(
     // it flat grey, its outline.)
     let (asked, others): (Vec<_>, Vec<_>) = std::mem::take(&mut spawns.creatures).into_iter().partition(|(kind, ..)| kind == "bishop");
     spawns.creatures = others;
-    for (_, count, traits) in asked {
+    for (_, count, traits, places) in asked {
         for n in 0..count {
-            let aside = (n as f32 - (count - 1) as f32 * 0.5) * 1.8;
-            let at = floor_near(&ground, nav.as_deref(), camera.translation + forward * super::hunter::AHEAD + across * aside);
+            let (base, aside) = match places.len() {
+                0 => (camera.translation + forward * super::hunter::AHEAD, (n as f32 - (count - 1) as f32 * 0.5) * 1.8),
+                k => (places[n as usize % k], (n as usize / k) as f32 * 1.8),
+            };
+            let at = floor_near(&ground, nav.as_deref(), base + across * aside);
             make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, traits.has("grey"), at, face(at));
             info!("a bishop hangs at {:.1}", at);
         }

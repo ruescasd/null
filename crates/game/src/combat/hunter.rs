@@ -365,8 +365,9 @@ pub(super) struct Part {
 }
 
 /// `spawn KIND [N]` at the console (see `console::Spawns`): hunters and buds
-/// a metre before you (several, side by side), in a built place on the floor
-/// nearest there.
+/// a metre before you (several, side by side), or at the places asked for
+/// (in turn, side by side at each), in a built place on the floor nearest
+/// there.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn(
     mut commands: Commands,
@@ -382,18 +383,21 @@ pub(super) fn spawn(
 ) {
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
-    for (kind, count, traits) in std::mem::take(&mut spawns.creatures) {
+    for (kind, count, traits, places) in std::mem::take(&mut spawns.creatures) {
         // (Bishops are the bishops' to make: see `bishop::arrive`.)
         if kind == "bishop" {
-            spawns.creatures.push((kind, count, traits));
+            spawns.creatures.push((kind, count, traits, places));
             continue;
         }
         for n in 0..count {
-            let aside = (n as f32 - (count - 1) as f32 * 0.5) * 1.6;
-            let mut at = camera.translation + forward * AHEAD + across * aside;
+            let (base, aside) = match places.len() {
+                0 => (camera.translation + forward * AHEAD, (n as f32 - (count - 1) as f32 * 0.5) * 1.6),
+                k => (places[n as usize % k], (n as usize / k) as f32 * 1.6),
+            };
+            let mut at = base + across * aside;
             at = Vec3::new(at.x, ground.at(at), at.z);
             if let Some(nav) = nav.as_deref()
-                && let Some(j) = nav.nearest(camera.translation + forward * AHEAD + across * aside, 8)
+                && let Some(j) = nav.nearest(base + across * aside, 8)
             {
                 at = nav.nodes[j as usize];
             }

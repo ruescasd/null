@@ -10,9 +10,12 @@
 //! out: `contrast` (most blocks left blank, a few split all the way down:
 //! knots against bare plateaus) and `sunken` (the rule cut downward: pits
 //! within pits, ribs between them, excavated ground, not buildings).
+//!
+//! Streetlights on contrast's bare plateaus (see `Street`).
 
 use glam::DVec2;
 
+use super::void::{Foot, echo};
 use super::{Builder, SPAN, rand};
 
 /// How deep it splits; per depth: how far a block may rise or sink (m),
@@ -32,12 +35,31 @@ pub struct Mode {
     stop: f64,
     from: u32,
     knot: f64,
+    lamps: Option<Street>,
 }
 
-pub const RAISED: Mode = Mode { stop: 0.15, from: 2, knot: 0.0 };
-pub const CONTRAST: Mode = Mode { stop: 0.75, from: 1, knot: 0.3 };
+pub const RAISED: Mode = Mode { stop: 0.15, from: 2, knot: 0.0, lamps: None };
+pub const CONTRAST: Mode = Mode { stop: 0.75, from: 1, knot: 0.3, lamps: None };
 
-pub fn build(b: &mut Builder, seed: u32, mode: Mode) {
+/// A streetlight on contrast's bare plateaus (the user, 2026-10-26:
+/// streetlights recurring across the world as its near scale): the void's
+/// echo, as it is. (Contrast's own, a knot, its rule in small: a post, a
+/// glowing plate, the plate split into blocks over it, each turned and
+/// risen. Black, its head lost against the sky; its head white, floating
+/// over a post lost above the horizon; white, legible but a block on a
+/// stick, a sign. The echo read better here: what makes a streetlight is
+/// its gesture, an upright, arms out, lights hanging over you, not a
+/// district's rule.)
+#[derive(Clone, Copy)]
+pub enum Street {
+    Echo,
+}
+
+/// The plateaus that may have a streetlight: so wide at least (half, m),
+/// the chance one does; it stands so far in from its corner (m).
+const PLATEAU_LIT: (f64, f64, f64) = (10.0, 1.0, 4.0);
+pub fn build(b: &mut Builder, seed: u32, mode: Mode, lamps: Option<Street>) {
+    let mode = Mode { lamps, ..mode };
     let mut id = 0;
     block(b, seed, &mode, &mut id, b.centre, DVec2::splat(SPAN * 0.5), 0.0, 40.0, 0, false);
 }
@@ -62,6 +84,23 @@ fn block(b: &mut Builder, seed: u32, mode: &Mode, id: &mut i32, middle: DVec2, h
     b.shade(seed, (me, depth as i32), 0.17, 0.045);
     b.prism(&corners(middle, half, turn), floor, -1.0, false);
     if leaf {
+        // (A streetlight at one of its corners, its head or arms in over it.)
+        if let Some(street) = mode.lamps
+            && depth >= 1
+            && half.min_element() >= PLATEAU_LIT.0
+            && r(20) < PLATEAU_LIT.1
+        {
+            let k = (r(21) * 4.0) as usize;
+            let round = corners(middle, half - DVec2::splat(PLATEAU_LIT.2), turn);
+            let p = round[k];
+            let mut u = (round[(k + 1) % 4] - p).normalize();
+            if u.perp().dot(middle - p) < 0.0 {
+                u = -u;
+            }
+            match street {
+                Street::Echo => b.gloss(|b| echo(b, p, u, floor, Foot::Plain, true)),
+            }
+        }
         return;
     }
     let axes = (DVec2::from_angle(turn), DVec2::from_angle(turn).perp());

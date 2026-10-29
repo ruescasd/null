@@ -363,14 +363,28 @@ impl Mover<'_, '_, '_> {
     /// under it (a slope landed on faces partly aside too, but meets the
     /// hull's bottom inside it). Shifted away from it a little (no more than
     /// `GRAZE`) till the way on is clear, it goes on, straight up or down as
-    /// that was found clear, its velocity kept.
+    /// that was found clear, its velocity kept. Or, mostly rising or falling,
+    /// the way straight up or down clear and only the way across meeting the
+    /// edge (the user, 2026-10-27: let go by the tether just under a lip,
+    /// rising at 25 m/s, pressed into the wall at half a metre a second,
+    /// thrown back at 5; and climbing a wall, now and then, where the
+    /// diagonal between its two triangles crossed it, the edge between them
+    /// met as if it stood out): up or down first, then across as that
+    /// slides, its speed up or down kept.
     fn graze_slip(&self, center: Vec3, velocity: Vec3, dt: f32) -> Option<(Vec3, Vec3)> {
         let vertical = Vec3::Y * (velocity.y * dt);
-        let hit = self.query.cast_move(&self.shape, center, Quat::IDENTITY, vertical, self.config.skin_width, &self.filter)?;
-        let off = Vec2::new(hit.point1.x - center.x, hit.point1.z - center.z);
-        if off.x.abs().max(off.y.abs()) < HALF_WIDTH - 0.005 {
-            return None;
-        }
+        let on_rim = |point: Vec3| {
+            let off = Vec2::new(point.x - center.x, point.z - center.z);
+            (off.x.abs().max(off.y.abs()) >= HALF_WIDTH - 0.005).then_some(off)
+        };
+        let Some(hit) = self.query.cast_move(&self.shape, center, Quat::IDENTITY, vertical, self.config.skin_width, &self.filter) else {
+            let across = Vec3::new(velocity.x, 0.0, velocity.z);
+            let hit = self.query.cast_move(&self.shape, center, Quat::IDENTITY, velocity * dt, self.config.skin_width, &self.filter)?;
+            on_rim(hit.point1).filter(|_| across.length() < velocity.y.abs())?;
+            let (moved, slid) = self.slide(center + vertical, across, dt);
+            return Some((moved, Vec3::new(slid.x, velocity.y, slid.z)));
+        };
+        let off = on_rim(hit.point1)?;
         // (Away from the corner: the side or sides of the rim it is at.)
         let rim = |d: f32| if d.abs() >= HALF_WIDTH - 0.005 { -d.signum() } else { 0.0 };
         let aside = Vec3::new(rim(off.x), 0.0, rim(off.y)).normalize_or_zero();
@@ -748,6 +762,8 @@ pub fn walk(
     lab: Option<Res<crate::groundlab::LabGround>>,
     camera: Single<(&mut Transform, &mut FlyCam, Option<&mut Player>)>,
     mut ridelog: Local<Option<std::fs::File>>,
+    mut slidelog: Local<Option<std::fs::File>>,
+    terrain: Query<(), With<crate::terrain::TerrainColumn>>,
 ) {
     let (mut transform, mut fly, player) = camera.into_inner();
     let Some(mut player) = player else { return };
@@ -817,7 +833,7 @@ pub fn walk(
         let floor = if args.opt("chasm") && !args.opt("rooms") && !args.opt("plan") { crate::chasm::rim(args.seed, p.x, p.z).unwrap_or(ground_height) } else { ground_height };
         // (On the ground lab's, on its top there.)
         let floor = lab.as_ref().map_or(floor, |g| floor.max(g.height(p.x, p.z)));
-        if !(args.opt("chasm") && (args.opt("rooms") || args.opt("region"))) {
+        if !(args.opt("chasm") && (args.opt("rooms") || args.opt("region") || args.opt("arena"))) {
             transform.translation.y = floor + EYE + 0.3;
         }
     }
@@ -944,6 +960,32 @@ pub fn walk(
 
         let can_step = player.grounded || player.velocity.y < 2.0;
         let (moved, velocity) = mover.step_slide(center, player.velocity, dt, can_step);
+        // `--opt slidelog`: tethered, each step to target/slidelog.txt, all
+        // it needs to be replayed, and what it met when it was turned hard
+        // (the user, 2026-10-27: still thrown back from a wall now and then).
+        if args.opt("slidelog")
+            && let Tether::Anchored { point, .. } = player.tether
+        {
+            use std::io::Write;
+            let file = slidelog.get_or_insert_with(|| std::fs::File::create("target/slidelog.txt").expect("writing target/slidelog.txt"));
+            let v = |a: Vec3| format!("{:.5},{:.5},{:.5}", a.x, a.y, a.z);
+            let _ = writeln!(
+                file,
+                "t {:.3} center {} vel {} dt {:.6} can_step {can_step} grounded {} jump {jump} wish {} anchor {} -> moved {} vel {}",
+                time.elapsed_secs(), v(center), v(player.velocity), dt, player.grounded, v(wishdir), v(point), v(moved), v(velocity)
+            );
+            if (velocity - player.velocity).length() > 1.5 {
+                let hit = mover.query.cast_move(&mover.shape, center, Quat::IDENTITY, player.velocity * dt, mover.config.skin_width, &mover.filter);
+                let _ = writeln!(
+                    file,
+                    "  turned: hit {}",
+                    hit.map_or("none".into(), |h| format!(
+                        "at {:.5} normal {} point {} entity {:?} terrain {}",
+                        h.distance, v(h.normal1), v(h.point1 - center), h.entity, terrain.contains(h.entity)
+                    ))
+                );
+            }
+        }
         let rose = moved.y - center.y;
         center = moved;
         player.velocity = velocity;
@@ -1155,8 +1197,40 @@ mod tests {
     /// The climb, with `wish` held: how far it was thrown back at worst
     /// (m/s, away from the wall), and where it ends.
     fn climb(wish: Vec2) -> (f32, Vec3) {
-        use std::sync::Arc;
-        let args = Args { opts: vec!["headless".into()], sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None };
+        let patch = worldgen::grounds::build("contrast", crate::groundlab::CENTRE, 1).unwrap();
+        // (The lab's flat ground, and the ground's pieces.)
+        let colliders: Vec<(Collider, Vec3)> = std::iter::once((Collider::cuboid(20_000.0, 1.0, 20_000.0), Vec3::new(0.0, -0.5, 0.0)))
+            .chain(patch.pieces.iter().filter_map(|piece| {
+                let vertices: Vec<Vec3> = piece.positions.iter().map(|&p| Vec3::from(p)).collect();
+                let tris: Vec<[u32; 3]> = piece.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+                Collider::try_trimesh_with_config(vertices, tris, TrimeshFlags::MERGE_DUPLICATE_VERTICES | TrimeshFlags::DELETE_DEGENERATE_TRIANGLES).ok().map(|c| (c, Vec3::ZERO))
+            }))
+            .collect();
+        let lab = WorldGen(std::sync::Arc::new(worldgen::plates::PlateWorld::lab(worldgen::WORLD_SIZE, 1)));
+        let frames = tether_run(lab, &colliders, Vec3::new(8300.49, 29.61, 8721.02), (179.46, 88.11), wish, 360);
+        let back = frames.iter().map(|f| f.1.z).fold(0.0f32, f32::min);
+        let end = frames.last().unwrap().0;
+        println!("wish {wish}: most thrown back {back:.2} m/s; ends at y {:.2}", end.y);
+        (back, end)
+    }
+
+    /// A tether climb on `colliders` (each where it stands) over `ground`'s
+    /// lab or world: the eye at `eye`, looking (yaw, pitch, degrees), the
+    /// tether fired and held, `wish` held, `frames` at 60 a second; each
+    /// frame the hull's middle, its velocity, and the tether's anchor.
+    fn tether_run(ground: WorldGen, colliders: &[(Collider, Vec3)], eye: Vec3, look: (f32, f32), wish: Vec2, frames: usize) -> Vec<(Vec3, Vec3, Option<Vec3>)> {
+        let mut player = Player::fresh();
+        player.ready = true;
+        run(ground, colliders, eye, look, player, MoveInput { tether: true, wish, ..default() }, 60.0, frames)
+    }
+
+    /// `player` moved on `colliders` over `ground`'s lab or world, the eye
+    /// at `eye`, looking (yaw, pitch, degrees), `input` held, `frames` at
+    /// `fps`; each frame the hull's middle, its velocity, and the tether's
+    /// anchor.
+    #[allow(clippy::too_many_arguments)]
+    fn run(ground: WorldGen, colliders: &[(Collider, Vec3)], eye: Vec3, look: (f32, f32), player: Player, input: MoveInput, fps: f64, frames: usize) -> Vec<(Vec3, Vec3, Option<Vec3>)> {
+        let args = Args { opts: vec!["headless".into()], sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins((TransformPlugin, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin, bevy::diagnostic::DiagnosticsPlugin))
@@ -1165,42 +1239,116 @@ mod tests {
             .init_resource::<avian3d::collision::CollisionDiagnostics>()
             .init_resource::<avian3d::dynamics::solver::SolverDiagnostics>()
             .init_resource::<avian3d::spatial_query::SpatialQueryDiagnostics>()
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 60.0)))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / fps)))
             .insert_resource(args)
-            .insert_resource(MoveInput { tether: true, wish, ..default() })
+            .insert_resource(input)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Bodies>()
-            .insert_resource(WorldGen(Arc::new(worldgen::plates::PlateWorld::lab(worldgen::WORLD_SIZE, 1))))
+            .insert_resource(ground)
             .insert_resource({
                 let mut streamer = Streamer::default();
                 streamer.near = true;
                 streamer
             })
             .add_systems(Update, walk);
-        let patch = worldgen::grounds::build("contrast", crate::groundlab::CENTRE, 1).unwrap();
         let world = app.world_mut();
-        world.spawn((RigidBody::Static, Collider::cuboid(20_000.0, 1.0, 20_000.0), Transform::from_xyz(0.0, -0.5, 0.0)));
-        for piece in &patch.pieces {
-            let vertices: Vec<Vec3> = piece.positions.iter().map(|&p| Vec3::from(p)).collect();
-            let tris: Vec<[u32; 3]> = piece.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
-            if let Ok(c) = Collider::try_trimesh_with_config(vertices, tris, TrimeshFlags::MERGE_DUPLICATE_VERTICES | TrimeshFlags::DELETE_DEGENERATE_TRIANGLES) {
-                world.spawn((RigidBody::Static, c, Transform::IDENTITY));
-            }
+        for (c, at) in colliders {
+            world.spawn((RigidBody::Static, c.clone(), Transform::from_translation(*at)));
         }
-        let fly = FlyCam { yaw: 179.46f32.to_radians(), pitch: 88.11f32.to_radians(), speed: 25.0, noclip: false };
+        let fly = FlyCam { yaw: look.0.to_radians(), pitch: look.1.to_radians(), speed: 25.0, noclip: false };
+        world.spawn((Transform::from_translation(eye).with_rotation(fly.rotation()), fly, player));
+        (0..frames)
+            .map(|_| {
+                app.update();
+                let world = app.world_mut();
+                let (t, p) = world.query::<(&Transform, &Player)>().single(world).unwrap();
+                let anchor = if let Tether::Anchored { point, .. } = p.tether { Some(point) } else { None };
+                (t.translation - Vec3::Y * (EYE - HEIGHT * 0.5 + p.view_offset), p.velocity, anchor)
+            })
+            .collect()
+    }
+
+    /// The user's climb (2026-10-27, `--opt slidelog`): up the first wall
+    /// of `tether_up_a_wall`, anchored just under its lip, let go there
+    /// rising at 25 m/s, pressed into the wall at half a metre a second;
+    /// the hull's top met the lip's corner, the rise was thrown away and
+    /// the body thrown back at 5 m/s (see `Mover::graze_slip`). Replayed
+    /// from the last step tethered, at the user's frame rate, no keys:
+    /// never thrown back, up past the lip.
+    #[test]
+    fn let_go_under_the_lip() {
+        let args = Args { opts: vec!["headless".into()], sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
+        let world = crate::terrain::plate_world(&args);
+        let size = worldgen::mesh::column_size(0);
+        let center = Vec3::new(1034.96887, -1.33139, 1552.44250);
+        let (cx, cz) = ((center.x / size).floor() as i32, (center.z / size).floor() as i32);
+        let colliders: Vec<(Collider, Vec3)> = (-6..=6)
+            .flat_map(|i| (-6..=6).map(move |k| (cx + i, cz + k)))
+            .filter_map(|(i, k)| crate::terrain::column_collider(&world.0.mesh_column(0, i, k)).map(|c| (c, Vec3::new(i as f32 * size, 0.0, k as f32 * size))))
+            .collect();
         let mut player = Player::fresh();
         player.ready = true;
-        world.spawn((Transform::from_xyz(8300.49, 29.61, 8721.02).with_rotation(fly.rotation()), fly, player));
-        let (mut back, mut end) = (0.0f32, Vec3::ZERO);
-        for _ in 0..360 {
-            app.update();
-            let world = app.world_mut();
-            let (t, p) = world.query::<(&Transform, &Player)>().single(world).unwrap();
-            back = back.min(p.velocity.z);
-            end = t.translation - Vec3::Y * (EYE - HEIGHT * 0.5 + p.view_offset);
+        player.velocity = Vec3::new(0.42631, 25.27435, -0.14353);
+        player.tether = Tether::Missed;
+        player.tether_held = true;
+        let eye = center + Vec3::Y * (EYE - HEIGHT * 0.5);
+        let frames = run(world, &colliders, eye, (282.82, 80.0), player, MoveInput { tether: true, ..default() }, 310.0, 400);
+        // (Out from the wall: its face's normal.)
+        let out = Vec3::new(-0.97009, 0.0, 0.24273);
+        let back = frames.iter().map(|f| f.1.dot(out)).fold(0.0f32, f32::max);
+        let top = frames.iter().map(|f| f.0.y - HEIGHT * 0.5).fold(f32::MIN, f32::max);
+        assert!(back < 1.0, "thrown back from the wall at {back:.2} m/s");
+        assert!(top > 0.25, "rose to {top:.2}, not past the lip (0.25)");
+    }
+
+    /// The user's walls (2026-10-27): in a pit 14 m deep, thrown back now
+    /// and then climbing its wall at (1028.63, 1548.59), facing 283 degrees;
+    /// never, it seemed, the one at (1013.34, 1529.94), facing 10. Each is
+    /// one quad, the diagonal between its triangles crossing it where the
+    /// hull's top met it (see `Mover::graze_slip`). Climbs by the tether from
+    /// along each and out from it, anchored at heights up its face, with no
+    /// keys and forward held, on the main world's own columns: never thrown
+    /// back while pulled. (Without the fix, 28 of 280 such climbs on the
+    /// first, 6 on the second; with it none of them. Building the columns
+    /// with parry's FIX_INTERNAL_EDGES made it worse, 49 and 11: the slide's
+    /// casts do not use it. Each hit's normal taken from the face behind it,
+    /// a ray from the hull's middle, fixed it too, but not the lip.)
+    #[test]
+    fn tether_up_a_wall() {
+        let args = Args { opts: vec!["headless".into()], sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
+        let world = crate::terrain::plate_world(&args);
+        let size = worldgen::mesh::column_size(0);
+        let mut thrown = Vec::new();
+        for (x, z, yaw) in [(1028.63f32, 1548.59f32, 282.82f32), (1013.34, 1529.94, 9.53)] {
+            // (A column has the plates whose sites are in it, which reach
+            // out of it by up to 384 m.)
+            let (cx, cz) = ((x / size).floor() as i32, (z / size).floor() as i32);
+            let colliders: Vec<(Collider, Vec3)> = (-6..=6)
+                .flat_map(|i| (-6..=6).map(move |k| (cx + i, cz + k)))
+                .filter_map(|(i, k)| crate::terrain::column_collider(&world.0.mesh_column(0, i, k)).map(|c| (c, Vec3::new(i as f32 * size, 0.0, k as f32 * size))))
+                .collect();
+            let forward = Vec3::new(-yaw.to_radians().sin(), 0.0, -yaw.to_radians().cos());
+            let side = Vec3::new(-forward.z, 0.0, forward.x);
+            let ground = world.ground_height(x, z);
+            let wall = (1..400).map(|i| i as f32 * 0.025).find(|&d| world.ground_height(x + forward.x * d, z + forward.z * d) > ground + 0.6).expect("no wall ahead");
+            for along in [-2.0f32, 0.0, 1.0, 2.0] {
+                for out in [1.0f32, 6.0] {
+                    let start = Vec3::new(x, ground + EYE, z) + side * along + forward * (wall - out);
+                    for up in [6.0f32, 9.0, 12.0] {
+                        let d = Vec3::new(x, ground + up, z) + side * along + forward * wall - start;
+                        let look = ((-d.x).atan2(-d.z).to_degrees(), d.y.atan2(Vec2::new(d.x, d.z).length()).to_degrees());
+                        for wish in [Vec2::ZERO, Vec2::Y] {
+                            let frames = tether_run(world.clone(), &colliders, start, look, wish, 120);
+                            let back = frames.iter().filter(|f| f.2.is_some()).map(|f| -f.1.dot(forward)).fold(0.0f32, f32::max);
+                            if back > 1.0 {
+                                thrown.push(format!("{back:.2} m/s at ({x}, {z}), {along} along, {out} out, anchored {up} up, wish {wish}"));
+                            }
+                        }
+                    }
+                }
+            }
         }
-        println!("wish {wish}: most thrown back {back:.2} m/s; ends at y {:.2}", end.y);
-        (back, end)
+        assert!(thrown.is_empty(), "thrown back from the wall while pulled:\n{}", thrown.join("\n"));
     }
 
     #[test]

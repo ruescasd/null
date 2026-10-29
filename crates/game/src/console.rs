@@ -13,6 +13,7 @@
 //! `NAME VALUE`, `NAME default` (a number), `NAME` alone its value. And
 //! `help`; `list` (what acts at once, then all else on or set); `where`
 //! (the camera, as `--cam`); `clear`. Up brings back the last command.
+//! `--do COMMAND` on the command line runs one at the start.
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
@@ -36,15 +37,19 @@ impl Plugin for ConsolePlugin {
             .init_resource::<Spawns>()
             .add_systems(Startup, spawn)
             .add_systems(PreUpdate, (type_in, swallow).chain().after(InputSystems))
-            .add_systems(Update, (show, follow, loudness, clock));
+            .add_systems(Update, (show, follow, loudness, clock, given.run_if(crate::loading::playing)));
     }
 }
 
 /// What `spawn` at the console asks for: creatures, their kind, how many,
-/// and their options (see `traits.rs`).
+/// their options (see `traits.rs`), and where (each in turn at one of
+/// these; none, before you). And a round (`round`: what it is, see
+/// `combat::round`), and `reset` (every creature gone, your health back).
 #[derive(Resource, Default)]
 pub struct Spawns {
-    pub creatures: Vec<(String, u32, crate::traits::Traits)>,
+    pub creatures: Vec<(String, u32, crate::traits::Traits, Vec<Vec3>)>,
+    pub round: Option<String>,
+    pub reset: bool,
 }
 
 /// The kinds `spawn` knows.
@@ -61,6 +66,13 @@ pub struct Console {
     back: usize,
     down: f32,
     closing: bool,
+}
+
+impl Console {
+    /// A line said in it (a round's result).
+    pub fn say(&mut self, line: String) {
+        self.lines.push(line);
+    }
 }
 
 #[derive(Component)]
@@ -135,42 +147,7 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
                     console.history.push(line.clone());
                 }
                 console.back = 0;
-                if line.trim() == "clear" {
-                    console.lines.clear();
-                } else if line.trim() == "quit" || line.trim() == "exit" {
-                    exit.write(AppExit::Success);
-                } else if line.trim().starts_with("spawn") {
-                    // `spawn KIND [N] [option ...]`: N of them (1) before you,
-                    // with their options; `spawn KIND --help` (or `help`, `?`),
-                    // what it takes.
-                    let words: Vec<&str> = line.split_whitespace().collect();
-                    let count = words.get(2).and_then(|n| n.parse::<u32>().ok());
-                    let options = &words[(2 + count.is_some() as usize).min(words.len())..];
-                    match words.get(1) {
-                        Some(kind) if KINDS.contains(kind) && matches!(options, ["?"] | ["help"] | ["--help"]) => console.lines.push(crate::traits::help(kind)),
-                        Some(kind) if KINDS.contains(kind) => match crate::traits::Traits::parse(kind, options) {
-                            Ok(traits) => {
-                                let count = count.unwrap_or(1).clamp(1, 20);
-                                spawns.creatures.push((kind.to_string(), count, traits));
-                                console.lines.push(format!("{count} {kind} before you{}", if options.is_empty() { String::new() } else { format!(": {}", options.join(" ")) }));
-                            }
-                            Err(e) => console.lines.push(e),
-                        },
-                        _ => console.lines.push(format!("spawn what? {}", KINDS.join(", "))),
-                    }
-                } else if line.trim() == "where" {
-                    // (Its height above the ground, as `--cam` takes it; also
-                    // in the log, where it can be copied, the user.)
-                    let (t, fly) = *camera;
-                    let p = t.translation;
-                    let above = p.y - world.as_ref().map_or(0.0, |w| w.ground_height(p.x, p.z));
-                    let cam = format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees());
-                    info!("where: {cam}");
-                    console.lines.push(cam);
-                } else {
-                    let said = run(&line, &mut args);
-                    console.lines.extend(said);
-                }
+                execute(&line, &mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit);
             }
             Key::Backspace => {
                 console.line.pop();
@@ -194,6 +171,78 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
     }
 }
 
+/// A command run: typed (Enter), or given on the command line (`--do`, see
+/// `given`).
+#[allow(clippy::too_many_arguments)]
+fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), world: Option<&crate::terrain::WorldGen>, exit: &mut MessageWriter<AppExit>) {
+    if line.trim() == "clear" {
+        console.lines.clear();
+    } else if line.trim() == "quit" || line.trim() == "exit" {
+        exit.write(AppExit::Success);
+    } else if line.trim() == "reset" {
+        spawns.reset = true;
+        console.lines.push("every creature gone, your health back".into());
+    } else if line.trim().starts_with("spawn") || line.trim().starts_with("round") {
+        // `spawn KIND [N] [option ...]`: N of them (1) before you,
+        // with their options; `spawn KIND --help` (or `help`, `?`),
+        // what it takes. `round` the same, timed (see
+        // `combat::round`), in the arena through its gates.
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let round = words[0] == "round";
+        let gates = round && args.opt("arena");
+        let count = words.get(2).and_then(|n| n.parse::<u32>().ok());
+        let options = &words[(2 + count.is_some() as usize).min(words.len())..];
+        match words.get(1) {
+            Some(kind) if KINDS.contains(kind) && matches!(options, ["?"] | ["help"] | ["--help"]) => console.lines.push(crate::traits::help(kind)),
+            Some(kind) if KINDS.contains(kind) => match crate::traits::Traits::parse(kind, options) {
+                Ok(traits) => {
+                    let count = count.unwrap_or(1).clamp(1, 20);
+                    let places = if gates { crate::chasm::arena::pens() } else { Vec::new() };
+                    spawns.creatures.push((kind.to_string(), count, traits, places));
+                    let with = if options.is_empty() { String::new() } else { format!(": {}", options.join(" ")) };
+                    if round {
+                        spawns.round = Some(format!("{count} {kind}{with}"));
+                    }
+                    console.lines.push(format!("{count} {kind} {}{with}", if gates { "through the gates" } else { "before you" }));
+                }
+                Err(e) => console.lines.push(e),
+            },
+            _ => console.lines.push(format!("{} what? {}", words[0], KINDS.join(", "))),
+        }
+    } else if line.trim() == "where" {
+        // (Its height above the ground, as `--cam` takes it; also
+        // in the log, where it can be copied, the user.)
+        let (t, fly) = camera;
+        let p = t.translation;
+        let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
+        let cam = format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees());
+        info!("where: {cam}");
+        console.lines.push(cam);
+    } else {
+        let said = run(line, args);
+        console.lines.extend(said);
+    }
+}
+
+/// `--do COMMAND` (repeatable): run as if typed, once the game is on (so a
+/// fight can be set up the same way again, from the command line); what
+/// they say also in the log.
+#[allow(clippy::too_many_arguments)]
+fn given(mut done: Local<bool>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, mut exit: MessageWriter<AppExit>) {
+    if *done {
+        return;
+    }
+    *done = true;
+    for line in args.run.clone() {
+        let before = console.lines.len();
+        console.lines.push(format!("> {line}"));
+        execute(&line, &mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit);
+        for said in &console.lines[before..] {
+            info!("console: {said}");
+        }
+    }
+}
+
 /// While it is down, the game sees no keys or clicks.
 fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>, mut mouse: ResMut<ButtonInput<MouseButton>>) {
     if console.open || console.closing {
@@ -204,8 +253,9 @@ fn swallow(mut console: ResMut<Console>, mut keys: ResMut<ButtonInput<KeyCode>>,
 }
 
 /// The switches that take effect as the game runs, and what each does.
-const SWITCHES: [(&str, &str); 6] = [
+const SWITCHES: [(&str, &str); 7] = [
     ("mute", "no sound"),
+    ("still", "the time of day held where it is (T in the game too)"),
     ("god", "nothing hurts you (for testing)"),
     ("fullbright", "an even light from everywhere, no shadows: to see the shapes"),
     ("nolampshadows", "no shadows from lamps"),
@@ -213,11 +263,14 @@ const SWITCHES: [(&str, &str); 6] = [
     ("notaa", "no temporal anti-aliasing (nor temporal shadow filtering)"),
 ];
 
+/// How loud unless set (of as made: the user, half what it was).
+const VOLUME: f32 = 0.5;
+
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
 fn numbers(args: &Args) -> [(&'static str, &'static str, f32); 6] {
     [
-        ("volume", "how loud (1 as made, 0 silent)", 1.0),
+        ("volume", "how loud (1 as made, 0 silent)", VOLUME),
         ("timescale", "how fast the game's time runs (1 real time; 4 four times as fast, 0.25 slow)", 1.0),
         ("shadowed", "how many lamps cast shadows at once (0-8; each about 0.5 ms)", 8.0),
         ("ev", "exposure (EV100; higher is darker)", 11.2),
@@ -265,6 +318,9 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "spawn KIND [N] [OPTION ...]  N creatures 3 m before you, with their options (`spawn KIND --help`".into(),
             "                     lists them): harrow, angler, biped, sprawl, stalker, porter, chained (a".into(),
             "                     stalker keeping a porter on a chain), bud, grove (7 asleep), bishop".into(),
+            "round KIND [N] [OPTION ...]  the same, as a round: timed, and what it took said at its end (in".into(),
+            "                     the arena, through its gates)".into(),
+            "reset                every creature gone, your health back".into(),
             "clear                clears this".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),
@@ -302,9 +358,12 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             }
             if was { vec![value(args, name)] } else { vec![value(args, name), warned(args, name)] }
         }
+        // (Off, a name it does not know, said so: the user's `time off`
+        // answered as though it had done something.)
         [name, "off"] => {
+            let was = known(args, name);
             args.opts.retain(|o| o != name);
-            vec![value(args, name)]
+            if was { vec![value(args, name)] } else { vec![unknown(args, name)] }
         }
         [name, "default"] => {
             args.sets.retain(|(k, _)| k != name);
@@ -368,7 +427,7 @@ fn loudness(
     mut last: Local<Option<(f32, f32)>>,
 ) {
     use bevy::audio::{AudioSinkPlayback, Volume};
-    let v = if args.unattended() || args.opt("mute") { 0.0 } else { args.num("volume", 1.0).max(0.0) };
+    let v = if args.unattended() || args.opt("mute") { 0.0 } else { args.num("volume", VOLUME).max(0.0) };
     // (What it was, and what it was last when not silent.)
     let (was, heard) = *last.get_or_insert((global.volume.to_linear(), global.volume.to_linear().max(1e-3)));
     if v == was {
@@ -466,7 +525,7 @@ mod tests {
 
     #[test]
     fn unknown_names_said_so() {
-        let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None, ground: None };
+        let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None, ground: None, run: Vec::new() };
         let said = run("shadowmaps", &mut args);
         assert!(said[0].contains("not a setting") && said[0].contains("shadowed"), "{said:?}");
         assert_eq!(run("shadowed", &mut args)[0], "shadowed 8 (default)");
@@ -475,7 +534,7 @@ mod tests {
         assert!(set.len() == 2 && set[1].contains("did you mean shadowed"), "{set:?}");
         assert_eq!(run("shadowmap", &mut args)[0], "shadowmap on");
         assert_eq!(distance("shadowmaps", "shadowed"), 4);
-        assert_eq!(run("volume", &mut args)[0], "volume 1 (default)");
+        assert_eq!(run("volume", &mut args)[0], "volume 0.5 (default)");
         assert_eq!(run("volume 0.3", &mut args)[0], "volume 0.3");
         assert_eq!(run("mute on", &mut args), vec!["mute on".to_string()]);
     }

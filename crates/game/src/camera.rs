@@ -16,6 +16,7 @@ impl Plugin for FlyCameraPlugin {
         app.add_systems(
             Update,
             (
+                quit,
                 fullscreen,
                 grab_cursor,
                 fly,
@@ -43,6 +44,14 @@ pub struct FlyCam {
 impl FlyCam {
     pub fn rotation(&self) -> Quat {
         Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0)
+    }
+}
+
+/// Ctrl+C in the window: quit (the user: faster than the console's `quit`
+/// while testing).
+fn quit(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>) {
+    if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) && keys.just_pressed(KeyCode::KeyC) {
+        exit.write(AppExit::Success);
     }
 }
 

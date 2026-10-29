@@ -5,8 +5,8 @@
 //! true place and depth; each step of a path inside the rock a tile (see
 //! `rooms::tiles`): a passage, a stair a storey up the cell, a portal where
 //! it comes out on the chasm; out there, plainly (for now), a ledge's shelf
-//! along the face, a bridge's deck across, a balcony's slab, a glass
-//! stepwell (a room glazed on the chasm). The rock is the blockout's
+//! along the face, a bridge's deck across, a balcony's slab, a stepwell or
+//! a glass stair (rooms glazed on the chasm). The rock is the blockout's
 //! surfaces, open where what is built into it opens; inside it nothing but
 //! what is built. You start on the rim at the entrance, a stair down into
 //! the rock.
@@ -92,8 +92,8 @@ fn start_at(net: &super::Network, paths: &[usize]) -> [f32; 5] {
 /// The way a walker takes through the region (`--opt walkbot`): each path
 /// from its first step out of a place to its last, cell to cell at its
 /// floors (a stair's cell at half way), out through each portal and along
-/// what is out there; a glass stepwell jumped across (its stair is its
-/// own); each path after the first begun afresh, jumped to.
+/// what is out there; a stepwell or a glass stair jumped across (its
+/// stairs are its own); each path after the first begun afresh, jumped to.
 pub fn route(seed: u32, spine: usize, side: bool) -> Vec<(Vec3, String)> {
     let plan = tree(seed);
     let net = network(&plan, seed);
@@ -150,6 +150,9 @@ pub fn route(seed: u32, spine: usize, side: bool) -> Vec<(Vec3, String)> {
                         way.push((at(e), format!("{label}: back in")));
                     }
                     Kind::Glass => {
+                        way.push((at(e + 1), format!("jump to {label}: past the glass stair")));
+                    }
+                    Kind::Court => {
                         way.push((at(e + 1), format!("jump to {label}: past the stepwell")));
                     }
                 }
@@ -212,7 +215,7 @@ pub(in crate::chasm) fn build(seed: u32, spine: usize, side_links: bool) -> (Par
         doors[*b].push(Door { cell: steps[n - 1].at, out: steps[n - 2].at - steps[n - 1].at, storey: steps[n - 1].storey });
         let room = |i: usize| (i == 0 && *a != 0) || (i == n - 1 && *b != 0);
         let out = |i: usize| matches!(steps[i].what, What::Out(_));
-        let glass = |i: usize| matches!(steps[i].what, What::Out(Kind::Glass));
+        let glass = |i: usize| matches!(steps[i].what, What::Out(Kind::Glass | Kind::Court));
         let void = |i: usize| cells.void(steps[i].at);
         // (Where two steps meet: at the earlier's storey; a stair's cell
         // climbs from the storey it is come to at to its own.)
@@ -345,7 +348,7 @@ fn place_cells(p: &Place) -> Vec<IVec2> {
 /// it is come to from, `after` the one it goes on to), plainly: a shelf
 /// along the face (a ledge), a deck across (a bridge), a slab out from it
 /// (a balcony), each a storey's floor's height, lamps at its ends; or a
-/// glass stepwell, a room glazed on the chasm.
+/// room glazed on the chasm, a glass stair or a stepwell.
 #[allow(clippy::too_many_arguments)]
 fn exposure(run: &[super::Step], cells: &Cells, before: &super::Step, after: &super::Step, parts: &mut Parts, holes: &mut Holes, fixtures: &mut Fixtures, views: &mut RoomViews, report: &mut Vec<String>, boxes: &mut Vec<(String, Vec3, Vec3)>, path: usize) {
     let What::Out(kind) = run[0].what else { return };
@@ -379,7 +382,7 @@ fn exposure(run: &[super::Step], cells: &Cells, before: &super::Step, after: &su
     let thick = Vec3::Y * 1.2;
     // (Views: out through its portal from inside, and back at the face
     // from out on it.)
-    if kind != Kind::Glass {
+    if !matches!(kind, Kind::Glass | Kind::Court) {
         let eye = middle(first.at) - flat(d) * 2.0 + Vec3::Y * (y + 1.7);
         views.0.push((format!("path{path}_portal"), eye, eye + flat(d) * 10.0 - Vec3::Y * 2.0));
         let out = face(first.at) + flat(d) * 2.0 + Vec3::Y * (y + 1.7);
@@ -416,9 +419,30 @@ fn exposure(run: &[super::Step], cells: &Cells, before: &super::Step, after: &su
             let (a, b) = (run[0], run[run.len() - 1]);
             let place = Place { at: a.at.min(b.at), size: (b.at - a.at).abs() + IVec2::ONE, storeys: (a.storey.min(b.storey), a.storey.max(b.storey)) };
             let ds = [Door { cell: a.at, out: before.at - a.at, storey: a.storey }, Door { cell: b.at, out: after.at - b.at, storey: b.storey }];
-            let spec = spec(&place, &ds, format!("stepwell{path}"));
+            let spec = spec(&place, &ds, format!("stair{path}"));
             let origin = corner(place.at) + Vec3::Y * (floor(place.storeys.1) - 1.0);
             report.push(rooms::place(&spec, origin, 0, Some(side(d)), parts, fixtures, views));
+            boxes.push((format!("stair{path}"), origin, origin + Vec3::new(spec.size.x, spec.height, spec.size.y)));
+            for c in place_cells(&place) {
+                for (k, e) in DIRS.into_iter().enumerate() {
+                    if cells.void(c + e) {
+                        holes.faces.entry((c, k)).or_default().push(band(place.storeys.0, place.storeys.1));
+                    }
+                }
+            }
+        }
+        Kind::Court => {
+            // The court, three cells along the face from where the way
+            // comes in at its top to where it goes on at its floor, and
+            // three in; its doors in its side walls.
+            let (a, b) = (run[0], run[run.len() - 1]);
+            let cells3: Vec<IVec2> = (0..3).flat_map(|k| [a.at - d * k, b.at - d * k]).collect();
+            let lo = cells3.iter().copied().reduce(IVec2::min).unwrap();
+            let place = Place { at: lo, size: IVec2::splat(3), storeys: (a.storey.min(b.storey), a.storey.max(b.storey)) };
+            let ds = [Door { cell: a.at, out: before.at - a.at, storey: a.storey }, Door { cell: b.at, out: after.at - b.at, storey: b.storey }];
+            let spec = spec(&place, &ds, format!("stepwell{path}"));
+            let origin = corner(place.at) + Vec3::Y * (floor(place.storeys.1) - 1.0);
+            report.push(rooms::place_court(&spec, origin, side(d), parts, fixtures, views));
             boxes.push((format!("stepwell{path}"), origin, origin + Vec3::new(spec.size.x, spec.height, spec.size.y)));
             for c in place_cells(&place) {
                 for (k, e) in DIRS.into_iter().enumerate() {

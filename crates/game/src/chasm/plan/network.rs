@@ -7,8 +7,9 @@
 //! shortcuts). A path is legs: each a stretch inside the rock (a cell back
 //! from the faces at least), level but for one flight up or down along it,
 //! then an exposure where it meets a face: a ledge along the face and back
-//! in, a bridge over a branch into the rock across it, a glass stepwell
-//! against the void, a balcony out over it; never the same kind twice
+//! in, a bridge over a branch into the rock across it, a stepwell (a
+//! court glazed on the void) or a glass stair against it, a balcony out
+//! over it; never the same kind twice
 //! running. The last leg goes inside into the place it leads to, at a
 //! storey it spans. Nothing of a path passes within a few storeys of
 //! anything else. The spine is the shortest way from the entrance to the
@@ -37,9 +38,10 @@ pub(super) enum Kind {
     Bridge,
     Glass,
     Balcony,
+    Court,
 }
 
-const KINDS: [Kind; 4] = [Kind::Ledge, Kind::Bridge, Kind::Glass, Kind::Balcony];
+const KINDS: [Kind; 5] = [Kind::Ledge, Kind::Bridge, Kind::Glass, Kind::Balcony, Kind::Court];
 
 /// What a step of a path is: inside the rock, on, or a stair onto another
 /// storey; or out on the chasm.
@@ -153,7 +155,7 @@ struct Leg {
 
 /// The exposure of `kind` at face `c` (the chasm `d` from it) at storey
 /// `s`, if it fits: its steps, what it takes, and where it goes back into
-/// the rock. A glass stepwell goes `toward` (1 down, -1 up).
+/// the rock. A glass stair or a stepwell goes `toward` (1 down, -1 up).
 fn exposure(cells: &Cells, taken: &Taken, c: IVec2, d: IVec2, s: i32, kind: Kind, toward: i32, r: &dyn Fn(i32) -> f32) -> Option<Leg> {
     let free = |c: IVec2, s: i32| !taken.any(c, (s - 2, s + 2));
     let flip = if r(1) < 0.5 { 1 } else { -1 };
@@ -193,7 +195,7 @@ fn exposure(cells: &Cells, taken: &Taken, c: IVec2, d: IVec2, s: i32, kind: Kind
                 exit: (exit, s),
             })
         }
-        // A stepwell three cells along the face (its flights, a storey
+        // A glass stair three cells along the face (its flights, a storey
         // each, long enough to walk), its front glass, 3 or 5 storeys
         // inside it (odd: its flights turn at its ends, so it is left by
         // its far end), out by its far end.
@@ -208,6 +210,27 @@ fn exposure(cells: &Cells, taken: &Taken, c: IVec2, d: IVec2, s: i32, kind: Kind
             Some(Leg {
                 steps: vec![out(c, s), out(c2, e)],
                 takes: room.iter().flat_map(|&a| (s.min(e)..=s.max(e) + 1).map(move |s| (a, s))).chain([(exit, e), (exit, e + 1)]).collect(),
+                exit: (exit, e),
+            })
+        }),
+        // A stepwell (the court, glazed: see `fit::court`), three cells
+        // along the face and three in, four storeys (a flight a storey
+        // round its walls); the cell it is come to a passage along the face
+        // to its side, in at its top; out at its floor by its other side
+        // into a passage along the face the same, and back in.
+        Kind::Court => sides.into_iter().find_map(|t| {
+            let e = s + 4 * toward;
+            let (lo, hi) = (s.min(e), s.max(e));
+            let room: Vec<IVec2> = (1..=3).flat_map(|i| (0..3).map(move |k| c + t * i - d * k)).collect();
+            let (past, exit) = (c + t * 4, c + t * 4 - d);
+            let front = (1..=4).all(|i| cells.face(c + t * i).is_some() && cells.void(c + t * i + d));
+            if lo < 1 || !front || !room.iter().all(|&a| cells.rock(a) && (lo..=hi).all(|s| free(a, s))) || !free(c, s) || !free(past, e) || !cells.inside(exit) || !free(exit, e) {
+                return None;
+            }
+            let inside = |at: IVec2, s: i32| Step { at, storey: s, what: What::In };
+            Some(Leg {
+                steps: vec![inside(c, s), out(c + t, s), out(c + t * 3, e), inside(past, e)],
+                takes: room.iter().flat_map(|&a| (lo..=hi + 1).map(move |s| (a, s))).chain([(c, s), (c, s + 1), (past, e), (past, e + 1), (exit, e), (exit, e + 1)]).collect(),
                 exit: (exit, e),
             })
         }),
@@ -313,6 +336,11 @@ fn leg(cells: &Cells, taken: &Taken, from: &[IVec2], s: i32, climb: i32, kind: K
         let c = *path.last().unwrap();
         let (mut steps, mut takes, e) = flight(&path, s, climb, r(path.len() as i32 * 31 + c.x))?;
         let out = exposure(cells, taken, c, cells.face(c)?, e, kind, toward, r)?;
+        // (Clear of its own way in, not taken yet: a stepwell reaches back
+        // from the face over cells the way may have come along.)
+        if out.takes.iter().any(|t| takes.contains(t)) {
+            return None;
+        }
         steps.extend(out.steps);
         takes.extend(out.takes);
         Some(Leg { steps, takes, exit: out.exit })
@@ -678,7 +706,7 @@ pub fn check() -> bool {
         let (dist, _) = shortest(net.places.len(), &net.paths, &lengths, 0);
         let reached = dist.iter().filter(|d| **d < f32::MAX).count();
         let (all, inside) = net.paths.iter().map(|p| walked(&p.2)).fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
-        let mut kinds = [0; 4];
+        let mut kinds = [0; 5];
         for p in &net.paths {
             for (i, s) in p.2.iter().enumerate() {
                 if let What::Out(k) = s.what
@@ -720,7 +748,7 @@ pub fn check() -> bool {
         let covered = faces.iter().filter(|c| (-2..=2).any(|i| (-2..=2).any(|j| near.contains(&(c.x / 6 + i, c.y / 6 + j))))).count();
         let tree_paths = net.paths.iter().filter(|p| p.3).count();
         eprintln!(
-            "network {seed}: {} places, {} reached; {} paths ({} loops); {:.1} km walked, {:.0}% inside; exposures ledge {}, bridge {}, glass {}, balcony {}; spine {:.0} m to storey {}; faces near a path {:.0}%",
+            "network {seed}: {} places, {} reached; {} paths ({} loops); {:.1} km walked, {:.0}% inside; exposures ledge {}, bridge {}, glass stair {}, balcony {}, stepwell {}; spine {:.0} m to storey {}; faces near a path {:.0}%",
             net.places.len(),
             reached,
             net.paths.len(),
@@ -731,6 +759,7 @@ pub fn check() -> bool {
             kinds[1],
             kinds[2],
             kinds[3],
+            kinds[4],
             spine,
             net.places[net.bottom].storeys.1,
             covered as f32 / faces.len().max(1) as f32 * 100.0,

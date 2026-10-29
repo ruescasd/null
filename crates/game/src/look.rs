@@ -43,6 +43,8 @@ impl Plugin for LookPlugin {
             time: args.time.unwrap_or(if rooms { 550.0 } else { 150.0 }),
             speed: 1.0,
             paused: args.shot.is_some() || args.opt("labshots") || rooms,
+            // (The game's own, see `sun_shadows`; on, to be tried as much as
+            // possible, the user. `--opt hard` or P: off.)
             soft_shadows: !args.opt("hard"),
         })
         .insert_resource(Tuning {
@@ -59,8 +61,27 @@ impl Plugin for LookPlugin {
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .add_systems(Startup, setup)
         .add_systems(Update, (sky_controls, move_suns, darken, hud).chain())
+        .add_systems(Update, sun_shadows)
         .add_systems(Update, flicker);
     }
+}
+
+/// Bevy's shadows shader, where the suns' soft shadows are worked out.
+const SHADOWS: &str = "embedded://bevy_pbr/render/shadows.wgsl";
+
+/// The suns' soft shadows, the game's own (see sun_shadows.wgsl): Bevy's
+/// shadows shader replaced by the game's copy once it has loaded (before,
+/// it would be loaded over the copy).
+fn sun_shadows(server: Res<AssetServer>, mut shaders: ResMut<Assets<Shader>>, mut handle: Local<Option<Handle<Shader>>>, mut done: Local<bool>) {
+    if *done {
+        return;
+    }
+    let handle = handle.get_or_insert_with(|| server.load(SHADOWS)).clone();
+    if !server.is_loaded(&handle) {
+        return;
+    }
+    shaders.insert(&handle, Shader::from_wgsl(include_str!("sun_shadows.wgsl"), SHADOWS)).expect("replacing Bevy's shadows shader with the game's (sun_shadows.wgsl)");
+    *done = true;
 }
 
 /// Bloom flickers: on in short, irregular bursts (about 30 ms on, 80 ms off
@@ -99,9 +120,6 @@ struct SunOrbit {
     illuminance: f32,
     /// Apparent diameter in degrees (drawn disc, and shadow softness).
     angular_size: f32,
-    /// PCSS light size for this sun's shadows. For directional lights Bevy
-    /// measures this against light-space depth, so the numbers are empirical.
-    shadow_softness: f32,
     /// Seconds per orbit.
     period: f32,
     phase: f32,
@@ -116,7 +134,6 @@ const SUNS: [SunOrbit; 2] = [
     SunOrbit {
         illuminance: 22_000.0,
         angular_size: 0.7,
-        shadow_softness: 8.0,
         period: 900.0,
         phase: 0.0,
         max_elevation: 27.0,
@@ -126,7 +143,6 @@ const SUNS: [SunOrbit; 2] = [
     SunOrbit {
         illuminance: 7_000.0,
         angular_size: 4.5,
-        shadow_softness: 3600.0,
         period: 347.0,
         phase: 1.9,
         max_elevation: 16.0,
@@ -193,7 +209,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("chasm") && args.opt("region") { crate::chasm::plan::network::region::start(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"), args.opt("inside")) } else if args.opt("chasm") && args.opt("plan") { crate::chasm::plan::start(args.seed) } else if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::start(args.seed, crate::chasm::rooms::Show::of(&args)) } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
+    let [x, agl, z, yaw, pitch] = args.cam.unwrap_or(if args.opt("arena") { crate::chasm::arena::start() } else if args.opt("chasm") && args.opt("region") { crate::chasm::plan::network::region::start(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"), args.opt("inside")) } else if args.opt("chasm") && args.opt("plan") { crate::chasm::plan::start(args.seed) } else if args.opt("chasm") && args.opt("rooms") { crate::chasm::rooms::start(args.seed, crate::chasm::rooms::Show::of(&args)) } else if args.opt("chasm") { crate::chasm::start(args.seed, args.opt("junctions")) } else { [1200.0, 30.0, 900.0, -40.0, -6.0] });
     // (Over the ground lab's, its top; `--opt camfloor`, over the lab's
     // flat ground under it, to look from under its decks.)
     let ground = lab.as_ref().filter(|_| !args.opt("camfloor")).map_or(world.ground_height(x, z), |g| g.height(x, z).max(world.ground_height(x, z)));
@@ -280,6 +296,10 @@ fn setup(
                 ..default()
             },
             // The dim sun's soft shadows get away with less resolution and range.
+            // (Bevy's soft shadows, for a sun, were worked out from its
+            // cascade's depth, fitted to the view, and came and went with the
+            // camera's pitch, the user, in the arena; the game's own are in
+            // metres, see `sun_shadows`.)
             // (In the chasm, as far as anything in it can be seen from anywhere
             // in it: shadows end at a distance along the view, so a wall just
             // past their end would turn from shadowed to lit as the view
@@ -338,13 +358,20 @@ fn setup(
     ));
 }
 
-fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut sky: ResMut<Sky>) {
+fn sky_controls(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, args: Res<Args>, mut sky: ResMut<Sky>, mut still: Local<bool>) {
     let dt = time.delta_secs();
     if keys.just_pressed(KeyCode::KeyT) {
         sky.paused = !sky.paused;
     }
     if keys.just_pressed(KeyCode::KeyP) {
         sky.soft_shadows = !sky.soft_shadows;
+    }
+    // `still` (`--opt still`, or `still on` at the console): the time of
+    // day held, as T holds it (the user, wanting it from the command line);
+    // off, it runs again. (T still toggles it in between.)
+    if args.opt("still") != *still {
+        *still = !*still;
+        sky.paused = *still;
     }
     if keys.pressed(KeyCode::ArrowUp) {
         sky.speed = (sky.speed * (1.0 + 2.0 * dt)).min(200.0);
@@ -437,8 +464,10 @@ fn move_suns(
             light.shadow_maps_enabled = shadows;
         }
         light.illuminance = orbit.illuminance * (up * 20.0).min(1.0);
+        // (The penumbra's width per metre from what casts it: the sun's
+        // apparent diameter's tangent, see sun_shadows.wgsl.)
         light.soft_shadow_size =
-            sky.soft_shadows.then_some(orbit.shadow_softness * tuning.softness[sun.0]);
+            sky.soft_shadows.then_some(orbit.angular_size.to_radians().tan() * tuning.softness[sun.0]);
         bounced += orbit.illuminance * up;
         let t = ((dir.y + 0.03) / 0.15).clamp(0.0, 1.0);
         let weight = orbit.illuminance / SUNS[0].illuminance * t * t * (3.0 - 2.0 * t);

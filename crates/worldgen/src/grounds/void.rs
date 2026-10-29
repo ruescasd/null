@@ -557,18 +557,7 @@ fn lamp(b: &mut Builder, kind: Lamp, c: DVec2, to: DVec2, y: f64, lit: bool) {
     let u = (to - c).normalize();
     let v = u.perp();
     let at = |p: DVec2, h: f64| DVec3::new(p.x, h, p.y);
-    // (A glowing part, and where its light shines from, if anywhere.)
-    let head = |b: &mut Builder, build: &dyn Fn(&mut Builder), light: Option<DVec3>| {
-        if lit {
-            let stone = b.tone;
-            b.tone = LAMP;
-            b.glow(|b| build(b));
-            b.tone = stone;
-            b.lights.extend(light);
-        } else {
-            build(b);
-        }
-    };
+    let head = |b: &mut Builder, build: &dyn Fn(&mut Builder), light: Option<DVec3>| shine(b, lit, build, light);
     let floor = y - 0.01;
     let p = stand(c, to);
     match kind {
@@ -612,45 +601,68 @@ fn lamp(b: &mut Builder, kind: Lamp, c: DVec2, to: DVec2, y: f64, lit: bool) {
             block(b, q, u, (rod * 0.5, rod * 0.5), (y + from, y + NOTCH.1));
             head(b, &|b| block(b, q, u, (bead * 0.5, bead * 0.5), (y + from - long, y + from)), Some(at(q, y + from - long * 0.5)));
         }
-        Lamp::Echo(foot) => {
-            let (pole, high, groove, band) = ECHO;
-            let (reach, wide, deep, spring) = ARM;
-            let (hang, over) = ECHO_DRUM;
-            let g = floor + groove;
-            // (A drum at `q`, so wide, from `y.0` up to `y.1`, the groove
-            // cut round its core.)
-            let grooved = |b: &mut Builder, q: DVec2, r: f64, y: (f64, f64), light: Option<DVec3>| {
-                let round = |r: f64| polygon(q, r, LAMP_SIDES);
-                b.cylinder(q, &round(r), g, y.0, y.0 > floor);
-                head(b, &|b| b.cylinder(q, &round(r * (RADIUS - NOTCH.0) / RADIUS), g + band, g, false), light);
-                b.cylinder(q, &round(r), y.1, g + band, true);
-            };
-            match foot {
-                Foot::Plain => grooved(b, p, pole, (floor, floor + high), None),
-                // (Down to the socket's floor.)
-                Foot::Socket => grooved(b, p, pole, (y - SOCKET.1, floor + high), None),
-            }
-            // (Out over the walkway, one either way along it.)
-            for s in [-1.0, 1.0] {
-                let way = (v + u * s).normalize();
-                let q = p + way * reach;
-                // (Its soffit as a span's: from face to face, half an
-                // ellipse's quarter at each end.)
-                let (side, gap) = (way.perp() * wide * 0.5, reach - 2.0 * pole);
-                let steps = 12;
-                let sections: Vec<[DVec3; 4]> = (0..=steps)
-                    .map(|n| {
-                        let x = pole + gap * n as f64 / steps as f64;
-                        let e = (2.0 * (x - pole) / gap - 1.0).abs();
-                        let low = g - deep - spring * (1.0 - (1.0 - e * e).max(0.0).sqrt());
-                        let m = p + way * x;
-                        [at(m - side, g), at(m + side, g), at(m + side, low), at(m - side, low)]
-                    })
-                    .collect();
-                b.sweep(&sections);
-                grooved(b, q, pole, (g - hang, g + over), Some(at(q, g + band * 0.5)));
-            }
-        }
+        Lamp::Echo(foot) => echo(b, p, u, y, foot, lit),
+    }
+}
+
+/// A glowing part, lit (its light shining from `light`, if anywhere), or
+/// not.
+fn shine(b: &mut Builder, lit: bool, build: &dyn Fn(&mut Builder), light: Option<DVec3>) {
+    if lit {
+        let stone = b.tone;
+        b.tone = LAMP;
+        b.glow(|b| build(b));
+        b.tone = stone;
+        b.lights.extend(light);
+    } else {
+        build(b);
+    }
+}
+
+/// An echo (see `Lamp::Echo`) standing at `p`, `u` the way along what it
+/// lights, its foot at `y` (as `foot` meets it); lit, or not. (Any
+/// district's: an echo of the void elsewhere.)
+pub(super) fn echo(b: &mut Builder, p: DVec2, u: DVec2, y: f64, foot: Foot, lit: bool) {
+    let v = u.perp();
+    let at = |p: DVec2, h: f64| DVec3::new(p.x, h, p.y);
+    let head = |b: &mut Builder, build: &dyn Fn(&mut Builder), light: Option<DVec3>| shine(b, lit, build, light);
+    let floor = y - 0.01;
+    let (pole, high, groove, band) = ECHO;
+    let (reach, wide, deep, spring) = ARM;
+    let (hang, over) = ECHO_DRUM;
+    let g = floor + groove;
+    // (A drum at `q`, so wide, from `y.0` up to `y.1`, the groove
+    // cut round its core.)
+    let grooved = |b: &mut Builder, q: DVec2, r: f64, y: (f64, f64), light: Option<DVec3>| {
+        let round = |r: f64| polygon(q, r, LAMP_SIDES);
+        b.cylinder(q, &round(r), g, y.0, y.0 > floor);
+        head(b, &|b| b.cylinder(q, &round(r * (RADIUS - NOTCH.0) / RADIUS), g + band, g, false), light);
+        b.cylinder(q, &round(r), y.1, g + band, true);
+    };
+    match foot {
+        Foot::Plain => grooved(b, p, pole, (floor, floor + high), None),
+        // (Down to the socket's floor.)
+        Foot::Socket => grooved(b, p, pole, (y - SOCKET.1, floor + high), None),
+    }
+    // (Out over the walkway, one either way along it.)
+    for s in [-1.0, 1.0] {
+        let way = (v + u * s).normalize();
+        let q = p + way * reach;
+        // (Its soffit as a span's: from face to face, half an
+        // ellipse's quarter at each end.)
+        let (side, gap) = (way.perp() * wide * 0.5, reach - 2.0 * pole);
+        let steps = 12;
+        let sections: Vec<[DVec3; 4]> = (0..=steps)
+            .map(|n| {
+                let x = pole + gap * n as f64 / steps as f64;
+                let e = (2.0 * (x - pole) / gap - 1.0).abs();
+                let low = g - deep - spring * (1.0 - (1.0 - e * e).max(0.0).sqrt());
+                let m = p + way * x;
+                [at(m - side, g), at(m + side, g), at(m + side, low), at(m - side, low)]
+            })
+            .collect();
+        b.sweep(&sections);
+        grooved(b, q, pole, (g - hang, g + over), Some(at(q, g + band * 0.5)));
     }
 }
 

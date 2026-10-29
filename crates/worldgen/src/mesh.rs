@@ -27,9 +27,9 @@ pub struct ColumnMesh {
     pub albedo: Vec<f32>,
     /// Sky visibility per vertex (0 = fully occluded, 1 = open sky).
     pub ao: Vec<f32>,
-    /// Which plate's top each vertex is on, for the shader's subdivision
-    /// (see [`plate_code`]); it may run short of `positions`, and missing
-    /// entries are 0: not a plate's top.
+    /// Which plate each vertex is on (its top or its walls), for the
+    /// shader's subdivision (see [`plate_code`]); it may run short of
+    /// `positions`, and missing entries are 0: not a plate's.
     pub plate: Vec<f32>,
     /// How brightly each vertex glows; it may run short of `positions`,
     /// and missing entries are 0.
@@ -44,6 +44,16 @@ pub fn plate_code(level: usize, id: f32, big: bool) -> f32 {
     1.0 + level as f32 + 4.0 * (id + if big { 1024.0 } else { 0.0 })
 }
 
+/// What a plate's wall tells the shader: its plate's code and a number of
+/// its own (0..16), from its line, not its plate, so it keeps its pattern
+/// whichever level of detail draws it (a far wall is a coarser plate's; its
+/// panels changed as it was approached, the user). Under 2^17: the game
+/// adds the level of detail above it, and the colour it all travels in,
+/// interpolated, must still round to it.
+pub fn wall_code(code: f32, line: u32) -> f32 {
+    code + 8192.0 * (line % 16) as f32
+}
+
 impl ColumnMesh {
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
@@ -56,7 +66,7 @@ impl ColumnMesh {
         self.glow.resize(end, glow);
     }
 
-    /// Marks the `count` vertices just added as a plate's top (`code`, see
+    /// Marks the `count` vertices just added as a plate's (`code`, see
     /// [`plate_code`]).
     pub fn plate_of(&mut self, count: usize, code: f32) {
         let end = self.positions.len();

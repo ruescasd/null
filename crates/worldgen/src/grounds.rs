@@ -18,7 +18,9 @@
 //! - `nested`: the structures' fractal rule run at the scale of the land:
 //!   plateaus within plateaus, channels between them; `sunken`, the same
 //!   cut downward (pits within pits, ribs between); `contrast`, most blocks
-//!   left blank, a few split all the way down (knots).
+//!   left blank, a few split all the way down (knots), and with
+//!   streetlights on its bare plateaus, `contrast_lamp_echo` (the void's
+//!   streetlight) (`nested::Street`).
 //! - `stacked`: ground in layers, decks on pillars over a floor, voids
 //!   between them; `floors`, the decks continuous over many pillars, a
 //!   megastructure's floors.
@@ -75,7 +77,7 @@ use glam::{DVec2, DVec3};
 use crate::tilted::{SheetMesh, Tilted, clip, face, triangulate};
 
 /// The names `build` knows.
-pub const NAMES: [&str; 27] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander", "void_inlay", "void_inlay_balcony", "void_inlay_screen", "void_inlay_trees", "void_scale_courses", "void_seams_staves", "void_seams_rings", "void_lamp_monolith", "void_lamp_cradle", "void_lamp_pendant", "void_lamp_echo", "void_lamp_echo_socket"];
+pub const NAMES: [&str; 28] = ["tilted", "canyons", "bridged", "nested", "sunken", "contrast", "contrast_lamp_echo", "stacked", "floors", "void_machine", "void_web", "void_lattice", "void_tension", "void_branch", "void_mixed", "void_meander", "void_inlay", "void_inlay_balcony", "void_inlay_screen", "void_inlay_trees", "void_scale_courses", "void_seams_staves", "void_seams_rings", "void_lamp_monolith", "void_lamp_cradle", "void_lamp_pendant", "void_lamp_echo", "void_lamp_echo_socket"];
 
 /// Whether a kind stands over the void (its floor far below, lost in the
 /// haze: the game draws the haze nearer for it).
@@ -135,9 +137,10 @@ pub fn build(name: &str, centre: (f64, f64), seed: u32) -> Result<Patch, String>
             canyons::build(&mut b, seed, &canyons::BRIDGED);
             canyons::bridges(&mut b, seed);
         }
-        "nested" => nested::build(&mut b, seed, nested::RAISED),
+        "nested" => nested::build(&mut b, seed, nested::RAISED, None),
         "sunken" => nested::sunken(&mut b, seed),
-        "contrast" => nested::build(&mut b, seed, nested::CONTRAST),
+        "contrast" => nested::build(&mut b, seed, nested::CONTRAST, None),
+        "contrast_lamp_echo" => nested::build(&mut b, seed, nested::CONTRAST, Some(nested::Street::Echo)),
         "stacked" => stacked::build(&mut b, seed),
         "floors" => floors::build(&mut b, seed),
         "void_machine" => void::build(&mut b, seed, void::Recipe::Machine, void::Style::Solid),
@@ -241,6 +244,17 @@ fn inside(poly: &[DVec2], p: DVec2) -> bool {
         }
     }
     odd
+}
+
+/// The void's echo streetlight alone (see `void::echo`), for anywhere (the
+/// canals' banks): standing at the origin, its foot socketed 1.2 m into the
+/// ground, the way along what it lights +x, its arms out over +z. Its body
+/// glossy black (`Patch::gloss`), its glowing parts (`Patch::glows`), where
+/// its lights shine from.
+pub fn streetlight() -> Patch {
+    let mut b = Builder::new(DVec2::ZERO);
+    b.gloss(|b| void::echo(b, DVec2::ZERO, DVec2::X, 0.0, void::Foot::Socket, true));
+    b.finish()
 }
 
 /// Gathers a patch's solids into meshes by tile, and its top; each solid

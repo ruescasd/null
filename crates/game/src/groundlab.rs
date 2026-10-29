@@ -141,6 +141,9 @@ fn build(
     for &p in &ground.0.lights {
         commands.spawn((PointLight { intensity: args.num("lamp_light", LAMP.1), range: args.num("lamp_range", LAMP.2), shadow_maps_enabled: false, ..default() }, Transform::from_translation(Vec3::from(p))));
     }
-    info!("ground lab: {} lights", ground.0.lights.len());
+    // (And the nearest the middle, to find them by.)
+    let middle = Vec3::new(CENTRE.0 as f32, 0.0, CENTRE.1 as f32);
+    let nearest = ground.0.lights.iter().map(|&p| Vec3::from(p)).min_by(|a, b| (*a - middle).xz().length().total_cmp(&(*b - middle).xz().length()));
+    info!("ground lab: {} lights{}", ground.0.lights.len(), nearest.map_or(String::new(), |p| format!(", the nearest the middle at ({:.1}, {:.1}, {:.1})", p.x, p.y, p.z)));
     info!("ground lab: {} round ({:.0}, {:.0}), {} meshes, {triangles} triangles", args.ground.as_deref().unwrap_or(""), CENTRE.0, CENTRE.1, ground.0.pieces.len());
 }

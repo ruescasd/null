@@ -64,7 +64,7 @@ pub(super) struct Room {
 }
 
 /// Outer walls' thickness.
-const T: f32 = 1.5;
+pub(in crate::chasm) const T: f32 = 1.5;
 
 /// Rounds to half metres.
 fn half(x: f32) -> f32 {
@@ -996,6 +996,18 @@ fn flight_drop(side: f32, band: f32) -> f32 {
 /// last the floor under the first) and the flights (where each starts and
 /// ends on its treads' line, mid-band, and half the band across).
 fn round_flights(b: &mut B, (x0, z0): (f32, f32), side: f32, band: f32, top: f32) -> (Vec<Vec3>, Vec<(Vec3, Vec3, Vec3)>) {
+    round_flights_at(b, &|p| p, (x0, z0), side, band, top, 1.0)
+}
+
+/// The same, laid out by `at` (from the frame they are worked in to the
+/// grid's: a turn and a mirror, so a region's stepwell can face its glass
+/// and doors whichever way they are), its lamps `bright` times as strong;
+/// landings and flights in the grid's.
+fn round_flights_at(b: &mut B, at: &dyn Fn(Vec3) -> Vec3, (x0, z0): (f32, f32), side: f32, band: f32, top: f32, bright: f32) -> (Vec<Vec3>, Vec<(Vec3, Vec3, Vec3)>) {
+    let solid = |b: &mut B, p: Vec3, q: Vec3| {
+        let (p, q) = (at(p), at(q));
+        b.solid(p.min(q), p.max(q));
+    };
     let steps = ((side - 2.0 * band) / 0.5) as i32;
     let level = side - 2.0 * band - steps as f32 * 0.5;
     let drop = flight_drop(side, band);
@@ -1013,10 +1025,10 @@ fn round_flights(b: &mut B, (x0, z0): (f32, f32), side: f32, band: f32, top: f32
         // The landing at the corner, then the flight on from it.
         let c = corner(k);
         let mid = c + Vec2::splat(band * 0.5);
-        landings.push(Vec3::new(mid.x, y, mid.y));
-        b.solid(Vec3::new(c.x, y - slab, c.y), Vec3::new(c.x + band, y, c.y + band));
+        landings.push(at(Vec3::new(mid.x, y, mid.y)));
+        solid(b, Vec3::new(c.x, y - slab, c.y), Vec3::new(c.x + band, y, c.y + band));
         if k > 0 {
-            b.lamp(Vec3::new(mid.x, y + 2.5, mid.y), side * 0.8, strength(side * 0.8) * 0.5);
+            b.lamp(at(Vec3::new(mid.x, y + 2.5, mid.y)), side * 0.8, strength(side * 0.8) * 0.5 * bright);
         }
         let way = ways[k];
         // (Across the band, from the wall in, between two points along it.)
@@ -1027,22 +1039,23 @@ fn round_flights(b: &mut B, (x0, z0): (f32, f32), side: f32, band: f32, top: f32
         let start = mid + way * band * 0.5;
         if level > 0.0 {
             let (a, bb) = span(start, start + way * level);
-            b.solid(Vec3::new(a.x, y - slab, a.y), Vec3::new(bb.x, y, bb.y));
+            solid(b, Vec3::new(a.x, y - slab, a.y), Vec3::new(bb.x, y, bb.y));
         }
         let start = start + way * level;
         for i in 0..steps {
             let along = start + way * (i as f32 * 0.5);
             let (a, bb) = span(along, along + way * 0.5);
             let step_top = y - (i + 1) as f32 * 0.25;
-            b.solid(Vec3::new(a.x, step_top - slab, a.y), Vec3::new(bb.x, step_top, bb.y));
+            solid(b, Vec3::new(a.x, step_top - slab, a.y), Vec3::new(bb.x, step_top, bb.y));
         }
         let end = start + way * (steps as f32 * 0.5);
         let across = Vec2::new(way.y, way.x).abs() * band * 0.5;
-        flights.push((Vec3::new(start.x, y, start.y), Vec3::new(end.x, y - drop, end.y), Vec3::new(across.x, 0.0, across.y)));
+        let (from, to) = (Vec3::new(start.x, y, start.y), Vec3::new(end.x, y - drop, end.y));
+        flights.push((at(from), at(to), at(from + Vec3::new(across.x, 0.0, across.y)) - at(from)));
         y -= drop;
     }
     let c = corner(0) + Vec2::splat(band * 0.5);
-    landings.push(Vec3::new(c.x, y, c.y));
+    landings.push(at(Vec3::new(c.x, y, c.y)));
     (landings, flights)
 }
 

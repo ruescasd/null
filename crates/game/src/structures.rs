@@ -237,6 +237,8 @@ fn watch(
         new.canals.relief = old.canals.relief;
         new.districts.force = old.districts.force;
         new.slabs = old.slabs;
+        new.kerbs = old.kerbs;
+        new.wall_least = old.wall_least;
         let new = new.with_sites(&library);
         if !old.same_ground(&new) {
             info!("sites changed: regenerating the terrain");
@@ -359,7 +361,7 @@ fn receive(
                 let bundle = (
                     bounds(&mesh),
                     NoAutoAabb,
-                    Mesh3d(meshes.add(to_bevy_mesh(mesh))),
+                    Mesh3d(meshes.add(to_bevy_mesh(mesh, 0))),
                     MeshMaterial3d(material.0.clone()),
                     Transform::default(),
                     if far { Visibility::Hidden } else { Visibility::Inherited },
@@ -380,7 +382,7 @@ fn receive(
                 Level(i),
                 bounds(&mesh),
                 NoAutoAabb,
-                Mesh3d(meshes.add(to_bevy_mesh(mesh))),
+                Mesh3d(meshes.add(to_bevy_mesh(mesh, 0))),
                 MeshMaterial3d(material.0.clone()),
                 Transform::default(),
                 if i == 0 { Visibility::Inherited } else { Visibility::Hidden },

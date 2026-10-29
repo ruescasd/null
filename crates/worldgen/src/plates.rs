@@ -54,8 +54,19 @@ pub struct PlateWorld {
     /// Slabs thrust up out of the ground, of which kind (see `slabs.rs`; 0
     /// none; the game's `--set slabs N`, to judge).
     pub slabs: u8,
+    /// Kerbs along the flat plates' edges, near (see `bricks.rs`; the
+    /// game's `--opt kerbs`).
+    pub kerbs: bool,
+    /// The lowest a wall carries its pattern (m, out of the ground beyond
+    /// it, at its tallest; the game's `--set wall_least`). (The user: on a
+    /// short wall the panels do not fit, a few ticks with no panel's edge;
+    /// and the cut is a measure of its own, a step one looks over plain, a
+    /// wall that shuts the view panelled. 1.5: just under the eye, and
+    /// always a course's line through it.)
+    pub wall_least: f64,
 }
 
+mod bricks;
 mod slabs;
 pub use slabs::SlabInfo;
 
@@ -155,6 +166,8 @@ impl PlateWorld {
             library: None,
             lab: false,
             slabs: 0,
+            kerbs: false,
+            wall_least: 1.5,
         }
     }
 
@@ -175,7 +188,7 @@ impl PlateWorld {
     /// meshed for one is wrong for the other).
     pub fn same_ground(&self, other: &PlateWorld) -> bool {
         let forms = |w: &PlateWorld| w.library.as_ref().map(|l| format!("{:?}", l.forms));
-        self.sites == other.sites && forms(self) == forms(other) && self.slabs == other.slabs
+        self.sites == other.sites && forms(self) == forms(other) && self.slabs == other.slabs && self.kerbs == other.kerbs && self.wall_least == other.wall_least
     }
 
     /// The world's seed (scrambled), for things derived from it.
@@ -878,7 +891,12 @@ impl PlateWorld {
         // on splitting it below what the geometry draws.
         let id = (self.rand(plate.level, plate.sites[plate.level], 11) * 1024.0).floor() as f32;
         let big = self.districts.at(centroid.x, centroid.y).rules().pieces >= 32.0;
-        mesh.plate_of(mesh.positions.len() - top_start, crate::mesh::plate_code(plate.level, id, big));
+        let code = crate::mesh::plate_code(plate.level, id, big);
+        mesh.plate_of(mesh.positions.len() - top_start, code);
+        // (Its kerbs, near: flat plates only.)
+        if self.kerbs && max_level == 2 && !plate.sloped && plate.tilt == DVec2::ZERO {
+            self.emit_kerbs(mesh, poly, plate, h, origin);
+        }
 
         // Walls, darkening towards their foot.
         let wall_albedo = plate.albedo * 0.85;
@@ -892,6 +910,9 @@ impl PlateWorld {
             if normal.dot((a + b) * 0.5 - centroid) < 0.0 {
                 normal = -normal;
             }
+            // (Its line: the way it faces and how far out, the same for the
+            // pieces of a finer level along it.)
+            let line = hash01((normal.y.atan2(normal.x) * 1e4).round() as i32, (normal.dot(a) * 100.0).round() as i32, 17, self.seed);
             let normal = Vec3::new(normal.x as f32, 0.0, normal.y as f32);
             let j = (i + 1) % n;
             if beyond[i] >= tops[i].max(tops[j]) - 1e-3 {
@@ -903,6 +924,10 @@ impl PlateWorld {
             let bot_b = push(mesh, local(b, foot), normal, wall_albedo, 0.0);
             tri(mesh, [top_a, bot_a, bot_b], normal);
             tri(mesh, [top_a, bot_b, top_b], normal);
+            // (Its plate and line, for its pattern, if it is tall enough:
+            // see the walls in `terrain.wgsl`.)
+            let tall = tops[i].max(tops[j]) - beyond[i] >= self.wall_least - 1e-3;
+            mesh.plate_of(4, if tall { crate::mesh::wall_code(code, (line * 16.0) as u32) } else { 0.0 });
         }
     }
 }
@@ -980,5 +1005,84 @@ mod tests {
             }
         }
         assert!(total > 0);
+    }
+
+    /// A wall's number for its pattern comes from its line, so the finer
+    /// level's pieces along a coarser plate's wall have the coarser wall's
+    /// (its panels changed as it was approached, the user: it was its
+    /// plate's).
+    #[test]
+    fn walls_keep_their_number_across_lods() {
+        // (Each wall: its ends (m, world), the way it faces, its number.)
+        fn walls(w: &PlateWorld, lod: u32, cx: i32, cz: i32) -> Vec<(DVec2, DVec2, DVec2, u32)> {
+            let m = w.mesh_column(lod, cx, cz);
+            let (x0, z0) = crate::mesh::column_origin(lod, cx, cz);
+            let at = |i: usize| DVec2::new((m.positions[i][0] + x0) as f64, (m.positions[i][2] + z0) as f64);
+            let wall = |i: usize| m.normals[i][1].abs() < 1e-3 && m.plate.get(i).is_some_and(|&c| c > 0.0);
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < m.positions.len() {
+                if !wall(i) {
+                    i += 1;
+                    continue;
+                }
+                let n = DVec2::new(m.normals[i][0] as f64, m.normals[i][2] as f64);
+                out.push((at(i), at(i + 1), n, (m.plate[i] / 8192.0) as u32));
+                i += 4;
+            }
+            out
+        }
+        let w = PlateWorld::new(4096.0, 3);
+        let per = (column_size(1) / column_size(0)).round() as i32;
+        let mut matched = 0;
+        for c in 0..4 {
+            let (cx, cz) = (c, c * 2 + 1);
+            let coarse = walls(&w, 1, cx, cz);
+            let mut fine = Vec::new();
+            for dz in 0..per {
+                for dx in 0..per {
+                    fine.extend(walls(&w, 0, cx * per + dx, cz * per + dz));
+                }
+            }
+            for &(a, b, n, number) in &coarse {
+                let along = (b - a).normalize();
+                for &(fa, fb, fn_, fine_number) in &fine {
+                    let on = |p: DVec2| (p - a).dot(n).abs() < 0.01;
+                    let (s0, s1) = ((fa - a).dot(along), (fb - a).dot(along));
+                    let overlap = s0.max(s1).min((b - a).length()) - s0.min(s1).max(0.0);
+                    if (fn_ - n).length() < 1e-3 && on(fa) && on(fb) && overlap > 0.1 {
+                        assert_eq!(number, fine_number, "wall {a} {b} facing {n}");
+                        matched += 1;
+                    }
+                }
+            }
+        }
+        assert!(matched > 20, "only {matched} walls shared by both levels");
+    }
+
+    /// Only walls at least `wall_least` tall carry a pattern: a low step
+    /// is left plain.
+    #[test]
+    fn low_walls_are_plain() {
+        // (Wall vertices with a pattern, and without.)
+        fn count(w: &PlateWorld) -> (usize, usize) {
+            let (mut coded, mut plain) = (0, 0);
+            for c in 0..6 {
+                let m = w.mesh_column(0, c, c * 3);
+                for (i, n) in m.normals.iter().enumerate() {
+                    if n[1].abs() < 1e-3 {
+                        if m.plate.get(i).is_some_and(|&p| p > 0.0) { coded += 1 } else { plain += 1 }
+                    }
+                }
+            }
+            (coded, plain)
+        }
+        let mut w = PlateWorld::new(4096.0, 3);
+        w.wall_least = 0.0;
+        let (all, none) = count(&w);
+        assert!(all > 0 && none == 0, "{all} patterned, {none} plain with no least height");
+        w.wall_least = 1.5;
+        let (tall, low) = count(&w);
+        assert!(tall > 0 && low > 0 && tall + low == all, "{tall} patterned, {low} plain of {all}");
     }
 }

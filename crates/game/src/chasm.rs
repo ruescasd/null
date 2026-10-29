@@ -25,6 +25,7 @@ mod claims;
 use claims::{Claim, ROCK, Table, Use};
 pub mod rooms;
 pub mod plan;
+pub mod arena;
 pub(crate) mod nav;
 
 /// A taut cable from `a` to `b`, sagging `sag` in the middle.
@@ -940,6 +941,8 @@ fn build(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    surfaces: Option<ResMut<Assets<crate::terrain::TerrainMaterial>>>,
+    world: Option<Res<crate::terrain::WorldGen>>,
 ) {
     if !args.opt("chasm") {
         return;
@@ -982,6 +985,42 @@ fn build(
         furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
         let pieces: Vec<&Geometry> = std::iter::once(&parts.stone).chain(&parts.chunks).chain(std::iter::once(&parts.glass)).collect();
         let colliders = colliders_of(&pieces).into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
+        return;
+    }
+    // `--opt arena`: the combat lab, a colosseum (see `arena.rs`).
+    if args.opt("arena") {
+        let layout = args.num("floor", 0.0) as usize;
+        let (mut parts, report) = arena::build(layout);
+        for line in report {
+            info!("arena: {line}");
+        }
+        let nav = nav::Nav::new(&parts.walkable);
+        let (pieces, largest) = nav.pieces();
+        let lost: Vec<String> = arena::landmarks(layout).into_iter().filter(|(_, p)| nav.path(arena::ground(), *p).is_none()).map(|(n, _)| n).collect();
+        info!("arena: nav {} spots in {pieces} pieces (the largest {largest}); from the floor, {} not reached{}", nav.nodes.len(), lost.len(), lost.iter().map(|n| format!("; {n}")).collect::<String>());
+        commands.insert_resource(nav);
+        let pieces: Vec<&Geometry> = parts.chunks.iter().collect();
+        let colliders = colliders_of(&pieces).into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        // Its stone drawn as the ground's is (the user: in plain stone no
+        // depth could be seen): the plates' pieces on its floors, the
+        // panels on its walls, along the curve of those round its middle;
+        // its flights the same stone, plain. (Not where nothing is drawn,
+        // as in the headless check: there, as the other built places.)
+        if let (Some(mut surfaces), Some(world)) = (surfaces, world) {
+            let mut surface = crate::terrain::surface(&args, world.size(), 0.0, 0.0);
+            surface.extension.round = Vec4::new(arena::CENTRE.x, arena::CENTRE.z, 0.0, 1.0);
+            let surface = surfaces.add(surface);
+            let albedo = Color::srgb(0.62, 0.62, 0.62).to_linear().red;
+            let stone = std::mem::take(&mut parts.chunks).into_iter().map(|g| (g, arena::PLATE));
+            for (g, plate) in stone.chain(std::iter::once((std::mem::take(&mut parts.steps), -1))) {
+                if g.indices.is_empty() {
+                    continue;
+                }
+                let colours = vec![[albedo, (plate + 1) as f32, 0.0, 1.0]; g.positions.len()];
+                commands.spawn((Mesh3d(meshes.add(g.mesh().with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colours))), MeshMaterial3d(surface.clone()), Transform::IDENTITY));
+            }
+        }
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }
