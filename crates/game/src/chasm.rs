@@ -52,7 +52,7 @@ pub struct ChasmPlugin;
 
 impl Plugin for ChasmPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, build).add_systems(Update, (near_shadows, rooms::orb::animate, rooms::pool::animate, rooms::projector::animate, rooms::shimmer::animate));
+        app.add_systems(Startup, build).add_systems(Update, (near_shadows, near_spots, rooms::orb::animate, rooms::pool::animate, rooms::projector::animate, rooms::shimmer::animate));
     }
 }
 
@@ -535,6 +535,12 @@ struct Parts {
     /// nearest to the eye (see `near_shadows`), so their light leaves by
     /// the windows and doors, not through the rock.
     shadowed: Vec<(Vec3, f32, f32)>,
+    /// Lamps shining down from a ceiling, a cone (see `SPOT`): where, which
+    /// way, how far they reach, how bright; casting shadows when among the
+    /// nearest (see `near_spots`). (The user: a light shaped to what is round
+    /// it needs its shadow less to stay right; and a cone's shadow is one
+    /// view where a sphere's is six.)
+    spots: Vec<(Vec3, Vec3, f32, f32)>,
     /// Glass (clear, in windows): drawn see-through, and collided with.
     glass: Geometry,
     /// Flights' steps (seen, not walked on), and the slopes beneath them
@@ -991,7 +997,8 @@ fn build(
     // `--opt arena`: the combat lab, a colosseum (see `arena.rs`).
     if args.opt("arena") {
         let layout = args.num("floor", 0.0) as usize;
-        let (mut parts, report) = arena::build(layout);
+        // (`--opt pointlamps`: its lamps as they were, spheres, to compare.)
+        let (mut parts, report) = arena::build(layout, !args.opt("pointlamps"));
         for line in report {
             info!("arena: {line}");
         }
@@ -1020,6 +1027,19 @@ fn build(
                 let colours = vec![[albedo, (plate + 1) as f32, 0.0, 1.0]; g.positions.len()];
                 commands.spawn((Mesh3d(meshes.add(g.mesh().with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colours))), MeshMaterial3d(surface.clone()), Transform::IDENTITY));
             }
+        }
+        // The gates' leaves, shut (they open for a round: see `combat::round`).
+        let leaf = meshes.add(Cuboid::new(arena::LEAF.x, arena::LEAF.y, arena::LEAF.z));
+        let black = materials.add(StandardMaterial { base_color: Color::srgb(0.01, 0.01, 0.01), perceptual_roughness: 0.12, reflectance: 0.7, ..default() });
+        for (at, turn) in arena::leaves() {
+            commands.spawn((
+                arena::Leaf { shut: at },
+                Mesh3d(leaf.clone()),
+                MeshMaterial3d(black.clone()),
+                Transform::from_translation(at).with_rotation(turn),
+                RigidBody::Kinematic,
+                Collider::cuboid(arena::LEAF.x, arena::LEAF.y, arena::LEAF.z),
+            ));
         }
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
@@ -1081,23 +1101,137 @@ struct StandIn(Option<Entity>);
 const SHADOWED: usize = 8;
 const STAND_INS: usize = 8;
 
-/// Shadows from the lamps nearest the eye only, cast by the stand-ins put
-/// in their places, the lamps themselves dark meanwhile (none with `--opt
-/// nolampshadows` or `fullbright`).
+/// A ceiling lamp's cone (see `Parts::spots`): its outer and inner half
+/// angles (radians: 75 and 55 degrees; much wider, its one shadow view is
+/// stretched past use).
+const SPOT: (f32, f32) = (1.309, 0.96);
+
+/// How many spot lamps cast shadows at once (`--set spot_shadowed=N`, up to
+/// `SPOT_STAND_INS`). Their maps are the sun's size (4096, Bevy keeps them
+/// in its cascades' array, no size of their own), 64 MB each: in the
+/// corridor at 270 degrees, all in view, 8 took the frame from 6.6 ms to
+/// 8.5, 16 to 20.7. The array is sized by how many are in view: that count
+/// changing as you walked (stand-ins culled) had it allocated anew again
+/// and again, the frame dropping and the GPU's memory running out at 16
+/// (the user, 2026-10-29); the stand-ins are never culled now.
+const SPOT_SHADOWED: usize = 8;
+const SPOT_STAND_INS: usize = 48;
+
+/// A spot lamp that casts shadows when among the nearest (see
+/// `near_spots`): its intensity.
+#[derive(Component)]
+struct ShadowedSpot(f32);
+
+/// A spot light standing in for a spot lamp near the eye, casting its
+/// shadow (as `StandIn` for the point lamps).
+#[derive(Component)]
+struct StandInSpot(Option<Entity>);
+
+/// Where a lamp's light reaches: a sphere `range` round `at`, or of it only
+/// the cone `cone` for a spot (its way, its half angle).
+#[derive(Clone, Copy)]
+pub(crate) struct Reach {
+    pub at: Vec3,
+    pub range: f32,
+    pub cone: Option<(Vec3, f32)>,
+}
+
+impl Reach {
+    /// Whether it reaches into `view` (past its far plane counted in): not
+    /// wholly outside any of its sides, by how far it reaches across each,
+    /// a sphere its range, a cone its range along its edge nearest the side's
+    /// way out (none, from its tip, when that edge turns away).
+    pub fn in_view(&self, view: &bevy::math::primitives::ViewFrustum) -> bool {
+        view.half_spaces[..bevy::math::primitives::ViewFrustum::FAR_PLANE_IDX].iter().all(|side| {
+            let into = Vec3::from(side.normal());
+            let across = match self.cone {
+                None => self.range,
+                Some((way, half)) => self.range * (into.angle_between(way) - half).max(0.0).cos().max(0.0),
+            };
+            into.dot(self.at) + side.d() + across > 0.0
+        })
+    }
+}
+
+/// Which of `lamps` cast their shadows, `wanted` of them, seen from `eye`
+/// (`clip_from_world` its view): first those whose reach overlaps the view's
+/// frustum, the only ones lighting anything seen, then the rest, each by how
+/// far its sphere is from the eye. (Overlapping the frustum, not seen past
+/// walls: a lamp without its shadow lights through them, the leak itself,
+/// the user. The rest keep the slots left ready for a turn.)
+pub(crate) fn shadow_rank(eye: Vec3, clip_from_world: Mat4, lamps: &[Reach], wanted: usize) -> Vec<usize> {
+    let view = bevy::math::primitives::ViewFrustum::from_clip_from_world(&clip_from_world);
+    let mut ranked: Vec<(bool, f32, usize)> = lamps.iter().enumerate().map(|(i, l)| (!l.in_view(&view), l.at.distance(eye) - l.range, i)).collect();
+    ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    ranked.into_iter().take(wanted).map(|r| r.2).collect()
+}
+
+/// The eye's view this frame (as `shadow_rank` wants it; the camera's own
+/// `Frustum` is updated after, a frame late on a turn).
+fn clip_from_world(camera: &Transform, projection: &Projection) -> Mat4 {
+    projection.get_clip_from_view() * camera.to_matrix().inverse()
+}
+
+/// Shadows from the spot lamps lighting the view (see `shadow_rank`), cast
+/// by stand-ins put in their places, as `near_shadows`.
+fn near_spots(
+    args: Res<Args>,
+    camera: Single<(&Transform, &Projection), (With<crate::camera::FlyCam>, Without<StandInSpot>, Without<ShadowedSpot>)>,
+    mut lamps: Query<(Entity, &Transform, &mut SpotLight, &ShadowedSpot), Without<StandInSpot>>,
+    mut stand: Query<(&mut StandInSpot, &mut Transform, &mut SpotLight), Without<ShadowedSpot>>,
+) {
+    let off = args.opt("nolampshadows") || args.opt("fullbright");
+    let wanted = (args.num("spot_shadowed", SPOT_SHADOWED as f32).max(0.0) as usize).min(SPOT_STAND_INS);
+    let (cam, projection) = *camera;
+    let all: Vec<(Entity, Reach)> = if off { Vec::new() } else { lamps.iter().map(|(e, t, l, _)| (e, Reach { at: t.translation, range: l.range, cone: Some((*t.forward(), l.outer_angle)) })).collect() };
+    let reach: Vec<Reach> = all.iter().map(|a| a.1).collect();
+    let near: Vec<Entity> = shadow_rank(cam.translation, clip_from_world(cam, projection), &reach, wanted).into_iter().map(|i| all[i].0).collect();
+    let kept: Vec<Entity> = stand.iter().filter_map(|s| s.0.0.filter(|e| near.contains(e))).collect();
+    let mut free = near.iter().copied().filter(|e| !kept.contains(e));
+    for (mut s, mut t, mut light) in &mut stand {
+        if s.0.is_some_and(|e| !near.contains(&e))
+            && let Some(old) = s.0.take()
+            && let Ok((_, _, mut l, base)) = lamps.get_mut(old)
+        {
+            l.intensity = base.0;
+        }
+        if s.0.is_none() {
+            s.0 = free.next();
+        }
+        match s.0.and_then(|e| lamps.get_mut(e).ok()) {
+            Some((_, lt, mut l, base)) => {
+                *t = *lt;
+                *light = SpotLight { intensity: base.0, shadow_maps_enabled: true, ..*l };
+                l.intensity = 0.0;
+            }
+            None => {
+                if light.intensity != 0.0 {
+                    light.intensity = 0.0;
+                }
+                if light.shadow_maps_enabled {
+                    light.shadow_maps_enabled = false;
+                }
+            }
+        }
+    }
+}
+
+/// Shadows from the lamps lighting the view only (see `shadow_rank`), cast
+/// by the stand-ins put in their places, the lamps themselves dark meanwhile
+/// (none with `--opt nolampshadows` or `fullbright`).
 fn near_shadows(
     args: Res<Args>,
-    camera: Single<&Transform, (With<crate::camera::FlyCam>, Without<StandIn>)>,
+    camera: Single<(&Transform, &Projection), (With<crate::camera::FlyCam>, Without<StandIn>)>,
     mut lamps: Query<(Entity, &Transform, &mut PointLight, &Shadowed), Without<StandIn>>,
     mut stand: Query<(&mut StandIn, &mut Transform, &mut PointLight), Without<Shadowed>>,
 ) {
     let off = args.opt("nolampshadows") || args.opt("fullbright");
     // (Those past how many are wanted stand idle: no light, no shadows.)
     let wanted = (args.num("shadowed", SHADOWED as f32).max(0.0) as usize).min(STAND_INS);
-    let eye = camera.translation;
-    let mut near: Vec<(f32, Entity)> = if off { Vec::new() } else { lamps.iter().map(|(e, t, _, _)| (t.translation.distance_squared(eye), e)).collect() };
-    near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.truncate(wanted);
-    let near: Vec<Entity> = near.into_iter().map(|n| n.1).collect();
+    let (cam, projection) = *camera;
+    let all: Vec<(Entity, Reach)> = if off { Vec::new() } else { lamps.iter().map(|(e, t, l, _)| (e, Reach { at: t.translation, range: l.range, cone: None })).collect() };
+    let reach: Vec<Reach> = all.iter().map(|a| a.1).collect();
+    let near: Vec<Entity> = shadow_rank(cam.translation, clip_from_world(cam, projection), &reach, wanted).into_iter().map(|i| all[i].0).collect();
     // (Each keeps the lamp it has while that is still near: no flicker.)
     let kept: Vec<Entity> = stand.iter().filter_map(|s| s.0.0.filter(|e| near.contains(e))).collect();
     let mut free = near.iter().copied().filter(|e| !kept.contains(e));
@@ -1209,11 +1343,25 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
     }
     if shadows || !parts.shadowed.is_empty() {
         for _ in 0..STAND_INS {
-            commands.spawn((StandIn(None), PointLight { intensity: 0.0, range: 1.0, shadow_maps_enabled: false, ..default() }, Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0))));
+            // (Never culled from the view: Bevy sizes its shadow maps by the
+            // shadowed lights in view, and a count changing as you walked
+            // had it allocate them anew, a frame's worth each time; see
+            // `SPOT_SHADOWED`.)
+            commands.spawn((StandIn(None), PointLight { intensity: 0.0, range: 1.0, shadow_maps_enabled: false, ..default() }, Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0)), bevy::camera::visibility::NoFrustumCulling));
         }
     }
     for &(at, range, k) in &parts.fill {
         commands.spawn((PointLight { intensity: power * k, range, shadow_maps_enabled: false, ..default() }, Transform::from_translation(at)));
+    }
+    let spot = |intensity: f32, range: f32| SpotLight { intensity, range, outer_angle: SPOT.0, inner_angle: SPOT.1, shadow_maps_enabled: false, ..default() };
+    for &(at, way, range, k) in &parts.spots {
+        let up = if way.cross(Vec3::Z).length() > 0.1 { Vec3::Z } else { Vec3::X };
+        commands.spawn((spot(power * k, range), Transform::from_translation(at).looking_to(way, up), ShadowedSpot(power * k)));
+    }
+    if !parts.spots.is_empty() {
+        for _ in 0..SPOT_STAND_INS {
+            commands.spawn((StandInSpot(None), spot(0.0, 1.0), Transform::from_translation(Vec3::new(0.0, -1000.0, 0.0)), bevy::camera::visibility::NoFrustumCulling));
+        }
     }
     info!("the chasm: built ({} lights)", parts.lights.len());
 }

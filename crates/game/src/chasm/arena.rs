@@ -235,6 +235,34 @@ fn in_cut(deg: f32, margin: f32) -> bool {
     d.abs() <= CUT + margin
 }
 
+/// How far the lamps reach (m): a room's, a corridor's or a tunnel's, a
+/// gate's pen's. (Short, so that no point is reached by more lamps than cast
+/// shadows at once, see `crowded`: a lamp without its shadow lights through
+/// walls, and lamps taking their shadows by turns as you walked made what
+/// was lit jump, the user, in the corridor at 270 degrees.)
+const REACH: (f32, f32, f32) = (11.0, 12.0, 20.0);
+
+/// The most lamps reaching any point of the building, and where (see
+/// `REACH`): sampled every metre out, every 2 degrees round, at eye height
+/// on each storey and terrace. A lamp a cone (`spots`) reaches only what is
+/// within its cone, down.
+pub fn crowded(lamps: &[(Vec3, f32)], spots: bool) -> (usize, Vec3) {
+    let within = (super::SPOT.0).cos();
+    let mut worst = (0, Vec3::ZERO);
+    for r in 30..85 {
+        for d in (0..360).step_by(2) {
+            for y in [0.5, 4.0, 8.5, 12.0, 16.5, 20.0, 24.5, 28.0, 32.5, 36.0] {
+                let p = at(r as f32, d as f32, y);
+                let n = lamps.iter().filter(|(c, reach)| c.distance(p) < *reach && (!spots || (p - *c).normalize_or(Vec3::Y).dot(Vec3::NEG_Y) > within)).count();
+                if n > worst.0 {
+                    worst = (n, p);
+                }
+            }
+        }
+    }
+    worst
+}
+
 /// A lamp's brightness for its reach (a passage lamp's, as `tiles`).
 fn lamp(range: f32) -> f32 {
     0.0006 * (range / 14.0).powi(2) * 6.0
@@ -244,6 +272,25 @@ fn lamp(range: f32) -> f32 {
 pub fn start() -> [f32; 5] {
     let eye = CENTRE + at(170.0, 0.0, 1.7);
     [eye.x, eye.y, eye.z, 90.0, 6.0]
+}
+
+/// A gate's leaf (see `leaves`): a slab of glossy black as wide as its gate,
+/// as tall and 2 m more, standing in it at its pen's mouth, shut; sunk into
+/// the floor, its top flush with it, open (a round's, see `combat::round`).
+#[derive(Component)]
+pub struct Leaf {
+    /// Where it stands shut.
+    pub shut: Vec3,
+}
+
+/// A leaf's size (m): wide, tall, thick; how far it sinks to stand open.
+pub const LEAF: Vec3 = Vec3::new(GATE_HALF * 2.0 + 0.1, GATE_HIGH + 2.0, 1.0);
+pub const SINK: f32 = GATE_HIGH;
+
+/// The gates' leaves, shut: where each stands (its middle), and turned so
+/// its face is across its gate (in the shell's inner wall, at the pen).
+pub fn leaves() -> Vec<(Vec3, Quat)> {
+    GATES.iter().map(|&g| (CENTRE + at(INNER + 0.75, g, GATE_HIGH * 0.5 - 1.0), Quat::from_rotation_y((90.0 - g).to_radians()))).collect()
 }
 
 /// Where a gate's pen is, behind it, on its floor (for what comes through).
@@ -355,8 +402,9 @@ fn floor(layout: usize) -> Floor {
 }
 
 /// The arena built, its floor laid out as `FLOORS[layout]`: its surfaces
-/// and lights, where it can be walked, and a line on what it is.
-pub(in crate::chasm) fn build(layout: usize) -> (Parts, Vec<String>) {
+/// and lights (`spots`, its lamps cones shining down, else spheres), where
+/// it can be walked, and a line on what it is.
+pub(in crate::chasm) fn build(layout: usize, spots: bool) -> (Parts, Vec<String>) {
     let mut parts = Parts::default();
     let mut cuts = Vec::new();
     let mut steps = Vec::new();
@@ -422,7 +470,7 @@ pub(in crate::chasm) fn build(layout: usize) -> (Parts, Vec<String>) {
             // (In a stair hall, out past its flights: in the room's middle,
             // it hung at the head of one going up.)
             if f < RISE * TIERS as f32 && kind != 'p' && !dark {
-                lamps.push((at(if kind == 's' { ROOM_OUT - 1.0 } else { (ROOM_IN + ROOM_OUT) * 0.5 }, c, ceiling - 0.6), 14.0));
+                lamps.push((at(if kind == 's' { ROOM_OUT - 1.0 } else { (ROOM_IN + ROOM_OUT) * 0.5 }, c, ceiling - 0.6), REACH.0));
             }
         }
         for j in 0..BAYS {
@@ -432,7 +480,7 @@ pub(in crate::chasm) fn build(layout: usize) -> (Parts, Vec<String>) {
         // through the arcade.)
         if f < RISE * TIERS as f32 {
             for j in 0..12 {
-                lamps.push((at((HALL_IN + HALL_OUT) * 0.5, 30.0 * j as f32 + 15.0, ceiling - 0.6), 14.0));
+                lamps.push((at((HALL_IN + HALL_OUT) * 0.5, 30.0 * j as f32 + 15.0, ceiling - 0.6), REACH.1));
             }
         }
     }
@@ -444,7 +492,7 @@ pub(in crate::chasm) fn build(layout: usize) -> (Parts, Vec<String>) {
     for g in GATES {
         cuts.push(spoke(g, FLOOR - 1.0, ROOM_IN + 0.5, GATE_HALF, 0.0, GATE_HIGH));
         cuts.push(sector(ROOM_IN, ROOM_OUT, (g - 5.0 + hw, g + 5.0 - hw), 0.0, GATE_HIGH + SLAB));
-        lamps.push((at((ROOM_IN + ROOM_OUT) * 0.5, g, GATE_HIGH - 0.6), 24.0));
+        lamps.push((at((ROOM_IN + ROOM_OUT) * 0.5, g, GATE_HIGH - 0.6), REACH.2));
     }
 
     // The vomitoria: from a terrace's back (the floor's edge) out under
@@ -452,7 +500,7 @@ pub(in crate::chasm) fn build(layout: usize) -> (Parts, Vec<String>) {
     for (deg, y) in VOMITORIA {
         let from = FLOOR + DEEP * (y / RISE);
         cuts.push(spoke(deg, short_of(from, 1.5), ROOM_IN + 0.5, 1.5, y, y + 3.0));
-        lamps.push((at((from + ROOM_IN) * 0.5, deg, y + 2.6), 14.0));
+        lamps.push((at((from + ROOM_IN) * 0.5, deg, y + 2.6), REACH.1));
     }
 
     // The aisles: a flight cut into each giant step's riser, from the
@@ -559,17 +607,23 @@ pub(in crate::chasm) fn build(layout: usize) -> (Parts, Vec<String>) {
     }
     for &(p, range) in &lamps {
         let p = p + CENTRE;
-        parts.lights.push((p, range, lamp(range)));
+        if spots {
+            parts.spots.push((p, Vec3::NEG_Y, range, lamp(range)));
+        } else {
+            parts.lights.push((p, range, lamp(range)));
+        }
         parts.glow.oriented(p + Vec3::Y * 0.5, Vec3::X * 0.3, Vec3::Y * 0.05, Vec3::Z * 0.3);
     }
+    let (most, where_) = crowded(&lamps, spots);
     let report = vec![format!(
-        "{} m across, {} m high, the floor {}; {} triangles, {} flights, {} lamps, {} spots to walk",
+        "{} m across, {} m high, the floor {}; {} triangles, {} flights, {} lamps (at most {most} reaching one point, at {:.0}), {} spots to walk",
         OUTER * 2.0,
         TOP,
         FLOORS[layout],
         parts.chunks.iter().map(|g| g.indices.len() / 3).sum::<usize>(),
         slopes.len(),
         lamps.len(),
+        where_ + CENTRE,
         parts.walkable.len()
     )];
     (parts, report)
@@ -661,11 +715,24 @@ mod tests {
         }
     }
 
+    /// No point of the building is reached by more lamps than cast shadows at
+    /// once (see `REACH`): failing, the lamps' layout or their reach must
+    /// change, not the test.
+    #[test]
+    fn lamps_never_crowd() {
+        for spots in [false, true] {
+            let (parts, _) = build(0, spots);
+            let lamps: Vec<(Vec3, f32)> = parts.lights.iter().map(|&(p, reach, _)| (p - CENTRE, reach)).chain(parts.spots.iter().map(|&(p, _, reach, _)| (p - CENTRE, reach))).collect();
+            let (most, at) = crowded(&lamps, spots);
+            assert!(most <= super::super::SHADOWED, "{most} lamps reach {:?}, more than the {} that cast shadows at once", at + CENTRE, super::super::SHADOWED);
+        }
+    }
+
     /// Every floor builds, and from it every landmark is reached.
     #[test]
     fn floors_reached() {
         for layout in 0..FLOORS.len() {
-            let (parts, _) = build(layout);
+            let (parts, _) = build(layout, true);
             let nav = super::super::nav::Nav::new(&parts.walkable);
             for (name, p) in landmarks(layout) {
                 assert!(nav.path(ground(), p).is_some(), "the floor {}: {name} not reached", FLOORS[layout]);

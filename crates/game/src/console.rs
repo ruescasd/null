@@ -12,7 +12,10 @@
 //! setting is its name then its value: `NAME on`, `NAME off` (a switch),
 //! `NAME VALUE`, `NAME default` (a number), `NAME` alone its value. And
 //! `help`; `list` (what acts at once, then all else on or set); `where`
-//! (the camera, as `--cam`); `clear`. Up brings back the last command.
+//! (the camera, as `--cam`; and copies it); `clear`. Up brings back the
+//! last command (kept between runs); Left, Right, Home, End, Delete and
+//! Ctrl with Left, Right or Backspace edit the line; Tab completes a word;
+//! Ctrl+V pastes (a line at a time run), Ctrl+C copies the line.
 //! `--do COMMAND` on the command line runs one at the start.
 
 use bevy::{
@@ -22,6 +25,7 @@ use bevy::{
         keyboard::{Key, KeyboardInput},
     },
     light::ShadowFilteringMethod,
+    clipboard::Clipboard,
     pbr::ContactShadows,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
@@ -33,11 +37,12 @@ pub struct ConsolePlugin;
 
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Console>()
+        app.insert_resource(Console { history: remembered(), ..default() })
             .init_resource::<Spawns>()
             .add_systems(Startup, spawn)
             .add_systems(PreUpdate, (type_in, swallow).chain().after(InputSystems))
-            .add_systems(Update, (show, follow, loudness, clock, given.run_if(crate::loading::playing)));
+            .add_systems(Update, (show, follow, loudness, clock, given.run_if(crate::loading::playing)))
+            .add_systems(PostUpdate, goto.before(TransformSystems::Propagate));
     }
 }
 
@@ -50,22 +55,103 @@ pub struct Spawns {
     pub creatures: Vec<(String, u32, crate::traits::Traits, Vec<Vec3>)>,
     pub round: Option<String>,
     pub reset: bool,
+    /// Where `cam` moves the camera to (as `--cam`), at the frame's end:
+    /// after what was spawned before it in the same breath.
+    pub goto: Option<[f32; 5]>,
 }
 
 /// The kinds `spawn` knows.
 pub const KINDS: [&str; 10] = ["harrow", "angler", "biped", "sprawl", "stalker", "porter", "chained", "bud", "grove", "bishop"];
 
-/// The console: whether it is down, the line being typed, what it has
-/// said, the commands run (for Up), how far down it is (0 away, 1 down).
+/// The console: whether it is down, the line being typed and where in it
+/// the cursor is (in characters), what it has said, the commands run (for
+/// Up), how far down it is (0 away, 1 down); what to copy to the clipboard.
 #[derive(Resource, Default)]
 pub struct Console {
     pub open: bool,
     line: String,
+    at: usize,
     lines: Vec<String>,
     history: Vec<String>,
     back: usize,
     down: f32,
     closing: bool,
+    copy: Option<String>,
+}
+
+/// How many commands are kept between runs.
+const REMEMBERED: usize = 500;
+
+/// Where the commands run are kept between runs: beside the game.
+fn history_file() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("console_history.txt"))
+}
+
+/// The commands run before, the last `REMEMBERED`.
+fn remembered() -> Vec<String> {
+    let text = history_file().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    let lines: Vec<String> = text.lines().filter(|l| !l.trim().is_empty()).map(String::from).collect();
+    lines[lines.len().saturating_sub(REMEMBERED)..].to_vec()
+}
+
+/// A command run, kept for the next run (said if it cannot be).
+fn remember(line: &str) {
+    use std::io::Write;
+    let Some(path) = history_file() else { return };
+    let kept = std::fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut f| writeln!(f, "{line}"));
+    if let Err(e) = kept {
+        warn!("console: could not keep {line:?} in {}: {e}", path.display());
+    }
+}
+
+/// The byte where character `at` of `line` starts.
+fn byte(line: &str, at: usize) -> usize {
+    line.char_indices().nth(at).map_or(line.len(), |(i, _)| i)
+}
+
+/// Where the word before (`-1`) or after (`1`) character `at` ends.
+fn word(line: &str, at: usize, way: i32) -> usize {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = at.min(chars.len());
+    if way < 0 {
+        while i > 0 && chars[i - 1] == ' ' {
+            i -= 1;
+        }
+        while i > 0 && chars[i - 1] != ' ' {
+            i -= 1;
+        }
+    } else {
+        while i < chars.len() && chars[i] == ' ' {
+            i += 1;
+        }
+        while i < chars.len() && chars[i] != ' ' {
+            i += 1;
+        }
+    }
+    i
+}
+
+impl Console {
+    /// `text` put in the line at the cursor, the cursor after it.
+    fn insert(&mut self, text: &str) {
+        let b = byte(&self.line, self.at);
+        self.line.insert_str(b, text);
+        self.at += text.chars().count();
+    }
+
+    /// The characters from `from` to `to` taken out of the line, the
+    /// cursor at `from`.
+    fn cut(&mut self, from: usize, to: usize) {
+        let (a, b) = (byte(&self.line, from), byte(&self.line, to));
+        self.line.replace_range(a..b, "");
+        self.at = from;
+    }
+
+    /// The line from the history, the cursor at its end.
+    fn recall(&mut self, line: String) {
+        self.at = line.chars().count();
+        self.line = line;
+    }
 }
 
 impl Console {
@@ -80,6 +166,15 @@ struct Panel;
 
 #[derive(Component)]
 struct Lines;
+
+/// The line's letter at the cursor (lit), and the rest of the line after it.
+#[derive(Component)]
+struct AtCursor;
+#[derive(Component)]
+struct AfterCursor;
+
+/// The colour the letter at the cursor is shown in.
+const CURSOR: Color = Color::srgb(1.0, 0.85, 0.3);
 
 /// How much of the screen it takes when down.
 const HEIGHT: f32 = 45.0;
@@ -113,7 +208,11 @@ fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Con
             Visibility::Hidden,
         ))
         .with_children(|panel| {
-            panel.spawn((Lines, Text::new(""), TextFont { font_size: FontSize::Px(14.0), ..default() }, TextColor(Color::srgb(0.8, 0.8, 0.8))));
+            let font = TextFont { font_size: FontSize::Px(14.0), ..default() };
+            panel.spawn((Lines, Text::new(""), font.clone(), TextColor(Color::srgb(0.8, 0.8, 0.8)))).with_children(|lines| {
+                lines.spawn((AtCursor, TextSpan::new(""), font.clone(), TextColor(CURSOR)));
+                lines.spawn((AfterCursor, TextSpan::new(""), font.clone(), TextColor(Color::srgb(0.8, 0.8, 0.8))));
+            });
         });
 }
 
@@ -121,11 +220,31 @@ fn spawn(mut commands: Commands, mut args: ResMut<Args>, mut console: ResMut<Con
 /// the line, Backspace takes one off, Enter runs it, Up brings back the
 /// last command, Esc puts it away.
 #[allow(clippy::too_many_arguments)]
-fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, mut cursor: Single<&mut CursorOptions>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, mut exit: MessageWriter<AppExit>) {
+#[allow(clippy::too_many_arguments)]
+fn type_in(
+    mut keys: MessageReader<KeyboardInput>,
+    mut ctrl: Local<bool>,
+    mut clipboard: Option<ResMut<Clipboard>>,
+    mut console: ResMut<Console>,
+    mut args: ResMut<Args>,
+    mut spawns: ResMut<Spawns>,
+    mut cursor: Single<&mut CursorOptions>,
+    camera: Single<(&Transform, &FlyCam)>,
+    world: Option<Res<crate::terrain::WorldGen>>,
+    mut exit: MessageWriter<AppExit>,
+) {
     for key in keys.read() {
+        // (Ctrl held, from its own presses and releases: the keys held are
+        // cleared each frame while the console is down (see `swallow`), so
+        // Ctrl was let go by the time V came, and a v was typed, the user.)
+        if matches!(key.key_code, KeyCode::ControlLeft | KeyCode::ControlRight) {
+            *ctrl = key.state == ButtonState::Pressed;
+            continue;
+        }
         if key.state != ButtonState::Pressed {
             continue;
         }
+        let ctrl = *ctrl;
         if key.key_code == KeyCode::Backquote || (console.open && key.logical_key == Key::Escape) {
             console.open = !console.open;
             // (The keys of the frame it goes away in are the console's too:
@@ -139,35 +258,124 @@ fn type_in(mut keys: MessageReader<KeyboardInput>, mut console: ResMut<Console>,
         if !console.open {
             continue;
         }
+        let length = console.line.chars().count();
+        let at = console.at.min(length);
         match &key.logical_key {
-            Key::Enter => {
-                let line = std::mem::take(&mut console.line);
-                console.lines.push(format!("> {line}"));
-                if !line.trim().is_empty() {
-                    console.history.push(line.clone());
-                }
-                console.back = 0;
-                execute(&line, &mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit);
+            Key::Enter => enter(&mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit),
+            Key::Backspace if ctrl => {
+                let from = word(&console.line, at, -1);
+                console.cut(from, at);
             }
-            Key::Backspace => {
-                console.line.pop();
-            }
+            Key::Backspace if at > 0 => console.cut(at - 1, at),
+            Key::Delete if at < length => console.cut(at, at + 1),
+            Key::ArrowLeft => console.at = if ctrl { word(&console.line, at, -1) } else { at.saturating_sub(1) },
+            Key::ArrowRight => console.at = if ctrl { word(&console.line, at, 1) } else { (at + 1).min(length) },
+            Key::Home => console.at = 0,
+            Key::End => console.at = length,
+            Key::Tab => complete(&mut console, &args),
             Key::ArrowUp => {
                 if console.back < console.history.len() {
                     console.back += 1;
-                    console.line = console.history[console.history.len() - console.back].clone();
+                    let line = console.history[console.history.len() - console.back].clone();
+                    console.recall(line);
                 }
             }
             Key::ArrowDown => {
                 console.back = console.back.saturating_sub(1);
-                console.line = if console.back == 0 { String::new() } else { console.history[console.history.len() - console.back].clone() };
+                let line = if console.back == 0 { String::new() } else { console.history[console.history.len() - console.back].clone() };
+                console.recall(line);
             }
+            // Pasted: at the cursor; each line ended in it run, as if typed
+            // and Enter pressed (a whole setting-up pasted at once).
+            _ if ctrl && key.key_code == KeyCode::KeyV => {
+                let Some(board) = clipboard.as_deref_mut() else { continue };
+                let Some(Ok(text)) = board.fetch_text().poll_result() else { continue };
+                let text = text.replace("\r\n", "\n").replace('\r', "\n");
+                let mut parts = text.split('\n').peekable();
+                while let Some(part) = parts.next() {
+                    console.at = console.at.min(console.line.chars().count());
+                    console.insert(&part.chars().filter(|c| !c.is_control()).collect::<String>());
+                    if parts.peek().is_some() {
+                        enter(&mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit);
+                    }
+                }
+            }
+            // (An empty line copies nothing: what is on the clipboard kept.)
+            _ if ctrl && key.key_code == KeyCode::KeyC => console.copy = (!console.line.is_empty()).then(|| console.line.clone()),
+            _ if ctrl => {}
             _ => {
                 if let Some(text) = &key.text {
-                    console.line.extend(text.chars().filter(|c| !c.is_control()));
+                    let text: String = text.chars().filter(|c| !c.is_control()).collect();
+                    console.at = at;
+                    console.insert(&text);
                 }
             }
         }
+    }
+    // (What `where` said, or the line, to the clipboard.)
+    if let Some(text) = console.copy.take()
+        && let Some(board) = clipboard.as_deref_mut()
+        && let Err(e) = board.set_text(text)
+    {
+        console.lines.push(format!("(not copied: {e:?})"));
+    }
+}
+
+/// The line run, as Enter: said back, kept in the history (and for the next
+/// run), done.
+fn enter(console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), world: Option<&crate::terrain::WorldGen>, exit: &mut MessageWriter<AppExit>) {
+    let line = std::mem::take(&mut console.line);
+    console.at = 0;
+    console.lines.push(format!("> {line}"));
+    if !line.trim().is_empty() {
+        console.history.push(line.clone());
+        remember(&line);
+    }
+    console.back = 0;
+    execute(&line, console, args, spawns, camera, world, exit);
+}
+
+/// Tab: the word at the cursor completed, from what can be said there: a
+/// command or a setting first; a creature's kind after `spawn` or `round`;
+/// then its options. One, completed; several, as far as they agree, and
+/// listed.
+fn complete(console: &mut Console, args: &Args) {
+    let at = console.at.min(console.line.chars().count());
+    console.at = at;
+    let before: String = console.line.chars().take(at).collect();
+    let words: Vec<&str> = before.split(' ').collect();
+    let (done, partial) = (&words[..words.len() - 1], words[words.len() - 1]);
+    let done: Vec<&str> = done.iter().copied().filter(|w| !w.is_empty()).collect();
+    let mut choices: Vec<String> = match done.as_slice() {
+        [] => ["spawn", "round", "reset", "cam", "where", "list", "help", "clear", "quit"]
+            .iter()
+            .map(|c| c.to_string())
+            .chain(SWITCHES.iter().map(|s| s.0.to_string()))
+            .chain(numbers(args).iter().map(|n| n.0.to_string()))
+            .collect(),
+        [command] if *command == "spawn" || *command == "round" => KINDS.iter().map(|k| k.to_string()).collect(),
+        [command, kind, ..] if *command == "spawn" || *command == "round" => crate::traits::OPTIONS
+            .iter()
+            .filter(|(kinds, ..)| kinds.contains(kind))
+            .map(|(_, name, number, ..)| if *number { format!("{name}=") } else { name.to_string() })
+            .collect(),
+        [name] if SWITCHES.iter().any(|s| s.0 == *name) => vec!["on".into(), "off".into()],
+        _ => Vec::new(),
+    };
+    choices.retain(|c| c.starts_with(partial));
+    choices.sort();
+    choices.dedup();
+    let Some(first) = choices.first() else { return };
+    // (As far as all of them agree.)
+    let common: String = first.chars().enumerate().take_while(|&(i, c)| choices.iter().all(|o| o.chars().nth(i) == Some(c))).map(|(_, c)| c).collect();
+    let rest: String = common.chars().skip(partial.chars().count()).collect();
+    console.insert(&rest);
+    if choices.len() == 1 {
+        if !common.ends_with('=') {
+            console.insert(" ");
+        }
+    } else {
+        console.lines.push(choices.join("  "));
     }
 }
 
@@ -179,6 +387,22 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
         console.lines.clear();
     } else if line.trim() == "quit" || line.trim() == "exit" {
         exit.write(AppExit::Success);
+    } else if let Some(rest) = line.trim().strip_prefix("cam ") {
+        // (`where`'s answer back: the camera there, so a creature spawned
+        // can be seen round, `--do` after `--do`.)
+        let v: Vec<f32> = rest.split([',', ' ']).filter(|w| !w.is_empty()).filter_map(|w| w.parse().ok()).collect();
+        match <[f32; 5]>::try_from(v) {
+            Ok(at) => {
+                spawns.goto = Some(at);
+                console.lines.push(format!("the camera to {rest}"));
+            }
+            Err(_) => console.lines.push("cam X,Y,Z,YAW,PITCH (as `where` says it)".into()),
+        }
+    } else if line.trim() == "mark" {
+        // (A mark in the rig's trace, see the `rigtrace` option: now, what
+        // you saw.)
+        crate::combat::trace("rigtrace: MARK");
+        console.lines.push(format!("marked in {}", crate::combat::trace_file()));
     } else if line.trim() == "reset" {
         spawns.reset = true;
         console.lines.push("every creature gone, your health back".into());
@@ -217,7 +441,8 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
         let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
         let cam = format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees());
         info!("where: {cam}");
-        console.lines.push(cam);
+        console.copy = Some(cam.clone());
+        console.lines.push(format!("{cam}  (copied)"));
     } else {
         let said = run(line, args);
         console.lines.extend(said);
@@ -241,6 +466,17 @@ fn given(mut done: Local<bool>, mut console: ResMut<Console>, mut args: ResMut<A
             info!("console: {said}");
         }
     }
+}
+
+/// `cam` at the console: the camera moved there (its height above the
+/// ground, as `--cam` and `where`), at the end of the frame.
+fn goto(mut spawns: ResMut<Spawns>, world: Option<Res<crate::terrain::WorldGen>>, camera: Single<(&mut Transform, &mut FlyCam)>) {
+    let Some([x, above, z, yaw, pitch]) = spawns.goto.take() else { return };
+    let (mut t, mut fly) = camera.into_inner();
+    t.translation = Vec3::new(x, above + world.map_or(0.0, |w| w.ground_height(x, z)), z);
+    fly.yaw = yaw.to_radians();
+    fly.pitch = pitch.to_radians();
+    t.rotation = fly.rotation();
 }
 
 /// While it is down, the game sees no keys or clicks.
@@ -321,7 +557,11 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "round KIND [N] [OPTION ...]  the same, as a round: timed, and what it took said at its end (in".into(),
             "                     the arena, through its gates)".into(),
             "reset                every creature gone, your health back".into(),
+            "cam X,Y,Z,YAW,PITCH  the camera there and that way (as `where` says it)".into(),
             "clear                clears this".into(),
+            "Keys: Up/Down the commands before (kept between runs); Left, Right, Home, End, Delete,".into(),
+            "Ctrl+Left/Right a word, Ctrl+Backspace a word back; Tab completes; Ctrl+V pastes (each".into(),
+            "line run); Ctrl+C copies the line; `where` copies what it says.".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),
         ],
@@ -453,7 +693,15 @@ fn loudness(
 }
 
 /// Slides it down or up, and shows what it has said and the line.
-fn show(time: Res<Time>, mut console: ResMut<Console>, panel: Single<(&mut Node, &mut Visibility), With<Panel>>, mut text: Single<&mut Text, With<Lines>>) {
+#[allow(clippy::type_complexity)]
+fn show(
+    time: Res<Time>,
+    mut console: ResMut<Console>,
+    panel: Single<(&mut Node, &mut Visibility), With<Panel>>,
+    mut text: Single<&mut Text, With<Lines>>,
+    mut at: Single<&mut TextSpan, (With<AtCursor>, Without<AfterCursor>)>,
+    mut after: Single<&mut TextSpan, (With<AfterCursor>, Without<AtCursor>)>,
+) {
     let target = if console.open { 1.0 } else { 0.0 };
     let step = time.delta_secs() * 6.0;
     let down = console.down + (target - console.down).clamp(-step, step);
@@ -472,9 +720,23 @@ fn show(time: Res<Time>, mut console: ResMut<Console>, panel: Single<(&mut Node,
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&format!("> {}_", console.line));
+        // (The cursor: its letter lit, a space as `_`, past the end a `_`;
+        // a bar put in before it hid the letter, the user.)
+        let b = byte(&console.line, console.at);
+        let rest = &console.line[b..];
+        let (here, then) = match rest.chars().next() {
+            Some(c) => (if c == ' ' { "_".to_string() } else { c.to_string() }, rest[c.len_utf8()..].to_string()),
+            None => ("_".to_string(), String::new()),
+        };
+        out.push_str(&format!("> {}", &console.line[..b]));
         if text.0 != out {
             text.0 = out;
+        }
+        if at.0 != here {
+            at.0 = here;
+        }
+        if after.0 != then {
+            after.0 = then;
         }
     }
 }
@@ -537,5 +799,35 @@ mod tests {
         assert_eq!(run("volume", &mut args)[0], "volume 0.5 (default)");
         assert_eq!(run("volume 0.3", &mut args)[0], "volume 0.3");
         assert_eq!(run("mute on", &mut args), vec!["mute on".to_string()]);
+    }
+
+    /// The line edited at its cursor, and words completed (the user: the
+    /// console cumbersome, a spawn command typed out again at every launch).
+    #[test]
+    fn editing_and_completing() {
+        let mut c = Console::default();
+        c.insert("spawn harrow 3");
+        c.at = word(&c.line, c.at, -1);
+        assert_eq!(c.at, 13);
+        c.cut(word(&c.line, c.at, -1), c.at);
+        assert_eq!((c.line.as_str(), c.at), ("spawn 3", 6));
+        c.insert("angler ");
+        assert_eq!(c.line, "spawn angler 3");
+        assert_eq!(word("spawn angler 3", 0, 1), 5);
+        let args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None, ground: None, run: Vec::new() };
+        let typed = |text: &str| {
+            let mut c = Console::default();
+            c.insert(text);
+            complete(&mut c, &args);
+            (c.line, c.lines)
+        };
+        assert_eq!(typed("spa").0, "spawn ");
+        assert_eq!(typed("spawn har").0, "spawn harrow ");
+        assert_eq!(typed("round harrow 3 bod").0, "round harrow 3 body=");
+        assert!(typed("round harrow 3 bo").1.last().is_some_and(|l| l.contains("body=") && l.contains("bones")));
+        assert_eq!(typed("mute o").1.last().map(String::as_str), Some("off  on"));
+        let (line, said) = typed("spawn s");
+        assert_eq!(line, "spawn s");
+        assert!(said.last().is_some_and(|l| l.contains("sprawl") && l.contains("stalker")), "{said:?}");
     }
 }

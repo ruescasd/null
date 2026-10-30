@@ -28,6 +28,7 @@ use crate::{
 };
 
 mod hunter;
+pub(crate) use hunter::{trace, trace_file};
 mod cape;
 mod slab;
 mod lance;
@@ -101,11 +102,12 @@ impl Plugin for CombatPlugin {
             .init_resource::<Director>()
             .init_resource::<Feedback>()
             .init_resource::<round::Round>()
+            .init_resource::<round::Gates>()
             .add_systems(PostStartup, setup)
             .add_systems(Startup, (round::setup, ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, cape::hang))
             .add_systems(
                 Update,
-                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, (round::track, die).chain(), feedback, debris, swarm_sound, hud)
+                (fire, fly_shards, ichor::fly, ichor::burst, swarm, grove::grove, leech::leech, gloom, hunter::gather, web::web, hunter::hunt, hunter::voice, hunter::flesh, hunter::cables, hunter::watch, (round::track, die, round::gates).chain(), feedback, debris, swarm_sound, hud)
                     .chain()
                     .after(crate::player::walk)
                     .run_if(crate::loading::playing),
@@ -303,10 +305,8 @@ struct Swarmer {
     /// Seconds left of its leap on waking, flung up and away before it
     /// stalks (or freezes under your gaze).
     leap: f32,
-    /// In a built place, its way to where it is going (see `nav::steer`),
-    /// and when to find it afresh.
-    way: Vec<Vec3>,
-    way_age: f32,
+    /// In a built place, its way to where it is going (see `Nav::steer`).
+    route: crate::chasm::nav::Route,
 }
 
 /// A piece flying off something broken, or a spark.
@@ -728,7 +728,7 @@ fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, p
             place = Vec3::new(f.x, f.y + 1.0 + h(2) * 1.5, f.z);
             aim = place;
         }
-        if let Some((ahead, l)) = nav.steer(p, place, &mut s.way, &mut s.way_age, dt, &|a, b| ground.clear(a, b)) {
+        if let crate::chasm::nav::Steer::Ahead(ahead, l) = nav.steer(p, place, &mut s.route, dt, &|a, b| ground.clear(a, b)) {
             left = Some(l);
             if l > 3.5 {
                 aim = ahead + Vec3::Y * 1.6;
@@ -807,7 +807,7 @@ fn gloom(
 /// the sky, leaning a little (see `grove.rs`).
 fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32, traits: &crate::traits::Traits) {
     let r = |j: i32| hash01(seed as i32, j, 0, 0x5a2) - 0.5;
-    let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
+    let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, route: Default::default() };
     let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
     let transform = Transform::from_translation(at + Vec3::Y * 0.55).looking_to(lean * Vec3::Y, Vec3::Z);
     let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, traits.clone(), transform, Visibility::default())).id();
@@ -817,7 +817,7 @@ fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Asse
 /// A free bud at `at`, stalking (`spawn bud` at the console).
 fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32, traits: &crate::traits::Traits) {
     let phase = hash01(seed as i32, 4, 0, 0x5a2) * 50.0;
-    let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, way: Vec::new(), way_age: 0.0 };
+    let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, route: Default::default() };
     let root = commands.spawn((swarmer, forms::Gazed::default(), traits.clone(), Transform::from_translation(at), Visibility::default())).id();
     forms::build(commands, kit, materials, root);
 }
@@ -862,6 +862,8 @@ fn die(
     mut spawns: ResMut<crate::console::Spawns>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
     bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>, With<hunter::Part>, With<hunter::Eye>)>>,
+    bishops: Query<Entity, With<bishop::OfBishop>>,
+    bolts: Query<(Entity, &bishop::Bolt)>,
 ) {
     for (entity, transform, s) in &swarm {
         if s.health > 0.0 {
@@ -884,6 +886,18 @@ fn die(
         }
         for entity in &bodies {
             commands.entity(entity).despawn();
+        }
+        // (The bishops too, their cloth and lights, and their lightning
+        // in flight: left standing, a round after `reset` began with them.)
+        // (Tried: one dying this frame may be despawning itself already.)
+        for entity in &bishops {
+            commands.entity(entity).try_despawn();
+        }
+        for (entity, bolt) in &bolts {
+            commands.entity(entity).try_despawn();
+            for part in bolt.parts() {
+                commands.entity(part).try_despawn();
+            }
         }
     }
 }

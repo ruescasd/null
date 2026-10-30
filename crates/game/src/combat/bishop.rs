@@ -298,6 +298,13 @@ pub(super) struct Bolt {
     next_roll: f32,
 }
 
+impl Bolt {
+    /// What it has besides itself (its light, its dark twin): gone with it.
+    pub(super) fn parts(&self) -> [Entity; 2] {
+        [self.light, self.twin]
+    }
+}
+
 /// Whether a strand (the points it passed, then its tip) touches you (your
 /// body: from `feet` to `head`).
 fn touches(path: &[Vec3], tip: Vec3, feet: Vec3, head: Vec3) -> bool {

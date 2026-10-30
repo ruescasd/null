@@ -170,7 +170,8 @@ fn bench(
     if now - since < warmup {
         return;
     }
-    if now - since < warmup + BENCH_TIME {
+    // (`--set benchtime`: measured for longer, a whole round, say.)
+    if now - since < warmup + args.num("benchtime", BENCH_TIME) {
         // (`--opt slay`: every hunter broken as the measuring starts, to
         // see what their deaths cost.)
         if state.frames.is_empty() && args.opt("slay") {

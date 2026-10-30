@@ -19,7 +19,10 @@
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology};
 
 use super::*;
-use crate::rig::{Intent, Plan, Rig};
+use crate::{
+    chasm::nav::Steer,
+    rig::{Intent, Plan, Rig},
+};
 
 pub(super) mod cables;
 pub(super) use cables::run as cables;
@@ -121,6 +124,9 @@ const FOLLOW: f32 = 12.0;
 /// How long it hangs back with no way round you before it comes at you
 /// anyway, seen or not (s).
 const HUNG: f32 = 2.5;
+/// Within this of a spot on its way (m), it heads for its goal instead:
+/// see `way_to`.
+const WAY_NEAR: f32 = 0.3;
 /// How near it hauls itself onto you from (m), and how fast (m/s).
 const HAUL_FROM: f32 = 6.0;
 const HAUL: f32 = 24.0;
@@ -218,10 +224,8 @@ pub(crate) struct Hunter {
     stance: Stance,
     timer: f32,
     pub(crate) health: f32,
-    /// In a built place, its way to you (see `nav::steer`), and when to
-    /// find it afresh.
-    way: Vec<Vec3>,
-    way_age: f32,
+    /// In a built place, its way to you (see `Nav::steer`).
+    route: crate::chasm::nav::Route,
     /// What it knows of you: whether it hunts you, where it thinks you are
     /// and which way you were going, how long since it saw (or heard) you,
     /// and, searching, the spot it is looking in and how long it has been
@@ -289,6 +293,38 @@ enum Gesture {
     Creep(f32),
     /// A short trot.
     Burst(f32),
+}
+
+/// Where `rigtrace` lines go, besides the log: a file for each run, kept
+/// (`TRACE_FILE`, then the run's start in seconds since 1970; in the folder
+/// the game ran in), to read after play. (One file begun afresh each run,
+/// the user's marked trace was lost to the next run.)
+static TRACE: std::sync::Mutex<Option<(std::fs::File, String)>> = std::sync::Mutex::new(None);
+pub(crate) const TRACE_FILE: &str = "target/rigtrace";
+
+/// The file this run's trace goes to, if one is begun.
+pub(crate) fn trace_file() -> String {
+    TRACE.lock().ok().and_then(|f| f.as_ref().map(|f| f.1.clone())).unwrap_or_else(|| format!("{TRACE_FILE}-*.log"))
+}
+
+/// A line of the rig's trace (see the `rigtrace` option; the console's
+/// `mark` puts in a mark), to the log and to `TRACE_FILE`, begun afresh
+/// each run.
+pub(crate) fn trace(line: &str) {
+    use std::io::Write;
+    info!("{line}");
+    let Ok(mut file) = TRACE.lock() else { return };
+    if file.is_none() {
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let name = format!("{TRACE_FILE}-{since}.log");
+        *file = std::fs::File::create(&name).ok().map(|f| (f, name.clone()));
+        if file.is_some() {
+            info!("rigtrace: writing to {}", std::path::Path::new(&name).canonicalize().map(|p| p.display().to_string()).unwrap_or(name));
+        }
+    }
+    if let Some((f, _)) = file.as_mut() {
+        let _ = writeln!(f, "{line}");
+    }
 }
 
 impl Hunter {
@@ -800,7 +836,7 @@ fn spawn_hunter(
     let health = traits.value("health", HUNTER_HEALTH) * if traits.has("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, way: Vec::new(), way_age: 0.0, aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new() },
+            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, route: Default::default(), aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new() },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
         ))
@@ -1422,6 +1458,17 @@ pub(super) fn hunt(
         let flat = Vec3::new(goal.x - root.x, 0.0, goal.z - root.z);
         let mut distance = flat.length();
         let mut toward = flat.normalize_or(Vec3::Z);
+        // (The way to a spot, unless it is all but on it: there, its way
+        // the rounding's noise, spinning a full turn in a few frames, its
+        // body went round in circles of millimetres, buzzing, its legs
+        // with it, the user's vibration (the shard beast's rigid body
+        // showed it, the harrow's sprung shards hid it). There, its goal's
+        // way.)
+        let goal_way = toward;
+        let way_to = |p: Vec3| {
+            let to = Vec3::new(p.x - root.x, 0.0, p.z - root.z);
+            if to.length() > WAY_NEAR { to.normalize() } else { goal_way }
+        };
         // (A straight run at you, a leap or a dash: only with you in sight
         // and the way to you about straight; in a built place, a leap
         // through a wall, or off a ledge, it fell into the void.)
@@ -1430,33 +1477,37 @@ pub(super) fn hunt(
         // In a built place: there by the way along its floors (the furthest
         // spot on along it in sight), and as far as that way is.
         if let Some(nav) = nav.as_deref() {
-            let mut way = std::mem::take(&mut h.way);
-            let mut age = h.way_age;
+            let mut route = std::mem::take(&mut h.route);
             // (A new goal, a new way at once.)
-            if way.last().is_some_and(|&end| end.distance(goal) > 4.0) {
-                age = 0.0;
+            if route.end().is_some_and(|end| end.distance(goal) > 4.0) {
+                route.renew();
             }
             // (Heading for a spot its body gets to, not only one it sees: a
             // line of sight past a corner aimed it into the corner, and it
             // stuck there, pressed head on into the wall, the user.)
             let body = if beast { 0.4 } else { 0.3 };
-            if let Some((ahead, left)) = nav.steer(root, goal, &mut way, &mut age, dt, &|a, b| ground.passes(a + Vec3::Y * 0.6, b + Vec3::Y * 0.6, body)) {
-                toward = Vec3::new(ahead.x - root.x, 0.0, ahead.z - root.z).normalize_or(toward);
-                straight = straight && left < flat.length() * 1.2 + 1.5;
-                distance = left;
-            } else {
-                lost = true;
-                // Off the floors' spots (knocked into a corner, say): back
-                // onto the nearest first, not pressing at you through what
-                // is in the way.
-                if let Some(j) = nav.nearest(root, 8) {
-                    let q = nav.nodes[j as usize];
-                    toward = Vec3::new(q.x - root.x, 0.0, q.z - root.z).normalize_or(toward);
+            match nav.steer(root, goal, &mut route, dt, &|a, b| ground.passes(a + Vec3::Y * 0.6, b + Vec3::Y * 0.6, body)) {
+                Steer::Ahead(ahead, left) => {
+                    toward = way_to(ahead);
+                    straight = straight && left < flat.length() * 1.2 + 1.5;
+                    distance = left;
+                }
+                // (Its first way not found yet, a moment's wait: no straight
+                // run at you meanwhile.)
+                Steer::Waiting => straight = false,
+                Steer::NoWay => {
+                    lost = true;
+                    // Off the floors' spots (knocked into a corner, say):
+                    // back onto the nearest first, not pressing at you
+                    // through what is in the way.
+                    if let Some(j) = nav.nearest(root, 8) {
+                        let q = nav.nodes[j as usize];
+                        toward = way_to(q);
+                    }
                 }
             }
             straight = straight && ground.clear(root + Vec3::Y * 1.0, target);
-            h.way = way;
-            h.way_age = age;
+            h.route = route;
         }
         // There, and you are not (or there is no way there): it searches.
         if h.aware == Aware::Pursuing && (distance < 2.0 || lost) {
@@ -1486,7 +1537,7 @@ pub(super) fn hunt(
             info!("huntlog: {} {:?} -> {:?} (you {:.1} m off, {}; {:.1} m on to where it was going{})", entity.index_u32(), was, h.aware, root.distance(target), if sees { "in sight" } else if alarmed { "heard" } else { "unseen" }, distance, if lost { ", no way there" } else { "" });
         }
         if log {
-            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}, {} at {:.1} m/s", entity.index_u32(), h.rig.root, h.aware, distance, if h.way.is_empty() { " (no way)" } else { "" }, match h.stance { Stance::Stalk => "stalking", Stance::Freeze => "still", Stance::Charge => "charging", Stance::Windup => "gathering", Stance::Attack(_) => "attacking", Stance::Recover => "recovering", Stance::Stagger => "staggered", Stance::Rear => "rearing", Stance::Reach => "reaching", Stance::Haul(_) => "hauling" }, h.rig.speed());
+            info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}, {} at {:.1} m/s", entity.index_u32(), h.rig.root, h.aware, distance, if h.route.is_empty() { " (no way)" } else { "" }, match h.stance { Stance::Stalk => "stalking", Stance::Freeze => "still", Stance::Charge => "charging", Stance::Windup => "gathering", Stance::Attack(_) => "attacking", Stance::Recover => "recovering", Stance::Stagger => "staggered", Stance::Rear => "rearing", Stance::Reach => "reaching", Stance::Haul(_) => "hauling" }, h.rig.speed());
         }
         // Seeing you, it looks at you; else where it is going.
         let look = if sees { target } else { root + toward * 6.0 + Vec3::Y * 1.3 };
