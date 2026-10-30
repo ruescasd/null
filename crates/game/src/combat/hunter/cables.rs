@@ -1,9 +1,7 @@
 //! Cables on a hunter: strands hung on its bones, all of a hunter's drawn as
-//! one mesh of tubes rebuilt every frame. Every hunter with a head but the
-//! stalker has its neck's: thin cables from the top of its chest into the
-//! base of its skull, tendons (the user: a solid neck would not work as
-//! one; dressed in a few sprung shards only, the head floated). And `--set
-//! cables=N`:
+//! one mesh of tubes rebuilt every frame, by `--set cables=N`. (Every hunter
+//! with a head had tendons up its neck too, thin cables from its chest into
+//! its skull: taken out, they never worked, the user.)
 //!
 //! 1. Muscles: cables strung between bones (body to thigh, across each knee,
 //!    up the neck), taut when the limb is stretched, sagging when it folds.
@@ -156,17 +154,6 @@ fn strands(variant: u32, hunter: &Hunter, seed: u32) -> Vec<Strand> {
         out.push(Strand { kind, points: Vec::new(), previous: Vec::new(), targets: Vec::new(), width, shade });
     };
     let a = |bone: usize, along: f32, offset: Vec3| Anchor { bone, along, offset };
-    // The neck (every hunter with a head; the first variant has its own):
-    // thin dark cables, taut as the head reaches out, slack as it draws in.
-    // (Not the stalker's: its neck is its head's own struts, see `skull.rs`.)
-    if !plan.radial && plan.style != crate::rig::Style::Stilt && variant != 1 && bones.len() > 4 {
-        for j in 0..7 {
-            k += 1;
-            let t = j as f32 / 7.0 * std::f32::consts::TAU + r(k, 0) * 0.3;
-            let around = Vec3::new(t.cos(), 0.0, t.sin());
-            add(Kind::Strung { from: a(2, 0.92 + r(k, 1) * 0.08, around * 0.55), to: a(4, 0.08 + r(k, 2) * 0.08, around * 0.7), length: 0.0 }, (0.02, 0.013), 0.06);
-        }
-    }
     match variant {
         0 => {}
         1 => {

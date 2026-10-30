@@ -146,7 +146,10 @@ const SEVER: u32 = 10;
 const STIFFNESS: f32 = 160.0;
 const LIMB_STIFFNESS: f32 = 600.0;
 /// No spring at all: fixed to its bone.
-const RIGID: f32 = 0.0;
+pub(super) const RIGID: f32 = 0.0;
+/// How thick a beast's hard leg segments are under a body with void in it
+/// (`body` 1 to 10), of what they were.
+const LEG_SLIM: f32 = 0.6;
 const DAMPING: f32 = 13.0;
 /// How much of its bone's movement a piece is carried along with each frame
 /// before its spring acts (the rest it trails behind).
@@ -164,7 +167,7 @@ enum Kind {
     Beast,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Stance {
     Stalk,
     Windup,
@@ -215,7 +218,7 @@ pub(super) const OVERKILL: usize = 10;
 #[derive(Component)]
 pub(crate) struct Hunter {
     kind: Kind,
-    rig: Rig,
+    pub(super) rig: Rig,
     /// Its options, given when it was spawned (see `traits.rs`).
     pub(crate) traits: crate::traits::Traits,
     /// Its bones last frame (the pieces on them are carried along with
@@ -285,6 +288,7 @@ pub(crate) struct Hunter {
 
 /// Gestures that break up a prowl.
 #[derive(Clone, Copy, PartialEq)]
+#[derive(Debug)]
 enum Gesture {
     None,
     /// Stopped, staring, the head slowly tilting over (radians).
@@ -390,14 +394,14 @@ impl Hunter {
 /// A piece of a hunter's body, hung on one of its bones.
 #[derive(Component)]
 pub(super) struct Part {
-    hunter: Entity,
-    bone: usize,
+    pub(super) hunter: Entity,
+    pub(super) bone: usize,
     /// Where along the bone (0..1), and out from it in the bone's frame.
-    along: f32,
-    offset: Vec3,
-    rotation: Quat,
-    velocity: Vec3,
-    stiffness: f32,
+    pub(super) along: f32,
+    pub(super) offset: Vec3,
+    pub(super) rotation: Quat,
+    pub(super) velocity: Vec3,
+    pub(super) stiffness: f32,
 }
 
 /// `spawn KIND [N]` at the console (see `console::Spawns`): hunters and buds
@@ -526,6 +530,11 @@ pub(super) struct Heads {
     /// The stalker's head: its cage's skull and legs, each pale and black,
     /// and their finishes (see `setup`).
     stalker_head: ([(Handle<Mesh>, Handle<Mesh>); 2], Handle<StandardMaterial>, Handle<StandardMaterial>),
+    /// A body of bones (a beast's `body=1` option, see `skeleton.rs`).
+    skeleton: super::skeleton::Kit,
+    /// A body from an authored mesh (a harrow's `mesh=1` option, see
+    /// `beast_mesh.rs`).
+    body_mesh: super::beast_mesh::Kit,
 }
 
 
@@ -644,6 +653,8 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
     let stalker_head = ([skull, legs].map(|p| (meshes.add(p.pale), meshes.add(p.dark))), bone_white, black);
     // (Its face along the head, forward: up is -z in the head's frame.)
     commands.insert_resource(Heads {
+        skeleton: super::skeleton::build(&mut meshes),
+        body_mesh: super::beast_mesh::build(&mut meshes),
         rods,
         lance,
         halo: super::halo::build(&mut meshes, &mut images),
@@ -804,7 +815,12 @@ fn spawn_hunter(
     let floor = |x: f32, z: f32| ground.at(Vec3::new(x, centre.y, z));
     // (The angler's body is a size larger than the harrow's; its head is the
     // same size, so smaller for the body.)
-    let plan = if angler {
+    // (Its `mesh=1` option: a whole body, authored, riding its bones in
+    // place of all its own parts, its build the mesh's; see `beast_mesh.rs`.)
+    let meshed = kind == Kind::Beast && !angler && want != Some("sprawl") && traits.value("mesh", 0.0) == 1.0;
+    let plan = if meshed {
+        heads.body_mesh.plan.clone()
+    } else if angler {
         let head = Plan::beast().head;
         Plan { head, ..Plan::beast().scaled(1.15) }
     } else if kind == Kind::Beast {
@@ -880,7 +896,28 @@ fn spawn_hunter(
             Transform::from_scale(Vec3::new(width / 0.025, length / 0.75, width / 0.025)),
         ));
     };
+    // (Its `body=1` option: a harrow's torso and neck of bones, a spine,
+    // an open ribcage, shoulder blades and a pelvis, not shards scattered
+    // round its bones (the user: a jumble of fragments, no outline; then
+    // muscles, a block of black); see `skeleton.rs`.)
+    let body = traits.value("body", 0.0) as usize;
+    // (8: its own shards, as they were, but a third as many: the void
+    // between them kept, the user.)
+    let sparse = kind == Kind::Beast && !radial && !sprawl && body == 8;
+    let boned = kind == Kind::Beast && !radial && !sprawl && (1..=7).contains(&body) || body == 9 || body == 10;
+    // (Its legs slimmer under a body with void in it: the user, their upper
+    // segments had become its biggest black.)
+    let slim = if boned || sparse { LEG_SLIM } else { 1.0 };
+    if meshed {
+        super::beast_mesh::spawn(commands, &heads.body_mesh, &assets.dark, hunter);
+    }
+    if boned && !meshed {
+        super::skeleton::spawn_harrow(commands, &heads.skeleton, &assets.dark, hunter, &bones, body, traits.value("ribs", 1.0));
+    }
     for (i, bone) in bones.iter().enumerate() {
+        if meshed {
+            break;
+        }
         // (Woven cable instead; see `cables.rs`.)
         if cables::replaces(traits, i) {
             continue;
@@ -895,7 +932,7 @@ fn spawn_hunter(
             // the lower down to a prong that plants; a spur out past each
             // knee, a pale band above the prong.
             let lower = (i - limbs.start) % 2 == 1;
-            let rr = bone.radius;
+            let rr = bone.radius * slim;
             let mesh = if lower { &heads.legs.1 } else { &heads.legs.0 };
             commands.spawn((
                 Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
@@ -1060,6 +1097,11 @@ fn spawn_hunter(
             }
             continue;
         }
+        // (Its `body=1` option: its torso and neck bones instead, see
+        // above.)
+        if boned && i <= 3 {
+            continue;
+        }
         if traits.has("wiry") {
             // Fibres: thin, long, bundled along the bone and splaying from
             // it, gaps between them; now and then a spine bristling out.
@@ -1095,6 +1137,7 @@ fn spawn_hunter(
         // `skull.rs`: with these, tendons and cables as well, it had three
         // necks, the user.)
         let count = if i == 3 && stilt { 0 } else { count };
+        let count = if sparse { (count / 3).max(2) } else { count };
         for k in 0..count {
             let r = |j: i32| hash01(seed as i32, (i * 97 + k) as i32, j, 0x6b2) - 0.5;
             let along = k as f32 / count as f32 + r(0) / count as f32;
@@ -1133,7 +1176,7 @@ fn spawn_hunter(
             // Muscle over the shoulders and up the back of the neck: a
             // heavy hump of mass on top, where its strength is.
             let (from, to) = if i == 2 { (0.45, 1.0) } else { (0.0, 0.45) };
-            for k in 0..10 {
+            for k in 0..if sparse { 3 } else { 10 } {
                 let r = |j: i32| hash01(seed as i32, (i * 53 + k) as i32, j, 0x6b7) - 0.5;
                 let along = from + (to - from) * (k as f32 + 0.5 + r(0) * 0.5) / 10.0;
                 let offset = Vec3::new(r(1) * bone.radius * 0.9, 0.0, -bone.radius * (0.55 + 0.3 * (r(2) + 0.5)));
@@ -1182,8 +1225,9 @@ fn spawn_hunter(
             ));
         }
     } else {
-        // (The stalker has none: its cage's face is its openings.)
-        for side in [-1.0f32, 1.0].into_iter().filter(|_| !stilt) {
+        // (The stalker has none: its cage's face is its openings; nor the
+        // authored body: its head is its own.)
+        for side in [-1.0f32, 1.0].into_iter().filter(|_| !stilt && !meshed) {
             commands.spawn((
                 Eye { hunter, bone: 4, at: Vec3::new(side * across, up, along), material: eyes.clone() },
                 Mesh3d(assets.core.clone()),
@@ -1622,7 +1666,11 @@ pub(super) fn hunt(
                     intent.head_rate = 10.0;
                 }
             }
-            intent.crouch = if pace < 3.0 && !stalker { 0.35 } else { 0.0 };
+            // (A mass, the shard beast, walks upright: crouched, as this
+            // made every creature but the stalker below 3 m/s, its legs
+            // stayed bent at a right angle as it walked, the user.)
+            let mass = h.rig.plan.style == crate::rig::Style::Mass;
+            intent.crouch = if pace < 3.0 && !stalker && !mass { 0.35 } else { 0.0 };
         } else if sprawl {
             // The flanker: it never comes at you from before you. Hunting you,
             // it runs low and fast round to your back and keeps there as you
@@ -1782,8 +1830,10 @@ pub(super) fn hunt(
                     let speed = h.rig.speed();
                     // (Its `pounce` option: the hound's leap, kept; the user: it
                     // sort of works for the harrow too.)
-                    let pounce = h.traits.has("pounce");
-                    if pounce && speed > 7.0 && distance < 5.0 + speed * 0.35 && straight {
+                    // (A mass, the shard beast: it hurls itself; reared to
+                    // haul, its forelegs hung in the air, the user.)
+                    let pounce = h.traits.has("pounce") || h.rig.plan.style == crate::rig::Style::Mass;
+                    if pounce && speed > 7.0 && distance < 5.0 + speed * 0.35 && straight && h.rig.airborne.is_none() {
                         // A quick gather, still running.
                         h.stance = Stance::Windup;
                         h.timer = 0.13;
@@ -2073,6 +2123,22 @@ pub(super) fn hunt(
         // sway, to see what moves of its own on it: its cloak.)
         if !(h.traits.has("still") && !h.rig.bones.is_empty()) {
             h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
+        }
+        // (Its `rigtrace` option: its rig every frame, to find what moves
+        // it in play that a test does not: time, frame, asked and got
+        // velocity, root, heading, then each foot planted and whether it
+        // swings, then each bone's ends; whether it is in the air, and its
+        // stance.)
+        if h.traits.has("rigtrace") {
+            let r = &h.rig;
+            let mut line = format!("rigtrace: {} {:.3} {:.5} {:.3} {:.3} {:.3} {:.3} {:.4} {:.4} {:.4} {:.4}", entity.index_u32(), time.elapsed_secs(), dt, intent.velocity.x, intent.velocity.z, r.velocity.x, r.velocity.z, r.root.x, r.root.y, r.root.z, r.heading);
+            for f in &r.feet {
+                line += &format!(" {:.4} {:.4} {:.4} {}", f.planted.x, f.planted.y, f.planted.z, f.swinging as u8);
+            }
+            for b in &r.bones {
+                line += &format!(" {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}", b.a.x, b.a.y, b.a.z, b.b.x, b.b.y, b.b.z);
+            }
+            trace(&format!("{line} | {} {:?} | {:?} {:?} crouch {:.2} stretch {:.2} look {:.2} {:.2} {:.2}", r.airborne.is_some() as u8, h.stance, h.aware, h.gesture, intent.crouch, intent.stretch, intent.look.x, intent.look.y, intent.look.z));
         }
         if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {
             info!("huntlog: {} went through something built, from {:.1} to {:.1}", entity.index_u32(), before, h.rig.root);
