@@ -42,9 +42,6 @@ pub struct LegPlan {
     /// Hip offset from its root: x to the right, z forward.
     pub side: f32,
     pub forward: f32,
-    /// How far below its root the hip is (m): the shard beast's legs meet
-    /// its deep body low on its flanks, under its spine.
-    pub drop: f32,
     pub upper: f32,
     pub lower: f32,
     /// Which way the knee points: +1 forward, -1 back; and how far up and
@@ -87,20 +84,6 @@ pub enum Style {
     /// chest, workable, but a struggle like the stalker's: the load is its
     /// own cause and its own shape.)
     Porter,
-    /// Heavy (the shard beast; the user chose mass for its look,
-    /// 2026-10-29). Driven on by its legs: its pace quicker as they push,
-    /// slower as they land (`MASS_DRIVE`, `MASS_PUSH`). Walking, one leg at
-    /// a time, three always down: it shifts its weight off a leg before it
-    /// lifts it (`MASS_SHIFT`, fading as it speeds up, `MASS_WALKS`); each
-    /// end of it rides its legs as struts, rising and falling as each foot
-    /// takes its weight (`MASS_RIDE`). Running, the same footfalls, each foot down only a third of its
-    /// stride, the body carried between (its plan's gaits). Turning only as
-    /// it steps (`MASS_PIVOT`); its feet low walking, higher running
-    /// (`MASS_LIFT`). (Run as a walk sped up, its feet down most of each
-    /// stride, its strides could grow no longer than its legs reached, its
-    /// legs flickered and shook; bounding instead, it hopped like a frog,
-    /// the user.)
-    Mass,
 }
 
 /// A gait, used from `speed` up (blending into the next): when in the
@@ -264,78 +247,6 @@ const GROUND_GIVE: f32 = 0.08;
 const REACHED: f32 = 0.97;
 /// The tightest a joint folds (radians between its bones).
 const FOLD: f32 = 0.45;
-/// A heavy body's weight shifted off a leg as it lifts (`Style::Mass`): how
-/// far aside and fore or aft (m), from how far before it lifts and until
-/// how long after it lands (of a cycle).
-const MASS_SHIFT: (f32, f32, f32, f32) = (0.12, 0.07, 0.15, 0.1);
-/// How quickly its weight follows where its legs would have it (1/s).
-const MASS_SHIFT_EASE: f32 = 12.0;
-/// How soft the least of its legs' heights is that each end of it rides
-/// (m).
-const MASS_RIDE_SOFT: f32 = 0.02;
-/// How quickly each end of it follows the height its legs hold it at
-/// (1/s).
-const MASS_RIDE_EASE: f32 = 30.0;
-/// Landing from a leap, how fast its weight comes down on its legs (m/s).
-const MASS_LANDING: f32 = 1.5;
-/// How much its pace follows its legs' push (see `Rig::push`): at 1, all
-/// of it (0.2 to twice its pace); up to the first pace, and from the second
-/// (m/s), less flat out (more, its legs whipped to keep up); how quickly
-/// (1/s).
-const MASS_DRIVE: (f32, f32, f32, (f32, f32)) = (0.7, 0.3, 10.0, (4.0, 12.0));
-/// Its legs' drive (see `Rig::push`): a foreleg's pull with its foot ahead
-/// and a hind leg's push with its foot behind; and the lesser, a foreleg's
-/// push and a hind leg's pull.
-const MASS_PUSH: (f32, f32) = (1.0, 0.3);
-/// How far its legs lean out before and behind it as they bear it, by its
-/// pace (m/s, radians from upright): more the faster, as a leopard's, its
-/// leg a straight line from shoulder to foot at any lean. (At one lean,
-/// walking or running, they reached as far, too far walking, the user.)
-pub(crate) const MASS_LEAN: [(f32, f32); 4] = [(0.0, 0.35), (4.0, 0.6), (8.0, 0.8), (14.0, 1.0)];
-
-/// How far a heavy body's legs lean out at `speed` (radians; `MASS_LEAN`).
-pub(crate) fn mass_lean(speed: f32) -> f32 {
-    let k = MASS_LEAN.iter().rposition(|l| l.0 <= speed).unwrap_or(0);
-    match MASS_LEAN.get(k + 1) {
-        Some(next) => MASS_LEAN[k].1 + (next.1 - MASS_LEAN[k].1) * (speed - MASS_LEAN[k].0) / (next.0 - MASS_LEAN[k].0),
-        None => MASS_LEAN[k].1,
-    }
-}
-/// How fast it turns stepping, and standing on all four (of its turn); not
-/// at all with a planted leg stretched this far (of its length).
-const MASS_PIVOT: (f32, f32, f32) = (1.4, 0.25, 0.9);
-/// How much of a strut's fall each end of it rides (see `Rig::ride`): all
-/// of it, walking and running, its legs nearly straight as they bear it,
-/// vaulting it over each, as low as a foot far out before or behind it
-/// brings it. (A third, its knees bent at a right angle throughout, never
-/// straightening, the body level, on wheels, the user; two fifths of it
-/// running, a foot planted far ahead out of reach, its legs folded to
-/// meet it.)
-const MASS_RIDE: f32 = 1.0;
-/// Its walk's weight (shift, jolts, lurches) full to this pace and gone by
-/// this (m/s): running, its footfalls come too quick for each to land (a
-/// jolt each, ten a second, it shook, the user).
-const MASS_WALKS: (f32, f32) = (1.2, 3.0);
-/// How long a heavy body's foot takes to take its share of its weight once
-/// down (s).
-const MASS_LOAD: f32 = 0.1;
-/// How long a heavy body's foot swings, walking and flat out (s; between,
-/// by its pace to `MASS_LEAN`'s fastest).
-const MASS_SWING: (f32, f32) = (0.35, 0.26);
-/// The order its feet take their turns to step: hind left, fore left, hind
-/// right, fore right (by `Plan::legs`: fore left, fore right, hind left,
-/// hind right).
-const MASS_ORDER: [usize; 4] = [2, 0, 3, 1];
-/// Standing, how far out of its place a foot steps back to it (m).
-const MASS_SETTLE: f32 = 0.15;
-/// How far a heavy body's planted legs stretch before a foot lifts early,
-/// and over how much it gives up its share first (of its length): as a
-/// leopard's, all but straight, reaching far ahead to pull the ground back
-/// to it, not with a knee at a right angle (the user).
-const MASS_REACHED: (f32, f32) = (0.99, 0.02);
-/// How high it lifts a foot (m), walking and flat out, and at most (of its
-/// hip's height).
-const MASS_LIFT: (f32, f32, f32) = (0.15, 0.15, 0.4);
 
 impl Plan {
     /// The stalker (`--opt stalker`): a small, thin human body high on two
@@ -348,7 +259,7 @@ impl Plan {
         // waddle, comic, the user): a short thigh folding a long thin stilt.
         // (The knee a little lower, the user: 0.65 over 0.95, was 0.5 over
         // 1.1.)
-        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, drop: 0.0, upper: 0.65, lower: 0.95, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.08, radius: (0.05, 0.022) };
+        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.65, lower: 0.95, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.08, radius: (0.05, 0.022) };
         let arm = |side: f32| ArmPlan { side, upper: 0.6, lower: 0.7, radius: (0.04, 0.03) };
         Plan {
             hips: (0.0, 1.55),
@@ -394,7 +305,7 @@ impl Plan {
 
     /// A tall biped with long arms, about 3 m.
     pub fn biped() -> Self {
-        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, drop: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.16, 0.1) };
+        let leg = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.8, lower: 0.8, knee: 1.0, knee_up: 0.0, knee_out: 0.0, spread: 0.0, radius: (0.16, 0.1) };
         let arm = |side: f32| ArmPlan { side, upper: 0.75, lower: 0.9, radius: (0.11, 0.07) };
         Plan {
             hips: (0.0, 1.5),
@@ -469,8 +380,8 @@ impl Plan {
     /// behind; the chest high, the rump low, the head hung low between the
     /// shoulders; no tail. Thin legs: hard, a spider's.
     pub fn beast() -> Self {
-        let fore = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.15, drop: 0.0, upper: 1.3, lower: 1.4, knee: -0.6, knee_up: 1.0, knee_out: 0.6, spread: 0.35, radius: (0.14, 0.09) };
-        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, drop: 0.0, upper: 0.75, lower: 0.8, knee: 0.3, knee_up: 1.0, knee_out: 0.5, spread: 0.3, radius: (0.16, 0.09) };
+        let fore = |side: f32| LegPlan { root: Root::Chest, side, forward: 0.15, upper: 1.3, lower: 1.4, knee: -0.6, knee_up: 1.0, knee_out: 0.6, spread: 0.35, radius: (0.14, 0.09) };
+        let hind = |side: f32| LegPlan { root: Root::Hips, side, forward: 0.0, upper: 0.75, lower: 0.8, knee: 0.3, knee_up: 1.0, knee_out: 0.5, spread: 0.3, radius: (0.16, 0.09) };
         Plan {
             hips: (-0.8, 0.8),
             chest: (0.8, 1.2),
@@ -513,7 +424,7 @@ impl Plan {
     /// upright, of a mass with its legs (a small body on long legs read as a
     /// cartoon spider); no head: three eyes round its body.
     pub fn sprawl() -> Self {
-        let leg = |a: f32| LegPlan { root: Root::Chest, side: 0.3 * a.sin(), forward: 0.3 * a.cos(), drop: 0.0, upper: 1.4, lower: 1.7, knee: 0.0, knee_up: 1.0, knee_out: 0.7, spread: 1.6, radius: (0.18, 0.11) };
+        let leg = |a: f32| LegPlan { root: Root::Chest, side: 0.3 * a.sin(), forward: 0.3 * a.cos(), upper: 1.4, lower: 1.7, knee: 0.0, knee_up: 1.0, knee_out: 0.7, spread: 1.6, radius: (0.18, 0.11) };
         let third = std::f32::consts::TAU / 3.0;
         let beast = Plan::beast();
         Plan {
@@ -661,22 +572,6 @@ pub struct Rig {
     turn_rate: f32,
     /// How fast its height goes after the ground's (m/s; `GROUND_FOLLOW`).
     climb: f32,
-    /// How fast a heavy body crouches (per s).
-    crouching: f32,
-    /// How hard its legs push on the whole, lately (`Rig::push`); its pace
-    /// for it, and how fast that changes.
-    pushing: f32,
-    driven: (f32, f32),
-    /// Its pace for its push, on the whole, lately.
-    surged: f32,
-    /// Where its weight is shifted to, and how fast it goes, sprung after
-    /// where the legs would have it (`Rig::shift`; reset, its gait clock
-    /// threw it from one leg to another in a frame, its folded legs
-    /// whirling).
-    weight: (Vec3, Vec3),
-    /// How far each end of a heavy body (hips, chest) rides below its
-    /// height on the legs it stands on, and how fast it goes (`MASS_RIDE`).
-    ride: [(f32, f32); 2],
     phase: f32,
     /// The current gait: each leg's place in the cycle and where it is now,
     /// the swing fraction, the stride, and how far into the fastest gait.
@@ -723,22 +618,7 @@ pub struct Rig {
     /// fixed as it lifts and its end by how far through it is: ended where
     /// the gait's swing ends, the swing grown past where the foot lifted as
     /// the beast sped up, a foot never landed, dragged 8 m behind.)
-    /// (A heavy body's every swing so, its own course from its lift, on by
-    /// the clock's own ticks, `advance`: ended where the gait's swing ended,
-    /// its clock reset by a settling step or its swing shortened as it
-    /// slowed, a foot in the air landed at once, half a metre on.)
     early: Vec<Option<(f32, f32, f32)>>,
-    /// A heavy body's feet, stepping by its legs (`Rig::step_mass`): each
-    /// one's swing, how far through it (0..1) and how long it takes (s);
-    /// whose turn it is to step next (of `MASS_ORDER`), and how long since
-    /// a foot last lifted (s).
-    mass_swing: Vec<(f32, f32)>,
-    next_foot: usize,
-    since_lift: f32,
-    /// How long each foot has been down (s).
-    down_for: Vec<f32>,
-    /// How far the gait's clock went on this frame (of a cycle).
-    advance: f32,
     rest: f32,
     step_rest: f32,
     step_time: f32,
@@ -939,16 +819,6 @@ fn dragged(hand: Vec3, tip: Vec3, fallback: Vec3) -> (Vec3, Vec3) {
 
 /// Two-bone IK: where the middle joint goes so that a limb from `a` of
 /// lengths `l1`, `l2` reaches `target`, bending towards `pole`.
-/// `at` sprung after `target`, critically damped, at `rate` (1/s), `speed`
-/// its pace: its pace changing smoothly however the target jumps. (Eased
-/// instead, each jump of the target was a kink in a frame: the shard
-/// beast's body jerked sideways and up as each foot came down, the user's
-/// vibration.)
-fn spring_to(at: &mut Vec3, speed: &mut Vec3, target: Vec3, rate: f32, dt: f32) {
-    *speed += ((target - *at) * rate * rate - *speed * 2.0 * rate) * dt;
-    *at += *speed * dt;
-}
-
 fn ik(a: Vec3, target: Vec3, l1: f32, l2: f32, pole: Vec3) -> (Vec3, Vec3) {
     let to = target - a;
     // (Folded no tighter than `FOLD`: closer than its bones' difference, the
@@ -984,12 +854,6 @@ impl Rig {
             hips_yaw: heading,
             turn_rate: 0.0,
             climb: 0.0,
-            crouching: 0.0,
-            pushing: 0.0,
-            driven: (1.0, 0.0),
-            surged: 1.0,
-            weight: (Vec3::ZERO, Vec3::ZERO),
-            ride: [(0.0, 0.0); 2],
             phase: 0.0,
             offsets: Vec::new(),
             local: Vec::new(),
@@ -1010,11 +874,6 @@ impl Rig {
             footfall: Vec::new(),
             step_t: Vec::new(),
             early: Vec::new(),
-            mass_swing: Vec::new(),
-            next_foot: 0,
-            since_lift: 0.0,
-            down_for: Vec::new(),
-            advance: 0.0,
             rest: 0.0,
             step_rest: 0.2,
             step_time: 0.3,
@@ -1058,8 +917,6 @@ impl Rig {
         rig.steps = vec![0; rig.plan.legs.len()];
         rig.step_t = vec![0.0; rig.plan.legs.len()];
         rig.early = vec![None; rig.plan.legs.len()];
-        rig.mass_swing = vec![(0.0, 1.0); rig.plan.legs.len()];
-        rig.down_for = vec![1.0; rig.plan.legs.len()];
         let homes: Vec<Vec3> = (0..rig.plan.legs.len()).map(|i| rig.home(i, ground)).collect();
         rig.feet = homes.into_iter().map(|h| Foot { planted: h, from: h, swinging: false }).collect();
         let back = -rig.forward_of(heading);
@@ -1099,281 +956,32 @@ impl Rig {
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving) * self.alive;
         // Crouched: lower, and the chest lower still (the head goes down).
         // Running, the body drops, so the legs can reach far fore and aft.
-        // (A heavy body's, on its feet: low in the air at its leap's pace, it
-        // sprang up as it landed, stopped dead.)
-        // (Its hips well down its flanks, a heavy body drops less of its
-        // height: dropped as much, its hips all but touched the ground.)
-        let fast = (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
-        let run = match self.plan.style {
-            Style::Mass if self.airborne.is_some() => 0.0,
-            // (A heavy body's no lower than its legs bring it, reaching far
-            // out: lowered as it ran, its forelegs folded, the user.)
-            Style::Mass => 0.0,
-            _ => 0.3 * fast,
-        };
+        let run = 0.3 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
         let low = (self.crouch * if root == Root::Chest { 0.42 } else { 0.3 }).max(run);
         // In a leap the body pitches with its arc: nose up rising, down
         // falling.
-        // (A heavy body flies level: pitched, it snapped level as it
-        // landed, its legs whipping.)
-        let pitch = if self.plan.style == Style::Mass { 0.0 } else { (self.airborne.unwrap_or(0.0) * 0.04).clamp(-0.25, 0.25) * if root == Root::Chest { 1.0 } else { -1.0 } };
+        let pitch = (self.airborne.unwrap_or(0.0) * 0.04).clamp(-0.25, 0.25) * if root == Root::Chest { 1.0 } else { -1.0 };
         // Hauling, the chest gathers low as the arms reach and heaves up as
         // they haul (the rump less).
         let heave = if self.plan.style == Style::Hauler { 0.15 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos() * if root == Root::Chest { 1.0 } else { 0.4 } } else { 0.0 };
         // (On stilts, as high as the stilts it stands on hold it.)
         let h = if self.plan.style == Style::Stilt { self.stilt + if root == Root::Chest { self.plan.chest.1 - self.plan.hips.1 } else { 0.0 } } else { h };
-        let ride = self.ride[(root == Root::Chest) as usize].0;
-        // (Lowered by its legs' height, not its own: a heavy body's hips
-        // and shoulders hang well under it (`LegPlan::drop`), and lowered
-        // by its own, crouched or running, its forelegs folded twice as
-        // much as meant, their knees at a right angle, the user.)
-        let drop = self.plan.legs.iter().filter(|leg| leg.root == root).map(|leg| leg.drop).fold(0.0, f32::max);
-        let height = h - low * (h - drop) + bob + rock + pitch + heave + ride + if root == Root::Chest { breath } else { 0.0 };
+        let height = h * (1.0 - low) + bob + rock + pitch + heave + if root == Root::Chest { breath } else { 0.0 };
         // A leg lost, its corner sags and slumps towards it; both of a pair
         // lost, that end drags on the ground.
         let (gone, slump) = self.plan.legs.iter().enumerate().filter(|&(i, leg)| leg.root == root && self.lost.get(i).copied().unwrap_or(false)).fold((0, 0.0), |(n, s), (_, leg)| (n + 1, s + leg.side.signum()));
         let height = (height - h * [0.0, 0.4, 0.75][gone.min(2)]).max(0.25) + self.reared * if root == Root::Chest { 0.6 } else { 0.1 };
         // Leaning into a turn: the body swings towards its inside.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
-        // (A heavy body leans on its feet, not in the air: thrown at its
-        // bound's pace still turning from its pivot, it lurched aside half a
-        // metre as it left the ground.)
-        let roll = if self.plan.style == Style::Mass && self.airborne.is_some() { 0.0 } else { (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35) };
+        let roll = (self.turn_rate * speed * self.plan.lean).clamp(-0.35, 0.35);
         let right = Vec3::new(forward.z, 0.0, -forward.x);
         let reel = self.reel * if root == Root::Chest { 1.0 } else { 0.4 };
         // Each stride lurches a little to one side or the other, the chest
         // more than the hips.
-        let lurch = if matches!(self.plan.style, Style::Porter | Style::Mass) { 0.0 } else { (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 } };
+        let lurch = if self.plan.style == Style::Porter { 0.0 } else { (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 } };
         // (The porter's chest ahead of its hips, countering its load.)
         let tow = if self.plan.style == Style::Porter && root == Root::Chest { PORTER_TOW * (speed / 1.5).min(1.0) } else { 0.0 };
-        self.root + forward * (f - mid + flex + tow) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel + self.weight.0
-    }
-
-    /// How far a planted leg stretches before its foot lifts early (of its
-    /// length; see `REACHED`), and over how much of that it gives up its
-    /// share of the body first. A heavy body's legs all but straight as they
-    /// pull and push (`MASS_REACHED`).
-    fn reached(&self) -> (f32, f32) {
-        if self.plan.style == Style::Mass { MASS_REACHED } else { (REACHED, 0.06) }
-    }
-
-    /// How far leg `i` leans out before and behind its hip as it bears the
-    /// body at its pace now (m): its strut leaning `MASS_LEAN`, none
-    /// standing.
-    fn sweep(&self, i: usize) -> f32 {
-        let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
-        self.strut(i) * mass_lean(speed).sin() * (speed / 1.5).min(1.0)
-    }
-
-    /// The way a heavy body goes: its pace's, or where it faces standing.
-    fn going(&self) -> Vec3 {
-        Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or(self.forward_of(self.heading))
-    }
-
-    /// How far a planted foot of a heavy body has gone back through its
-    /// leg's lean, from upright (0) to leaning back as far as it does (1):
-    /// where it lifts.
-    fn spent(&self, i: usize) -> f32 {
-        let hip = self.hip(i);
-        let behind = -(self.feet[i].planted - hip).with_y(0.0).dot(self.going());
-        behind / self.sweep(i).max(0.05)
-    }
-
-    /// A heavy body's foot `i`, stepping by its legs, not by a clock (the
-    /// user: the legs are the whole reason it moves; everything else
-    /// follows from them). Down, it stays where it is planted as the body
-    /// goes over it, its leg a strut leaning forward, upright, then back;
-    /// leaning back as far as it leaned forward (`Rig::sweep`), its turn
-    /// come (`MASS_ORDER`) and a quarter of a stride since the last foot
-    /// lifted, it lifts; at once if out of its reach. In the air
-    /// (`MASS_SWING`), folded, it swings to land leaning forward of where its
-    /// hip will be. Standing, a foot out of place steps back to it, one at a
-    /// time. (On a clock, each foot's window to swing, the clock fought the
-    /// legs: feet stepped twice, hung in the air, landed past their reach,
-    /// never reached out, the body went as on rails, the user.)
-    fn step_mass(&mut self, i: usize, dt: f32, speed: f32, ground: &impl Fn(f32, f32) -> f32) {
-        let leg = self.plan.legs[i];
-        let length = leg.upper + leg.lower;
-        let hip = self.hip(i);
-        let going = self.going();
-        let sweep = self.sweep(i);
-        let fast = (speed / MASS_LEAN[MASS_LEAN.len() - 1].0).min(1.0);
-        let swing_time = MASS_SWING.0 + (MASS_SWING.1 - MASS_SWING.0) * fast;
-        // Where it lands: leaning forward of where its hip will be when it
-        // lands.
-        let landing = |rig: &Self, left: f32| {
-            let p = hip + Vec3::new(rig.velocity.x, 0.0, rig.velocity.z) * left + going * sweep;
-            Vec3::new(p.x, ground(p.x, p.z), p.z)
-        };
-        if self.feet[i].swinging {
-            let (t, time) = self.mass_swing[i];
-            let t = (t + dt / time).min(1.0);
-            self.mass_swing[i].0 = t;
-            let to = landing(self, (1.0 - t) * time);
-            if t >= 1.0 {
-                let foot = &mut self.feet[i];
-                foot.swinging = false;
-                foot.planted = to;
-                self.down_for[i] = 0.0;
-                return;
-            }
-            // Folded and lifted, it goes forward early and comes down
-            // reaching.
-            let lift = (MASS_LIFT.0 + (MASS_LIFT.1 - MASS_LIFT.0) * fast).min((hip.y - to.y) * MASS_LIFT.2) * (0.75 + 0.5 * hash01(self.seed as i32, i as i32, self.steps[i] as i32, 0x61c));
-            let even = t * t * (3.0 - 2.0 * t);
-            let across = even + (1.0 - (1.0 - t).powi(3) - even) * 0.5;
-            let foot = &mut self.feet[i];
-            foot.planted = foot.from.lerp(to, across) + Vec3::Y * (t.powf(0.85) * std::f32::consts::PI).sin() * lift;
-            return;
-        }
-        self.down_for[i] += dt;
-        // (Out of its reach a little short of where its reach holds the
-        // body back, `Rig::within_reach`: at the same, the body stopped, the
-        // foot not lifted, nothing moved again.)
-        let (limit, _) = self.reached();
-        let out = self.feet[i].planted.distance(hip) > length * (limit - 0.005);
-        let turn = self.mass_turn() == Some(i);
-        let lift = if speed > 0.3 {
-            // A quarter of a stride between lifts: as long as its foot is
-            // down (its sweep there and back at its pace) and in the air,
-            // over four. (Starting, its feet all under it, so they lift in
-            // turn, half way back, not all at once.)
-            let spacing = (2.0 * sweep / speed + swing_time) / 4.0;
-            let spent = self.spent(i);
-            out || turn && self.since_lift >= spacing && (spent >= 1.0 || spent >= 0.5 && self.since_lift >= spacing * 1.5)
-        } else {
-            // Standing: one at a time, a foot out of place back to it.
-            let place = Vec3::new(hip.x, 0.0, hip.z);
-            let astray = self.feet[i].planted.with_y(0.0).distance(place) > MASS_SETTLE;
-            out || turn && astray && !self.feet.iter().any(|f| f.swinging) && self.since_lift >= swing_time
-        };
-        if lift {
-            let foot = &mut self.feet[i];
-            foot.swinging = true;
-            foot.from = foot.planted;
-            self.steps[i] += 1;
-            self.mass_swing[i] = (0.0, swing_time);
-            self.since_lift = 0.0;
-            if turn {
-                self.next_foot = MASS_ORDER.iter().position(|&j| j == i).unwrap_or(0) + 1;
-            }
-        }
-    }
-
-    /// `want`, a heavy body's pace, cut to what its planted legs reach this
-    /// frame: no further than any planted foot can be left behind its hip.
-    fn within_reach(&self, want: Vec3, dt: f32) -> Vec3 {
-        let step = want.with_y(0.0) * dt;
-        let length = step.length();
-        if length < 1e-6 {
-            return want;
-        }
-        let way = step / length;
-        let (limit, _) = self.reached();
-        let room = (0..self.feet.len())
-            .filter(|&j| !self.feet[j].swinging && !self.lost.get(j).copied().unwrap_or(false))
-            .map(|j| {
-                let leg = &self.plan.legs[j];
-                let hip = self.hip(j);
-                let foot = self.feet[j].planted;
-                let reach = ((leg.upper + leg.lower) * limit).powi(2) - (hip.y - foot.y).powi(2);
-                reach.max(0.0).sqrt() + (foot - hip).with_y(0.0).dot(way)
-            })
-            .fold(f32::MAX, f32::min);
-        if room < length { want * (room / length).max(0.0) } else { want }
-    }
-
-    /// Whose turn it is to step: of the feet down, the one leaned furthest
-    /// back through its leg's lean (standing, furthest out of its place),
-    /// the order its feet go in (`MASS_ORDER`, on from the last to step)
-    /// deciding between feet as far. (By the order alone, a foot leaned all
-    /// the way back waited on one just down, the body held back by it,
-    /// nothing moved.)
-    fn mass_turn(&self) -> Option<usize> {
-        let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
-        (0..MASS_ORDER.len())
-            .map(|k| MASS_ORDER[(self.next_foot + k) % MASS_ORDER.len()])
-            .filter(|&i| i < self.feet.len() && !self.feet[i].swinging && !self.lost.get(i).copied().unwrap_or(false))
-            .map(|i| {
-                let need = if speed > 0.3 {
-                    self.spent(i)
-                } else {
-                    let hip = self.hip(i);
-                    self.feet[i].planted.with_y(0.0).distance(Vec3::new(hip.x, 0.0, hip.z))
-                };
-                (i, need)
-            })
-            .fold(None, |best: Option<(usize, f32)>, (i, need)| if best.is_none_or(|b| need > b.1 + 0.02) { Some((i, need)) } else { best })
-            .map(|b| b.0)
-    }
-
-    /// How long leg `i` is as a strut, its hip's height standing over its
-    /// foot (m).
-    fn strut(&self, i: usize) -> f32 {
-        let leg = &self.plan.legs[i];
-        (if leg.root == Root::Hips { self.plan.hips.1 } else { self.plan.chest.1 }) - leg.drop
-    }
-
-    /// How much a heavy body walks (1) rather than stands or runs (0): see
-    /// `MASS_WALKS`.
-    fn walking(&self) -> f32 {
-        let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
-        let (walk, run) = MASS_WALKS;
-        (speed / 0.5).min(1.0) * (1.0 - ((speed - walk) / (run - walk)).clamp(0.0, 1.0))
-    }
-
-    /// A heavy body's weight shifted off each leg about to lift, and held
-    /// off it until it is down (`Style::Mass`): away from it, over the
-    /// three it stands on.
-    fn shift(&self) -> Vec3 {
-        if self.plan.style != Style::Mass {
-            return Vec3::ZERO;
-        }
-        let (aside, fore, before, after) = MASS_SHIFT;
-        let walking = self.walking();
-        if walking <= 0.0 {
-            return Vec3::ZERO;
-        }
-        let forward = self.forward_of(self.heading);
-        let right = Vec3::new(forward.z, 0.0, -forward.x);
-        let shift: Vec3 = (0..self.plan.legs.len())
-            .map(|i| {
-                let leg = &self.plan.legs[i];
-                -(right * leg.side.signum() * aside + forward * fore * if leg.root == Root::Chest { 1.0 } else { -1.0 }) * self.unloaded(i, before, after)
-            })
-            .sum();
-        shift * walking
-    }
-
-    /// How little of the body's weight leg `i` bears (0 to 1): none in the
-    /// air, taking it on over `after` of a cycle once down, giving it up
-    /// over `before` until it lifts.
-    fn unloaded(&self, i: usize, before: f32, after: f32) -> f32 {
-        let ease = |t: f32| t * t * (3.0 - 2.0 * t);
-        let local = self.local.get(i).copied().unwrap_or(0.5);
-        // (A heavy body's by its foot, not its clock: its steps on their own
-        // course, a foot just down could be in its clock's swing, its share
-        // none for a few frames, then all, a kink. Taking it on over
-        // `MASS_LOAD` from its touchdown, if at all.)
-        if self.plan.style == Style::Mass {
-            if self.feet.get(i).is_none_or(|f| f.swinging) {
-                return 1.0;
-            }
-            // (Giving it up as its leg leans back to where it lifts: see
-            // `Rig::spent`.)
-            let taking = if after > 0.0 { 1.0 - ease((self.down_for.get(i).copied().unwrap_or(1.0) / MASS_LOAD).min(1.0)) } else { 0.0 };
-            let giving = if before > 0.0 { ease(((self.spent(i) - 0.75) / 0.25).clamp(0.0, 1.0)) } else { 0.0 };
-            return taking.max(giving);
-        }
-        if local < self.swing || self.feet.get(i).is_some_and(|f| f.swinging) {
-            1.0
-        } else if local < self.swing + after {
-            1.0 - ease((local - self.swing) / after)
-        } else if local > 1.0 - before {
-            ease((local - (1.0 - before)) / before)
-        } else {
-            0.0
-        }
+        self.root + forward * (f - mid + flex + tow) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -1385,7 +993,7 @@ impl Rig {
         let local = self.local.get(i).copied().unwrap_or(0.5);
         let stance = if local < self.swing { 0.0 } else { (std::f32::consts::PI * (local - self.swing) / (1.0 - self.swing)).sin() };
         let blade = if leg.root == Root::Chest { self.plan.shoulder * stance * (self.velocity.length() / 2.0).min(1.0) } else { 0.0 };
-        self.anchor(leg.root) + right * leg.side + forward * leg.forward + Vec3::Y * (blade - leg.drop)
+        self.anchor(leg.root) + right * leg.side + forward * leg.forward + Vec3::Y * blade
     }
 
     /// Where a foot belongs: under its hip, a little ahead when moving.
@@ -1413,21 +1021,11 @@ impl Rig {
         let room = (leg.upper + leg.lower) * 0.92;
         let ahead = match self.plan.style {
             Style::Stilt => ahead,
-            // (A heavy body's, as far out as its leg leans at most, its body
-            // coming down to meet it, see `MASS_RIDE`: capped by its reach
-            // from its hip's height then, its body standing tall, its feet
-            // landed all but under it, its legs going up and down, never
-            // reaching out to pull the ground back, the user.)
-            Style::Mass => self.strut(i) * mass_lean(speed).sin() * (speed / 1.5).min(1.0),
             _ => ahead.min((room * room - (hip.y - self.root.y).powi(2)).max(0.0).sqrt()),
         };
         let yaw = if leg.root == Root::Hips { self.hips_yaw } else { self.chest_yaw };
         let fwd = self.forward_of(yaw);
         let out = self.out_of(&leg, fwd) * (leg.spread + COMBAT.1 * self.combat);
-        // (A heavy body coming down from a bound lands on its feet under it,
-        // stopped dead: set ahead as at its flight's pace, each foot
-        // stepped back after it landed, one by one.)
-        let ahead = if self.plan.style == Style::Mass && self.airborne.is_some() { 0.0 } else { ahead };
         let lead = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero() * ahead + out;
         // Each step lands a little off its ideal place.
         let k = self.steps.get(i).copied().unwrap_or(0) as i32;
@@ -1444,16 +1042,7 @@ impl Rig {
         let was = self.root;
         self.time += dt;
         self.dt = dt;
-        // (A heavy body's crouch sprung, not eased: going still or about to
-        // strike, its whole rigid body jerked down in a frame, 2 cm and
-        // more.)
-        if self.plan.style == Style::Mass {
-            let (mut at, mut speed) = (Vec3::X * self.crouch, Vec3::X * self.crouching);
-            spring_to(&mut at, &mut speed, Vec3::X * intent.crouch, 8.0, dt);
-            (self.crouch, self.crouching) = (at.x, speed.x);
-        } else {
-            self.crouch += (intent.crouch - self.crouch) * (1.0 - (-dt * 8.0).exp());
-        }
+        self.crouch += (intent.crouch - self.crouch) * (1.0 - (-dt * 8.0).exp());
         // A raised paw goes up slowly, comes down quicker.
         let still = Vec2::new(self.velocity.x, self.velocity.z).length() < 0.4;
         match intent.paw {
@@ -1478,19 +1067,7 @@ impl Rig {
                 self.root.y = floor;
                 self.climb = 0.0;
                 self.airborne = None;
-                // (A heavy body: all its weight coming down at once, and
-                // stopped dead by it (before its feet are set: set at its
-                // flight's pace, each landed ahead of it, and stepped back);
-                // its crouch easing in: thrown down in a frame, its legs
-                // whipped.)
-                if self.plan.style != Style::Mass {
-                    self.crouch = 0.7;
-                } else {
-                    for (_, v) in &mut self.ride {
-                        *v -= MASS_LANDING;
-                    }
-                    self.velocity = Vec3::ZERO;
-                }
+                self.crouch = 0.7;
                 // Landing: the feet come down where they are.
                 for i in 0..self.feet.len() {
                     let h = self.home(i, ground);
@@ -1504,7 +1081,6 @@ impl Rig {
             // as much again, about 3 g at a gallop: it swings wide round a
             // corner and slams into the wall, not turning on the spot (the
             // user: slamming into walls before toy physics).
-            let mass = self.plan.style == Style::Mass;
             let change = intent.velocity - self.velocity;
             let dir = self.velocity.normalize_or_zero();
             let along = dir * change.dot(dir);
@@ -1516,18 +1092,6 @@ impl Rig {
                 let target = face.x.atan2(face.z);
                 let turn = (target - self.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                 let rate = self.plan.turn * (1.0 + (COMBAT.0 - 1.0) * self.combat);
-                // (A heavy body turns as it steps, on its feet, little while
-                // all four are down: turned steadily, it slid round, the
-                // user.)
-                // (Nor turned further than its planted feet reach: pivoting
-                // on the spot, one foot stepping at a time, it left them
-                // out of reach, in the air.)
-                let strained = (0..self.feet.len()).any(|i| {
-                    let leg = &self.plan.legs[i];
-                    !self.feet[i].swinging && self.feet[i].planted.distance(self.hip(i)) > (leg.upper + leg.lower) * MASS_PIVOT.2
-                });
-                let stepping = if strained { 0.0 } else if self.feet.iter().any(|f| f.swinging) { MASS_PIVOT.0 } else { MASS_PIVOT.1 };
-                let rate = if mass { rate * stepping } else { rate };
                 self.heading += turn.clamp(-rate * dt, rate * dt);
             }
             let before = self.root;
@@ -1535,26 +1099,7 @@ impl Rig {
             // easing to it and out of it.)
             let creep = if self.beat > STILT_BEAT.0 + STILT_BEAT.1 { STILT_LINGER.3 } else if self.beat > 0.0 { STILT_GATHER.0 } else { 1.0 };
             self.gather += (creep - self.gather) * (1.0 - (-STILT_GATHER.1 * dt).exp());
-            if self.plan.style == Style::Mass {
-                let push = self.push();
-                self.pushing = if self.pushing <= 0.0 { push.max(0.1) } else { self.pushing + (push - self.pushing) * (1.0 - (-dt * 1.5).exp()) };
-            }
-            // (Its pace sprung after its legs' push: see `MASS_DRIVE`.)
-            let surge = if self.plan.style == Style::Mass {
-                let (mut at, mut speed) = (Vec3::X * self.driven.0, Vec3::X * self.driven.1);
-                spring_to(&mut at, &mut speed, Vec3::X * self.surge(), MASS_DRIVE.2, dt);
-                self.driven = (at.x, speed.x);
-                // (Over a stride, its pace as asked: its surges clipped, it
-                // went slower.)
-                self.surged += (at.x - self.surged) * (1.0 - (-dt).exp());
-                at.x / self.surged.max(0.3)
-            } else {
-                self.surge()
-            };
-            let want = self.velocity * surge * self.gather;
-            // (A heavy body no further than its planted legs reach: carried
-            // past them, they stretched out of reach, its feet in the air.)
-            let want = if self.plan.style == Style::Mass { self.within_reach(want, dt) } else { want };
+            let want = self.velocity * self.surge() * self.gather;
             self.root = sweep(self.root, (want + self.knock) * dt);
             // Its height after the ground's, sprung: quick enough for a
             // stair, not after every millimetre of it. (Set to it each
@@ -1581,21 +1126,11 @@ impl Rig {
                 self.velocity.z *= k;
             }
         }
-        // A heavy body in the air: where each foot will come down, its legs
-        // reaching for it (see `solve`).
-        if self.plan.style == Style::Mass && self.airborne.is_some() {
-            for i in 0..self.feet.len() {
-                self.feet[i].planted = self.home(i, ground);
-            }
-        }
         self.knock *= (-dt * 6.0).exp();
         self.reared += (self.rear - self.reared) * (1.0 - (-dt * 10.0).exp());
         // (Sprung, a little under damped: thrown, it overshoots once.)
         self.reel_v += (-self.reel * 160.0 - self.reel_v * 14.0) * dt;
         self.reel += self.reel_v * dt;
-        let target = self.shift();
-        let (at, speed) = &mut self.weight;
-        spring_to(at, speed, target, MASS_SHIFT_EASE, dt);
         self.turn_rate += ((self.heading - old_heading) / dt.max(1e-4) - self.turn_rate) * (1.0 - (-dt * 6.0).exp());
         // The chest leads a turn, the hips follow.
         let lead = (self.turn_rate * 0.15).clamp(-0.4, 0.4);
@@ -1669,24 +1204,13 @@ impl Rig {
             let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
             // (Each stride a little quicker or slower, by up to 15%; the
             // stalker's by up to 10%, less erratic, the user.)
-            let spread = match self.plan.style {
-                Style::Stilt => 0.2,
-                Style::Mass => 0.12,
-                _ => 0.3,
-            };
+            let spread = if self.plan.style == Style::Stilt { 0.2 } else { 0.3 };
             let tempo = 1.0 - spread * 0.5 + spread * self.vary(0);
-            // (A heavy body's clock as slow as its pace, walking: kept to a
-            // metre a second's, it stepped three times a second at a crawl.
-            // Standing, its settling steps as quick as any.)
-            let pace = if self.plan.style == Style::Mass && speed > 0.3 { speed.max(0.4) } else { speed.max(1.0) };
-            let next = self.phase + pace / self.stride * drift * tempo * dt;
+            let next = self.phase + speed.max(1.0) / self.stride * drift * tempo * dt;
             if next >= 1.0 {
                 self.strides += 1;
             }
-            self.advance = next - self.phase;
             self.phase = next.fract();
-        } else {
-            self.advance = 0.0;
         }
         // The porter's next step, after its rest: the foot furthest behind.
         let porter_next = if self.plan.style == Style::Porter && !any_swinging && speed > 0.1 {
@@ -1695,7 +1219,6 @@ impl Rig {
         } else {
             None
         };
-        self.since_lift += dt;
         for i in 0..self.feet.len() {
             let home = self.home(i, ground);
             let local = (self.phase - self.offsets[i]).rem_euclid(1.0);
@@ -1714,12 +1237,6 @@ impl Rig {
                 continue;
             }
             if self.airborne.is_some() {
-                continue;
-            }
-            // A heavy body's feet step by its legs, not by the clock: see
-            // `Rig::step_mass`.
-            if self.plan.style == Style::Mass {
-                self.step_mass(i, dt, speed, ground);
                 continue;
             }
             // The porter's feet only catch up: one at a time, a foot steps
@@ -1834,79 +1351,6 @@ impl Rig {
                 foot.from = foot.planted;
                 foot.swinging = true;
                 self.phase = (self.offsets[i] + 0.01).fract();
-            }
-        }
-
-        // A heavy body carried by its legs: each end held up by the legs it
-        // stands on as by struts, highest with a foot under it, lower as its
-        // feet are out before and behind it, rising and falling with each
-        // step. (Held level, it glided along, its legs shuffling under it,
-        // not carrying it, the user.)
-        if self.plan.style == Style::Mass {
-            for (r, root) in [Root::Hips, Root::Chest].into_iter().enumerate() {
-                // (Each foot as it bears the weight, taking it on as it
-                // lands and giving it up before it lifts: all at once, the
-                // body jolted as each came down.)
-                let ramp = (1.0 - self.swing) * 0.3;
-                // (As low as its most stretched leg bearing it holds it, as
-                // that leg bears it: averaged, the leg furthest out was
-                // stretched past its reach; each by its share, smoothly, a
-                // foot just down or about to lift barely pulling it down.)
-                let want = (0..self.feet.len())
-                    .filter(|&i| self.plan.legs[i].root == root)
-                    .map(|i| {
-                        let leg = &self.plan.legs[i];
-                        let strut = self.strut(i);
-                        let hip = self.hip(i);
-                        // (A foot about to land, reaching out: the body comes
-                        // down to meet it over the last of its swing, so the
-                        // leg reaches where it lands, and rises as it passes
-                        // over it.)
-                        if self.feet[i].swinging {
-                            let done = self.mass_swing[i].0;
-                            // (From early in its swing: from halfway, the body
-                            // came down too late, the leg landing past its
-                            // reach.)
-                            let coming = ((done - 0.2) / 0.6).clamp(0.0, 1.0);
-                            // (Where the foot is, easing to where it lands: by
-                            // where it would land, moving with the body, the
-                            // body's pace down changed as it landed, a kink.)
-                            let to = self.feet[i].planted;
-                            let out = Vec2::new(to.x - hip.x, to.z - hip.z).length().min(strut);
-                            return ((strut * strut - out * out).sqrt() - strut) * coming * coming * (3.0 - 2.0 * coming);
-                        }
-                        let out = Vec2::new(self.feet[i].planted.x - hip.x, self.feet[i].planted.z - hip.z).length().min(strut);
-                        // (Giving up its share as it nears its reach, before
-                        // it lifts early: lifted bearing it, the body
-                        // dropped in a frame.)
-                        let stretch = self.feet[i].planted.distance(hip) / (leg.upper + leg.lower);
-                        let (limit, shed) = self.reached();
-                        let reaching = ((limit - stretch) / shed).clamp(0.0, 1.0);
-                        // (Bearing it from its touchdown: the body has come down
-                        // to meet it; taking it on only then, its share fell
-                        // from all to none as it landed.)
-                        ((strut * strut - out * out).sqrt() - strut) * (1.0 - self.unloaded(i, ramp, 0.0)) * reaching * reaching * (3.0 - 2.0 * reaching)
-                    })
-                    // (Softly the least: the leg it rides changing from one
-                    // to another, the hard least turned a corner, its pace
-                    // up and down jumping, a kink.)
-                    .fold(0.0f32, |sum, fall| sum + (-fall / MASS_RIDE_SOFT).exp());
-                let vault = -MASS_RIDE_SOFT * want.ln().max(0.0) * MASS_RIDE;
-                // Running, its legs springs, not struts: landing straight,
-                // leaning far forward, giving under it as it goes over,
-                // straight again leaning back as they push off; the body
-                // carried low and level, as low as a straight leg leaning out
-                // holds it. Walking, it vaults over them. (Vaulting over
-                // struts at a run, it would rise and fall 40 cm at each step;
-                // its legs out of its reach, it lurched.)
-                let leg = (0..self.feet.len()).find(|&i| self.plan.legs[i].root == root).unwrap_or(0);
-                let (strut, sweep) = (self.strut(leg), self.sweep(leg));
-                let level = (strut * strut - sweep * sweep).max(0.0).sqrt() - strut;
-                let walking = self.walking();
-                let want = vault * walking + level * (1.0 - walking);
-                let (mut at, mut speed) = (Vec3::X * self.ride[r].0, Vec3::X * self.ride[r].1);
-                spring_to(&mut at, &mut speed, Vec3::X * want, MASS_RIDE_EASE, dt);
-                self.ride[r] = (at.x, speed.x);
             }
         }
 
@@ -2278,22 +1722,10 @@ impl Rig {
                     let (lag, short) = if leads { (0.0, 1.0) } else { (0.2, 0.8) };
                     let s = (self.air.0 / self.air.1.max(0.05) - lag).clamp(0.0, 1.0);
                     let out = self.out_of(&leg, fwd);
-                    let flung = if leg.root == Root::Chest {
+                    if leg.root == Root::Chest {
                         hip + fwd * reach * 0.85 * short + out * reach * 0.35 - Vec3::Y * reach * (0.15 + 0.45 * s)
                     } else {
                         hip - fwd * reach * (0.85 * (1.0 - s) * short - 0.2 * s) - Vec3::Y * reach * (0.5 + 0.25 * s)
-                    };
-                    // (A heavy body's, leaving the ground from where each
-                    // foot was under it and reaching down for where it comes
-                    // down: flung there and back in a frame, its legs
-                    // whipped; left where it was on the ground as the body
-                    // flew on, dragged back and flung under it.)
-                    if self.plan.style == Style::Mass {
-                        let ease = |t: f32| t * t * (3.0 - 2.0 * t);
-                        let t = (self.air.0 / self.air.1.max(0.05)).clamp(0.0, 1.0);
-                        (self.root + self.feet[i].from).lerp(flung, ease((t / 0.4).min(1.0))).lerp(self.feet[i].planted, ease(((t - 0.5) / 0.5).clamp(0.0, 1.0)))
-                    } else {
-                        flung
                     }
                 }
                 None if self.paw.0 == i && self.paw.1 > 0.0 && !self.feet[i].swinging => {
@@ -2579,52 +2011,11 @@ impl Rig {
                 None => creep,
             };
         }
-        if self.plan.style == Style::Mass && self.grab.is_none() {
-            // (Its pace its legs': quicker as they push, slower as they land,
-            // the same overall. Its pace even, the legs going through their
-            // motions under it, it went as on rails, as a cartoon on wheels;
-            // a wobble on a clock, four to a stride, it shook, the user.)
-            // (Its pace followed its legs only walking: trotting and running
-            // it went as on rails again, the user.)
-            let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
-            let (full, flat_out) = MASS_DRIVE.3;
-            let drive = MASS_DRIVE.0 + (MASS_DRIVE.1 - MASS_DRIVE.0) * ((speed - full) / (flat_out - full)).clamp(0.0, 1.0);
-            return (1.0 + drive * (self.push() / self.pushing.max(1e-3) - 1.0)).clamp(0.2, 2.0);
-        }
         if self.plan.style != Style::Hauler || self.grab.is_some() {
             return 1.0;
         }
         let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 3.0).min(1.0);
         1.0 + 0.85 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos()
-    }
-
-    /// How hard a heavy body's legs drive it on now, each on the ground by
-    /// where its foot is (`MASS_PUSH`).
-    fn push(&self) -> f32 {
-        let (main, minor) = MASS_PUSH;
-        let forward = self.forward_of(self.heading);
-        let ramp = (1.0 - self.swing) * 0.3;
-        (0..self.feet.len())
-            .filter(|&i| !self.feet[i].swinging)
-            .map(|i| {
-                // Where its foot is, before or behind its hip, of its length:
-                // ahead, it pulls the ground back to it; behind, it pushes the
-                // ground away. A foreleg mostly pulls, a hind leg mostly
-                // pushes. (Driven by a clock's curve, its pace a line drawn
-                // beside its legs, it went as on rails, the user: a leg's
-                // reach has a purpose, the ground it pulls.)
-                let leg = &self.plan.legs[i];
-                let hip = self.hip(i);
-                let at = (self.feet[i].planted - hip).dot(forward) / self.strut(i);
-                let (pull, push) = if leg.root == Root::Chest { (main, minor) } else { (minor, main) };
-                // (Each as it bears the weight: nothing at its touchdown and
-                // its lift, nor as it nears its reach and lifts early; begun
-                // or ended at once, the body kinked.)
-                let (limit, shed) = self.reached();
-                let reaching = ((limit - self.feet[i].planted.distance(hip) / (leg.upper + leg.lower)) / shed).clamp(0.0, 1.0);
-                (pull * at.max(0.0) + push * (-at).max(0.0)) * (1.0 - self.unloaded(i, ramp, ramp)) * reaching * reaching * (3.0 - 2.0 * reaching)
-            })
-            .sum()
     }
 
     /// The gait's clock for the body's rise and fall: galloping, shifted so
@@ -2646,11 +2037,6 @@ impl Rig {
 
     /// Leap towards `dir` (horizontal) with this speed and upward speed.
     pub fn leap(&mut self, dir: Vec3, speed: f32, up: f32) {
-        // (Where each foot left the ground, from the body: a heavy body's
-        // legs leave it from there, see `solve`.)
-        for foot in &mut self.feet {
-            foot.from = foot.planted - self.root;
-        }
         self.velocity = Vec3::new(dir.x, 0.0, dir.z).normalize_or(Vec3::Z) * speed;
         self.airborne = Some(up);
         self.air = (0.0, 2.0 * up / 25.0);
@@ -3164,5 +2550,34 @@ mod stalker {
         let pace = (rig.root - start).length() / 20.0;
         // (Less than asked by its beats, and its lingering, `STILT_LINGER`.)
         assert!(pace > 0.85, "it went {pace} m/s, asked 1.6");
+    }
+}
+
+#[cfg(test)]
+mod beast {
+    use super::*;
+
+    /// Its feet reach the ground standing, walking and running (hauled past
+    /// its forefeet at a run, they once hung in the air behind it). (Kept from
+    /// the shard beast's tests when its walk was taken out, 2026-10-30.)
+    #[test]
+    fn feet_reach_the_ground() {
+        for speed in [0.0, 1.0, 2.0, 4.0, 6.0, 10.0] {
+            let mut rig = Rig::new(Plan::beast(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
+            let mut worst = 0.0f32;
+            for frame in 0..600 {
+                let intent = Intent { velocity: Vec3::Z * speed, look: rig.root + Vec3::new(0.0, 1.5, 20.0), ..Default::default() };
+                rig.update(1.0 / 60.0, intent, &|_, _| 0.0, &|from, step| from + step);
+                if frame < 120 {
+                    continue;
+                }
+                // A foot down: its leg's end where it is planted (bounding,
+                // not in the air).
+                for (i, foot) in rig.feet.iter().enumerate().filter(|(_, f)| !f.swinging && rig.airborne.is_none()) {
+                    worst = worst.max(rig.bones[6 + 2 * i].b.distance(foot.planted));
+                }
+            }
+            assert!(worst < 0.05, "the harrow at {speed} m/s: a planted foot is {worst:.2} m off the ground");
+        }
     }
 }

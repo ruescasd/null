@@ -532,9 +532,6 @@ pub(super) struct Heads {
     stalker_head: ([(Handle<Mesh>, Handle<Mesh>); 2], Handle<StandardMaterial>, Handle<StandardMaterial>),
     /// A body of bones (a beast's `body=1` option, see `skeleton.rs`).
     skeleton: super::skeleton::Kit,
-    /// A body from an authored mesh (a harrow's `mesh=1` option, see
-    /// `beast_mesh.rs`).
-    body_mesh: super::beast_mesh::Kit,
 }
 
 
@@ -654,7 +651,6 @@ pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mu
     // (Its face along the head, forward: up is -z in the head's frame.)
     commands.insert_resource(Heads {
         skeleton: super::skeleton::build(&mut meshes),
-        body_mesh: super::beast_mesh::build(&mut meshes),
         rods,
         lance,
         halo: super::halo::build(&mut meshes, &mut images),
@@ -815,12 +811,7 @@ fn spawn_hunter(
     let floor = |x: f32, z: f32| ground.at(Vec3::new(x, centre.y, z));
     // (The angler's body is a size larger than the harrow's; its head is the
     // same size, so smaller for the body.)
-    // (Its `mesh=1` option: a whole body, authored, riding its bones in
-    // place of all its own parts, its build the mesh's; see `beast_mesh.rs`.)
-    let meshed = kind == Kind::Beast && !angler && want != Some("sprawl") && traits.value("mesh", 0.0) == 1.0;
-    let plan = if meshed {
-        heads.body_mesh.plan.clone()
-    } else if angler {
+    let plan = if angler {
         let head = Plan::beast().head;
         Plan { head, ..Plan::beast().scaled(1.15) }
     } else if kind == Kind::Beast {
@@ -908,16 +899,10 @@ fn spawn_hunter(
     // (Its legs slimmer under a body with void in it: the user, their upper
     // segments had become its biggest black.)
     let slim = if boned || sparse { LEG_SLIM } else { 1.0 };
-    if meshed {
-        super::beast_mesh::spawn(commands, &heads.body_mesh, &assets.dark, hunter);
-    }
-    if boned && !meshed {
+    if boned {
         super::skeleton::spawn_harrow(commands, &heads.skeleton, &assets.dark, hunter, &bones, body, traits.value("ribs", 1.0));
     }
     for (i, bone) in bones.iter().enumerate() {
-        if meshed {
-            break;
-        }
         // (Woven cable instead; see `cables.rs`.)
         if cables::replaces(traits, i) {
             continue;
@@ -1225,9 +1210,8 @@ fn spawn_hunter(
             ));
         }
     } else {
-        // (The stalker has none: its cage's face is its openings; nor the
-        // authored body: its head is its own.)
-        for side in [-1.0f32, 1.0].into_iter().filter(|_| !stilt && !meshed) {
+        // (The stalker has none: its cage's face is its openings.)
+        for side in [-1.0f32, 1.0].into_iter().filter(|_| !stilt) {
             commands.spawn((
                 Eye { hunter, bone: 4, at: Vec3::new(side * across, up, along), material: eyes.clone() },
                 Mesh3d(assets.core.clone()),
@@ -1666,11 +1650,7 @@ pub(super) fn hunt(
                     intent.head_rate = 10.0;
                 }
             }
-            // (A mass, the shard beast, walks upright: crouched, as this
-            // made every creature but the stalker below 3 m/s, its legs
-            // stayed bent at a right angle as it walked, the user.)
-            let mass = h.rig.plan.style == crate::rig::Style::Mass;
-            intent.crouch = if pace < 3.0 && !stalker && !mass { 0.35 } else { 0.0 };
+            intent.crouch = if pace < 3.0 && !stalker { 0.35 } else { 0.0 };
         } else if sprawl {
             // The flanker: it never comes at you from before you. Hunting you,
             // it runs low and fast round to your back and keeps there as you
@@ -1830,9 +1810,7 @@ pub(super) fn hunt(
                     let speed = h.rig.speed();
                     // (Its `pounce` option: the hound's leap, kept; the user: it
                     // sort of works for the harrow too.)
-                    // (A mass, the shard beast: it hurls itself; reared to
-                    // haul, its forelegs hung in the air, the user.)
-                    let pounce = h.traits.has("pounce") || h.rig.plan.style == crate::rig::Style::Mass;
+                    let pounce = h.traits.has("pounce");
                     if pounce && speed > 7.0 && distance < 5.0 + speed * 0.35 && straight && h.rig.airborne.is_none() {
                         // A quick gather, still running.
                         h.stance = Stance::Windup;

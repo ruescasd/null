@@ -130,3 +130,19 @@ All at `e2701d5` (`git show e2701d5:<path>`).
 - **The hunched humanoid and the feral creature** (`--opt hunched`,
   `--opt creature`), and the alternative heads, hands and eyes. The chosen
   combination is the default. `--opt luminous` stays as a possible final boss.
+
+- **The shard beast's walk and its mesh body** (2026-10-30, at `3f7a7f7`;
+  `git show 3f7a7f7:<path>`). A generated mesh
+  (`Predatory_Shard_Beast_1029124844_generate.glb`) baked into 13 rigid
+  pieces by `tools/bake_beast.py` (kept) into `data/harrow_mesh.bin`, decoded
+  and fitted onto its bones by `combat/beast_mesh.rs`, spawned with
+  `spawn harrow mesh=1`, and walked by `Style::Mass` in `rig.rs` (stepping
+  by its legs with no clock, its pace from its feet's pull and push, its
+  height ridden on its legs as struts). After more than 8 hours it never
+  looked good; its knees bent where the user wanted them straight, and
+  three of its tests failed. The user (2026-10-30): enemies are the
+  critical path, so the next test is a process, not this creature: biped
+  enemies from generated meshes, rigged, with library animation clips. The
+  bake tool stays for rigid-piece bodies; its loader and walk are here to
+  recover. Kept for every creature: the ground spring, the fold limit, the
+  early lift when out of reach, the landing within reach, `rigtrace`.

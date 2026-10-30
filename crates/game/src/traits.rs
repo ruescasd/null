@@ -39,7 +39,6 @@ pub const OPTIONS: &[(&[&str], &str, bool, &[f32], &str)] = &[
     (BEASTS, "cables", true, &[], "cables on its body: 1 muscles, 2 fibres, 3 a cable waist"),
     (BEASTS, "pounce", false, &[], "the hound's leap at you, running"),
     (&["harrow", "angler"], "body", true, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0], "its body: 0 shards round its bones; with void between: 1 a skeleton, 2 hoops, 3 a spiral, 4 a truss, 5 arches, 6 a keel and a fan, 7 branches, joined, 8 its shards, a third as many, 9 plates in bands, 10 Voronoi plates"),
-    (&["harrow"], "mesh", true, &[0.0, 1.0], "its body and build from an authored mesh in place of its own parts: 1 the shard beast (a crest of blades, an open ribcage, legs of stacked shards, a burst of spikes for a head)"),
     (&["harrow", "angler"], "ribs", true, &RIB_SIZES, "body=1: its ribs' thickness, 1, 1.7, 2.5 or 3.5"),
     (STALKER, "searchlight", true, &[], "its searchlight after a hit: 0 pale, 1 black"),
     (STALKER, "nolance", false, &[], "no lance"),

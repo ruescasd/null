@@ -51,7 +51,6 @@ mod weapon;
 mod web;
 mod round;
 mod skeleton;
-mod beast_mesh;
 
 pub struct CombatPlugin;
 
