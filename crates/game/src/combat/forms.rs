@@ -93,6 +93,7 @@ fn aim(dir: Vec3, across: Vec3) -> Quat {
 /// match.
 pub(super) fn gaze(
     time: Res<Time>,
+    stutter: Res<crate::look::Stutter>,
     ground: crate::ground::Ground,
     camera: Single<&Transform, With<FlyCam>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -126,7 +127,7 @@ pub(super) fn gaze(
     for glow in &glows {
         let Ok((_, g, ..)) = gazed.get(glow.of) else { continue };
         if let Some(mut material) = materials.get_mut(&glow.material) {
-            let e = glow.rest + (glow.gazed - glow.rest) * g.gaze;
+            let e = (glow.rest + (glow.gazed - glow.rest) * g.gaze) * stutter.0;
             material.emissive = LinearRgba::rgb(e, e, e);
         }
     }

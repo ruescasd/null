@@ -232,7 +232,7 @@ struct Figure {
 
 /// The glowing core's material (pulsed) and the lamp inside the chest.
 #[derive(Resource)]
-struct Glow(Handle<StandardMaterial>);
+struct Glow(Handle<StandardMaterial>, Handle<StandardMaterial>);
 
 #[derive(Component)]
 struct CoreLight;
@@ -322,7 +322,7 @@ fn spawn(
         emissive: LinearRgba::rgb(GLOW, GLOW, GLOW),
         ..default()
     });
-    commands.insert_resource(Glow(glow.clone()));
+
     commands.spawn((
         CoreLight,
         PointLight { intensity: CORE_LIGHT, range: 5.0, shadow_maps_enabled: false, ..default() },
@@ -361,6 +361,7 @@ fn spawn(
     });
     // The eyes: a steady light, not the chest's pulse (an unwavering stare).
     let eye_light = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(GLOW * 0.8, GLOW * 0.8, GLOW * 0.8), ..default() });
+    commands.insert_resource(Glow(glow.clone(), eye_light.clone()));
     // Line art on the figure alone. Each piece gets a slightly larger black
     // copy that shows only its back faces, so a line of constant width runs
     // round every piece and nowhere else.
@@ -784,9 +785,11 @@ pub(crate) fn faceted(points: &[[f32; 3]], faces: &[&[usize]]) -> Mesh {
         .with_inserted_indices(Indices::U32(indices))
 }
 
-/// A slow, uneven pulse of the glowing core and the lamp inside it.
+/// A slow, uneven pulse of the glowing core and the lamp inside it; both,
+/// and the eyes, stuttering (see `look::Stutter`).
 fn pulse(
     time: Res<Time>,
+    stutter: Res<crate::look::Stutter>,
     glow: Option<Res<Glow>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut light: Single<&mut PointLight, With<CoreLight>>,
@@ -795,7 +798,11 @@ fn pulse(
     let t = time.elapsed_secs();
     let beat = 0.55 + 0.45 * ((t * 1.6).sin() * 0.7 + (t * 0.53).sin() * 0.3).max(-1.0);
     if let Some(mut material) = materials.get_mut(&glow.0) {
-        let g = GLOW * beat;
+        let g = GLOW * beat * stutter.0;
+        material.emissive = LinearRgba::rgb(g, g, g);
+    }
+    if let Some(mut material) = materials.get_mut(&glow.1) {
+        let g = GLOW * 0.8 * stutter.0;
         material.emissive = LinearRgba::rgb(g, g, g);
     }
     light.intensity = CORE_LIGHT * beat;

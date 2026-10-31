@@ -28,7 +28,7 @@ use crate::{
 };
 
 mod hunter;
-pub(crate) use hunter::{trace, trace_file};
+pub(crate) use hunter::{clip::folder as creatures_folder, clip::names as creatures, trace, trace_file};
 mod cape;
 mod slab;
 mod lance;
@@ -104,6 +104,8 @@ impl Plugin for CombatPlugin {
             .init_resource::<Feedback>()
             .init_resource::<round::Round>()
             .init_resource::<round::Gates>()
+            .add_plugins(hunter::clip::plugin)
+            .add_plugins(hunter::mace::plugin)
             .add_systems(PostStartup, setup)
             .add_systems(Startup, (round::setup, ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, cape::hang))
             .add_systems(
@@ -862,7 +864,7 @@ fn die(
     mut player: Single<&mut Player>,
     mut spawns: ResMut<crate::console::Spawns>,
     swarm: Query<(Entity, &Transform, &Swarmer)>,
-    bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>, With<hunter::Part>, With<hunter::Eye>)>>,
+    bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>, With<hunter::Part>, With<hunter::Eye>, With<hunter::clip::Body>)>>,
     bishops: Query<Entity, With<bishop::OfBishop>>,
     bolts: Query<(Entity, &bishop::Bolt)>,
 ) {

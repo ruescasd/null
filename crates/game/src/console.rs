@@ -60,8 +60,25 @@ pub struct Spawns {
     pub goto: Option<[f32; 5]>,
 }
 
-/// The kinds `spawn` knows.
+/// The kinds `spawn` knows, besides the creatures of `creatures/` (each by
+/// its name, see `options_kind`).
 pub const KINDS: [&str; 10] = ["harrow", "angler", "biped", "sprawl", "stalker", "porter", "chained", "bud", "grove", "bishop"];
+
+/// Every kind `spawn` knows: `KINDS` and the creatures of `creatures/`.
+fn kinds() -> Vec<String> {
+    KINDS.iter().map(|k| k.to_string()).chain(crate::combat::creatures().iter().cloned()).collect()
+}
+
+/// The kind whose options `kind` takes: a creature of `creatures/` takes
+/// those of an authored body (`clip`), the rest their own.
+fn options_kind(kind: &str) -> &str {
+    if crate::combat::creatures().iter().any(|c| c == kind) { "clip" } else { kind }
+}
+
+/// A line about the options of `kind`, said of it by its own name.
+fn named(kind: &str, line: String) -> String {
+    if options_kind(kind) == "clip" { line.replacen("clip", kind, 1) } else { line }
+}
 
 /// The console: whether it is down, the line being typed and where in it
 /// the cursor is (in characters), what it has said, the commands run (for
@@ -353,10 +370,10 @@ fn complete(console: &mut Console, args: &Args) {
             .chain(SWITCHES.iter().map(|s| s.0.to_string()))
             .chain(numbers(args).iter().map(|n| n.0.to_string()))
             .collect(),
-        [command] if *command == "spawn" || *command == "round" => KINDS.iter().map(|k| k.to_string()).collect(),
+        [command] if *command == "spawn" || *command == "round" => kinds(),
         [command, kind, ..] if *command == "spawn" || *command == "round" => crate::traits::OPTIONS
             .iter()
-            .filter(|(kinds, ..)| kinds.contains(kind))
+            .filter(|(kinds, ..)| kinds.contains(&options_kind(kind)))
             .map(|(_, name, number, ..)| if *number { format!("{name}=") } else { name.to_string() })
             .collect(),
         [name] if SWITCHES.iter().any(|s| s.0 == *name) => vec!["on".into(), "off".into()],
@@ -417,8 +434,8 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
         let count = words.get(2).and_then(|n| n.parse::<u32>().ok());
         let options = &words[(2 + count.is_some() as usize).min(words.len())..];
         match words.get(1) {
-            Some(kind) if KINDS.contains(kind) && matches!(options, ["?"] | ["help"] | ["--help"]) => console.lines.push(crate::traits::help(kind)),
-            Some(kind) if KINDS.contains(kind) => match crate::traits::Traits::parse(kind, options) {
+            Some(kind) if kinds().iter().any(|k| k == kind) && matches!(options, ["?"] | ["help"] | ["--help"]) => console.lines.push(named(kind, crate::traits::help(options_kind(kind)))),
+            Some(kind) if kinds().iter().any(|k| k == kind) => match crate::traits::Traits::parse(options_kind(kind), options) {
                 Ok(traits) => {
                     let count = count.unwrap_or(1).clamp(1, 20);
                     let places = if gates { crate::chasm::arena::pens() } else { Vec::new() };
@@ -429,9 +446,9 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
                     }
                     console.lines.push(format!("{count} {kind} {}{with}", if gates { "through the gates" } else { "before you" }));
                 }
-                Err(e) => console.lines.push(e),
+                Err(e) => console.lines.push(named(kind, e)),
             },
-            _ => console.lines.push(format!("{} what? {}", words[0], KINDS.join(", "))),
+            _ => console.lines.push(format!("{} what? {}", words[0], kinds().join(", "))),
         }
     } else if line.trim() == "where" {
         // (Its height above the ground, as `--cam` takes it; also
@@ -499,8 +516,8 @@ const SWITCHES: [(&str, &str); 7] = [
     ("notaa", "no temporal anti-aliasing (nor temporal shadow filtering)"),
 ];
 
-/// How loud unless set (of as made: the user, half what it was).
-const VOLUME: f32 = 0.5;
+/// How loud unless set (of as made: the user, a tenth, 2026-10-31).
+const VOLUME: f32 = 0.1;
 
 /// The numbers that take effect as the game runs, what each does, and
 /// what it is unless set.
@@ -786,6 +803,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn creatures_spawned_by_name() {
+        assert!(kinds().iter().any(|k| k == "gladiator") && !kinds().iter().any(|k| k == "clip"), "{:?}", kinds());
+        assert_eq!(options_kind("gladiator"), "clip");
+        assert_eq!(options_kind("harrow"), "harrow");
+        assert!(crate::traits::Traits::parse(options_kind("gladiator"), &["tame", "health=20"]).is_ok());
+        let wrong = crate::traits::Traits::parse(options_kind("gladiator"), &["model=0"]).unwrap_err();
+        assert!(named("gladiator", wrong.clone()).starts_with("gladiator has no option"), "{wrong}");
+    }
+
+    #[test]
     fn unknown_names_said_so() {
         let mut args = Args { opts: Vec::new(), sets: Vec::new(), cam: None, time: None, shot: None, seed: 0, focus: None, ground: None, run: Vec::new() };
         let said = run("shadowmaps", &mut args);
@@ -796,7 +823,7 @@ mod tests {
         assert!(set.len() == 2 && set[1].contains("did you mean shadowed"), "{set:?}");
         assert_eq!(run("shadowmap", &mut args)[0], "shadowmap on");
         assert_eq!(distance("shadowmaps", "shadowed"), 4);
-        assert_eq!(run("volume", &mut args)[0], "volume 0.5 (default)");
+        assert_eq!(run("volume", &mut args)[0], "volume 0.1 (default)");
         assert_eq!(run("volume 0.3", &mut args)[0], "volume 0.3");
         assert_eq!(run("mute on", &mut args), vec!["mute on".to_string()]);
     }

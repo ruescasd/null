@@ -12,7 +12,7 @@ use bevy::prelude::*;
 
 /// The hunters, the beasts among them, and those that are (or bring) a
 /// stalker or a porter.
-const HUNTERS: &[&str] = &["harrow", "angler", "sprawl", "biped", "stalker", "porter", "chained"];
+const HUNTERS: &[&str] = &["harrow", "angler", "sprawl", "biped", "stalker", "porter", "chained", "clip"];
 const BEASTS: &[&str] = &["harrow", "angler", "sprawl"];
 const STALKER: &[&str] = &["stalker", "chained"];
 const PORTER: &[&str] = &["porter", "chained"];

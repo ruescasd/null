@@ -1,0 +1,29 @@
+# robot.creature: what the game needs to know of robot.glb, measured by
+# tools/creature_clips.py. Edit height, the clips and the joints freely;
+# run the tool again after changing the GLB (measured lines are rewritten).
+model = robot.glb
+# How tall it stands in the game (m): 0.5380 m to the model's unit.
+height = 2.4
+# Measured: how tall the model stands and where its lowest point is (its units); how far its top is above its head joint; which way it faces (x z).
+model_height = 4.4612
+model_floor = -0.0203
+head_length = 1.4710
+forward = 0.000 1.000
+# Clips. Walk and run: name, ground speed (model units/s, measured), where the
+# left foot comes down (of the clip), length (s).
+# Attack: name, when it lands (of the clip, measured: its hands fastest), length (s).
+# The rest: name, length (s). A clip left empty is not played.
+idle = Idle 3.333
+walk = Walking 3.5122 0.950 0.958   # 1.89 m/s, its feet sliding 0.91 m/s while down
+run = Running 6.2250 0.254 0.958   # 3.35 m/s, its feet sliding 0.15 m/s while down
+attack = Punch 0.248 0.833
+hit =
+death = Death 0.958
+# Joints: the spine from the hips up to the neck, the head, and each leg and
+# arm from its root out (left, right): its hits are taken on them.
+spine = Hips Abdomen Torso Neck
+head = Head
+legs = UpperLeg.L LowerLeg.L Foot.L, UpperLeg.R LowerLeg.R Foot.R
+arms = UpperArm.L LowerArm.L Palm2.L, UpperArm.R LowerArm.R Palm2.R
+# How thick each is (m): torso, neck, head, leg, arm.
+radii = 0.3 0.12 0.2 0.12 0.09

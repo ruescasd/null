@@ -87,6 +87,7 @@ fn setup(mut commands: Commands, args: Res<Args>, world: Res<WorldGen>, mut mesh
     // (Glossy black, the ichor's; its glow a plain light.)
     let black = materials.add(StandardMaterial { base_color: Color::srgb(0.01, 0.01, 0.01), perceptual_roughness: 0.12, reflectance: 0.7, ..default() });
     let lit = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(args.num("street_glow", GLOW.0)), ..default() });
+    commands.spawn(crate::look::LampGlow(lit.clone(), args.num("street_glow", GLOW.0)));
     let curvature = if args.opt("flat") { 0.0 } else { 0.5 / PLANET_RADIUS };
     commands.insert_resource(Looks { lit, dark: black.clone(), near: args.num("street_near", STREET.2), curvature });
     let (every, back) = (args.num("street_every", STREET.0) as f64, args.num("street_back", STREET.1) as f64);

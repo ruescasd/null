@@ -1291,6 +1291,8 @@ fn show(commands: &mut Commands, args: &Args, meshes: &mut Assets<Mesh>, materia
     let dark = materials.add(StandardMaterial { base_color: Color::srgb(0.02, 0.02, 0.02), perceptual_roughness: 0.9, ..default() });
     let glow = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(60.0), ..default() });
     let dim = materials.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::gray(8.0), ..default() });
+    commands.spawn(crate::look::LampGlow(glow.clone(), 60.0));
+    commands.spawn(crate::look::LampGlow(dim.clone(), 8.0));
     let cable = materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.05), perceptual_roughness: 0.6, ..default() });
 
     for g in std::mem::take(&mut parts.chunks) {

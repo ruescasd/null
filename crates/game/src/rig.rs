@@ -1085,7 +1085,18 @@ impl Rig {
             let dir = self.velocity.normalize_or_zero();
             let along = dir * change.dot(dir);
             let rate = if change.dot(dir) > 0.0 || dir == Vec3::ZERO { self.plan.accel } else { self.plan.decel };
-            self.velocity += along.clamp_length_max(rate * dt) + (change - along).clamp_length_max(rate * 1.5 * dt);
+            let mut side = (change - along).clamp_length_max(rate * 1.5 * dt);
+            let along = along.clamp_length_max(rate * dt);
+            // (Turned no further round than where it is asked to go: given
+            // the side of what it was asked whole, a body slower than that
+            // turned past it, and back past it the next frame, zigzagging 4
+            // degrees a frame as it set off, its heading shaking with it.)
+            let ahead = intent.velocity.dot(dir);
+            if ahead > 1e-3 {
+                let across = (intent.velocity - dir * ahead).length();
+                side = side.clamp_length_max(across / ahead * (self.velocity + along).dot(dir).max(0.0));
+            }
+            self.velocity += along + side;
             self.velocity.y = 0.0;
             let face = if self.velocity.length() > 0.5 { self.velocity } else { intent.look - self.root };
             if Vec2::new(face.x, face.z).length() > 0.01 {
@@ -1844,6 +1855,13 @@ impl Rig {
         self.before = std::mem::replace(&mut self.bones, bones);
     }
 
+    /// Its bones set to another's, as still (an authored body's as drawn,
+    /// falling: see `combat/hunter/clip.rs`).
+    pub fn pose(&mut self, bones: Vec<Bone>) {
+        self.before = bones.clone();
+        self.bones = bones;
+    }
+
     /// Gone limp (killed: the stalker's collapse), falling as it was moving,
     /// pushed by `push` (m/s), letting go of its gun (see `ragdoll.rs`).
     pub fn collapse(&mut self, push: Vec3) {
@@ -2027,6 +2045,11 @@ impl Rig {
     /// How fast it is moving over the ground.
     pub fn speed(&self) -> f32 {
         Vec2::new(self.velocity.x, self.velocity.z).length()
+    }
+
+    /// How far its chest is thrown from where it would be (m), reeling.
+    pub fn reeling(&self) -> Vec3 {
+        self.reel
     }
 
     /// A hit throws the body back along `kick` (its length up to 1, a
@@ -2324,15 +2347,20 @@ mod stalker {
     #[test]
     fn collapses() {
         // Killed (on flat ground, a slope, rolling ground; standing aimed,
-        // or walking; shot from before it), the stalker falls: nothing of it
-        // or its gun ever in the ground, its bones never stretched, its
-        // chest down near the ground, and lying still within 4.5 s.
+        // or walking; shot from before it; at the world's middle, and out
+        // where the arena is), the stalker falls: nothing of it or its gun
+        // ever in the ground, its bones never stretched, its chest down near
+        // the ground, and lying still within 4.5 s. (Out at 1200 m, a float's
+        // rounding kept it twitching on the ground for ever, the gladiator's,
+        // 2026-10-31.)
         let grounds: [(&str, fn(f32, f32) -> f32); 3] = [("flat", |_, _| 0.0), ("slope", |x, z| 0.25 * x + 0.1 * z), ("rolling", |x, z| (x * 0.7).sin() * 0.4 + (z * 0.5).cos() * 0.3)];
-        for (name, ground) in grounds {
-            for walking in [false, true] {
-                let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 5, &ground);
+        for (name, shape) in grounds {
+            for (walking, at) in [(false, Vec3::ZERO), (true, Vec3::ZERO), (false, Vec3::new(1170.0, 1200.0, 1000.0))] {
+                let ground = move |x: f32, z: f32| shape(x - at.x, z - at.z) + at.y;
+                let name = &format!("{name} at {at}");
+                let mut rig = Rig::new(Plan::stalker(), at, 0.0, 5, &ground);
                 for k in 0..180 {
-                    let you = Vec3::new(0.0, 1.6, 30.0);
+                    let you = at + Vec3::new(0.0, 1.6, 30.0);
                     rig.gun = Some(GunHold { arm: 1, aim: if walking { 0.0 } else { 1.0 }, dir: (you - rig.chest()).normalize(), length: 2.2, snap: false });
                     let intent = Intent { velocity: if walking && k > 30 { Vec3::Z * 1.0 } else { Vec3::ZERO }, look: you, ..Default::default() };
                     rig.update(1.0 / 60.0, intent, &ground, &|from, step| from + step);
@@ -2578,6 +2606,34 @@ mod beast {
                 }
             }
             assert!(worst < 0.05, "the harrow at {speed} m/s: a planted foot is {worst:.2} m off the ground");
+        }
+    }
+
+    /// Setting off, it turns to where it is asked to go and settles there,
+    /// never swinging past it and back (the gladiator's twitch, 2026-10-31:
+    /// 4 degrees a frame each way as it set off at 6 m/s).
+    #[test]
+    fn sets_off_without_zigzag() {
+        for (speed, off, going) in [(6.0f32, 1.0f32, 2.0f32), (6.0, 3.0, 1.0), (6.0, 40.0, 0.3), (2.0, 1.0, 0.5), (10.0, 90.0, 0.0)] {
+            let mut rig = Rig::new(Plan::biped(), Vec3::ZERO, 0.0, 5, &|_, _| 0.0);
+            // (Already going, nearly the way it is asked, as it was in play.)
+            rig.velocity = Vec3::Z * going;
+            let to = Vec3::new(off.to_radians().sin(), 0.0, off.to_radians().cos());
+            let mut last = None;
+            for frame in 0..240 {
+                let intent = Intent { velocity: to * speed, look: rig.root + to * 20.0, ..Default::default() };
+                rig.update(1.0 / 144.0, intent, &|_, _| 0.0, &|from, step| from + step);
+                if rig.velocity.length() < 0.05 {
+                    continue;
+                }
+                let angle = rig.velocity.x.atan2(rig.velocity.z).to_degrees();
+                if let Some(before) = last {
+                    // Past where it is asked, and turning back: a zigzag.
+                    assert!(angle <= off + 0.01, "{speed} m/s, {off} degrees off: at frame {frame} it turned to {angle:.2} (from {before:.2})");
+                }
+                last = Some(angle);
+            }
+            assert!((last.expect("it moved") - off).abs() < 0.5, "{speed} m/s, {off} degrees off: it settled at {last:?}");
         }
     }
 }

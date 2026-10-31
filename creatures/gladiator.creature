@@ -1,0 +1,31 @@
+# gladiator.creature: what the game needs to know of gladiator.glb, measured by
+# tools/creature_clips.py. Edit height, the clips and the joints freely;
+# run the tool again after changing the GLB (measured lines are rewritten).
+model = gladiator.glb
+# How tall it stands in the game (m): 1.5294 m to the model's unit.
+height = 2.6
+# Measured: how tall the model stands and where its lowest point is (its units); how far its top is above its head joint; which way it faces (x z).
+model_height = 1.7000
+model_floor = 0.0000
+head_length = 0.2500
+forward = -0.009 1.000
+# Clips. Walk and run: name, ground speed (model units/s, measured), where the
+# left foot comes down (of the clip), length (s).
+# Attack: name, when it lands (of the clip, measured: its hands fastest), length (s).
+# The rest: name, length (s). A clip left empty is not played.
+idle = Idle_02 1.867
+walk = Walking 1.2714 0.042 1.033   # 1.94 m/s, its feet sliding 0.19 m/s while down
+run = Running 3.9364 0.233 0.633   # 6.02 m/s, its feet sliding 1.35 m/s while down
+attack = Right_Hand_Sword_Slash 0.335 1.500
+hit =
+death =
+# Joints: the spine from the hips up to the neck, the head, and each leg and
+# arm from its root out (left, right): its hits are taken on them.
+spine = mixamorig:Hips mixamorig:Spine mixamorig:Spine1 mixamorig:Spine2 mixamorig:Neck
+head = mixamorig:Head
+legs = mixamorig:LeftUpLeg mixamorig:LeftLeg mixamorig:LeftFoot, mixamorig:RightUpLeg mixamorig:RightLeg mixamorig:RightFoot
+arms = mixamorig:LeftArm mixamorig:LeftForeArm mixamorig:LeftHand, mixamorig:RightArm mixamorig:RightForeArm mixamorig:RightHand
+# How thick each is (m): torso, neck, head, leg, arm.
+radii = 0.3 0.12 0.2 0.12 0.09
+shards = right
+weapon = mace

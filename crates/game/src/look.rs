@@ -62,7 +62,8 @@ impl Plugin for LookPlugin {
         .add_systems(Startup, setup)
         .add_systems(Update, (sky_controls, move_suns, darken, hud).chain())
         .add_systems(Update, sun_shadows)
-        .add_systems(Update, flicker);
+        .init_resource::<Stutter>()
+        .add_systems(Update, (stutter, lamps).chain());
     }
 }
 
@@ -84,13 +85,48 @@ fn sun_shadows(server: Res<AssetServer>, mut shaders: ResMut<Assets<Shader>>, mu
     *done = true;
 }
 
-/// Bloom flickers: on in short, irregular bursts (about 30 ms on, 80 ms off
-/// on average), so bright things (the creature's chest and eyes) seem to
-/// stutter like a failing light. It began as a bug (an unordered pass that
-/// threw bloom away most frames) and was kept for how it looked, measured
-/// from the bug. `--opt steadybloom` keeps bloom on.
-fn flicker(time: Res<Time>, args: Res<Args>, mut blooms: Query<&mut Bloom>, mut state: Local<(bool, u64)>) {
-    if args.opt("steadybloom") {
+/// How bright the creatures' glow is now (0..1): in short, irregular bursts
+/// (about 30 ms at full, 80 ms dimmed, on average), so it stutters like a
+/// failing light (the figure's chest and eyes, a hunter's eyeshine, the
+/// stalker's lens, the forms). It began as a bug (an unordered pass that
+/// threw bloom away most frames), kept for how it looked, measured from the
+/// bug; as bloom itself flickering, it made everything bright blink, the
+/// arena in the sun and a gun's glint (the user, 2026-10-31), so it is the
+/// glow's own. `--opt steadyglow` keeps it full.
+#[derive(Resource)]
+pub(crate) struct Stutter(pub(crate) f32);
+
+impl Default for Stutter {
+    fn default() -> Self {
+        Stutter(1.0)
+    }
+}
+
+/// The glow's dimmed level in a stutter (bloom off had dropped its halo
+/// whole; one material can only be dimmed, halo and all).
+const STUTTER_LOW: f32 = 0.2;
+
+/// A lamp's glowing material, stuttering with the creatures' glow (see
+/// `Stutter`), and its emissive at full: bloom flickering, the lamps had,
+/// and steady they looked too still (the user, 2026-10-31). Only its glow:
+/// the light it casts never flickered.
+#[derive(Component)]
+pub(crate) struct LampGlow(pub(crate) Handle<StandardMaterial>, pub(crate) f32);
+
+fn lamps(level: Res<Stutter>, lamps: Query<&LampGlow>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    if !level.is_changed() {
+        return;
+    }
+    for lamp in &lamps {
+        if let Some(mut m) = materials.get_mut(&lamp.0) {
+            m.emissive = LinearRgba::gray(lamp.1 * level.0);
+        }
+    }
+}
+
+fn stutter(time: Res<Time>, args: Res<Args>, mut level: ResMut<Stutter>, mut state: Local<(bool, u64)>) {
+    if args.opt("steadyglow") {
+        level.0 = 1.0;
         return;
     }
     let (on, seed) = &mut *state;
@@ -104,9 +140,7 @@ fn flicker(time: Res<Time>, args: Res<Args>, mut blooms: Query<&mut Bloom>, mut 
     if roll < time.delta_secs() / mean {
         *on = !*on;
     }
-    for mut bloom in &mut blooms {
-        bloom.intensity = if *on { 0.12 } else { 0.0001 };
-    }
+    level.0 = if *on { 1.0 } else { STUTTER_LOW };
 }
 
 /// Average albedo of the ground, used to estimate how much sunlight it

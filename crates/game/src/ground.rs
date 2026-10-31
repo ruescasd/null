@@ -41,7 +41,15 @@ impl Ground<'_, '_> {
         // flight's slope and its landing, and the floor four storeys down.)
         let from = p + Vec3::Y * ABOVE;
         let config = ShapeCastConfig { max_distance: ABOVE + BELOW, ignore_origin_penetration: true, ..default() };
-        self.spatial.cast_shape(&Collider::sphere(PROBE), from, Quat::IDENTITY, Dir3::NEG_Y, &config, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance - PROBE)
+        let ball = self.spatial.cast_shape(&Collider::sphere(PROBE), from, Quat::IDENTITY, Dir3::NEG_Y, &config, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance - PROBE)?;
+        // (Exactly, by a ray, where it meets the floor the ball did: the
+        // ball stopped short of a flat floor by anything up to 75 mm, from
+        // one centimetre to the next, its ground uneven to what stands on it
+        // (a body lying there slid about on it for ever, the gladiator's,
+        // 2026-10-31). Not where the ray falls further: through a crack, or
+        // off a step's edge the ball rests on.)
+        let ray = self.spatial.cast_ray(from, Dir3::NEG_Y, ABOVE + BELOW, true, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance);
+        Some(ray.filter(|&r| r <= ball + 1e-3 && ball - r <= PROBE).unwrap_or(ball))
     }
 
     /// Whether nothing built stands between `a` and `b` (in sight, in

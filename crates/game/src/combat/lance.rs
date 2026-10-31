@@ -211,6 +211,7 @@ pub(super) fn spawn(commands: &mut Commands, materials: &mut Assets<StandardMate
 pub(super) fn place(
     mut commands: Commands,
     time: Res<Time>,
+    stutter: Res<crate::look::Stutter>,
     hunters: Query<&Hunter>,
     mut lances: Query<(Entity, &mut Lance, &mut Transform)>,
     mut parts: Query<&mut Transform, (Without<Lance>, Without<crate::camera::FlyCam>)>,
@@ -235,7 +236,7 @@ pub(super) fn place(
         // Its glass flaring as it points at you.
         let facing = frame.axis.dot((camera.translation - frame.grip).normalize_or(Vec3::Y)).max(0.0).powi(8);
         if let Some(mut m) = materials.get_mut(&lance.lens) {
-            m.emissive = LinearRgba::rgb(1.0, 1.0, 1.0) * LENS_GLOW * facing;
+            m.emissive = LinearRgba::rgb(1.0, 1.0, 1.0) * LENS_GLOW * facing * stutter.0;
         }
         // (Far off, drawn larger, at least `LENS_PX` across: a pixel is
         // about a thousandth of the distance.)

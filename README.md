@@ -30,7 +30,7 @@ again. F1 toggles the status overlay (frame rate, position, time, shadows).
 | Up / Down | time speed |
 | P | soft / hard shadows |
 | F12 | screenshot to `screenshots/` |
-| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, stalker, porter, chained (a stalker keeping a porter on a chain), bud, grove, bishop): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam` and copies it, `cam X,Y,Z,YAW,PITCH` goes there. Left/Right, Home/End, Delete and Ctrl+Left/Right/Backspace edit the line, Tab completes, Ctrl+V pastes (each line run), Ctrl+C copies the line, Up/Down the commands before (kept between runs). Esc or ~ puts it away; `--opt console` starts with it down |
+| ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, stalker, porter, chained (a stalker keeping a porter on a chain), bud, grove, bishop, clip (a creature with an authored body: `docs/creatures.md`)): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam` and copies it, `cam X,Y,Z,YAW,PITCH` goes there. Left/Right, Home/End, Delete and Ctrl+Left/Right/Backspace edit the line, Tab completes, Ctrl+V pastes (each line run), Ctrl+C copies the line, Up/Down the commands before (kept between runs). Esc or ~ puts it away; `--opt console` starts with it down |
 
 Command-line options, mostly for tuning and capturing reference frames (a switch, `--opt name`, can
 also be given as at the console, `--set name on` or `--set name off`; a number `--set name=value` or
@@ -111,7 +111,7 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
                                               fire / fire only at a hunter / never die / face the nearest hunter
     --set wait=N                              with --shot: frames to wait once everything has loaded (90)
     --opt flat|hard|noao|nocontact|notaa|nosites|nosubdiv   switch features off
-    --opt steadybloom                         bloom always on (by default it flickers in short bursts, so bright things stutter)
+    --opt steadyglow                          creatures' glow steady (by default it stutters in short bursts, as a failing light)
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set soft0=1 --set soft1=1                tuning numbers
     --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)
@@ -147,6 +147,10 @@ Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Loca
 
 ## Layout
 
+- `creatures/` — creatures with authored bodies: each a rigged model with
+  its clips (`NAME.glb`) and what `tools/creature_clips.py` measured of it
+  (`NAME.creature`); read as they are at start, not built in. See
+  `docs/creatures.md`.
 - `crates/worldgen` — engine-agnostic generation. `plates.rs`: the plate
   world (hierarchical Voronoi, prisms meshed exactly, stylised AO).
   `district.rs`: districts and their generator rules. `canal.rs`: the canals.
@@ -321,8 +325,10 @@ Three of them awake shoot cables to each other and reel themselves in (you hear 
 snaps the weave); two shards break one. A finished weave becomes a beast the size of
 a horse built like a big cat (what the swarm weaves is a gameplay decision still to make). Creatures
 come only from `spawn KIND [N]` at the console: the beasts (harrow, angler, sprawl), the bipeds (biped,
-stalker, porter, chained), buds, a grove, a bishop. Its
-body moves on a procedural rig (`rig.rs`, no animation clips): a gait clock
+stalker, porter, chained), buds, a grove, a bishop, and creatures with
+authored bodies, rigged models moved by their own animation clips (`clip`,
+from `creatures/`: `docs/creatures.md`). The others' bodies move on a
+procedural rig (`rig.rs`, no animation clips): a gait clock
 coordinating the legs (the beast walks, trots and gallops, blending with its
 speed, rocking and flexing its spine in the gallop; speeding up and slowing
 down take time), feet that plant and swing on

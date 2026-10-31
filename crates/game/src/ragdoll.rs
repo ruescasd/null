@@ -76,6 +76,11 @@ struct Rod {
 }
 
 pub struct Ragdoll {
+    /// Where it fell: its points are kept from here. (Kept in the world's
+    /// own, out at the arena 1200 m from its middle, a float's rounding,
+    /// 0.1 mm there, moved them every step and it never lay still, twitching
+    /// on the ground for ever: the gladiator's, 2026-10-31.)
+    origin: Vec3,
     p: Vec<Vec3>,
     q: Vec<Vec3>,
     radius: Vec<f32>,
@@ -156,7 +161,7 @@ impl Ragdoll {
             }
         }
         let trunk_ix = [rump, chest, across.0, across.1];
-        let mut doll = Ragdoll { p, q: was, radius, links, hinges: Vec::new(), bones: Vec::new(), trunk: trunk_ix, rod: None, age: 0.0, clock: 0.0, still: 0.0 };
+        let mut doll = Ragdoll { origin: Vec3::ZERO, p, q: was, radius, links, hinges: Vec::new(), bones: Vec::new(), trunk: trunk_ix, rod: None, age: 0.0, clock: 0.0, still: 0.0 };
         let r0 = doll.frame(bones[0].side);
         doll.bones = bones.iter().zip(&ends).map(|(b, &(a, e))| (a, e, b.radius, r0.inverse() * b.side, r0.inverse() * (b.b - b.a).normalize_or(Vec3::Y))).collect();
         // Its limbs' middle joints, each bending the way it bent, its tone
@@ -198,6 +203,12 @@ impl Ragdoll {
             }
             doll.rod = Some(Rod { ends: [n, n + 1, n + 2], up: f.up, hand: hand.map(|h| (h, doll.p[h].distance(bore))) });
         }
+        let origin = doll.p[rump];
+        for i in 0..doll.p.len() {
+            doll.p[i] -= origin;
+            doll.q[i] -= origin;
+        }
+        doll.origin = origin;
         doll
     }
 
@@ -228,6 +239,9 @@ impl Ragdoll {
     /// On `dt` s: falling, lying; `floor` the ground's height under a point,
     /// `wall` where a point moving from one place to another is stopped.
     pub fn step(&mut self, dt: f32, floor: &dyn Fn(Vec3) -> f32, wall: &dyn Fn(Vec3, Vec3) -> Vec3) {
+        let o = self.origin;
+        let floor = &|p: Vec3| floor(p + o) - o.y;
+        let wall = &|a: Vec3, b: Vec3| wall(a + o, b + o) - o;
         self.age += dt;
         if self.at_rest() {
             return;
@@ -378,7 +392,7 @@ impl Ragdoll {
             .map(|&(a, b, radius, side, line)| {
                 let dir = (self.p[b] - self.p[a]).normalize_or(Vec3::Y);
                 let side = Quat::from_rotation_arc((r * line).normalize_or(dir), dir) * (r * side);
-                Bone { a: self.p[a], b: self.p[b], radius, side }
+                Bone { a: self.p[a] + self.origin, b: self.p[b] + self.origin, radius, side }
             })
             .collect()
     }
@@ -388,7 +402,7 @@ impl Ragdoll {
         self.rod.map(|rod| {
             let [s, _, t] = rod.ends;
             let axis = (self.p[t] - self.p[s]).normalize_or(Vec3::Z);
-            let grip = self.p[s] + axis * ROD.1 - rod.up * GUN_BORE;
+            let grip = self.p[s] + self.origin + axis * ROD.1 - rod.up * GUN_BORE;
             GunFrame { grip, axis, up: rod.up, fore: grip + axis * crate::rig::GUN_FORE + rod.up * (GUN_BORE - crate::rig::GUN_HOLD), aim: 0.0 }
         })
     }
@@ -396,6 +410,7 @@ impl Ragdoll {
     /// Every point, and its thickness (for tests).
     #[cfg(test)]
     pub fn points(&self) -> impl Iterator<Item = (Vec3, f32)> + '_ {
-        self.p.iter().copied().zip(self.radius.iter().copied())
+        self.p.iter().map(|&p| p + self.origin).zip(self.radius.iter().copied())
     }
 }
+

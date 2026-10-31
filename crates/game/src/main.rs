@@ -183,6 +183,9 @@ fn main() {
         unfocused_mode: bevy::winit::UpdateMode::Continuous,
     });
     app
+        // (The creatures with authored bodies, models and their clips, read
+        // from `creatures/` as they are, not built in: see `clip.rs`.)
+        .register_asset_source("creatures", bevy::asset::io::AssetSourceBuilder::platform_default(&combat::creatures_folder().to_string_lossy(), None))
         // (Half the cores for the background: the world's terrain and
         // structures are generated there. Bevy's default, a quarter and at
         // most four, left the ground streaming in for some 35 s at the
