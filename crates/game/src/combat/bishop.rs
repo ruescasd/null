@@ -874,11 +874,9 @@ impl Bishop {
 
 /// Where a bishop may float, from `from` (the spot on the floor before you
 /// it is asked for): in a built place the floor nearest there.
-fn floor_near(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, from: Vec3) -> Vec3 {
-    if let Some(nav) = nav
-        && let Some(j) = nav.nearest(from, 16)
-    {
-        return nav.nodes[j as usize];
+fn floor_near(ground: &crate::ground::Ground, navs: Option<&crate::navmesh::Navmeshes>, from: Vec3) -> Vec3 {
+    if let Some(q) = navs.and_then(|n| n.floors(crate::navmesh::Body::Biped)).and_then(|f| f.on(from, 8.0)) {
+        return q;
     }
     Vec3::new(from.x, ground.at(from), from.z)
 }
@@ -890,7 +888,7 @@ pub(super) fn arrive(
     assets: Res<Assets3>,
     ground: crate::ground::Ground,
     camera: Single<&Transform, With<FlyCam>>,
-    nav: Option<Res<crate::chasm::nav::Nav>>,
+    navs: Option<Res<crate::navmesh::Navmeshes>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut spawns: ResMut<crate::console::Spawns>,
@@ -910,7 +908,7 @@ pub(super) fn arrive(
                 0 => (camera.translation + forward * super::hunter::AHEAD, (n as f32 - (count - 1) as f32 * 0.5) * 1.8),
                 k => (places[n as usize % k], (n as usize / k) as f32 * 1.8),
             };
-            let at = floor_near(&ground, nav.as_deref(), base + across * aside);
+            let at = floor_near(&ground, navs.as_deref(), base + across * aside);
             make(&mut commands, &mut meshes, &mut materials, &assets, &drapes, traits.has("grey"), at, face(at));
             info!("a bishop hangs at {:.1}", at);
         }
@@ -929,7 +927,7 @@ pub(super) fn float(
     time: Res<Time>,
     args: Res<Args>,
     ground: crate::ground::Ground,
-    nav: Option<Res<crate::chasm::nav::Nav>>,
+    navs: Option<Res<crate::navmesh::Navmeshes>>,
     camera: Single<&Transform, With<FlyCam>>,
     gun: Res<Gun>,
     assets: Res<Assets3>,
@@ -1041,7 +1039,7 @@ pub(super) fn float(
                 let to_spot = |k: i32| {
                     let side = if r(10 + k) < 0.5 { -1.0 } else { 1.0 };
                     let far = BLINK.0 + (BLINK.1 - BLINK.0) * r(20 + k);
-                    floor_near(&ground, nav.as_deref(), b.at + across * side * far)
+                    floor_near(&ground, navs.as_deref(), b.at + across * side * far)
                 };
                 if let Some(to) = (0..6).map(to_spot).find(|&q| q.distance(b.at) > BLINK.0 * 0.7 && passes(b.at, q)) {
                     let by = to - b.at;
@@ -1067,7 +1065,7 @@ pub(super) fn float(
                 let spot = |k: i32| {
                     let a = r(60 + k) * std::f32::consts::TAU;
                     let far = RANGE.0 + (RANGE.1 - RANGE.0) * r(80 + k);
-                    floor_near(&ground, nav.as_deref(), feet + Vec3::new(a.cos(), 0.0, a.sin()) * far)
+                    floor_near(&ground, navs.as_deref(), feet + Vec3::new(a.cos(), 0.0, a.sin()) * far)
                 };
                 let ahead = camera.forward().with_y(0.0).normalize_or(Vec3::Z);
                 let seen = (0..16)
@@ -1104,7 +1102,7 @@ pub(super) fn float(
                 b.next_goal = b.time + 0.8 + 1.4 * r(6);
                 let spot = |k: i32| {
                     let a = r(30 + k) * std::f32::consts::TAU;
-                    let q = floor_near(&ground, nav.as_deref(), b.at + Vec3::new(a.cos(), 0.0, a.sin()) * (2.0 + 3.0 * r(40 + k)));
+                    let q = floor_near(&ground, navs.as_deref(), b.at + Vec3::new(a.cos(), 0.0, a.sin()) * (2.0 + 3.0 * r(40 + k)));
                     let far = Vec2::new(q.x - eye.x, q.z - eye.z).length();
                     (q, far)
                 };

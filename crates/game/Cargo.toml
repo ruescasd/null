@@ -10,6 +10,13 @@ bevy.workspace = true
 # and a C++ compiler).
 manifold-csg = "0.4.1"
 avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel"] }
+# Navigation: Recast (a Rust port) builds a navmesh from the static
+# colliders, landmass finds the way across it (the versions for Bevy 0.19).
+bevy_rerecast = { version = "0.5", default-features = false }
+avian_rerecast = "0.6"
+bevy_landmass = "0.12"
+landmass_rerecast = "0.3"
+landmass = "0.9"
 
 [features]
 # Per-system timings written as a Chrome trace (trace-*.json) on exit: build

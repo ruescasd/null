@@ -33,6 +33,9 @@ struct AutoShot {
     /// between frames.
     after: u32,
     more_saved: u32,
+    /// Each frame's time once settled (past its first second's frames), to
+    /// say how fast it ran when captured.
+    frames: Vec<f32>,
 }
 
 /// `--opt flybench`: a flight for stutter (the user: flying in noclip
@@ -467,6 +470,7 @@ fn manual_shot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {
 
 fn auto_shot(
     mut commands: Commands,
+    time: Res<Time>,
     args: Res<Args>,
     streamer: Res<Streamer>,
     building: Query<(), With<crate::structures::Building>>,
@@ -503,6 +507,9 @@ fn auto_shot(
     // Once the terrain has settled and every structure has been built.
     if streamer.settled && building.is_empty() {
         state.settled_frames += 1;
+        if state.settled_frames > 60 {
+            state.frames.push(time.delta_secs() * 1000.0);
+        }
     }
     // Give temporal effects (TAA, soft shadows, auto exposure) time to converge.
     if state.settled_frames >= args.num("wait", 90.0) as u32 {
@@ -512,6 +519,12 @@ fn auto_shot(
             .and_then(|d| d.smoothed())
         {
             info!("{fps:.0} fps when captured");
+        }
+        if !state.frames.is_empty() {
+            let mut f = state.frames.clone();
+            f.sort_by(f32::total_cmp);
+            let mean = f.iter().sum::<f32>() / f.len() as f32;
+            info!("frames: {} settled, mean {mean:.2} ms ({:.0} fps), 99th {:.2} ms, worst {:.2} ms", f.len(), 1000.0 / mean, f[f.len() * 99 / 100], f[f.len() - 1]);
         }
         commands
             .spawn(Screenshot::primary_window())

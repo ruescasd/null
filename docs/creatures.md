@@ -74,6 +74,7 @@ the hit radii, `shards` and `weapon`; the tool keeps them when run again. Run th
 | `spawn NAME health=20` | dies quickly, to see the death |
 | `round NAME 3` | three through the arena's gates, timed |
 | `spawn NAME --help` | the options it takes |
+| `spawn NAME echo echo_lag=0.07 echo_off=0.085` | a second body beside it, a moment behind (see below) |
 
 Add `rigtrace` to log its feet every frame to `target/rigtrace-*.log` for
 measuring sliding.
@@ -109,6 +110,14 @@ mind, navigation and collisions. The model stands on it:
 - **Floating shards** (`shards = left` or `right` in its `.creature`): the
   shard bodies' sprung pieces off that arm's shoulder, trailing its swing,
   scattered by a shot.
+- **Its echo** (`echo`, `clip/echo.rs`): its model again, standing
+  `echo_off` m off to one side and behind, drifting, posed every frame as
+  the body was `echo_lag` s before: it walks, strikes, flinches and falls
+  as the body did, that much later. Only a look: shots strike the body,
+  and it dies with it. It casts no shadow.
+- **Others of its kind** it does not walk through: every living hunter is
+  a column (0.35 m round, a beast's 0.45) that pushes the others out
+  (`apart` in `hunter.rs`). Its arms and weapon still pass through.
 - **Shots** are taken on capsules laid along its joints as drawn.
 - **Killed, it falls limp:** the stalker's ragdoll (`ragdoll.rs`) on its
   bones as drawn, pushed by the blow and carried on by its pace, each joint

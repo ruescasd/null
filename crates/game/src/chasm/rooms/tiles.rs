@@ -104,7 +104,6 @@ pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
         if !r.chunk.indices.is_empty() {
             parts.chunks.push(r.chunk);
         }
-        parts.walkable.extend(r.walkable);
         parts.slopes.extend(r.slopes);
         for p in r.lamps {
             // (As strong as a room's main lamp for its size: weaker, the
@@ -116,18 +115,17 @@ pub(in crate::chasm) fn build(tiles: &[Tile], parts: &mut Parts) {
     }
 }
 
-/// A run of tiles built: its mesh, where it is walked, its flights' slopes,
+/// A run of tiles built: its mesh, its flights' slopes,
 /// its lamps.
 struct Run {
     chunk: super::super::Geometry,
-    walkable: Vec<Vec3>,
     slopes: Vec<Vec<Vec3>>,
     lamps: Vec<Vec3>,
 }
 
 fn run(tiles: &[Tile]) -> Run {
     let mut cache = Cache(Default::default());
-    let mut out = Run { chunk: super::super::Geometry::default(), walkable: Vec::new(), slopes: Vec::new(), lamps: Vec::new() };
+    let mut out = Run { chunk: super::super::Geometry::default(), slopes: Vec::new(), lamps: Vec::new() };
     for tile in tiles {
         let mut g = Grid::solid(Vec3::ZERO, Vec3::new(SIDE, tile.height, SIDE));
         let mut slopes: Vec<Vec<Vec3>> = Vec::new();
@@ -183,7 +181,6 @@ fn run(tiles: &[Tile]) -> Run {
         }
         let g = Grid { origin: tile.origin, ..g };
         g.mesh(&mut out.chunk);
-        out.walkable.extend(g.walkable(super::HEADROOM));
         out.slopes.extend(slopes);
         if tile.lamp
             && let Some(p) = lamp_at

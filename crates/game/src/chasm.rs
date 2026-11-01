@@ -26,7 +26,6 @@ use claims::{Claim, ROCK, Table, Use};
 pub mod rooms;
 pub mod plan;
 pub mod arena;
-pub(crate) mod nav;
 
 /// A taut cable from `a` to `b`, sagging `sag` in the middle.
 fn rope_static(a: Vec3, b: Vec3, sag: f32) -> Vec<Vec3> {
@@ -436,6 +435,26 @@ fn colliders_of(pieces: &[&Geometry]) -> Vec<Collider> {
     })
 }
 
+/// What the region's navmeshes are checked for: that each step of the
+/// walker's way joins the next, unless jumped; and, informing, the jumps
+/// (through its rooms, from where the walker leaves one path to where it
+/// takes up the next).
+fn region_checks(way: &[(Vec3, String)]) -> crate::navmesh::Checks {
+    let steps = |jumps: bool| way.windows(2).filter(|w| w[1].1.starts_with("jump to path") == jumps && (jumps || !w[1].1.starts_with("jump"))).map(|w| (w[1].1.clone(), w[0].0, w[1].0)).collect();
+    vec![("the way's steps".into(), steps(false)), ("its jumps walked".into(), steps(true))]
+}
+
+/// What a built place's creatures collide with, and its navmeshes are
+/// built over: its pieces (with its stone and glass, unless all is in its
+/// chunks, as the arena's) and its flights' hidden slopes.
+fn solid(parts: &Parts, stone: bool) -> Vec<Collider> {
+    let mut pieces: Vec<&Geometry> = parts.chunks.iter().collect();
+    if stone {
+        pieces.extend([&parts.stone, &parts.glass]);
+    }
+    colliders_of(&pieces).into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect()
+}
+
 /// One face's frame: `at(u, v, n)` is the point `u` along the face from its
 /// start, `v` up and `n` out from it into the gap, the face standing
 /// `offset` out from its line (set back where negative).
@@ -511,9 +530,6 @@ struct Parts {
     /// is out of view, or out of a lamp's reach, is not drawn: as one mesh,
     /// every shadow drew all of it.
     chunks: Vec<Geometry>,
-    /// Where it can be walked (see `nav`): spots on its floors half a
-    /// metre apart.
-    walkable: Vec<Vec3>,
     dark: Geometry,
     /// Light built in: lines along bands, strips deep in shafts, glowing
     /// grooves and the edges of overhangs; `dim`, slits lit faintly within.
@@ -580,7 +596,6 @@ struct Parts {
 /// also hold solids, which stay on their thread).
 struct RoomParts {
     chunks: Vec<Geometry>,
-    walkable: Vec<Vec3>,
     glow: Geometry,
     strands: Vec<(Vec<Vec3>, f32, f32)>,
     lights: Vec<(Vec3, f32, f32)>,
@@ -596,13 +611,12 @@ impl Parts {
             self.stone.indices.is_empty() && self.dark.indices.is_empty() && self.dim.indices.is_empty() && self.glass.indices.is_empty() && self.steps.indices.is_empty() && self.ramps.indices.is_empty() && self.cables.is_empty() && self.shadowed.is_empty(),
             "a room built apart built parts `RoomParts` does not carry: add them to it"
         );
-        RoomParts { chunks: self.chunks, walkable: self.walkable, glow: self.glow, strands: self.strands, lights: self.lights, fill: self.fill, slopes: self.slopes }
+        RoomParts { chunks: self.chunks, glow: self.glow, strands: self.strands, lights: self.lights, fill: self.fill, slopes: self.slopes }
     }
 
     /// A room built apart, added.
     fn add_room(&mut self, room: RoomParts) {
         self.chunks.extend(room.chunks);
-        self.walkable.extend(room.walkable);
         self.glow.append(room.glow);
         self.strands.extend(room.strands);
         self.lights.extend(room.lights);
@@ -967,30 +981,16 @@ fn build(
         for line in report {
             info!("region: {line}");
         }
-        // Where creatures can go, and whether it joins the paths: each step
-        // of the walker's way to the next, unless jumped.
-        let nav = nav::Nav::new(&parts.walkable);
-        let way = plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"));
-        let (pieces, largest) = nav.pieces();
-        let broken: Vec<&str> = way.windows(2).filter(|w| !w[1].1.starts_with("jump") && nav.path(w[0].0, w[1].0).is_none()).map(|w| w[1].1.as_str()).collect();
-        info!("region: nav {} spots in {pieces} pieces (the largest {largest}); the way's {} steps, {} not joined{}", nav.nodes.len(), way.len() - 1, broken.len(), broken.iter().take(6).map(|b| format!("; {b}")).collect::<String>());
-        // (And through the rooms: from where the walker leaves one path to
-        // where it takes up the next, jumped over by the walker.)
-        let jumps: Vec<&[(Vec3, String)]> = way.windows(2).filter(|w| w[1].1.starts_with("jump to path") && nav.path(w[0].0, w[1].0).is_none()).collect();
-        info!(
-            "region: nav: {} of the way's jumps not walkable{}{}",
-            jumps.len(),
-            jumps.iter().take(6).map(|w| format!("; {}", w[1].1)).collect::<String>(),
-            jumps.first().and_then(|w| nav.closest_reach(w[0].0, w[1].0)).map_or(String::new(), |p| format!(" (the first gives out at {p:.1})"))
-        );
         commands.insert_resource(views);
-        commands.insert_resource(nav);
         if args.opt("walkbot") {
             commands.insert_resource(Way(plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"))));
         }
         furnish(&mut commands, &mut meshes, &mut materials, &mut images, fixtures);
-        let pieces: Vec<&Geometry> = std::iter::once(&parts.stone).chain(&parts.chunks).chain(std::iter::once(&parts.glass)).collect();
-        let colliders = colliders_of(&pieces).into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        let colliders = solid(&parts, true);
+        // Where creatures can go (see `navmesh.rs`), and whether it joins
+        // the walker's way.
+        let way = plan::network::region::route(args.seed, args.num("spine", 3.0) as usize, !args.opt("noside"));
+        commands.insert_resource(crate::navmesh::Navmeshes::ask("region", colliders.clone(), region_checks(&way), args.opt("navdraw")));
         show(&mut commands, &args, &mut meshes, &mut materials, &mut parts, colliders, true);
         return;
     }
@@ -1002,13 +1002,8 @@ fn build(
         for line in report {
             info!("arena: {line}");
         }
-        let nav = nav::Nav::new(&parts.walkable);
-        let (pieces, largest) = nav.pieces();
-        let lost: Vec<String> = arena::landmarks(layout).into_iter().filter(|(_, p)| nav.path(arena::ground(), *p).is_none()).map(|(n, _)| n).collect();
-        info!("arena: nav {} spots in {pieces} pieces (the largest {largest}); from the floor, {} not reached{}", nav.nodes.len(), lost.len(), lost.iter().map(|n| format!("; {n}")).collect::<String>());
-        commands.insert_resource(nav);
-        let pieces: Vec<&Geometry> = parts.chunks.iter().collect();
-        let colliders = colliders_of(&pieces).into_iter().chain(parts.slopes.iter().filter_map(|pts| Collider::convex_hull(pts.clone()))).collect();
+        let colliders = solid(&parts, false);
+        commands.insert_resource(crate::navmesh::Navmeshes::ask("arena", colliders.clone(), arena::checks(layout), args.opt("navdraw")));
         // Its stone drawn as the ground's is (the user: in plain stone no
         // depth could be seen): the plates' pieces on its floors, the
         // panels on its walls, along the curve of those round its middle;
@@ -5182,5 +5177,24 @@ fn web(parts: &mut Parts, seed: i32, near_m: &[Massif], far_m: &[Massif], routin
             continue;
         }
         parts.cables.push((rope, thick));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::navmesh::{Body, Floors, bounds, unreached};
+
+    /// On every body's navmesh of the region, each step of the walker's
+    /// way joins the next (but where it jumps).
+    #[test]
+    fn region_walked() {
+        let (parts, ..) = super::plan::network::region::build(1, 3, true);
+        let colliders = super::solid(&parts, true);
+        let checks = super::region_checks(&super::plan::network::region::route(1, 3, true));
+        for body in Body::ALL {
+            let floors = Floors::new(&crate::navmesh::build(&colliders, body.size(), bounds(&colliders)).unwrap(), body.size().0, false).unwrap();
+            let (group, n, lost) = &unreached(&floors, &checks)[0];
+            assert!(lost.is_empty(), "the {body:?}: {group}, {} of {n} not reached: {lost:?}", lost.len());
+        }
     }
 }

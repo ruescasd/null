@@ -63,6 +63,23 @@ listed. The rest was judged in review and dropped.
   jittering bolt. Retired as propulsion for the shotgun (at `66b1785`); its
   bolt may come back as the lightning gun.
 
+## Navigation
+
+- **Our own walkable map** (`chasm/nav.rs`, removed 2026-11-01, at
+  `b66bd2b`). Spots half a metre apart on a built place's floors, sampled
+  by each builder (`Grid::walkable`, the arena's own sampler, the region's
+  decks), joined to their neighbours a step up or down, searched by A* in
+  the background, with costs that kept ways off walls. Creatures steered by
+  a ball cast along the way. Replaced by Recast and Detour navmeshes
+  (`navmesh.rs`) after creatures pressed into ledges for ever wherever the
+  map and their bodies disagreed (the user, 2026-10-31: adopt the industry's
+  solution, not whack-a-mole with geometry). The same day's patches to its
+  steering (a level check on rising steps, routes begun no more than a step
+  up) were never committed and went with it. Not carried over: the count of
+  separate pieces in the build report (each place now checks its own
+  landmarks and routes are reached), and "where the way gives out" for an
+  unreached jump.
+
 ## The beasts' heads (review 56)
 
 - **Two more skulls** (a cranium sweeping back and up; a heavy, domed,

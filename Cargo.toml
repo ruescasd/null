@@ -38,3 +38,13 @@ codegen-units = 256
 # slower). See docs/building.md.
 [profile.fast.package.game]
 rustflags = ["-Clto=off"]
+
+# The navigation crates, patched (see vendor/, each change marked "null"):
+# Recast's Rust port keeps a contour it cannot triangulate whole as far as
+# it got (as Recast does) instead of failing the tile, one of the chasm
+# region's did; landmass joins two tiles' edges within a climb in height,
+# as Detour does, not a centimetre (the region's flights crossing a tile's
+# edge were cut in two).
+[patch.crates-io]
+rerecast = { path = "vendor/rerecast" }
+landmass = { path = "vendor/landmass" }

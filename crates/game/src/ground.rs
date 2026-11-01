@@ -17,7 +17,8 @@ use crate::{Args, terrain::WorldGen};
 /// below it.
 const ABOVE: f32 = 1.5;
 const BELOW: f32 = 40.0;
-/// The ball the ground is felt for with (its radius).
+/// How far about a point the ground is felt for too (over a crack, or off
+/// an edge).
 const PROBE: f32 = 0.1;
 
 #[derive(SystemParam)]
@@ -37,19 +38,22 @@ impl Ground<'_, '_> {
         if !self.args.opt("chasm") && self.args.ground.is_none() {
             return Some(self.world.ground_height(p.x, p.z));
         }
-        // (A thin ball, not a ray: a ray found a hairline crack between a
-        // flight's slope and its landing, and the floor four storeys down.)
+        // By rays, exact: one under it, and four `PROBE` about it. Where the
+        // one falls further than that below the highest of the four, it is
+        // over a crack (a hairline one between a flight's slope and its
+        // landing let a lone ray find the floor four storeys down) or off an
+        // edge: the ground is theirs. (Felt with a thin ball, it stood off a
+        // flat floor by up to 14 cm, from one centimetre to the next, on the
+        // arena's plaza, its long thin triangles: what lay there sank and
+        // popped up for ever, the gladiators', 2026-10-31.)
         let from = p + Vec3::Y * ABOVE;
-        let config = ShapeCastConfig { max_distance: ABOVE + BELOW, ignore_origin_penetration: true, ..default() };
-        let ball = self.spatial.cast_shape(&Collider::sphere(PROBE), from, Quat::IDENTITY, Dir3::NEG_Y, &config, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance - PROBE)?;
-        // (Exactly, by a ray, where it meets the floor the ball did: the
-        // ball stopped short of a flat floor by anything up to 75 mm, from
-        // one centimetre to the next, its ground uneven to what stands on it
-        // (a body lying there slid about on it for ever, the gladiator's,
-        // 2026-10-31). Not where the ray falls further: through a crack, or
-        // off a step's edge the ball rests on.)
-        let ray = self.spatial.cast_ray(from, Dir3::NEG_Y, ABOVE + BELOW, true, &SpatialQueryFilter::default()).map(|hit| from.y - hit.distance);
-        Some(ray.filter(|&r| r <= ball + 1e-3 && ball - r <= PROBE).unwrap_or(ball))
+        let ray = |at: Vec3| self.spatial.cast_ray(at, Dir3::NEG_Y, ABOVE + BELOW, true, &SpatialQueryFilter::default()).map(|hit| at.y - hit.distance);
+        let around = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z].into_iter().filter_map(|d| ray(from + d * PROBE)).reduce(f32::max);
+        match (ray(from), around) {
+            (Some(under), Some(around)) if around - under > PROBE => Some(around),
+            (Some(under), _) => Some(under),
+            (None, around) => around,
+        }
     }
 
     /// Whether nothing built stands between `a` and `b` (in sight, in

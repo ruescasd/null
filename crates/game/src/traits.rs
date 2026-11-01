@@ -55,6 +55,9 @@ pub const OPTIONS: &[(&[&str], &str, bool, &[f32], &str)] = &[
     (&["grove"], "hair", false, &[], "its buds' strands, standing up stiff asleep"),
     (&["grove"], "lonewake", false, &[], "now and then one wakes alone"),
     (&["bishop"], "grey", false, &[], "all of it flat grey (its outline)"),
+    (&["clip"], "echo", false, &[], "a second body beside it, a moment behind: one creature, two identities"),
+    (&["clip"], "echo_lag", true, &[], "echo: how far behind (s, 0.07)"),
+    (&["clip"], "echo_off", true, &[], "echo: how far off to one side (m, 0.085)"),
 ];
 
 /// A creature's options.

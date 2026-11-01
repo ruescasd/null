@@ -284,6 +284,10 @@ impl Ragdoll {
             rod.hand = None;
         }
         let rod = self.rod;
+        // (The ground under each point, felt once a step for all its passes,
+        // not in each: ten times over, it was a thousand casts a frame for a
+        // body still moving.)
+        let floors: Vec<f32> = (0..n).map(|i| floor(Vec3::new(self.p[i].x, self.p[i].y.max(self.q[i].y) + 0.3, self.p[i].z))).collect();
         for pass in 0..PASSES {
             for l in &self.links {
                 let d = self.p[l.b] - self.p[l.a];
@@ -310,7 +314,7 @@ impl Ragdoll {
                 self.p[m] -= fix;
             }
             self.hinge();
-            self.ground(floor);
+            self.ground(&floors);
         }
         // (Its long bones by their middles too: across a hump, not through
         // it. Its rod's middle is a point of its own.)
@@ -352,11 +356,11 @@ impl Ragdoll {
         }
     }
 
-    /// Off the ground, held by it.
-    fn ground(&mut self, floor: &dyn Fn(Vec3) -> f32) {
+    /// Off the ground (its height under each point), held by it.
+    fn ground(&mut self, floors: &[f32]) {
         for i in 0..self.p.len() {
             let p = self.p[i];
-            let top = floor(Vec3::new(p.x, p.y.max(self.q[i].y) + 0.3, p.z)) + self.radius[i];
+            let top = floors[i] + self.radius[i];
             if p.y < top {
                 self.p[i].y = top;
                 let q = self.q[i];

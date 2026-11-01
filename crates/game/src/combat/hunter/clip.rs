@@ -15,7 +15,10 @@
 //! leans with its hunter's reel and a limb struck flinches (see `aim`); its
 //! hits are taken on its joints. Killed, it falls limp:
 //! the stalker's ragdoll on its bones as drawn, its joints turned after it
-//! (see `fall`).
+//! (see `fall`). With `echo`, a second body beside it, a moment behind
+//! (see `echo.rs`).
+
+mod echo;
 
 use std::path::PathBuf;
 
@@ -195,13 +198,13 @@ impl Spec {
             [f, length] => (f * length, *length),
             _ => (0.3, 0.6),
         };
-        Moves { walk, run, impact, attack, reach: self.height * 0.7 }
+        Moves { walk, run, impact, attack, reach: self.height * 0.7, height: self.height }
     }
 }
 
 /// What a hunter with an authored body moves by: its walk's and run's
 /// ground speeds (m/s), how long its attack takes to land and all of it
-/// (s), and how near it strikes from (m).
+/// (s), how near it strikes from (m), and how tall it stands (m).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Moves {
     pub(super) walk: f32,
@@ -209,6 +212,7 @@ pub(super) struct Moves {
     pub(super) impact: f32,
     pub(super) attack: f32,
     pub(super) reach: f32,
+    pub(super) height: f32,
 }
 
 /// The creatures in `creatures/`, each with its model and, once loaded, its
@@ -347,12 +351,15 @@ pub(super) fn dress(mut commands: Commands, kits: Res<Kits>, mut hunters: Query<
         let spec = &kit.spec;
         h.clip = Some(spec.moves());
         commands.entity(entity).remove::<Wants>();
-        commands.spawn((
+        let body = commands.spawn((
             Body { hunter: entity, kit: wants.0, player: None, joints: None, phase: 0.0, act: None, dying: None, look: Quat::IDENTITY, flinch: [(Vec3::ZERO, Vec3::ZERO); 13], turned: Default::default(), fallen: None, weapon: None, bloom: 0.0 },
             WorldAssetRoot(kit.scene.clone()),
             placed(spec, h.rig.root, h.rig.heading),
             Visibility::default(),
-        ));
+        )).id();
+        if h.traits.has("echo") {
+            commands.spawn((echo::Echo::new(body, h.traits.value("echo_lag", echo::LAG), h.traits.value("echo_off", echo::OFF)), WorldAssetRoot(kit.scene.clone()), placed(spec, h.rig.root, h.rig.heading), Visibility::default()));
+        }
     }
 }
 
@@ -707,21 +714,24 @@ pub(super) fn wield(mut commands: Commands, args: Res<crate::Args>, kits: Res<Ki
                 if scale <= 0.0 {
                     continue;
                 }
-                // (In the hand's own frame: across its palm, head to its
-                // thumb, held near its pommel; turned otherwise, the
-                // gladiator's hung it head down, or out sideways. Its hand
-                // measured in the GLB, 2026-10-31: fingers along +Y, spread
-                // along Z, its palm facing -X, its thumb to +Z; held at the
-                // joint's X 0, it went through the hand, the user. `--set
-                // grip_x`, `grip_y`, `grip_z` (degrees), `grip_out` (m up the
-                // hand) and `grip_palm` (m out of the palm) to try others.)
-                let grip = Quat::from_euler(EulerRot::XYZ, args.num("grip_x", 90.0).to_radians(), args.num("grip_y", 0.0).to_radians(), args.num("grip_z", 0.0).to_radians());
-                let fist = Vec3::new(-args.num("grip_palm", 0.09), args.num("grip_out", 0.145), 0.0);
-                let at = Transform::from_translation((fist + grip * Vec3::Y * super::mace::GRIP) / scale).with_rotation(grip).with_scale(Vec3::splat(1.0 / scale));
-                body.weapon = Some(super::mace::spawn(&mut commands, &mut meshes, &mut materials, hand, at));
+                body.weapon = Some(super::mace::spawn(&mut commands, &mut meshes, &mut materials, hand, grip(&args, scale)));
             }
         }
     }
+}
+
+/// Where a weapon sits in its hand, the hand's scale `scale` (the model's,
+/// undone). (In the hand's own frame: across its palm, head to its thumb,
+/// held near its pommel; turned otherwise, the gladiator's hung it head
+/// down, or out sideways. Its hand measured in the GLB, 2026-10-31: fingers
+/// along +Y, spread along Z, its palm facing -X, its thumb to +Z; held at
+/// the joint's X 0, it went through the hand, the user. `--set grip_x`,
+/// `grip_y`, `grip_z` (degrees), `grip_out` (m up the hand) and `grip_palm`
+/// (m out of the palm) to try others.)
+fn grip(args: &crate::Args, scale: f32) -> Transform {
+    let grip = Quat::from_euler(EulerRot::XYZ, args.num("grip_x", 90.0).to_radians(), args.num("grip_y", 0.0).to_radians(), args.num("grip_z", 0.0).to_radians());
+    let fist = Vec3::new(-args.num("grip_palm", 0.09), args.num("grip_out", 0.145), 0.0);
+    Transform::from_translation((fist + grip * Vec3::Y * super::mace::GRIP) / scale).with_rotation(grip).with_scale(Vec3::splat(1.0 / scale))
 }
 
 /// Fallen limp: each joint turned as its bone of the hunter's ragdoll has
@@ -842,8 +852,8 @@ pub(super) fn hitbox(time: Res<Time>, kits: Res<Kits>, bodies: Query<(&Body, &Tr
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<Kits>()
         .add_systems(Startup, load)
-        .add_systems(Update, (prepare, dress, bind, animate, wield).chain().after(super::hunt).before(super::flesh).run_if(crate::loading::playing))
-        .add_systems(PostUpdate, (aim, fall).after(AnimationSystems).before(TransformSystems::Propagate))
+        .add_systems(Update, (prepare, dress, bind, animate, wield).chain().after(super::apart).before(super::flesh).run_if(crate::loading::playing))
+        .add_systems(PostUpdate, ((aim, fall), echo::follow).chain().after(AnimationSystems).before(TransformSystems::Propagate))
         .add_systems(PostUpdate, hitbox.after(TransformSystems::Propagate));
 }
 

@@ -174,7 +174,8 @@ Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Loca
   the weapon, the swarm and its hunters (`combat.rs`, `combat/hunter.rs`,
   `combat/ichor.rs`; creatures move on the procedural rig in `rig.rs`;
   their sounds are WAVs in `crates/game/src/sounds/`, synthesised or cut from
-recordings).
+recordings); in a built place they find their way on navmeshes, Recast's
+  and Detour's own (`navmesh.rs`, the two crates patched in `vendor/`).
   Collision uses Avian's move-and-slide against per-column triangle meshes.
 
 Lighting favours drama over physics. Though the world is airless, distant

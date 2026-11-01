@@ -13,6 +13,7 @@ mod canal_light;
 mod streetlights;
 mod landmarks;
 mod loading;
+mod navmesh;
 /// Every option name the game reads, gathered from its source by `build.rs`.
 mod options {
     include!(concat!(env!("OUT_DIR"), "/options.rs"));
@@ -273,6 +274,7 @@ fn main() {
             groundlab::GroundLabPlugin,
             console::ConsolePlugin,
             loading::LoadingPlugin,
+            navmesh::NavmeshPlugin,
         ))
         .add_systems(Update, startlog)
         .run();

@@ -12,12 +12,11 @@
 //! blockout. Everything in metres, from the floor's middle, angles in
 //! degrees round from +x towards +z.
 
-use std::collections::HashMap;
 
 use bevy::prelude::*;
 use manifold_csg::{CrossSection, Manifold, cross_section::FillRule};
 
-use super::{Geometry, Parts, across, nav::SPACING, placed};
+use super::{Geometry, Parts, across, placed};
 
 /// Where the floor's middle is: high over the lab's ground, out of sight
 /// below the haze, as a region of the chasm is.
@@ -302,6 +301,12 @@ pub fn pens() -> Vec<Vec3> {
 /// starts).
 pub fn ground() -> Vec3 {
     CENTRE + at(FLOOR - 3.0, 200.0, 0.0)
+}
+
+/// What its navmeshes are checked for: every landmark reached from the
+/// floor.
+pub(crate) fn checks(layout: usize) -> crate::navmesh::Checks {
+    vec![("from the floor".into(), landmarks(layout).into_iter().map(|(name, p)| (name, ground(), p)).collect())]
 }
 
 /// Places that must all be reached from the floor (the navigation's
@@ -589,9 +594,6 @@ pub(in crate::chasm) fn build(layout: usize, spots: bool) -> (Parts, Vec<String>
     slopes.extend(floor.slopes);
     lamps.retain(|(p, _)| !in_cut(p.z.atan2(p.x).to_degrees(), 1.0));
 
-    // Where it can be walked: its floors and the flights' slopes.
-    parts.walkable = walkable(&solid, &slopes, OUTER + 16.0).into_iter().map(|p| p + CENTRE).collect();
-
     // In the world: in twelve pieces round (so what is out of view, or out
     // of a lamp's reach, is not drawn).
     let place = |m: &Manifold| m.translate(CENTRE.x as f64, CENTRE.y as f64, CENTRE.z as f64);
@@ -616,80 +618,16 @@ pub(in crate::chasm) fn build(layout: usize, spots: bool) -> (Parts, Vec<String>
     }
     let (most, where_) = crowded(&lamps, spots);
     let report = vec![format!(
-        "{} m across, {} m high, the floor {}; {} triangles, {} flights, {} lamps (at most {most} reaching one point, at {:.0}), {} spots to walk",
+        "{} m across, {} m high, the floor {}; {} triangles, {} flights, {} lamps (at most {most} reaching one point, at {:.0})",
         OUTER * 2.0,
         TOP,
         FLOORS[layout],
         parts.chunks.iter().map(|g| g.indices.len() / 3).sum::<usize>(),
         slopes.len(),
         lamps.len(),
-        where_ + CENTRE,
-        parts.walkable.len()
+        where_ + CENTRE
     )];
     (parts, report)
-}
-
-/// Where `solid` and `slopes` can be walked, within `reach` of the middle:
-/// on every half metre (on the navigation's own grid), each surface facing
-/// up, no steeper than a flight, with 2 m clear over it.
-fn walkable(solid: &Manifold, slopes: &[Manifold], reach: f32) -> Vec<Vec3> {
-    const BUCKET: f32 = 2.0;
-    const CLEAR: f32 = 2.0;
-    let mut tris: Vec<[Vec3; 3]> = Vec::new();
-    for m in std::iter::once(solid).chain(slopes) {
-        let (v, props, idx) = m.to_mesh_f32();
-        let p = |i: u32| Vec3::new(v[i as usize * props], v[i as usize * props + 1], v[i as usize * props + 2]);
-        tris.extend(idx.chunks_exact(3).map(|t| [p(t[0]), p(t[1]), p(t[2])]));
-    }
-    // (Each triangle in the buckets its plan's bounds cover, within reach.)
-    let bucket = |x: f32| (x.clamp(-reach - BUCKET, reach + BUCKET) / BUCKET).floor() as i32;
-    let mut buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-    for (i, t) in tris.iter().enumerate() {
-        let (lo, hi) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2]));
-        if hi.x < -reach || lo.x > reach || hi.z < -reach || lo.z > reach {
-            continue;
-        }
-        for bx in bucket(lo.x)..=bucket(hi.x) {
-            for bz in bucket(lo.z)..=bucket(hi.z) {
-                buckets.entry((bx, bz)).or_default().push(i as u32);
-            }
-        }
-    }
-    // (Where a triangle is over (x, z): its height there and which way it
-    // faces, up or down.)
-    let over = |t: &[Vec3; 3], x: f32, z: f32| -> Option<(f32, f32)> {
-        let (a, b, c) = (t[0], t[1], t[2]);
-        let (e0, e1, q) = (Vec2::new(b.x - a.x, b.z - a.z), Vec2::new(c.x - a.x, c.z - a.z), Vec2::new(x - a.x, z - a.z));
-        let d = e0.perp_dot(e1);
-        if d.abs() < 1e-8 {
-            return None;
-        }
-        let (u, w) = (q.perp_dot(e1) / d, e0.perp_dot(q) / d);
-        if u < -1e-5 || w < -1e-5 || u + w > 1.0 + 1e-5 {
-            return None;
-        }
-        Some((a.y + u * (b.y - a.y) + w * (c.y - a.y), (b - a).cross(c - a).normalize_or(Vec3::Y).y))
-    };
-    let n = (reach / SPACING).ceil() as i32;
-    let mut out = Vec::new();
-    for i in -n..n {
-        for j in -n..n {
-            let (x, z) = ((i as f32 + 0.5) * SPACING, (j as f32 + 0.5) * SPACING);
-            if x * x + z * z > reach * reach {
-                continue;
-            }
-            let Some(near) = buckets.get(&(bucket(x), bucket(z))) else { continue };
-            let mut hits: Vec<(f32, f32)> = near.iter().filter_map(|&k| over(&tris[k as usize], x, z)).collect();
-            hits.sort_by(|a, b| b.0.total_cmp(&a.0));
-            hits.dedup_by(|a, b| (a.0 - b.0).abs() < 0.01 && (a.1 > 0.0) == (b.1 > 0.0));
-            for (k, &(y, up)) in hits.iter().enumerate() {
-                if up > 0.7 && (k == 0 || hits[k - 1].0 - y >= CLEAR) {
-                    out.push(Vec3::new(x, y, z));
-                }
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -728,14 +666,19 @@ mod tests {
         }
     }
 
-    /// Every floor builds, and from it every landmark is reached.
+    /// Every floor builds, and on every body's navmesh every landmark is
+    /// reached from it.
     #[test]
     fn floors_reached() {
+        use crate::navmesh::{Body, Floors, bounds, unreached};
         for layout in 0..FLOORS.len() {
             let (parts, _) = build(layout, true);
-            let nav = super::super::nav::Nav::new(&parts.walkable);
-            for (name, p) in landmarks(layout) {
-                assert!(nav.path(ground(), p).is_some(), "the floor {}: {name} not reached", FLOORS[layout]);
+            let colliders = super::super::solid(&parts, false);
+            for body in Body::ALL {
+                let floors = Floors::new(&crate::navmesh::build(&colliders, body.size(), bounds(&colliders)).unwrap(), body.size().0, false).unwrap();
+                for (group, _, lost) in unreached(&floors, &checks(layout)) {
+                    assert!(lost.is_empty(), "the floor {}, the {body:?}: {group}, {lost:?} not reached", FLOORS[layout]);
+                }
             }
         }
     }

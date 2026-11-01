@@ -29,6 +29,8 @@ use crate::{
 
 mod hunter;
 pub(crate) use hunter::{clip::folder as creatures_folder, clip::names as creatures, trace, trace_file};
+#[cfg(test)]
+pub(crate) use hunter::STEP_UP as CREATURE_STEP;
 mod cape;
 mod slab;
 mod lance;
@@ -116,6 +118,7 @@ impl Plugin for CombatPlugin {
                     .run_if(crate::loading::playing),
             )
             .add_systems(Update, choose.before(fire).run_if(crate::loading::playing))
+            .add_systems(Update, hunter::apart.after(hunter::hunt).before(hunter::flesh).run_if(crate::loading::playing))
             // (Not till the game is on: see `loading.rs`.)
             .add_systems(Update, (forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
@@ -163,6 +166,10 @@ const KICKBACK: f32 = 3.0;
 const SWARMER_HEALTH: f32 = 3.0;
 const SWARMER_RADIUS: f32 = 0.55;
 const SWARMER_SPEED: f32 = 18.0;
+/// How often a bud's way along a built place's floors is found again (s),
+/// sooner if its place has moved this far from the way's end (m).
+const ROUTE: f32 = 3.0;
+const ROUTE_MOVED: f32 = 4.0;
 /// How far off a swarmer starts to darken the world, and how near it does
 /// so fully.
 const GLOOM_REACH: f32 = 20.0;
@@ -308,8 +315,9 @@ struct Swarmer {
     /// Seconds left of its leap on waking, flung up and away before it
     /// stalks (or freezes under your gaze).
     leap: f32,
-    /// In a built place, its way to where it is going (see `Nav::steer`).
-    route: crate::chasm::nav::Route,
+    /// In a built place, its way to its place along the floors (see
+    /// `stalk`), and how long till it is found again.
+    route: (Vec<Vec3>, f32),
 }
 
 /// A piece flying off something broken, or a spark.
@@ -650,7 +658,7 @@ fn swarm(
     args: Res<Args>,
     streamer: Res<Streamer>,
     ground: crate::ground::Ground,
-    nav: Option<Res<crate::chasm::nav::Nav>>,
+    navs: Option<Res<crate::navmesh::Navmeshes>>,
     player: Single<(&Transform, &Player, &FlyCam)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<Player>>,
 ) {
@@ -685,7 +693,7 @@ fn swarm(
             face(&mut transform, ptransform.translation, dt);
             continue;
         }
-        stalk(&ground, nav.as_deref(), ptransform, &positions, &mut transform, &mut s, dt);
+        stalk(&ground, navs.as_deref().and_then(|n| n.floors(crate::navmesh::Body::Biped)), ptransform, &positions, &mut transform, &mut s, dt);
         // Still, its darkness creeps in; moving, it fades.
         s.dark = if s.velocity.length() < STILL { (s.dark + dt / DARK_IN).min(1.0) } else { (s.dark - dt / DARK_OUT).max(0.0) };
     }
@@ -696,7 +704,7 @@ fn swarm(
 /// waits, dead still; looked at, it stops dead where it is. Turn round and
 /// they are all still; turn back and they have moved behind you again.
 /// Arriving in front of you, they swing wide round your side.
-fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
+fn stalk(ground: &crate::ground::Ground, floors: Option<&crate::navmesh::Floors>, player: &Transform, positions: &[Vec3], transform: &mut Transform, s: &mut Swarmer, dt: f32) {
     let p = transform.translation;
     let eye = player.translation;
     // (It turns to face you, even while it stands still.)
@@ -723,17 +731,36 @@ fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, p
     // In a built place: its place on the floors nearest it, at about head
     // height over them, and there by the way along them, flying at about
     // head height (not through the walls).
+    // (Its way found again every `ROUTE` s, or once its place has moved;
+    // the corner on along it it has not come within a metre of, at head
+    // height over it.)
     let mut aim = place;
     let mut left = None;
-    if let Some(nav) = nav {
-        if let Some(j) = nav.nearest(place, 6) {
-            let f = nav.nodes[j as usize];
+    if let Some(floors) = floors {
+        if let Some(f) = floors.on(place, 3.0) {
             place = Vec3::new(f.x, f.y + 1.0 + h(2) * 1.5, f.z);
             aim = place;
         }
-        if let crate::chasm::nav::Steer::Ahead(ahead, l) = nav.steer(p, place, &mut s.route, dt, &|a, b| ground.clear(a, b)) {
+        // (Kept to, not found afresh every moment: hanging over a rim, the
+        // floor under it was found now on the rim, now on the flight below,
+        // each a way of its own, and it swung back and forth between them,
+        // never coming down.)
+        s.route.1 -= dt;
+        if s.route.1 <= 0.0 || s.route.0.len() < 2 || s.route.0.last().is_none_or(|end| end.distance(place) > ROUTE_MOVED) {
+            s.route = (floors.way(p, place).unwrap_or_default(), ROUTE);
+        }
+        let way = &mut s.route.0;
+        while way.len() > 1 && Vec2::new(way[0].x - p.x, way[0].z - p.z).length() < 1.0 {
+            way.remove(0);
+        }
+        // (The furthest of the next few corners in plain sight, not the
+        // next: at its speed it could not turn in the metre between two at
+        // the head of a flight, and overshot them, back and forth.)
+        if let Some(&first) = way.first() {
+            let l = std::iter::once(p).chain(way.iter().copied()).collect::<Vec<_>>().windows(2).map(|w| w[0].distance(w[1])).sum::<f32>();
             left = Some(l);
             if l > 3.5 {
+                let ahead = way.iter().take(8).rev().copied().find(|&q| ground.clear(p, q + Vec3::Y * 1.6)).unwrap_or(first);
                 aim = ahead + Vec3::Y * 1.6;
             }
         }
@@ -750,8 +777,12 @@ fn stalk(ground: &crate::ground::Ground, nav: Option<&crate::chasm::nav::Nav>, p
     }
     s.velocity += (want - s.velocity).clamp_length_max(20.0 * dt);
     // (Flying, a small round body: what is built stops it, it slides on.)
+    // (Kept over the floor under it, looked for from where it is: from a
+    // walker's foot height over it, as `Ground::at` looks, under the low
+    // ceiling of a flight going down in the rock, the ceiling was taken for
+    // its floor, and it was held up against it, never going down.)
     let mut next = ground.sweep(&Collider::sphere(0.35), p, s.velocity * dt);
-    let ground = ground.at(next) + 0.8;
+    let ground = ground.hit(next, Vec3::NEG_Y, 40.0).map_or(ground.at(next), |d| next.y - d) + 0.8;
     if next.y < ground {
         next.y = ground;
         s.velocity.y = s.velocity.y.max(0.0);
@@ -810,7 +841,7 @@ fn gloom(
 /// the sky, leaning a little (see `grove.rs`).
 fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32, traits: &crate::traits::Traits) {
     let r = |j: i32| hash01(seed as i32, j, 0, 0x5a2) - 0.5;
-    let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, route: Default::default() };
+    let swarmer = Swarmer { mode: Mode::Dormant, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase: r(4) * 50.0, dark: 0.0, leap: 0.0, route: (Vec::new(), 0.0) };
     let lean = Quat::from_euler(EulerRot::XYZ, r(5) * 0.6, 0.0, r(6) * 0.6);
     let transform = Transform::from_translation(at + Vec3::Y * 0.55).looking_to(lean * Vec3::Y, Vec3::Z);
     let root = commands.spawn((swarmer, forms::Gazed::default(), forms::Asleep, traits.clone(), transform, Visibility::default())).id();
@@ -820,7 +851,7 @@ fn spawn_sleeper(commands: &mut Commands, kit: &forms::Kit, materials: &mut Asse
 /// A free bud at `at`, stalking (`spawn bud` at the console).
 fn spawn_bud(commands: &mut Commands, kit: &forms::Kit, materials: &mut Assets<StandardMaterial>, at: Vec3, seed: u32, traits: &crate::traits::Traits) {
     let phase = hash01(seed as i32, 4, 0, 0x5a2) * 50.0;
-    let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, route: Default::default() };
+    let swarmer = Swarmer { mode: Mode::Free, velocity: Vec3::ZERO, health: SWARMER_HEALTH, phase, dark: 0.0, leap: 0.0, route: (Vec::new(), 0.0) };
     let root = commands.spawn((swarmer, forms::Gazed::default(), traits.clone(), Transform::from_translation(at), Visibility::default())).id();
     forms::build(commands, kit, materials, root);
 }
