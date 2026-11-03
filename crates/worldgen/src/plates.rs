@@ -708,7 +708,7 @@ impl PlateWorld {
             let plate = self.plate(cache, *sites, level);
             let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec()) };
             for piece in pieces {
-                if area(&piece) > 0.5 {
+                if area(&piece) >= LEAST_PIECE {
                     self.emit_prism(cache, mesh, &piece, &plate, max_level, origin);
                 }
             }
@@ -727,7 +727,7 @@ impl PlateWorld {
         for iz in iz0..=iz1 {
             for ix in ix0..=ix1 {
                 let piece = self.cell(next, (ix, iz), poly);
-                if piece.len() < 3 || area(&piece) < 0.5 {
+                if piece.len() < 3 || area(&piece) < LEAST_PIECE {
                     continue;
                 }
                 sites[next] = (ix, iz);
@@ -931,6 +931,14 @@ impl PlateWorld {
         }
     }
 }
+
+/// The least plate piece meshed (m²): only one of no area is left out.
+/// (Every piece is meshed, however thin. At half a square metre, as it was
+/// from the first prototype, the slivers left out were holes through the
+/// ground into the void under the world, hundreds a patch; the user had seen
+/// them. At a square centimetre a few still were. Found by the navigable
+/// nodes' tests, 2026-11-03.)
+const LEAST_PIECE: f64 = 1e-9;
 
 /// The form terrain pillars grow, if the library has it.
 const PILLAR_FORM: &str = "pillar";
