@@ -4,7 +4,7 @@
 //! it attacks landed (the user, 2026-11-10; step 4): it chooses a spot near
 //! you, flies its way there (`way.rs`), hangs over it a moment and crashes
 //! down onto it (letting go of its thrust), the ground struck round it;
-//! stays, lashing at you with the cables wound round its waist (`attack.rs`),
+//! stays, its arms' cables flung at you, homing, taking hold (`attack.rs`),
 //! rises and chooses again; it takes off sooner if you get away or out of
 //! sight. `keep=N`: it hovers after you N m off
 //! instead (step 2's way, to judge its field by).
@@ -26,6 +26,7 @@
 
 use bevy::prelude::*;
 
+pub(super) mod arms;
 pub(super) mod attack;
 pub(super) mod field;
 pub(super) mod plume;
@@ -53,8 +54,12 @@ const HOVER: f32 = 1.5;
 /// (m); how long it may fly to a spot before choosing again (s); how long
 /// before it tries again when it found no spot (s); how long beaten down
 /// onto the ground before it stays there, landed (s).
-const LANDED_FOR: f32 = 5.0;
-const LEAVE: (f32, f32) = (16.0, 1.0);
+const DOWN: f32 = 1.5;
+const LEAVE: (f32, f32) = (24.0, 1.0);
+/// How often, as one of its grasps ends, it goes elsewhere though you are
+/// still within its range (not to be foreseen; the user, 2026-11-10: it
+/// flies to catch you up, not by the clock).
+const RELOCATE: f32 = 0.25;
 const RISE: f32 = 3.0;
 const PASS: f32 = 2.0;
 const FLY_FOR: f32 = 25.0;
@@ -129,8 +134,13 @@ pub(in crate::combat) struct Impaled {
     down: Option<Down>,
     /// Crashed down: how long ago (s), and how deep its squash.
     crashed: Option<(f32, f32)>,
-    /// Its lash, landed.
-    lash: attack::Lash,
+    /// Its grasp, landed, what holding you does (`latch=N`, see
+    /// `attack::held`), whether it means to go elsewhere, and its body's
+    /// pose in its grasp (see `attack::pose`).
+    grasp: attack::Grasp,
+    relocate: bool,
+    latch: u8,
+    pose: Vec2,
 }
 
 /// What it is doing.
@@ -288,12 +298,12 @@ pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, args: Res
             let flight = Flight::hovering(&craft, at, -forward);
             let (pos, rot) = flight.drawn();
             let brute = commands
-                .spawn((Impaled { flight, craft, pilot, hover, keep, course, mind: Mind::Choose { wait: 0.0 }, log: traits.has("log"), logged: 0.0, logged_inside: 0.0, health: traits.value("health", HEALTH), stutter: 0.0, shot: Vec3::ZERO, down: None, crashed: None, lash: default() }, Transform::from_translation(pos).with_rotation(rot), Visibility::Visible))
+                .spawn((Impaled { flight, craft, pilot, hover, keep, course, mind: Mind::Choose { wait: 0.0 }, log: traits.has("log"), logged: 0.0, logged_inside: 0.0, health: traits.value("health", HEALTH), stutter: 0.0, shot: Vec3::ZERO, down: None, crashed: None, grasp: default(), relocate: false, latch: traits.value("latch", 1.0) as u8, pose: Vec2::ZERO }, Transform::from_translation(pos).with_rotation(rot), Visibility::Visible))
                 .with_child((WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(format!("creatures://{FILE}")))), Transform::from_scale(Vec3::splat(scale()))))
                 .id();
             let shards = traits.value("plume", 2.0) as u8 == 2;
             field::make(&mut commands, &kit, &mut meshes, &mut materials, &mut plumes, brute, shards, args.shot.is_none());
-            attack::make(&mut commands, &mut meshes, &mut materials, brute);
+            arms::make(&mut commands, &mut meshes, &mut materials, brute, scale());
             info!("an impaled brute hovers at {at:.1}{}", if traits.has("course") { ", to fly its course" } else { "" });
         }
     }
@@ -430,19 +440,28 @@ pub(super) fn fly(
         let (pos, rot) = b.flight.drawn();
         t.translation = pos;
         t.rotation = rot;
-        // (Landed, it lashes at you; else its lash is put away.)
-        if landed && b.alive() {
+        // (Landed, its grasp at you; else put away.)
+        if b.alive() {
             let seen = ground.clear(pos + Vec3::Y * (HEIGHT - feet() - 0.3), you);
-            if let Some(along) = attack::lash(b, you, seen, dt) {
-                let (harm, push) = attack::lash_blow(along);
-                blow(&mut commands, &assets, &mut player, &mut director, &mut gun, right, harm, push);
-                if b.log {
-                    info!("impaled: its lash struck you");
+            if let Some(grip) = attack::grasp(b, you, seen, landed, dt) {
+                player.health -= grip.harm;
+                attack::held(b.latch, &grip, you, &mut player.velocity);
+                director.hurt = director.hurt.max(0.35);
+                if grip.bitten {
+                    blow(&mut commands, &assets, &mut player, &mut director, &mut gun, right, 0.0, Vec3::ZERO);
+                    if b.log {
+                        info!("impaled: its cable took hold of you");
+                    }
                 }
             }
-        } else if b.lash.phase != attack::Phase::Rest {
+            // (Now and then, a grasp over, elsewhere though you are in range.)
+            if b.grasp.ended && worldgen::noise::hash01(entity.index_u32() as i32, (time.elapsed_secs() * 10.0) as i32, 0, 0x7e1) < RELOCATE {
+                b.relocate = true;
+            }
+        } else if b.grasp.phase != attack::Phase::Rest {
             attack::stow(b);
         }
+        b.pose = if landed && b.alive() { attack::pose(&b.grasp) } else { Vec2::ZERO };
         // (Its crash's squash: down onto its feet, wider for it, quickly;
         // back slowly.)
         t.scale = Vec3::ONE;
@@ -498,6 +517,7 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
     let hover = b.hover;
     let log = b.log;
     let mut slam = false;
+    let relocate = b.relocate;
     // (Still falling: not landed till the crash has happened.)
     let falling = b.flight.vel.y < -0.5;
     let next = match &mut b.mind {
@@ -555,7 +575,11 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
         Mind::Landed { spot, time, unseen } => {
             *time += dt;
             *unseen = if ground.clear(*spot + Vec3::Y * (HEIGHT - 0.3), you) { 0.0 } else { *unseen + dt };
-            (*time > LANDED_FOR || spot.xz().distance(you.xz()) > LEAVE.0 || *unseen > LEAVE.1).then(|| Mind::Rise { from: *spot, to: here.y + RISE })
+            // (Up to catch you again: you out of its grasp's range or its
+            // sight; or now and then, to go elsewhere. Its cables coming
+            // back hold it up none.)
+            let away = spot.xz().distance(you.xz()) > attack::RANGE * 0.85;
+            (*time > DOWN && (away || *unseen > LEAVE.1 || relocate)).then(|| Mind::Rise { from: *spot, to: here.y + RISE })
         }
         Mind::Rise { to, .. } => (here.y > *to - 0.5).then_some(Mind::Choose { wait: 0.0 }),
     };
@@ -565,6 +589,9 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
     if let Some(mind) = next {
         if log {
             info!("impaled: {} at {:.1}", mind.name(), here);
+        }
+        if matches!(mind, Mind::Rise { .. }) {
+            b.relocate = false;
         }
         b.mind = mind;
     }

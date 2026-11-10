@@ -1,24 +1,31 @@
 //! The brute's attacks (the user, 2026-11-10): its crash down onto its spot
-//! a blow to the ground round it, and, landed, lashes of the cables wound
-//! about its waist (its arms are cables, wound round it there: the
-//! original concept).
+//! a blow to the ground round it, and, landed, its grasp: cables of its arms
+//! (`arms.rs`: its arms are cables, wound round its waist, the original
+//! concept) flung out at you, homing slowly, taking hold.
 //!
 //! The crash: it hangs a moment over its spot (the tell), lets go, and
 //! where it lands the ground is struck: a ring sweeps out, and if you
 //! stand within `QUAKE` you are hurt, more the nearer, and thrown off your
 //! feet; in the air (a jump), you are spared.
 //!
-//! A lash: landed, you within its reach and in its sight, a bundle of
-//! cables uncoils from its waist band on the side towards you (the sides
-//! in turn) and curls back behind it (the tell), whips out to where you
-//! were as it let fly, holds a moment and reels back in, sagging. Struck,
-//! you are hurt, shoved along its way, and cry out; out of its reach, it
-//! misses.
+//! Its grasp: landed, you within its range and in its sight, its shoulders
+//! draw back, the line between them bowing open (the tell); it flings a
+//! cable from each arm, rolling its shoulders forward, and they come at you
+//! slowly through the air, turning after you, their way behind them
+//! sagging under its weight, fed from its waist band; one that touches you
+//! takes hold, and hurts you as it holds (and as `latch=N` has it, slows
+//! you, holds you, or reels you in); hurt it enough, or get far enough
+//! away, and it lets go; out of range they come back.
+//!
+//! (The user, 2026-11-10: first a lash, short and fast; this creature is
+//! too slow to reposition to use one; so this. What the lash taught: the
+//! body must move the cables, as a hand a whip, its shoulders drawn back
+//! and rolled forward, no lean; the arms' own cables, not a bundle of its
+//! own; both arms.)
 
 use bevy::prelude::*;
 
 use super::Impaled;
-use crate::rope::tubes;
 
 /// The crash: how far round it the ground is struck (m), how much it hurts
 /// at its middle (falling to none at its edge), how hard it throws you
@@ -27,41 +34,63 @@ pub(super) const QUAKE: f32 = 6.0;
 const QUAKE_HARM: f32 = 25.0;
 const QUAKE_THROW: (f32, f32) = (6.0, 3.0);
 const RING_TIME: f32 = 0.35;
-/// A lash: how far it reaches (m, from its waist); how long it winds up,
-/// strikes, holds, reels back, and rests before the next (s); how much it
-/// hurts; how hard it shoves you (m/s, along it and up); its cables (how
-/// many, how thick at its waist and at their tips, m; how dark).
-pub(super) const REACH: f32 = 8.0;
-const WIND: f32 = 0.45;
-const STRIKE: f32 = 0.22;
-const HOLD: f32 = 0.12;
-const REEL: f32 = 0.45;
-const REST: f32 = 0.6;
-const LASH_HARM: f32 = 20.0;
-const LASH_SHOVE: (f32, f32) = (5.0, 1.5);
-const CABLES: usize = 3;
-const THICK: (f32, f32) = (0.07, 0.025);
-const SHADE: f32 = 0.05;
-/// Where on its waist band the cables come from (m, its own frame at its
-/// height, +x its left; the side towards you), and where they are cocked
-/// before they strike.
-const WAIST: Vec3 = Vec3::new(0.30, 0.16, 0.38);
-const COCKED: Vec3 = Vec3::new(1.1, 0.7, -0.6);
-/// You, struck: from below your eye to above it (m), and how near a cable
-/// must come (m).
-const BODY: (f32, f32, f32) = (1.3, 0.15, 0.45);
+/// Its grasp (the user, 2026-11-10: not a lash: too slow to come at you, a
+/// short fast attack it cannot use, so long, slow, homing, holding you):
+/// how far it reaches (m); how long it rests between and winds up (s); how
+/// fast its heads are flung and how fast they home (m/s: you run at 10),
+/// and how long to get to speed (s); how fast they turn towards you
+/// (rad/s); how near one must come to take hold (m); how much it hurts
+/// taking hold, and holding (a second); how long it holds at most (s), and
+/// how much hurting it makes it let go; how fast its heads come back (m/s);
+/// how far apart its cables' way is kept (m), and how fast and how far it
+/// sags under its weight (m/s, m).
+pub(super) const RANGE: f32 = 25.0;
+const COOL: f32 = 1.5;
+const WIND: f32 = 0.6;
+const SPEED: (f32, f32) = (3.0, 7.0);
+const RAMP: f32 = 0.8;
+const TURN: f32 = 1.4;
+const LATCH: f32 = 0.6;
+const BITE: f32 = 8.0;
+const GNAW: f32 = 6.0;
+const HOLD_FOR: f32 = 6.0;
+const RELEASE: f32 = 20.0;
+const BACK: f32 = 9.0;
+const STEP: f32 = 0.3;
+const DROP: (f32, f32) = (0.5, 1.2);
+/// Held (`latch=N`): slowed to this (m/s), reeled in at this (m/s).
+const SLOW: f32 = 4.0;
+const REEL: f32 = 3.0;
+/// Its body in its grasp (see `arms::bent`): winding up, its shoulders drawn
+/// back (mesh units), the line between them bowing open, its body not
+/// leaning (rad about its waist band: none; the force is drawn from the
+/// shoulders' arch, not from leaning back, the user); flinging, its
+/// shoulders rolled forward, its body not leaning either (the user), as its
+/// cables fly; how long it takes to roll them forward (s).
+const ARCH: Vec2 = Vec2::new(0.0, -0.10);
+const THROW: Vec2 = Vec2::new(0.0, 0.11);
+const FLING: f32 = 0.3;
+/// You, struck: from below your eye to above it (m).
+const BODY: (f32, f32) = (1.3, 0.15);
 
-/// A lash: what it is doing, how long it has, which side, where it aims,
-/// whether it has struck.
+/// Its grasp: what it is doing (winding up; its cables out; at rest), how
+/// long it has been winding up, how long since it last flung its cables,
+/// how long since none of them was after you or holding you, its cables'
+/// heads out (coming back too), how long it has held you, its health when
+/// it took hold, and how far from it you were then (m).
 #[derive(Default)]
-pub(super) struct Lash {
+pub(super) struct Grasp {
     pub phase: Phase,
-    pub time: f32,
-    side: f32,
-    aim: Vec3,
-    struck: bool,
-    /// Its tip last frame (what it swept through since).
-    tip: Option<Vec3>,
+    wind: Option<f32>,
+    flung: f32,
+    idle: f32,
+    pub heads: Vec<Head>,
+    held: f32,
+    health_at: Option<f32>,
+    pub reach: f32,
+    busy: bool,
+    /// Whether one of its grasps ended (missed, or let go) this frame.
+    pub ended: bool,
 }
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -69,149 +98,233 @@ pub(super) enum Phase {
     #[default]
     Rest,
     Wind,
-    Strike,
-    Hold,
-    Reel,
+    Out,
 }
 
-/// What a landed brute's lash does this frame: begins when it can (you in
-/// reach and sight, rested), runs through its phases; Some(the way it
-/// struck you along) the frame it does.
-pub(super) fn lash(b: &mut Impaled, you: Vec3, seen: bool, dt: f32) -> Option<Vec3> {
+/// One of its cables flung out: which cable, its head (where, how fast), the
+/// way it has come (the points its cable lies along, each with how far it
+/// has sagged since), what it is doing, how far it has gone and how long.
+pub(super) struct Head {
+    pub cable: usize,
+    pub at: Vec3,
+    vel: Vec3,
+    pub trail: Vec<(Vec3, f32)>,
+    pub state: State,
+    gone: f32,
+    age: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum State {
+    Fly,
+    Held,
+    Back,
+    Home,
+}
+
+/// What its grasp does to you this frame: how much it hurts, whether it
+/// just took hold, and where it holds you from (it).
+pub(super) struct Grip {
+    pub harm: f32,
+    pub bitten: bool,
+    pub from: Vec3,
+    pub reach: f32,
+}
+
+/// What a landed brute's grasp does this frame: winds up when it can (you
+/// in range and sight, rested), flings a cable from each arm, which home on
+/// you slowly, turning; one that touches you takes hold; let go of (it held
+/// long enough, you hurt it enough, you got far enough away) or out of
+/// range, they come back along the way they came. Some(what it does to
+/// you) while it holds you.
+pub(super) fn grasp(b: &mut Impaled, you: Vec3, seen: bool, landed: bool, dt: f32) -> Option<Grip> {
     let (pos, rot) = b.flight.drawn();
-    let l = &mut b.lash;
-    l.time += dt;
-    let reach = Vec2::new(you.x - pos.x, you.z - pos.z).length() < REACH;
-    match l.phase {
-        Phase::Rest if l.time > REST && reach && seen => {
-            l.phase = Phase::Wind;
-            l.time = 0.0;
-            l.side = if l.side > 0.0 { -1.0 } else { 1.0 };
-            l.struck = false;
-            l.tip = None;
+    let scale = super::scale();
+    let health = b.health;
+    let g = &mut b.grasp;
+    let chest = you - Vec3::Y * 0.5;
+    g.flung += dt;
+    // (Free again once none of its cables is after you or holding you: its
+    // rest counts from then, not from their coming back, the user,
+    // 2026-11-10: a failed grasp must not leave it a sitting duck.)
+    // (Aloft: no grasp; its cables come back to it, wherever it goes: their
+    // coming back holds nothing up, neither its next grasp nor its flight,
+    // the user, 2026-11-10.)
+    if !landed {
+        g.wind = None;
+        for h in &mut g.heads {
+            if matches!(h.state, State::Fly | State::Held) {
+                h.state = State::Back;
+            }
         }
-        Phase::Wind if l.time > WIND => {
-            // (It lets fly at where you are now: out of reach, as far as it
-            // reaches towards you.)
-            let from = waist(pos, rot, l.side);
-            let chest = you - Vec3::Y * 0.5;
-            l.aim = from + (chest - from).clamp_length_max(REACH);
-            l.phase = Phase::Strike;
-            l.time = 0.0;
+    }
+    let busy = g.heads.iter().any(|h| matches!(h.state, State::Fly | State::Held));
+    g.ended = g.busy && !busy;
+    g.busy = busy;
+    g.idle = if busy || g.wind.is_some() { 0.0 } else { g.idle + dt };
+    if landed && !busy && g.wind.is_none() && g.idle > COOL && seen && you.distance(pos) < RANGE * 0.9 {
+        g.wind = Some(0.0);
+    }
+    if let Some(w) = &mut g.wind {
+        *w += dt;
+        if *w > WIND {
+            g.wind = None;
+            g.flung = 0.0;
+            // (Each arm its outermost cable not out already, coming back.)
+            let out: Vec<usize> = g.heads.iter().map(|h| h.cable).collect();
+            for side in [1.0f32, -1.0] {
+                let Some(cable) = super::arms::lasher(side, &out) else { continue };
+                let start = pos + rot * super::arms::elbow(cable, scale, ARCH);
+                // (Flung up and out its own side, then turning to you.)
+                let fling = ((chest - start).normalize_or(rot * Vec3::Z) + Vec3::Y * 0.6 + rot * Vec3::X * (side * 0.5)).normalize();
+                g.heads.push(Head { cable, at: start, vel: fling * SPEED.0, trail: vec![(start, 0.0)], state: State::Fly, gone: 0.0, age: 0.0 });
+            }
         }
-        Phase::Strike if l.time > STRIKE => {
-            l.phase = Phase::Hold;
-            l.time = 0.0;
+    }
+    g.phase = if g.wind.is_some() {
+        Phase::Wind
+    } else if g.heads.is_empty() {
+        Phase::Rest
+    } else {
+        Phase::Out
+    };
+    if g.heads.is_empty() {
+        return None;
+    }
+    let (feet, top) = (you - Vec3::Y * BODY.0, you + Vec3::Y * BODY.1);
+    let mut bitten = false;
+    for h in &mut g.heads {
+        h.age += dt;
+        match h.state {
+            State::Fly => {
+                let speed = SPEED.0 + (SPEED.1 - SPEED.0) * (h.age / RAMP).min(1.0);
+                let now = h.vel.normalize_or(Vec3::Z);
+                let want = (chest - h.at).normalize_or(now);
+                let axis = now.cross(want).normalize_or_zero();
+                let turned = if axis == Vec3::ZERO { now } else { Quat::from_axis_angle(axis, now.angle_between(want).min(TURN * dt)) * now };
+                h.vel = turned * speed;
+                let before = h.at;
+                h.at += h.vel * dt;
+                h.gone += speed * dt;
+                if crate::combat::bishop::between(before, h.at, feet, top) < LATCH {
+                    h.state = State::Held;
+                    bitten = true;
+                } else if h.gone > RANGE {
+                    h.state = State::Back;
+                }
+            }
+            State::Held => h.at = chest,
+            State::Back => {
+                // (Aloft, straight back to its arm, which goes with it.)
+                if !landed {
+                    let elbow = pos + rot * super::arms::elbow(h.cable, scale, Vec2::ZERO);
+                    h.trail = vec![(elbow, 0.0)];
+                }
+                let mut left = BACK * dt;
+                while left > 0.0 {
+                    let Some(&(to, sag)) = h.trail.last() else { break };
+                    let to = to - Vec3::Y * sag;
+                    let d = h.at.distance(to);
+                    if d > left {
+                        h.at += (to - h.at) / d * left;
+                        break;
+                    }
+                    h.at = to;
+                    left -= d;
+                    h.trail.pop();
+                }
+                if h.trail.is_empty() {
+                    h.state = State::Home;
+                }
+            }
+            State::Home => {}
         }
-        Phase::Hold if l.time > HOLD => {
-            l.phase = Phase::Reel;
-            l.time = 0.0;
+        // (Its way laid as its head goes, and sagging under its weight.)
+        if h.state != State::Back && h.trail.last().is_none_or(|(p, _)| p.distance(h.at) > STEP) {
+            h.trail.push((h.at, 0.0));
         }
-        Phase::Reel if l.time > REEL => {
-            l.phase = Phase::Rest;
-            l.time = 0.0;
+        for (_, sag) in h.trail.iter_mut().skip(1) {
+            *sag = (*sag + DROP.0 * dt).min(DROP.1);
+        }
+    }
+    let holding = g.heads.iter().any(|h| h.state == State::Held);
+    let mut grip = None;
+    if holding {
+        g.held += dt;
+        let at = *g.health_at.get_or_insert(health);
+        if bitten {
+            g.reach = you.distance(pos);
+        }
+        // (Let go: held long enough, hurt enough, or you got far away.)
+        if g.held > HOLD_FOR || at - health >= RELEASE || you.distance(pos) > RANGE * 1.3 {
+            for h in &mut g.heads {
+                if h.state == State::Held {
+                    h.state = State::Back;
+                }
+            }
+            g.health_at = None;
+            g.held = 0.0;
+        } else {
+            grip = Some(Grip { harm: GNAW * dt + if bitten { BITE } else { 0.0 }, bitten, from: pos, reach: g.reach });
+        }
+    }
+    // (Those come back, gone; all of them, at rest, unless winding up.)
+    g.heads.retain(|h| h.state != State::Home);
+    if g.heads.is_empty() && g.wind.is_none() {
+        g.phase = Phase::Rest;
+    }
+    grip
+}
+
+/// You held, as `latch` has it (1 hurt only, 2 slowed, 3 held where you
+/// were, 4 reeled in; the user, 2026-11-10: which is a menace and not
+/// frustrating, to try): your velocity (after you moved).
+pub(super) fn held(latch: u8, grip: &Grip, you: Vec3, velocity: &mut Vec3) {
+    let away = Vec3::new(you.x - grip.from.x, 0.0, you.z - grip.from.z);
+    let dir = away.normalize_or(Vec3::X);
+    let outward = velocity.dot(dir);
+    match latch {
+        2 => {
+            let flat = Vec2::new(velocity.x, velocity.z).clamp_length_max(SLOW);
+            *velocity = Vec3::new(flat.x, velocity.y, flat.y);
+        }
+        3 => {
+            if outward > 0.0 {
+                *velocity -= dir * outward;
+            }
+            let over = away.length() - grip.reach;
+            if over > 0.0 {
+                *velocity -= dir * (over * 4.0);
+            }
+        }
+        4 => {
+            if outward > -REEL {
+                *velocity -= dir * (outward + REEL);
+            }
         }
         _ => {}
     }
-    // (Striking or held out: what its cable swept through since last frame
-    // touches you, once.)
-    if matches!(l.phase, Phase::Strike | Phase::Hold) && !l.struck {
-        let points = cable(pos, rot, l, 0);
-        let tip = *points.last().unwrap_or(&pos);
-        let (feet, head) = (you - Vec3::Y * BODY.0, you + Vec3::Y * BODY.1);
-        let swept = l.tip.is_some_and(|t| crate::combat::bishop::between(t, tip, feet, head) < BODY.2);
-        let along = points.windows(2).any(|w| crate::combat::bishop::between(w[0], w[1], feet, head) < BODY.2);
-        l.tip = Some(tip);
-        if swept || along {
-            l.struck = true;
-            return Some((tip - waist(pos, rot, l.side)).normalize_or(Vec3::Z));
-        }
-    }
-    None
 }
 
-/// Its lash put away (it took off, or died).
-pub(super) fn stow(b: &mut Impaled) {
-    b.lash = Lash { side: b.lash.side, ..default() };
-}
-
-/// Where its cables come from, on `side` of its waist band.
-fn waist(pos: Vec3, rot: Quat, side: f32) -> Vec3 {
-    pos + rot * Vec3::new(WAIST.x * side, WAIST.y, WAIST.z)
-}
-
-/// The `k`th cable of a lash as it is now: from its waist to its tip along
-/// a bowed curve, whipping as it strikes, sagging as it reels in.
-fn cable(pos: Vec3, rot: Quat, l: &Lash, k: usize) -> Vec<Vec3> {
-    let from = waist(pos, rot, l.side) + rot * Vec3::new(0.0, (k as f32 - 1.0) * 0.07, 0.0);
-    let cocked = pos + rot * Vec3::new(COCKED.x * l.side, COCKED.y, COCKED.z);
+/// Its body's pose now (x: leaning forward about its waist band, rad; y:
+/// its shoulders forward, mesh units; back, less than none): drawn back
+/// winding up, rolled forward as it flings its cables and while they are
+/// out, settling as they come back.
+pub(super) fn pose(g: &Grasp) -> Vec2 {
     let ease = |t: f32| t * t * (3.0 - 2.0 * t);
-    // (Its tip, and how far out its middle bows, sideways and down.)
-    let (tip, bow, sag) = match l.phase {
-        Phase::Rest => return Vec::new(),
-        Phase::Wind => {
-            let t = ease((l.time / WIND).min(1.0));
-            (from.lerp(cocked, t), 0.25 * t, 0.0)
-        }
-        Phase::Strike => {
-            // (Faster and faster: a whip.)
-            let t = (l.time / STRIKE).min(1.0);
-            (cocked.lerp(l.aim, t * t), 0.35 * (1.0 - t * t), 0.0)
-        }
-        Phase::Hold => (l.aim, 0.0, 0.15),
-        Phase::Reel => {
-            let t = ease((l.time / REEL).min(1.0));
-            (l.aim.lerp(from, t), 0.0, 0.6 * (1.0 - t) * t.sqrt() + 0.15 * (1.0 - t))
-        }
-    };
-    let span = tip - from;
-    let length = span.length().max(0.05);
-    let across = rot * Vec3::X * l.side;
-    let n = 18;
-    (0..=n)
-        .map(|i| {
-            let s = i as f32 / n as f32;
-            let hump = 4.0 * s * (1.0 - s);
-            // (Each cable a little apart, and a wave running out along it.)
-            let wave = (s * 9.0 - l.time * 30.0 + k as f32 * 1.7).sin() * 0.06 * hump;
-            from + span * s + across * (bow * length * hump + wave) - Vec3::Y * (sag * length * hump) + rot * Vec3::new(0.0, (k as f32 - 1.0) * 0.05 * (1.0 - s), 0.0)
-        })
-        .collect()
-}
-
-/// A brute's lash, drawn: one mesh of its cables.
-#[derive(Component)]
-pub(in crate::combat) struct Cables {
-    brute: Entity,
-    mesh: Handle<Mesh>,
-}
-
-/// Its cables' mesh and look, made with it.
-pub(super) fn make(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, brute: Entity) {
-    let mesh = meshes.add(super::field::placeholder());
-    let look = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.3, reflectance: 0.6, ..default() });
-    commands.spawn((Cables { brute, mesh: mesh.clone() }, Mesh3d(mesh), MeshMaterial3d(look), bevy::camera::visibility::NoFrustumCulling, Transform::default(), Visibility::Hidden));
-}
-
-/// The lashes drawn this frame; the cables of brutes gone, gone.
-pub(in crate::combat) fn draw(mut commands: Commands, brutes: Query<&Impaled>, mut cables: Query<(Entity, &Cables, &mut Visibility)>, mut meshes: ResMut<Assets<Mesh>>) {
-    for (entity, c, mut visible) in &mut cables {
-        let Ok(b) = brutes.get(c.brute) else {
-            commands.entity(entity).despawn();
-            continue;
-        };
-        // (Put away, hidden, its mesh left as it was: none to write.)
-        if b.lash.phase == Phase::Rest {
-            *visible = Visibility::Hidden;
-            continue;
-        }
-        *visible = Visibility::Inherited;
-        let (pos, rot) = b.flight.drawn();
-        let strands: Vec<Vec<Vec3>> = (0..CABLES).map(|k| cable(pos, rot, &b.lash, k)).collect();
-        if let Some(mut mesh) = meshes.get_mut(&c.mesh) {
-            tubes(&mut mesh, strands.iter().map(|p| (&p[..], THICK, SHADE)));
-        }
+    if let Some(w) = g.wind {
+        return ARCH * ease((w / WIND).min(1.0));
     }
+    if g.heads.is_empty() {
+        return Vec2::ZERO;
+    }
+    let thrown = ARCH.lerp(THROW, ease((g.flung / FLING).min(1.0)));
+    if g.heads.iter().any(|h| matches!(h.state, State::Fly | State::Held)) { thrown } else { thrown * 0.4 }
+}
+
+/// Its grasp put away (it took off, or died).
+pub(super) fn stow(b: &mut Impaled) {
+    b.grasp = Grasp::default();
 }
 
 /// The crash's ring sweeping out over the ground, and fading.
@@ -252,8 +365,3 @@ pub(in crate::combat) fn rings(mut commands: Commands, time: Res<Time>, mut ring
     }
 }
 
-/// How much a lash or the crash hurts, and how it shoves you (for the
-/// shared reckoning in `fly`).
-pub(super) fn lash_blow(along: Vec3) -> (f32, Vec3) {
-    (LASH_HARM, along.with_y(0.0).normalize_or(Vec3::Z) * LASH_SHOVE.0 + Vec3::Y * LASH_SHOVE.1)
-}

@@ -4,7 +4,9 @@ place in this world: one smooth surface from the belt to the thighs, the
 normal map's relief there faded flat), then the spikes cut off, their holes
 capped, and faceted shards grown in their place (shorter, broken off, some
 with a splinter), in their own pale material; and the feet's soles made
-four-pointed stars, flat-shaded in facets (the paw's toes were too cute).
+four-pointed stars, flat-shaded in facets (the paw's toes were too cute);
+and its arms (cable loops) and waist band (coils) cut out and rebuilt as
+cables the game draws and moves, written beside it (`impaled.cables`).
 
     python tools/impaled_mesh.py [IN.glb] [OUT.glb] [--seed N]
 
@@ -14,6 +16,7 @@ are this mesh's; a regenerated mesh needs them looked at again."""
 import sys, os, tempfile
 from collections import defaultdict
 import numpy as np, trimesh
+import networkx as nx
 
 
 # The back.
@@ -343,6 +346,222 @@ def feet(inp, out, points=4, turn_deg=45.0):
     print("feet: faceted", int(nf), "faces")
 
 
+# The arms: cut out, rebuilt as cables the game draws (and moves).
+ARM_X = 0.40          # beyond this out from its middle (mesh units), the arms
+ARM_Y = (-0.22, 0.45) # between these heights
+ARM_PIECE = 300       # a piece of the arms has at least so many faces
+CABLES = 6            # cables to an arm
+CABLE_R = 0.024       # their radius (measured: 0.020..0.030), each 0.8..1.25 of it
+# Each arm's innermost and outermost cable, drawn from the original's outline
+# seen from the front (x out from its middle, mirrored for its right; y up):
+# from under its shoulder, out, curling under, in to the waist band. Those
+# between blended, inner to outer, packed towards the inner (spread wide,
+# the cables stood out further than the original's and the arm was harder to
+# see as one, the user).
+ARM_INNER = [(0.41, 0.45), (0.44, 0.30), (0.50, 0.17), (0.53, 0.07), (0.50, 0.00), (0.45, -0.03), (0.40, 0.00)]
+ARM_OUTER = [(0.50, 0.45), (0.57, 0.36), (0.62, 0.24), (0.625, 0.10), (0.59, -0.05), (0.53, -0.14), (0.46, -0.165), (0.40, -0.13)]
+
+
+def spline(ctrl, n):
+    """A smooth curve through `ctrl` (Catmull-Rom), `n` points evenly along it."""
+    ctrl = np.asarray(ctrl, float)
+    c = np.vstack([2 * ctrl[0] - ctrl[1], ctrl, 2 * ctrl[-1] - ctrl[-2]])
+    pts = []
+    for k in range(1, len(c) - 2):
+        p0, p1, p2, p3 = c[k - 1], c[k], c[k + 1], c[k + 2]
+        for t in np.linspace(0, 1, 20, endpoint=False):
+            pts.append(0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3))
+    pts.append(ctrl[-1])
+    return resample(np.array(pts), n=n)
+
+
+def resample(pts, step=None, n=None):
+    d = np.r_[0, np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
+    t = np.linspace(0, d[-1], n) if n else np.arange(0, d[-1] + 1e-9, step)
+    return np.stack([np.interp(t, d, pts[:, k]) for k in range(pts.shape[1])], 1)
+
+
+def arms(inp, out, cables_out):
+    """The arms (the cable loops hanging at its sides) cut out of the body,
+    the openings left capped; in their place cables, written to
+    `cables_out` for the game to draw: each arm's measured thickness, its
+    loops' shape drawn from the original (`ARM_INNER`, `ARM_OUTER`), their
+    depth the original's there, each a little irregular, rooted in its
+    shoulder. (The user, 2026-11-10: the lash read as pasted on; it must
+    come out of its own cabling; the mesh is one fused surface, its cables
+    not to be lifted out, so measured and rebuilt.)"""
+    s = trimesh.load(inp, force="scene", process=False)
+    g = s.geometry["body"]
+    V0 = np.asarray(g.vertices); F = np.asarray(g.faces); N0 = np.asarray(g.vertex_normals).copy()
+    uv0 = np.asarray(g.visual.uv)
+    P, inv = np.unique(V0.round(6), axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    WF = inv[F]
+    cen = P[WF].mean(1)
+    cand = (np.abs(cen[:, 0]) > ARM_X) & (cen[:, 1] > ARM_Y[0]) & (cen[:, 1] < ARM_Y[1])
+    m = trimesh.Trimesh(P, WF, process=False)
+    adj = m.face_adjacency
+    G = nx.Graph()
+    G.add_nodes_from(np.where(cand)[0])
+    ok = cand[adj[:, 0]] & cand[adj[:, 1]]
+    G.add_edges_from(adj[ok].tolist())
+    chosen = np.zeros(len(F), bool)
+    for piece in nx.connected_components(G):
+        if len(piece) > ARM_PIECE:
+            chosen[list(piece)] = True
+    armv = np.unique(WF[chosen])
+    # The openings left, capped: each a fan from its middle, turned as the
+    # faces round it (a face's boundary edge a->b, its cap's b->a).
+    def directed_open(faces):
+        d = np.r_[faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]
+        have = set(map(tuple, d))
+        return [tuple(e) for e in d if (e[1], e[0]) not in have]
+    before = set(directed_open(WF))
+    nxt = {a: b for a, b in directed_open(WF[~chosen]) if (a, b) not in before}
+    rep = np.zeros(len(P), int)
+    rep[inv[::-1]] = np.arange(len(inv))[::-1]
+    newV, newN, newUV, caps = [], [], [], []
+    seen = set()
+    for start in list(nxt):
+        if start in seen:
+            continue
+        loop, a = [], start
+        while a in nxt and a not in seen:
+            seen.add(a); loop.append(a); a = nxt[a]
+        if len(loop) < 3 or a != start:
+            continue
+        ci = len(V0) + len(newV)
+        newV.append(P[loop].mean(0))
+        n_ = N0[rep[loop]].mean(0)
+        newN.append(n_ / (np.linalg.norm(n_) + 1e-9))
+        newUV.append(uv0[rep[loop[0]]])
+        for i in range(len(loop)):
+            caps.append([rep[loop[(i + 1) % len(loop)]], rep[loop[i]], ci])
+    from trimesh.visual import TextureVisuals
+    faces = np.vstack([F[~chosen], np.array(caps, int).reshape(-1, 3)])
+    body = trimesh.Trimesh(np.vstack([V0, np.array(newV).reshape(-1, 3)]), faces, vertex_normals=np.vstack([N0, np.array(newN).reshape(-1, 3)]),
+                           visual=TextureVisuals(uv=np.vstack([uv0, np.array(newUV).reshape(-1, 2)]), material=g.visual.material), process=False)
+    s.geometry["body"] = body
+    s.export(out)
+    print(f"arms: cut {int(chosen.sum())} faces, {len(newV)} openings capped ({len(caps)} triangles)")
+    # The cables.
+    lines = ["# The impaled brute's arms and waist band as cables (tools/impaled_mesh.py):",
+             "# one a line, SIDE RADIUS then its points x,y,z (mesh units, as impaled.glb);",
+             "# an arm's (side 1 its left, -1 its right) from its root in its shoulder to its",
+             "# end in its waist band, a coil of the band's (side 0) round it once."]
+    for side in (1, -1):
+        vs = P[armv][P[armv][:, 0] * side > 0]
+        inner, outer = spline(ARM_INNER, 80), spline(ARM_OUTER, 80)
+        base = np.random.default_rng(3 if side > 0 else 5)
+        thick = base.uniform(0.8, 1.25, CABLES)
+        fs = np.sort(np.r_[0.0, 1.0, base.uniform(0.05, 0.7, CABLES - 2)])
+        for k in range(CABLES):
+            rng = np.random.default_rng(k + (7 if side > 0 else 19))
+            ph = rng.uniform(0, 2 * np.pi, 2)
+            xy = inner * (1 - fs[k]) + outer * fs[k]
+            t = np.linspace(0, 1, len(xy))
+            across = np.gradient(xy, axis=0)[:, ::-1] * np.array([1, -1])
+            across /= np.linalg.norm(across, axis=1, keepdims=True) + 1e-9
+            xy = xy + across * (0.012 * np.sin(2 * np.pi * rng.uniform(0.6, 1.4) * t + ph[0]))[:, None]
+            depth_f = rng.uniform(0.4, 1.0)
+            pts = []
+            for j, (x, y) in enumerate(xy):
+                near = vs[np.hypot(vs[:, 0] * side - x, vs[:, 1] - y) < 0.025]
+                if len(near) < 3:
+                    near = vs[np.argsort(np.hypot(vs[:, 0] * side - x, vs[:, 1] - y))[:12]]
+                z0, z1 = np.percentile(near[:, 2], [10, 90])
+                fb = np.clip(0.5 + 0.45 * np.sin(ph[1] + 2 * np.pi * depth_f * j / len(xy)), 0.05, 0.95)
+                pts.append([x * side, y, z0 + (z1 - z0) * fb])
+            pts = np.array(pts)
+            for _ in range(8):
+                pts[1:-1, 2] = (pts[:-2, 2] + 2 * pts[1:-1, 2] + pts[2:, 2]) / 4
+            pts = np.vstack([pts[0] + np.array([-0.03 * side, 0.06, 0.0]), pts])
+            pts = resample(pts, step=0.02)
+            lines.append(f"{side:+.0f} {CABLE_R * thick[k]:.4f} " + " ".join(f"{p[0]:.4f},{p[1]:.4f},{p[2]:.4f}" for p in pts))
+    with open(cables_out, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"arms: {2 * CABLES} cables written to {cables_out}")
+
+
+# The waist band: cut out, a core in its place, rebuilt as coils the game
+# draws (and unwinds as it lashes).
+BAND_C = (0.0, 0.0, -0.08)   # its middle (mesh units)
+BAND_AX, BAND_AZ = 0.35, 0.29  # its oval's half-widths, across and front to back
+BAND_TILT = -0.125           # its slant (y per z: lower at the front)
+BAND_Y = 0.1175              # its middle's height
+BAND_HALF = (0.14, 0.10)     # half its height at the front, at the back
+BAND_COILS, BAND_R = 7, 0.021
+
+
+def band(inp, out, cables_out):
+    """The waist band (its coils, the arms' cables wound round it) cut out of
+    the body and rebuilt (the user, 2026-11-10: the lash should pay out from
+    it, not stretch from nothing): a slanted ring of faces cut, an oval core
+    put in the body in its place (hidden behind the coils), and coils wound
+    round it added to `cables_out` (side 0), each an oval loop at its own
+    height, neat at the back, crossing the others at the front as the
+    original's, its own thickness."""
+    s = trimesh.load(inp, force="scene", process=False)
+    g = s.geometry["body"]
+    V0 = np.asarray(g.vertices); F = np.asarray(g.faces); N0 = np.asarray(g.vertex_normals).copy()
+    uv0 = np.asarray(g.visual.uv)
+    c = np.array(BAND_C)
+    band_y = lambda x, z: BAND_Y + BAND_TILT * (z - c[2])
+    def half(z):
+        front = np.clip((z - c[2]) / BAND_AZ, -1, 1) * 0.5 + 0.5
+        return BAND_HALF[1] + (BAND_HALF[0] - BAND_HALF[1]) * front
+    cen = V0[F].mean(1)
+    rel = cen[:, 1] - band_y(cen[:, 0], cen[:, 2])
+    ell = np.hypot((cen[:, 0] - c[0]) / BAND_AX, (cen[:, 2] - c[2]) / BAND_AZ)
+    # (A little less than the band, so the body's own surface tucks under the
+    # outermost coils: no ledge.)
+    cut = (np.abs(rel) < half(cen[:, 2]) - 0.006) & (ell > 0.6)
+    # The core: an oval tube, slanted with the band, short of the coils' edges.
+    ring = np.linspace(0, 2 * np.pi, 64, endpoint=False)
+    k = 0.90
+    cv, cn = [], []
+    for sgn in (-1, 1):
+        for a in ring:
+            x, z = c[0] + np.sin(a) * BAND_AX * k, c[2] + np.cos(a) * BAND_AZ * k
+            cv.append([x, band_y(x, z) + sgn * (half(z) - BAND_R * 0.8), z])
+            n_ = np.array([np.sin(a) / BAND_AX, 0.0, np.cos(a) / BAND_AZ])
+            cn.append(n_ / np.linalg.norm(n_))
+    n = len(ring)
+    base = len(V0)
+    cf = []
+    for i in range(n):
+        a, b = i, (i + 1) % n
+        # (Wound to face out.)
+        cf += [[base + a, base + b, base + b + n], [base + a, base + b + n, base + a + n]]
+    # (Its texture: the body's, from where the band was, dark.)
+    near = np.argmin(np.linalg.norm(V0[None, :, :] - np.array(cv)[:, None, :], axis=2), axis=1) if len(V0) < 60000 else np.zeros(len(cv), int)
+    from trimesh.visual import TextureVisuals
+    body = trimesh.Trimesh(np.vstack([V0, np.array(cv)]), np.vstack([F[~cut], np.array(cf)]), vertex_normals=np.vstack([N0, np.array(cn)]),
+                           visual=TextureVisuals(uv=np.vstack([uv0, uv0[near]]), material=g.visual.material), process=False)
+    s.geometry["body"] = body
+    s.export(out)
+    print(f"band: cut {int(cut.sum())} faces, a core of {len(cf)} triangles")
+    # The coils, each from its left or right side (in turn) round once:
+    # where it unwinds from as that arm pulls.
+    rng = np.random.default_rng(11)
+    lines = []
+    for ci in range(BAND_COILS):
+        f = (ci + 0.5) / BAND_COILS * 2 - 1
+        ph = rng.uniform(0, 2 * np.pi)
+        a = np.linspace(0, 2 * np.pi, 160) + (np.pi / 2 if ci % 2 == 0 else -np.pi / 2)
+        out_r = 1.0 + 0.035 * (ci % 2) + 0.012 * rng.uniform(-1, 1)
+        x = c[0] + np.sin(a) * BAND_AX * out_r
+        z = c[2] + np.cos(a) * BAND_AZ * out_r
+        front = np.clip(np.cos(a), 0, 1) ** 1.5
+        drift = rng.uniform(-1, 1) * 0.9 * front * np.sin(2 * a + ph) + 0.15 * np.sin(a + ph)
+        y = band_y(x, z) + np.clip(f + drift * 2 / BAND_COILS * 1.6, -1, 1) * (half(z) - BAND_R)
+        pts = resample(np.c_[x, y, z], step=0.02)
+        lines.append(f"0 {BAND_R * rng.uniform(0.85, 1.2):.4f} " + " ".join(f"{p[0]:.4f},{p[1]:.4f},{p[2]:.4f}" for p in pts))
+    with open(cables_out, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"band: {BAND_COILS} coils added to {cables_out}")
+
+
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     seed = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 1
@@ -355,5 +574,10 @@ if __name__ == "__main__":
         spikes = measure_spikes(inp)
         sharded = os.path.join(tmp, "shards.glb")
         shards(flat, spikes, sharded, seed)
-        feet(sharded, out)
+        footed = os.path.join(tmp, "feet.glb")
+        feet(sharded, footed)
+        armed = os.path.join(tmp, "arms.glb")
+        cables = os.path.splitext(out)[0] + ".cables"
+        arms(footed, armed, cables)
+        band(armed, out, cables)
     print("written", out)

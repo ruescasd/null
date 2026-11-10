@@ -77,6 +77,7 @@ pub const OPTIONS: &[(&[&str], &str, bool, &[f32], &str)] = &[
     (&["impaled"], "hover", true, &[], "how high its feet keep above the ground, m (1.5)"),
     (&["impaled"], "keep", true, &[], "it hovers after you this far off (m) instead of landing near you: to judge its field by"),
     (&["impaled"], "health", true, &[], "how much it takes (80)"),
+    (&["impaled"], "latch", true, &[1.0, 2.0, 3.0, 4.0], "what its cable does holding you, besides hurting: 1 nothing more, 2 slows you, 3 holds you where you were, 4 reels you in (1)"),
     (&["impaled"], "plume", true, &[1.0, 2.0], "its beams: 1 in curves, 2 in hard straight-edged shards (2)"),
         (&["clip"], "echo", false, &[], "a second body beside it, a moment behind: one creature, two identities"),
     (&["clip"], "echo_lag", true, &[], "echo: how far behind (s, 0.07)"),

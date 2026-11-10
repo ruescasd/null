@@ -120,16 +120,22 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   beaten down on its way, it stays landed. Checked: floor, stacks, spire,
   city and an arena round, every way clear (a warning if it is ever
   inside something). `keep=N` keeps the old hovering after you.
-- **You** Stage 2 built, its attacks (your picks, 2026-11-10): the crash
-  (it hangs 0.5 s over its spot, the tell; a ring sweeps out; within 6 m
-  on the ground you are hurt, up to 25, and thrown; a jump spares you) and
-  lashes from its waist (cables uncoil from the band on your side, curl
-  back 0.45 s, the tell, whip out to where you were, 8 m reach, 20 a hit,
-  shoved; out of reach, missed). It lands 3.5-8 m from you. Standing still
-  through one landing cost 71 of 100: tune by feel.
-  Its lash cables could borrow the buds' leeching cables' look
-  (`combat/leech.rs`), your note; now plain black tubes, hard to see at
-  night.
+- **You** Its attacks: the crash (it hangs 0.5 s over its spot, the tell;
+  a ring sweeps out; within 6 m on the ground you are hurt, up to 25, and
+  thrown; a jump spares you) and its grasp (your call 2026-11-10, in place
+  of the lash: too slow to reposition, it needs reach): its shoulders draw
+  back (the tell), a cable from each arm is flung out, homing on you
+  slowly (7 m/s, you run 10; turning gradually; range 25 m), its way sagging
+  behind it, fed from its waist band; touching you it takes hold (8, then 6
+  a second); missed or let go, it may grasp again 1.5 s on, its cables
+  still coming back. It stays down while you are in range and in sight,
+  flies to catch you up otherwise (and now and then anyway, 1 in 4 as a
+  grasp ends); its cables coming back hold up nothing. Open (yours): what holding does besides hurting, `latch=1`
+  nothing, `2` slows you, `3` holds you, `4` reels you in; and escape (for
+  now: hurt it by 20 and it lets go; or 6 s; or get 33 m away). It lands
+  5-14 m from you. Its arms and band are cables, not mesh
+  (tools/impaled_mesh.py, creatures/impaled.cables); its cables could
+  borrow the buds' leeching-cable look (combat/leech.rs), your note.
 - **Agreed** Stage 3, dense places (a 3D search), only if wanted.
 - Open: a choice costs 0.2-3 ms of sweeps (one a frame across all brutes).
 

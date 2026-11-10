@@ -17,9 +17,9 @@ use worldgen::noise::hash01;
 use super::{HEIGHT, feet};
 use crate::ground::Ground;
 
-/// How far from you it lands (m), and the distance it likes best: within
-/// its lash's reach, its crash's edge on you if you stand still.
-const NEAR: (f32, f32, f32) = (3.5, 8.0, 4.0);
+/// How far from you it lands (m), and the distance it likes best: well
+/// within its grasp's range, not so near it must come again.
+const NEAR: (f32, f32, f32) = (5.0, 14.0, 10.0);
 /// Its feet: how far out the ground under them is felt (m), and how much
 /// it may rise or fall within that (m).
 const FOOT: f32 = 1.0;

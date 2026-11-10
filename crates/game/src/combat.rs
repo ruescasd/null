@@ -129,7 +129,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
             .init_resource::<impaled::field::Pushes>()
             .add_systems(Startup, impaled::field::setup)
-            .add_systems(Update, (impaled::arrive, impaled::fly, impaled::attack::draw, impaled::attack::rings, impaled::field::show, impaled::field::beams).chain().before(hunter::spawn).run_if(crate::loading::playing))
+            .add_systems(Update, (impaled::arrive, impaled::fly, impaled::arms::adopt, impaled::arms::bend, impaled::arms::draw, impaled::attack::rings, impaled::field::show, impaled::field::beams).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
             .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, cape::cloaks.after(hunter::flesh), slab::pulse, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
