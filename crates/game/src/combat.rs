@@ -40,10 +40,12 @@ mod envelop;
 mod strike;
 mod stalker;
 mod skull;
+mod pieces;
 mod chain;
 /// A hunter, for what counts them from outside (the benches).
 pub(crate) use hunter::Hunter as HunterMarker;
 mod bishop;
+mod impaled;
 mod forms;
 mod grove;
 mod hair;
@@ -61,6 +63,7 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "sounds/shard_break.wav");
         embedded_asset!(app, "sounds/swarm_voice.wav");
         embedded_asset!(app, "sounds/ground_hum.wav");
+        embedded_asset!(app, "sounds/impaled_hum.wav");
         embedded_asset!(app, "sounds/swarm_assemble.wav");
         embedded_asset!(app, "sounds/shard_hit_synth.wav");
         embedded_asset!(app, "sounds/shard_hit_stab.wav");
@@ -98,8 +101,9 @@ impl Plugin for CombatPlugin {
         // Spatial sounds fade with the square of the distance; at this scale
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
         embedded_asset!(app, "combat/beam.wgsl");
+        embedded_asset!(app, "combat/impaled/plume.wgsl");
         embedded_asset!(app, "combat/envelop.wgsl");
-        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default()));
+        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default(), MaterialPlugin::<impaled::plume::Plume>::default()));
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
         app.init_resource::<Gun>()
             .init_resource::<Director>()
@@ -107,6 +111,7 @@ impl Plugin for CombatPlugin {
             .init_resource::<round::Round>()
             .init_resource::<round::Gates>()
             .add_plugins(hunter::clip::plugin)
+            .add_plugins(pieces::plugin)
             .add_plugins(hunter::mace::plugin)
             .add_systems(PostStartup, setup)
             .add_systems(Startup, (round::setup, ichor::setup, hunter::setup, beam::setup, envelop::setup, strike::setup, forms::setup, bishop::settle, cape::hang))
@@ -118,10 +123,13 @@ impl Plugin for CombatPlugin {
                     .run_if(crate::loading::playing),
             )
             .add_systems(Update, choose.before(fire).run_if(crate::loading::playing))
-            .add_systems(Update, hunter::apart.after(hunter::hunt).before(hunter::flesh).run_if(crate::loading::playing))
+            .add_systems(Update, (hunter::apart.after(hunter::hunt), hunter::keep_on_nodes.after(hunter::apart)).before(hunter::flesh).run_if(crate::loading::playing))
             // (Not till the game is on: see `loading.rs`.)
             .add_systems(Update, (forms::gaze, hair::hair).chain().after(swarm).run_if(crate::loading::playing))
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
+            .init_resource::<impaled::field::Pushes>()
+            .add_systems(Startup, impaled::field::setup)
+            .add_systems(Update, (impaled::arrive, impaled::fly, impaled::attack::draw, impaled::attack::rings, impaled::field::show, impaled::field::beams).chain().before(hunter::spawn).run_if(crate::loading::playing))
             .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, cape::cloaks.after(hunter::flesh), slab::pulse, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
@@ -207,15 +215,16 @@ struct Gun {
 }
 
 /// Keys 1 (nothing) and 3 (the shotgun) choose what is in your hands; the
-/// gun shows only if it is.
-fn choose(keys: Res<ButtonInput<KeyCode>>, mut gun: ResMut<Gun>, mut model: Single<&mut Visibility, With<weapon::Viewmodel>>) {
+/// gun shows only if it is (and not while a screenshot is taken, see
+/// `capture::Hiding`).
+fn choose(keys: Res<ButtonInput<KeyCode>>, mut gun: ResMut<Gun>, mut model: Single<&mut Visibility, With<weapon::Viewmodel>>, hiding: Res<crate::capture::Hiding>) {
     if keys.just_pressed(KeyCode::Digit1) {
         gun.empty = true;
     }
     if keys.just_pressed(KeyCode::Digit3) {
         gun.empty = false;
     }
-    let shown = if gun.empty { Visibility::Hidden } else { Visibility::Inherited };
+    let shown = if gun.empty || hiding.0 { Visibility::Hidden } else { Visibility::Inherited };
     if **model != shown {
         **model = shown;
     }
@@ -505,7 +514,8 @@ fn fire(
     camera: Single<(&Transform, &FlyCam, &mut Player)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
-    mut bishops: Query<(Entity, &mut bishop::Bishop)>,
+    // (Floaters: bishops and brutes, as one parameter.)
+    (mut bishops, mut brutes): (Query<(Entity, &mut bishop::Bishop)>, Query<(Entity, &mut impaled::Impaled)>),
     ichor: Res<ichor::Ichor>,
     fx: Res<weapon::Fx>,
     viewmodel: Single<Entity, With<weapon::Viewmodel>>,
@@ -523,7 +533,7 @@ fn fire(
     light.intensity *= (-dt * 40.0).exp();
     let (transform, fly, mut player) = camera.into_inner();
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
-    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|(_, b)| b.health > 0.0)));
+    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|(_, b)| b.health > 0.0) || brutes.iter().any(|(_, b)| b.alive())));
     if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 || gun.empty {
         return;
     }
@@ -572,12 +582,36 @@ fn fire(
         }
         let mut end = best.map_or(wall, |(d, _)| d);
         let mut struck = None;
+        // Or a brute's, nearer than any (taking the shot from them).
+        let limit = body.map_or(end, |(b, ..)| b);
+        let brute = brutes.iter().filter_map(|(e, b)| b.ray(eye, dir, limit).map(|d| (d, e))).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, _)) = brute {
+            body = None;
+            best = None;
+            end = d;
+        }
         // Or a bishop's, nearer than either.
         let limit = body.map_or(end, |(b, ..)| b);
         let robed = bishops.iter_mut().filter_map(|(e, b)| b.ray(eye, dir, limit).map(|d| (d, e, b))).min_by(|a, b| a.0.total_cmp(&b.0));
         if let Some((d, owner, mut b)) = robed {
             b.hurt(dir, DAMAGE);
             b.embed(&mut commands, &assets, owner, eye + dir * d, dir, d / SHARD_SPEED);
+            end = d;
+            struck = Some(eye + dir * d);
+        } else if let Some((d, entity)) = brute
+            && let Ok((_, mut b)) = brutes.get_mut(entity)
+        {
+            b.hurt(dir, DAMAGE);
+            // Its needle, in it where it struck, carried with it.
+            let t = b.drawn();
+            let base = eye + dir * (d - NEEDLE_OUT);
+            commands.spawn((
+                Needle { delay: d / SHARD_SPEED, life: NEEDLE_LIFE, size: NEEDLE_SIZE },
+                Mesh3d(assets.shard.clone()),
+                MeshMaterial3d(assets.bright.clone()),
+                Transform::from_translation(t.rotation.inverse() * (base - t.translation)).with_rotation(t.rotation.inverse() * Quat::from_rotation_arc(Vec3::Y, dir)).with_scale(Vec3::ZERO),
+                ChildOf(entity),
+            ));
             end = d;
             struck = Some(eye + dir * d);
         } else if let Some((d, entity, bone)) = body
@@ -898,6 +932,7 @@ fn die(
     bodies: Query<Entity, Or<(With<hunter::Hunter>, With<hunter::Assembly>, With<hunter::Part>, With<hunter::Eye>, With<hunter::clip::Body>)>>,
     bishops: Query<Entity, With<bishop::OfBishop>>,
     bolts: Query<(Entity, &bishop::Bolt)>,
+    brutes: Query<Entity, With<impaled::Impaled>>,
 ) {
     for (entity, transform, s) in &swarm {
         if s.health > 0.0 {
@@ -925,6 +960,9 @@ fn die(
         // in flight: left standing, a round after `reset` began with them.)
         // (Tried: one dying this frame may be despawning itself already.)
         for entity in &bishops {
+            commands.entity(entity).try_despawn();
+        }
+        for entity in &brutes {
             commands.entity(entity).try_despawn();
         }
         for (entity, bolt) in &bolts {
@@ -1016,6 +1054,22 @@ fn shatter_quiet(commands: &mut Commands, assets: &Assets3, at: Vec3, velocity: 
             Mesh3d(assets.shard.clone()),
             MeshMaterial3d(assets.dark.clone()),
             Transform::from_translation(at).with_scale(Vec3::new(2.5, 0.5, 2.5)),
+        ));
+    }
+}
+
+/// Chips of the ground kicked up where something heavy lands at `at`, going
+/// on with it (`velocity`): low, pale, quick.
+fn kicked_up(commands: &mut Commands, assets: &Assets3, at: Vec3, velocity: Vec3, seed: u32) {
+    for k in 0..8 {
+        let r = |j: i32| hash01(seed as i32, k, j, 0x5c3) - 0.5;
+        let out = Vec3::new(r(0), 0.0, r(1)).normalize_or(Vec3::X);
+        let size = Vec3::new(1.2, 0.3, 1.2) * (0.6 + 0.8 * (r(2) + 0.5));
+        commands.spawn((
+            Debris { velocity: velocity + out * (2.0 + 3.0 * (r(3) + 0.5)) + Vec3::Y * (2.5 + 2.5 * (r(4) + 0.5)), spin: Vec3::new(r(5), r(6), r(7)) * 16.0, life: 0.7, total: 0.7, size },
+            Mesh3d(assets.shard.clone()),
+            MeshMaterial3d(assets.pale.clone()),
+            Transform::from_translation(at + out * 0.3 + Vec3::Y * 0.05).with_scale(size),
         ));
     }
 }

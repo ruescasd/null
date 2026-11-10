@@ -1,5 +1,8 @@
 //! The stalker's shot: from its muzzle along its aim, to the ground or as
-//! far as it reaches, a ray of light (see `beam.wgsl`); a flash, held, gone.
+//! far as it reaches, a ray (see `beam.wgsl`); a flash, held, gone. Its
+//! searchlight inverted: dark against its pale one, light against its
+//! black (the user, 2026-11-06: a miss hard to see, the screen's flash now
+//! only on a hit; its pale searchlight turning black as it fires).
 //! Where it lands, on the ground or on what is built, it strikes, and the
 //! ground is electrified under a pillar of light (`envelop.rs`): aimed at
 //! what you stand on, it lands by you, or where you were. (Drawn as the comet
@@ -17,10 +20,12 @@ use bevy::{
 };
 
 
-/// How far a shot reaches (m), how wide it is (m), and how bright.
+/// How far a shot reaches (m), how wide it is (m), how bright, or, dark,
+/// how much it darkens what is behind it (0..1).
 const RANGE: f32 = 300.0;
 const WIDTH: f32 = 0.35;
 const GLOW: f32 = 3.0;
+const DARK: f32 = 0.92;
 /// A shot's flash (s): up, held, and gone in. (Whence
 /// it came, after the fact: its searchlight back on you, see `halo.rs`; a
 /// trail lingering after it was too like the beam, the user.)
@@ -88,6 +93,7 @@ pub(super) struct Shot {
     ray: Handle<Ray>,
     age: f32,
     gun: (Entity, f32),
+    dark: bool,
 }
 
 pub(super) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
@@ -130,7 +136,7 @@ pub(super) fn reach(ground: &crate::ground::Ground, from: Vec3, dir: Vec3) -> Op
 /// Fires a shot from `from` along `dir` (a unit), to where it first meets
 /// the ground or what is built, or `RANGE`. Where it lands, it strikes
 /// (`strike.rs`): the ground there electrified, a pillar of light over it,
-/// stone hanging in it (`envelop.rs`).
+/// stone hanging in it (`envelop.rs`). Dark, or light (`dark`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fire(
     commands: &mut Commands,
@@ -144,6 +150,7 @@ pub(super) fn fire(
     from: Vec3,
     dir: Vec3,
     gun: (Entity, f32),
+    dark: bool,
 ) {
     let length = reach(ground, from, dir);
     let landed = length.map(|d| from + dir * d);
@@ -157,9 +164,9 @@ pub(super) fn fire(
         super::envelop::raise(commands, layers, at);
         super::strike::levitate(commands, strikes, ground, at, 3.0);
     }
-    let ray = rays.add(Ray { shape: Vec4::new(WIDTH, 1.5, 0.0, 0.0), light: Vec4::ZERO });
+    let ray = rays.add(if dark { Ray::dark(WIDTH, 0.0) } else { Ray::new(WIDTH, 0.0) });
     commands.spawn((
-        Shot { ray: ray.clone(), age: 0.0, gun },
+        Shot { ray: ray.clone(), age: 0.0, gun, dark },
         Mesh3d(kit.0.clone()),
         MeshMaterial3d(ray),
         Transform::from_translation(from).with_rotation(Quat::from_rotation_arc(Vec3::Z, dir)).with_scale(Vec3::new(1.0, 1.0, length)),
@@ -197,7 +204,7 @@ pub(super) fn shots(
         }
         let strength = if a < FLASH.0 { a / FLASH.0 } else if a < hold { 1.0 } else { 1.0 - (a - hold) / FLASH.2 };
         if let Some(mut ray) = rays.get_mut(&shot.ray) {
-            ray.light.x = GLOW * strength;
+            ray.light.x = if shot.dark { DARK } else { GLOW } * strength;
         }
     }
 }

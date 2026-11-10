@@ -1,0 +1,27 @@
+# gladiator.steps: the walk of gladiator.glb (Walking, 1.033 s) as its steps' shape, measured by
+# tools/step_shape.py --write, for another body to walk with (see `rig::Steps`).
+# Lengths in its legs (hip joint to ankle). The cycle runs from its left foot landing.
+# Its own leg (m), the cycle (s), its speed (m/s); its stride (legs), how much of the
+# cycle a foot is down, where the left foot lifts and the right (of the cycle); where
+# a foot lands from its hip (legs, ahead and out); its hip joints' height (legs).
+leg = 1.1071
+cycle = 1.0333
+speed = 1.9445
+stride = 1.8149
+down = 0.5254
+lifts = 0.5117 0.0195
+land = 0.3863 0.0129
+hips = 0.9586
+# Through a swing (from lift to landing, evenly): how far along its way, how high.
+along = 0.0000 0.0290 0.0645 0.1059 0.1509 0.1987 0.2492 0.3021 0.3581 0.4176 0.4818 0.5495 0.6191 0.6887 0.7564 0.8202 0.8714 0.9142 0.9435 0.9617 0.9753 0.9863 0.9946 1.0000
+up = 0.1052 0.1403 0.1768 0.2038 0.2190 0.2228 0.2163 0.2023 0.1828 0.1605 0.1361 0.1152 0.1006 0.0889 0.0842 0.0851 0.0834 0.0810 0.0712 0.0563 0.0390 0.0236 0.0129 0.0077
+# Through the cycle (evenly, from its left foot landing): its hips' rise, sway (to its
+# left) and surge about their mean (legs); its pelvis's and shoulders' turn (degrees,
+# its left side back); its trunk's lean about its mean (degrees, forward) and roll.
+rise = -0.0351 -0.0375 -0.0320 -0.0163 0.0055 0.0226 0.0328 0.0322 0.0220 0.0053 -0.0154 -0.0309 -0.0389 -0.0361 -0.0233 -0.0020 0.0238 0.0464 0.0555 0.0483 0.0259 -0.0009 -0.0206 -0.0307
+sway = 0.0159 0.0269 0.0356 0.0393 0.0370 0.0320 0.0274 0.0226 0.0167 0.0106 0.0024 -0.0084 -0.0195 -0.0308 -0.0388 -0.0384 -0.0324 -0.0257 -0.0231 -0.0196 -0.0161 -0.0117 -0.0054 0.0041
+surge = 0.0068 0.0172 0.0174 0.0107 0.0034 0.0005 -0.0003 -0.0014 -0.0003 0.0001 0.0043 0.0183 0.0298 0.0346 0.0251 0.0102 -0.0032 -0.0170 -0.0240 -0.0306 -0.0326 -0.0315 -0.0271 -0.0106
+pelvis = -4.2117 -3.3759 -2.4516 -1.4921 -0.4635 0.6025 1.6711 2.6866 4.0266 5.0395 5.2288 4.4922 3.6606 2.8218 2.0339 1.3116 0.5830 -0.1259 -0.8818 -1.9703 -3.7068 -5.0606 -5.4782 -4.9530
+shoulders = 14.1618 13.0282 10.7557 6.8905 2.7893 -0.7848 -4.2034 -7.2999 -9.8779 -11.7813 -12.6236 -12.9646 -13.2193 -12.6974 -10.0385 -6.0173 -2.3240 0.1680 3.1421 6.0156 8.5027 10.7822 13.0052 14.3655
+lean = -1.1577 -1.8124 -1.9958 -1.8715 -1.8928 -2.0631 -1.7880 -1.0568 -0.3711 0.2096 0.6179 0.1718 -0.3795 -0.5912 0.0628 0.8587 1.3703 1.8401 2.0578 2.2134 2.0157 1.8020 1.5106 0.2173
+roll = -1.9576 -1.9743 -1.5204 -0.8459 -0.4466 -0.1544 0.2260 0.5573 0.8982 1.3130 1.6695 1.7405 1.7499 1.4413 0.8865 0.5811 0.5249 0.4563 0.1745 -0.0960 -0.6240 -1.1592 -1.5374 -1.8270

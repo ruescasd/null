@@ -12,10 +12,11 @@
 //! setting is its name then its value: `NAME on`, `NAME off` (a switch),
 //! `NAME VALUE`, `NAME default` (a number), `NAME` alone its value. And
 //! `help`; `list` (what acts at once, then all else on or set); `where`
-//! (the camera, as `--cam`; and copies it); `clear`. Up brings back the
+//! (the camera, as `--cam`; and copies it); `tp NAME` and `savetp NAME`
+//! (places kept by name, see `places.rs`); `clear`. Up brings back the
 //! last command (kept between runs); Left, Right, Home, End, Delete and
 //! Ctrl with Left, Right or Backspace edit the line; Tab completes a word;
-//! Ctrl+V pastes (a line at a time run), Ctrl+C copies the line.
+//! Ctrl+V pastes (a line at a time run), Ctrl+C copies the line and clears it.
 //! `--do COMMAND` on the command line runs one at the start.
 
 use bevy::{
@@ -58,11 +59,15 @@ pub struct Spawns {
     /// Where `cam` moves the camera to (as `--cam`), at the frame's end:
     /// after what was spawned before it in the same breath.
     pub goto: Option<[f32; 5]>,
+    /// Models `show` asks to stand before you (see `show.rs`), and whether
+    /// those shown go.
+    pub shows: Vec<crate::show::Asked>,
+    pub unshow: bool,
 }
 
 /// The kinds `spawn` knows, besides the creatures of `creatures/` (each by
 /// its name, see `options_kind`).
-pub const KINDS: [&str; 10] = ["harrow", "angler", "biped", "sprawl", "stalker", "porter", "chained", "bud", "grove", "bishop"];
+pub const KINDS: [&str; 11] = ["harrow", "angler", "biped", "sprawl", "stalker", "porter", "chained", "bud", "grove", "bishop", "impaled"];
 
 /// Every kind `spawn` knows: `KINDS` and the creatures of `creatures/`.
 fn kinds() -> Vec<String> {
@@ -94,7 +99,17 @@ pub struct Console {
     down: f32,
     closing: bool,
     copy: Option<String>,
+    /// The commands run this session that made the scene (`spawn`, `show`,
+    /// `round`, `reset`), in order: what a screenshot needs to be seen
+    /// again (F12, see `capture.rs`).
+    pub scene: Vec<String>,
+    /// `shot`: a screenshot asked for, as F12 (see `capture.rs`).
+    pub shoot: bool,
 }
+
+/// The commands that make the scene, kept for screenshots (see
+/// `Console::scene`).
+const SCENE: [&str; 4] = ["spawn", "show", "round", "reset"];
 
 /// How many commands are kept between runs.
 const REMEMBERED: usize = 500;
@@ -317,8 +332,14 @@ fn type_in(
                     }
                 }
             }
-            // (An empty line copies nothing: what is on the clipboard kept.)
-            _ if ctrl && key.key_code == KeyCode::KeyC => console.copy = (!console.line.is_empty()).then(|| console.line.clone()),
+            // Copied, and the line cleared, as a terminal's Ctrl+C gives it
+            // up (the user, 2026-11-07). (An empty line copies nothing: what
+            // is on the clipboard kept.)
+            _ if ctrl && key.key_code == KeyCode::KeyC => {
+                console.copy = (!console.line.is_empty()).then(|| console.line.clone());
+                console.recall(String::new());
+                console.back = 0;
+            }
             _ if ctrl => {}
             _ => {
                 if let Some(text) = &key.text {
@@ -364,7 +385,7 @@ fn complete(console: &mut Console, args: &Args) {
     let (done, partial) = (&words[..words.len() - 1], words[words.len() - 1]);
     let done: Vec<&str> = done.iter().copied().filter(|w| !w.is_empty()).collect();
     let mut choices: Vec<String> = match done.as_slice() {
-        [] => ["spawn", "round", "reset", "cam", "where", "list", "help", "clear", "quit"]
+        [] => ["spawn", "round", "reset", "cam", "tp", "savetp", "show", "shot", "where", "list", "help", "clear", "quit"]
             .iter()
             .map(|c| c.to_string())
             .chain(SWITCHES.iter().map(|s| s.0.to_string()))
@@ -376,6 +397,9 @@ fn complete(console: &mut Console, args: &Args) {
             .filter(|(kinds, ..)| kinds.contains(&options_kind(kind)))
             .map(|(_, name, number, ..)| if *number { format!("{name}=") } else { name.to_string() })
             .collect(),
+        [command] if *command == "tp" || *command == "savetp" => crate::places::names(),
+        [command] if *command == "show" => crate::show::files().into_iter().chain(["off".to_string()]).collect(),
+        [command, _, ..] if *command == "show" => ["height=", "ahead=", "turn=", "spin"].iter().map(|s| s.to_string()).collect(),
         [name] if SWITCHES.iter().any(|s| s.0 == *name) => vec!["on".into(), "off".into()],
         _ => Vec::new(),
     };
@@ -400,8 +424,13 @@ fn complete(console: &mut Console, args: &Args) {
 /// `given`).
 #[allow(clippy::too_many_arguments)]
 fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), world: Option<&crate::terrain::WorldGen>, exit: &mut MessageWriter<AppExit>) {
+    if line.split_whitespace().next().is_some_and(|w| SCENE.contains(&w)) {
+        console.scene.push(line.trim().to_string());
+    }
     if line.trim() == "clear" {
         console.lines.clear();
+    } else if line.trim() == "shot" {
+        console.shoot = true;
     } else if line.trim() == "quit" || line.trim() == "exit" {
         exit.write(AppExit::Success);
     } else if let Some(rest) = line.trim().strip_prefix("cam ") {
@@ -414,6 +443,83 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
                 console.lines.push(format!("the camera to {rest}"));
             }
             Err(_) => console.lines.push("cam X,Y,Z,YAW,PITCH (as `where` says it)".into()),
+        }
+    } else if line.trim() == "tp" || line.trim().starts_with("tp ") {
+        // (A place kept by name, see `places.rs`: there, as `cam`; alone,
+        // the places listed.)
+        match line.split_whitespace().nth(1) {
+            None => match crate::places::listed() {
+                Ok(listed) => console.lines.extend(listed),
+                Err(e) => console.lines.push(e),
+            },
+            Some(name) => match crate::places::find(name) {
+                Ok(at) => {
+                    spawns.goto = Some(at);
+                    console.lines.push(format!("to {name}"));
+                }
+                Err(e) => console.lines.push(e),
+            },
+        }
+    } else if line.trim() == "savetp" || line.trim().starts_with("savetp ") {
+        // (Where you are and look, as `where` says it, kept by name; the
+        // place it replaces said, so that it is not lost unseen.)
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words.get(1) {
+            None => console.lines.push("savetp NAME [note]".into()),
+            Some(name) => {
+                let (t, fly) = camera;
+                let p = t.translation;
+                let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
+                let place = crate::places::Place { name: name.to_string(), at: [p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()], note: words[2..].join(" ") };
+                match crate::places::save(&place) {
+                    Ok(None) => console.lines.push(format!("{name} kept in {}", crate::places::file().display())),
+                    Ok(Some(old)) => {
+                        let [x, y, z, yaw, pitch] = old.at;
+                        console.lines.push(format!("{name} kept, in place of {x},{y},{z},{yaw},{pitch} {}", old.note));
+                    }
+                    Err(e) => console.lines.push(e),
+                }
+            }
+        }
+    } else if line.trim() == "show" || line.trim().starts_with("show ") {
+        // (A model of `creatures/` stood before you, to see it, see
+        // `show.rs`: `height=M` tall (2.6), `ahead=M` before you (4),
+        // `turn=DEG` from facing you, `spin` turning slowly round; `show
+        // off`, those shown gone; alone, the files listed.)
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words.get(1) {
+            None => console.lines.push(format!("show FILE [height=M] [ahead=M] [turn=DEG] [spin]  (show off: gone): {}", crate::show::files().join("  "))),
+            Some(&"off") => {
+                spawns.unshow = true;
+                console.lines.push("those shown gone".into());
+            }
+            Some(file) if !crate::show::files().iter().any(|f| f == file) => console.lines.push(format!("{file}: not in {}; there are {}", crate::combat::creatures_folder().display(), crate::show::files().join("  "))),
+            Some(file) => {
+                let mut asked = crate::show::Asked { file: file.to_string(), height: 2.6, at: Vec3::ZERO, facing: 0.0, spin: false };
+                let (mut ahead, mut turn, mut wrong) = (4.0, 0.0, None);
+                for w in &words[2..] {
+                    let number = |v: &str| v.parse::<f32>().ok();
+                    match w.split_once('=') {
+                        Some(("height", v)) if number(v).is_some_and(|h| h > 0.0) => asked.height = number(v).expect("checked"),
+                        Some(("ahead", v)) if number(v).is_some() => ahead = number(v).expect("checked"),
+                        Some(("turn", v)) if number(v).is_some() => turn = number(v).expect("checked"),
+                        None if *w == "spin" => asked.spin = true,
+                        _ => wrong = Some(*w),
+                    }
+                }
+                match wrong {
+                    Some(w) => console.lines.push(format!("{w}: show takes height=M, ahead=M, turn=DEG and spin")),
+                    None => {
+                        let t = camera.0;
+                        let forward = Vec3::new(t.forward().x, 0.0, t.forward().z).normalize_or(Vec3::Z);
+                        asked.at = t.translation + forward * ahead;
+                        // (Its +Z, a generated model's front, towards you.)
+                        asked.facing = (-forward.x).atan2(-forward.z) + turn.to_radians();
+                        console.lines.push(format!("{file}, {} m tall, {ahead} m before you", asked.height));
+                        spawns.shows.push(asked);
+                    }
+                }
+            }
         }
     } else if line.trim() == "mark" {
         // (A mark in the rig's trace, see the `rigtrace` option: now, what
@@ -432,19 +538,39 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
         let round = words[0] == "round";
         let gates = round && args.opt("arena");
         let count = words.get(2).and_then(|n| n.parse::<u32>().ok());
+        // (`ahead=M`: M metres before you, where you are now, not 3 m
+        // before wherever you are when it forms: so a chase can be set up
+        // from the command line, `--do "spawn gladiator ahead=40"`.)
+        let ahead = words.iter().find_map(|w| w.strip_prefix("ahead=")).map(|m| m.parse::<f32>());
+        let words: Vec<&str> = words.iter().copied().filter(|w| !w.starts_with("ahead=")).collect();
         let options = &words[(2 + count.is_some() as usize).min(words.len())..];
         match words.get(1) {
+            _ if matches!(ahead, Some(Err(_))) => console.lines.push("ahead=M: how many metres before you, a number".into()),
             Some(kind) if kinds().iter().any(|k| k == kind) && matches!(options, ["?"] | ["help"] | ["--help"]) => console.lines.push(named(kind, crate::traits::help(options_kind(kind)))),
             Some(kind) if kinds().iter().any(|k| k == kind) => match crate::traits::Traits::parse(options_kind(kind), options) {
                 Ok(traits) => {
                     let count = count.unwrap_or(1).clamp(1, 20);
-                    let places = if gates { crate::chasm::arena::pens() } else { Vec::new() };
+                    let there = ahead.and_then(Result::ok).map(|m| {
+                        let t = camera.0;
+                        let forward = Vec3::new(t.forward().x, 0.0, t.forward().z).normalize_or(Vec3::Z);
+                        (m, t.translation + forward * m)
+                    });
+                    let places = match there {
+                        Some((_, at)) => vec![at],
+                        None if gates => crate::chasm::arena::pens(),
+                        None => Vec::new(),
+                    };
                     spawns.creatures.push((kind.to_string(), count, traits, places));
                     let with = if options.is_empty() { String::new() } else { format!(": {}", options.join(" ")) };
                     if round {
                         spawns.round = Some(format!("{count} {kind}{with}"));
                     }
-                    console.lines.push(format!("{count} {kind} {}{with}", if gates { "through the gates" } else { "before you" }));
+                    let place = match there {
+                        Some((m, _)) => format!("{m} m before you"),
+                        None if gates => "through the gates".into(),
+                        None => "before you".into(),
+                    };
+                    console.lines.push(format!("{count} {kind} {place}{with}"));
                 }
                 Err(e) => console.lines.push(named(kind, e)),
             },
@@ -568,17 +694,22 @@ fn run(line: &str, args: &mut Args) -> Vec<String> {
             "NAME VALUE           a number (--set NAME=VALUE); NAME default, back to its default".into(),
             "list                 what acts at once, then all else on or set".into(),
             "where                where you are and look, as --cam X,Y,Z,YAW,PITCH (Y as above a ground at 0)".into(),
-            "spawn KIND [N] [OPTION ...]  N creatures 3 m before you, with their options (`spawn KIND --help`".into(),
+            "spawn KIND [N] [OPTION ...]  N creatures 3 m before you (ahead=M: M m), with their options (`spawn KIND --help`".into(),
             "                     lists them): harrow, angler, biped, sprawl, stalker, porter, chained (a".into(),
             "                     stalker keeping a porter on a chain), bud, grove (7 asleep), bishop".into(),
             "round KIND [N] [OPTION ...]  the same, as a round: timed, and what it took said at its end (in".into(),
             "                     the arena, through its gates)".into(),
             "reset                every creature gone, your health back".into(),
             "cam X,Y,Z,YAW,PITCH  the camera there and that way (as `where` says it)".into(),
+            "tp [NAME]            to a place kept by name in places.txt (--tp NAME at the start); alone, them listed".into(),
+            "savetp NAME [note]   where you are kept by that name in places.txt (one there before: replaced, said)".into(),
+            "show FILE [height=M] [ahead=M] [turn=DEG] [spin]  a model of creatures/ stood before you, M tall (2.6),".into(),
+            "                     facing you, still (no rig); show off, gone; show alone, the files".into(),
+            "shot                 a screenshot, as F12: screenshots/STAMP.png, the place shot_STAMP kept, the way there in STAMP.txt".into(),
             "clear                clears this".into(),
             "Keys: Up/Down the commands before (kept between runs); Left, Right, Home, End, Delete,".into(),
             "Ctrl+Left/Right a word, Ctrl+Backspace a word back; Tab completes; Ctrl+V pastes (each".into(),
-            "line run); Ctrl+C copies the line; `where` copies what it says.".into(),
+            "line run); Ctrl+C copies the line and clears it; `where` copies what it says.".into(),
             "quit                 leaves the game".into(),
             "Others act if read each frame; many only count at the start.".into(),
         ],

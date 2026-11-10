@@ -182,6 +182,10 @@ impl<CS: CoordinateSystem<Coordinate: PartialEq>> PartialEq for PathStep<CS> {
 
 /// Finds a straight-line path across the navigation meshes from `start_point`
 /// to `end_point`.
+/// (null) How many ways were given up straightening, going back and forth.
+pub static STALLED_PATHS: std::sync::atomic::AtomicUsize =
+  std::sync::atomic::AtomicUsize::new(0);
+
 pub(crate) fn find_path<'a, CS: CoordinateSystem>(
   archipelago: &'a Archipelago<CS>,
   start_point: &SampledPoint<'a, CS>,
@@ -232,6 +236,7 @@ pub(crate) fn find_path<'a, CS: CoordinateSystem>(
     return Ok(path_points);
   }
 
+  let mut stalled = 0;
   // Keep looping until we reach the end index. If it's the last index, but the
   // previous step was an animation link, run once more to get the waypoint to
   // the end point.
@@ -239,6 +244,7 @@ pub(crate) fn find_path<'a, CS: CoordinateSystem>(
     || matches!(path_points.last().unwrap(), PathStep::AnimationLink { .. })
   {
     let next_step;
+    let before = current_index;
     (current_index, next_step) = path.find_next_point_in_straight_path(
       &archipelago.nav_data,
       current_index,
@@ -246,6 +252,17 @@ pub(crate) fn find_path<'a, CS: CoordinateSystem>(
       last_index,
       last_point,
     );
+    // (null: no further on, twice, is a way that will never be straightened,
+    // going back and forth for ever (it filled memory): none, and counted.)
+    if current_index == before {
+      stalled += 1;
+      if stalled > 1 {
+        STALLED_PATHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Err(FindPathError::NoPathFound);
+      }
+    } else {
+      stalled = 0;
+    }
     let next_path_step;
     (current_point, next_path_step) = match next_step {
       StraightPathStep::Waypoint(point) => {

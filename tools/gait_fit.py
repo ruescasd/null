@@ -1,6 +1,6 @@
 """Fit a creature's walk and run with sine waves, and say how closely they fit.
 
-    python tools/gait_fit.py creatures/NAME.glb
+    python tools/gait_fit.py creatures/NAME.glb [--write WAVES]
 
 A walk or run repeats, so over one cycle each joint's turning is a mean pose
 plus a few sine waves, each with its own size and phase (a Fourier series;
@@ -147,10 +147,76 @@ def angle(a, b):
     return np.degrees(2 * np.arccos(min(1.0, abs(float(np.dot(qa, qb))))))
 
 
+def waves_of(values, waves):
+    """Each column of `values` (sampled evenly over one cycle) as a constant
+    and, for each wave k, its cosine and sine parts: value(u) = a0 +
+    sum(c_k cos(2 pi k u) + s_k sin(2 pi k u)), u through the cycle (0..1).
+    (rows: a0, c_1, s_1, c_2, s_2, ...)."""
+    _, f = fit(values, waves)
+    rows = [f[0].real]
+    for k in range(1, waves + 1):
+        rows += [2.0 * f[k].real, -2.0 * f[k].imag]
+    return np.array(rows)
+
+
+def evaluate(rows, u):
+    """`waves_of`'s rows at `u` (as the game evaluates them)."""
+    out = rows[0].copy()
+    for k in range(1, (len(rows) - 1) // 2 + 1):
+        a = 2.0 * np.pi * k * u
+        out += rows[2 * k - 1] * np.cos(a) + rows[2 * k] * np.sin(a)
+    return out
+
+
+def write_gait(glb, skel, clip, duration, locals_, moving, waves):
+    """`creatures/NAME.gait`: the walk's joints as waves, for the game to play
+    in place of the clip (`walk=1`); and a few of the fit's own poses, for its
+    test (the game's evaluation must give the same)."""
+    out = glb.with_suffix(".gait")
+    lines = [
+        f"# {out.name}: the walk of {glb.name} ({clip}, {duration:.3f} s) as waves, fitted by",
+        "# tools/gait_fit.py --write (Unuma et al. 1995). u runs through the clip, 0..1, as",
+        "# the walk's line in the .creature times it. Each line: what, a joint, its numbers.",
+        "# rotation: its mean turn (x y z w), then its turn from that, a rotation vector",
+        "# (radians): the constant, then each wave's cosine and sine parts (3 numbers each).",
+        "# translation: the same, without the mean (model units, its parent's frame).",
+        "# check: a joint at u, its turn (x y z w) and place, as the fit gives them.",
+        f"clip = {clip}",
+        f"waves = {waves}",
+    ]
+    fitted = {}
+    for j in moving:
+        ms = locals_[j]
+        qs = np.array([matrix_quat(m[:3, :3] / np.linalg.norm(m[:3, 0])) for m in ms])
+        mean = mean_quat(qs)
+        vec = np.array([qlog(qmul(qinv(mean), q)) for q in qs])
+        rot = waves_of(vec, waves)
+        name = skel.names[j]
+        lines.append(f"rotation | {name} | " + " ".join(f"{v:.7g}" for v in list(mean) + list(rot.ravel())))
+        moves = np.ptp(ms[:, :3, 3], axis=0).max() > 1e-6
+        tra = waves_of(ms[:, :3, 3], waves) if moves else None
+        if moves:
+            lines.append(f"translation | {name} | " + " ".join(f"{v:.7g}" for v in tra.ravel()))
+        fitted[j] = (mean, rot, tra)
+        # (The formula, as written, against the fit it came from.)
+        rebuilt, _ = fit(vec, waves)
+        for k in range(0, len(ms), 17):
+            assert np.allclose(evaluate(rot, k / len(ms)), rebuilt[k], atol=1e-6), "the waves do not give back the fit"
+    for j in moving[:: max(1, len(moving) // 6)]:
+        mean, rot, tra = fitted[j]
+        for u in (0.0, 0.37, 0.81):
+            q = qmul(mean, qexp(evaluate(rot, u)))
+            t = evaluate(tra, u) if tra is not None else locals_[j][0][:3, 3]
+            lines.append(f"check | {skel.names[j]} | {u} " + " ".join(f"{v:.7g}" for v in list(q) + list(t)))
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"wrote {out}: {len(moving)} joints, {waves} waves")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("glb")
     p.add_argument("--waves", type=int, default=8, help="up to how many waves to try (8)")
+    p.add_argument("--write", type=int, metavar="WAVES", help="write the walk with this many waves to creatures/NAME.gait, for the game (walk=1)")
     a = p.parse_args()
     glb = Path(a.glb)
     gltf, blob = read_glb(glb)
@@ -169,6 +235,8 @@ def main():
         clip = kept.get(role, "").split()[0] if kept.get(role) else clip_named(skel, role, None)
         times, duration, locals_, seam = sample(skel, clip)
         moving = [j for j in skel.joints if np.ptp(locals_[j].reshape(len(times), -1), axis=0).max() > 1e-6]
+        if a.write and role == "walk":
+            write_gait(glb, skel, clip, duration, locals_, moving, a.write)
         truth = worlds(skel, locals_, order)
         print(f"\n{role} ({clip}, {duration:.3f} s, {len(moving)} joints moving)")
         gap = max(angle(a_, b_) for a_, b_ in seam.values())

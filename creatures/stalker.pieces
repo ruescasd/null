@@ -1,0 +1,21 @@
+# The stalker's body from a generated mesh, cut into rigid pieces on its bones
+# and moved by its own walk (`spawn stalker mesh=1`; see combat/pieces.rs).
+# Each triangle goes to the bone it is nearest; the stalker's build is fitted
+# to these joints (its legs, arms, torso and neck as long as the mesh's).
+# Measured 2026-11-06 from the vertices about each joint.
+
+model = Meshy_AI_Tall_Slender_Shard_Cr_1106040902_image-to-3d-texture.glb
+# How tall it stands (m), its lowest point to its highest.
+height = 2.6
+
+# Joints (m, x y z): the model scaled to that height, its lowest point at
+# y 0, x and z as the model has them (x to its left, z forward, its face).
+hips = 0 1.36 -0.02      # between its hip joints: its torso's foot
+chest = 0 2.07 0.0       # between its shoulders: its torso's top, its neck's foot
+head = 0 2.25 0.03       # its neck's top: its head from here up
+# Each leg, hip knee foot; the one at -x first.
+leg = -0.114 1.321 0.022   -0.157 0.476 -0.056   -0.161 0.008 -0.084
+leg = 0.121 1.322 0.03     0.151 0.487 -0.055    0.205 0.015 -0.027
+# Each arm, shoulder elbow hand (its palm: what it holds its lance by); -x first.
+arm = -0.229 2.079 -0.037   -0.366 1.568 -0.086   -0.386 0.93 -0.061
+arm = 0.231 2.079 -0.032    0.363 1.567 -0.092    0.395 0.929 -0.068

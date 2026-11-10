@@ -1,8 +1,8 @@
 //! A stalker's shot striking (the user: its impact read as geometry, not
 //! damage; the whole as a science experiment, without the weight or the
 //! violence of something menacing): sudden, at its height at once, then
-//! messy, and leaving a mark. The game held still a moment, a white flash,
-//! your view jolted (near it, more); pale stone blasted up out of the ground
+//! messy, and leaving a mark. Striking you, the game held still a moment, a
+//! white flash, your view jolted (deeper in it, more); pale stone blasted up out of the ground
 //! and falling back; while its beam holds, a hot core boring in, spraying
 //! sparks and stone; and after, a dark cracked scar on the ground, long
 //! after all else is gone.
@@ -17,8 +17,10 @@ use worldgen::noise::hash01;
 
 use super::{Assets3, Debris, Director, Gun};
 
-/// The game held still (s, of real time), if you are within so far (m).
-const HITSTOP: (f32, f32) = (0.06, 40.0);
+/// The game held still (s, of real time), if it strikes you (in its zone:
+/// `envelop::depth`; within 40 m, hit or not, it was always there, the
+/// user, 2026-11-06).
+const HITSTOP: f32 = 0.06;
 /// The flash (how white at most, near), and the jolt (radians at most).
 const WHITE: f32 = 0.85;
 const JOLT: f32 = 0.09;
@@ -232,9 +234,9 @@ pub(super) fn strikes(
             s.struck = true;
             let far = camera.translation.distance(at);
             commands.spawn((AudioPlayer::new(kit.impact.clone()), PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(loudness(LOUD.1, far)))));
-            let near = (1.0 - camera.translation.distance(at) / HITSTOP.1).max(0.0);
+            let near = super::envelop::depth(camera.translation - at);
             if near > 0.0 {
-                hitstop.left = hitstop.left.max(HITSTOP.0);
+                hitstop.left = hitstop.left.max(HITSTOP);
                 director.white = director.white.max(WHITE * near);
                 gun.jolt += Vec2::new(JOLT * near, JOLT * near * (hash01(seed, 0, 0, 0x5c2) - 0.5) * 2.0);
             }

@@ -2,7 +2,9 @@
 
 Named for what they are used for. Synthesised for this project (see the
 review pages): `shard_hit_synth`, `shard_break`, `hunter_death`, `swarm_voice`,
-`swarm_assemble`, `ground_hum`.
+`swarm_assemble`, `ground_hum`, `impaled_hum` (a placeholder for the
+impaled brute's propulsion: a low drone with beating partials and a gritty
+band of strain, looped).
 
 Cut, trimmed and levelled from recordings, all from Pixabay (the downloads
 are kept out of the repository, in `samples/used/`, each named for the sound

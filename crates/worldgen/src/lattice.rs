@@ -326,7 +326,10 @@ fn grow(half: Vec2, s: Settings, seed: u32) -> Lattice {
         round += 1;
         let mut candidates: Vec<(Key, Support, f32)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let filled: Vec<Key> = l.slots.keys().copied().collect();
+        // (In order: the pick walks the candidates, and a hash map's order
+        // differs from run to run.)
+        let mut filled: Vec<Key> = l.slots.keys().copied().collect();
+        filled.sort();
         for (x, y, z) in filled {
             for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0), (0, -2, 0), (0, -3, 0), (0, -4, 0)] {
                 let k = (x + dx, y + dy, z + dz);
@@ -419,7 +422,10 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
 
     // Loads: each cell weighs one (a beam a third), passed down its supports.
     let mut load: HashMap<Key, f32> = HashMap::new();
-    for (&k, slot) in &l.slots {
+    // (In order, so that each load sums the same way every time.)
+    let mut slots: Vec<(&Key, &Slot)> = l.slots.iter().collect();
+    slots.sort_by_key(|s| *s.0);
+    for (&k, slot) in slots {
         let weight = match slot {
             Slot::Cell(_) => 1.0,
             Slot::Beam(_) => 0.3,
@@ -681,8 +687,10 @@ pub fn lattice(origin: Vec3, dir: Vec2, half: Vec2, s: Settings, tone: f32, seed
             }
         }
     }
-    // What carries each slot of each cell, and the beams.
-    for (&k, slot) in &l.slots {
+    // What carries each slot of each cell, and the beams (in order).
+    let mut slots: Vec<(&Key, &Slot)> = l.slots.iter().collect();
+    slots.sort_by_key(|s| *s.0);
+    for (&k, slot) in slots {
         let c = at(k.0, k.2);
         let lk = load_of(k);
         match *slot {
@@ -968,6 +976,26 @@ mod tests {
             let city = Settings { cell: (96.0, 45.0), levels: 6, content: 6, ..settings() };
             let solids = lattice(Vec3::ZERO, Vec2::X, Vec2::splat(480.0), city, 0.15, seed);
             assert!(solids.len() > 5 * cells, "{}", solids.len());
+        }
+    }
+
+    /// The same lattice every time it is built: nothing may hang on a hash
+    /// map's order, which differs from map to map and run to run (places
+    /// saved on a hanging city's deck must find the deck there again).
+    #[test]
+    fn built_the_same_every_time() {
+        let city = Settings { cell: (96.0, 45.0), levels: 6, content: 6, ..settings() };
+        for seed in 0..4 {
+            let cells = |l: &Lattice| {
+                let mut k: Vec<_> = l.slots.iter().map(|(k, v)| format!("{k:?}{v:?}")).collect();
+                k.sort();
+                k
+            };
+            assert_eq!(cells(&grow(Vec2::splat(480.0), city, seed)), cells(&grow(Vec2::splat(480.0), city, seed)), "seed {seed}: grown differently");
+            let solids = |s: Vec<Solid>| s.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>();
+            let a = solids(lattice(Vec3::ZERO, Vec2::X, Vec2::splat(480.0), city, 0.15, seed));
+            let b = solids(lattice(Vec3::ZERO, Vec2::X, Vec2::splat(480.0), city, 0.15, seed));
+            assert!(a == b, "seed {seed}: {} and {} solids, built differently", a.len(), b.len());
         }
     }
 }

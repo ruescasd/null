@@ -1,0 +1,60 @@
+# Places to go to, for testing: `tp NAME` at the console (`tp` alone lists
+# them), `--tp NAME` on the command line in place of `--cam`; `savetp NAME
+# [note]` keeps where you are (replacing a place of that name, said so).
+# One a line: NAME X,Y,Z,YAW,PITCH [note], the numbers as `--cam` takes
+# them (Y above the ground). See crates/game/src/places.rs.
+
+# The districts' navigation sample points (zz_plates, blink_walks).
+floor            10880,2,128,0,0     the floor's navigation sample point
+tiers            5248,2,640,0,0      the tiers' navigation sample point (blink tests)
+stacks           12928,2,128,0,0     the stacks' navigation sample point
+broken           7296,2,640,0,0      the broken's navigation sample point
+uplands          9344,2,4736,0,0     the uplands' navigation sample point
+highlands        9344,2,2688,0,0     the highlands' navigation sample point
+
+# The districts' views in docs/world.md (some with --time 60 there).
+floor_view       1024,25,1700,0,-4   a pit in the flat plates; the spire and the stacks behind
+tiers_view       1024,70,15760,0,-10 contour terraces round a hill, a hanging city behind
+stacks_view      3072,60,1424,0,-10  pillars on small plates
+broken_view      3072,70,15760,0,-10 small nudged plates; a hanging city behind
+uplands_view     1024,60,13712,0,-8  big tilted plates with steps and level crests
+highlands_view   11264,110,5620,0,-10 tilted plates in strata over a ridge
+spire            1637,15,1350,0,6    the spire, a canal in front
+city             1309,15,3550,0,10   a hanging city, a colossus on a low platform
+station          2025,140,1850,0,-45 a canal station where canals meet
+broken_arena     2734.38,1.67,15928.55,11057.82,4.24        a clearing in the broken district that could have an arena
+spire_midlevel   1641.04,289.72,812.79,11837.08,-55.46
+shot_1794083198  1641.57,289.71,812.94,11840.44,-72.35
+shot_1794083268  1641.57,289.71,812.94,11840.19,-68.07
+shot_1794083946  8193.89,1201.64,8409.47,1106.43,4.59
+shot_1794090757  4234.56,1.68,15978.59,11471.98,-4.71
+shot_1794090768  4229.15,1.64,15972.57,11471.98,-4.71
+shot_1794091370  3199.18,1.61,824.30,11359.00,-3.70
+shot_1794091727  1213.08,41.61,900.89,-194.87,8.32
+shot_1794091967  1246.79,41.61,900.41,179.62,7.65
+shot_1794092034  1285.37,31.61,902.69,-223.49,11.05
+shot_1794092075  1286.12,31.61,902.21,-203.70,5.38
+shot_1794092214  1392.48,41.61,903.33,212.02,0.97
+shot_1794092429  1621.75,41.61,903.00,541.64,2.10
+shot_1794093397  1445.88,42.11,920.95,440.02,8.32
+shot_1794093841  1532.13,41.61,907.74,136.25,19.44
+shot_1794093884  1410.58,41.61,926.84,43.98,17.30
+shot_1794094077  1316.54,42.11,922.71,1119.16,8.56
+shot_1794094199  1317.25,53.67,922.04,1852.50,-15.14
+shot_1794095359  1553.18,1.69,1268.20,10826.57,13.32
+shot_1794096756  7025.98,1.61,3702.21,14202.05,-15.50
+shot_1794097823  15412.12,316.68,2884.52,15900.56,-8.19
+shot_1794099117  14597.26,1.61,14989.14,12458.19,-12.48
+shot_1794101083  1250.71,390.12,763.56,1170.10,-47.94
+shot_1794102529  1219.54,84.36,710.71,-1.26,19.66
+shot_1794103358  1092.72,400.84,692.19,577.19,-7.56
+shot_1794103496  1201.66,337.23,653.77,1219.41,-24.45
+shot_1794104335  8047.05,1201.65,7734.24,1968.13,0.93
+shot_1794104602  8796.08,1201.65,7590.31,977.84,3.20
+shot_1794104607  8796.08,1201.65,7590.31,988.68,4.84
+xxx              1422.71,245.51,2795.56,18061.53,-2.77
+zzz              2842.87,295.06,7749.90,361.85,9.25
+city_one         15131.21,245.57,9374.24,330.84,-0.96
+shot_1794116527  2852.18,296.17,7743.00,1786.70,-12.18
+shot_1794117640  9324.03,260.01,9530.79,3328.46,-6.00
+shot_1794118613  9165.72,179.18,11434.88,3833.49,-6.63

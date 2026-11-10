@@ -63,6 +63,12 @@ impl Ground<'_, '_> {
         Dir3::new(to).map_or(true, |d| self.spatial.cast_ray(a, d, to.length(), true, &SpatialQueryFilter::default()).is_none())
     }
 
+    /// Whether a ball of `radius` about `p` is inside something built (a
+    /// flyer's check that its ways keep clear).
+    pub fn inside(&self, p: Vec3, radius: f32) -> bool {
+        !self.spatial.shape_intersections(&Collider::sphere(radius), p, Quat::IDENTITY, &SpatialQueryFilter::default()).is_empty()
+    }
+
     /// Whether a ball of `radius` gets from `a` to `b` with nothing built in
     /// its way: a body's way past a corner, not only a line of sight.
     pub fn passes(&self, a: Vec3, b: Vec3, radius: f32) -> bool {

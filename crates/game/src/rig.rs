@@ -22,12 +22,17 @@
 //!   (a fast, flat arc, the body pitching with it: forelimbs thrown out wide
 //!   to grab, hind legs kicking back and then swinging under to land).
 //! - The head can tilt (rolling about where it looks) and turn suddenly.
+//! - Or another's walk, measured (`Steps`): the stalker hunting walks the
+//!   gladiator's on its stilts, its feet planted where they land.
 //!
 //! The rig outputs bones (segments with a thickness); what a creature is
 //! made of hangs on them (see `combat/hunter.rs`).
 
 use bevy::prelude::*;
 use worldgen::noise::hash01;
+
+mod steps;
+pub use steps::Steps;
 
 /// Where a limb is rooted: the hips or the chest.
 #[derive(Clone, Copy, PartialEq)]
@@ -505,6 +510,20 @@ pub struct Intent {
     /// Close combat (0..1): the stalker braced, its feet wide, turning on
     /// them, its gun quick (see `COMBAT`).
     pub combat: f32,
+    /// Walking another's walk, the gladiator's measured (`Steps`), not its
+    /// own (the stalker hunting: its struggling walk shed, the user,
+    /// 2026-11-06); and facing where it looks, whichever way it goes (a
+    /// step aside).
+    pub walk: bool,
+    pub strafe: bool,
+    /// Hovering, its stilts hanging over the ground, not walking; let go,
+    /// it comes down and anchors on them (the stalker hunting, to fire:
+    /// see `HOVER`).
+    pub hover: bool,
+    /// Hovering, walking the air: its legs going through a walk as they
+    /// would at its pace, touching nothing, its cadence divided by this (0,
+    /// hanging still; see `AIR`).
+    pub air: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -679,6 +698,14 @@ pub struct Rig {
     gun_spin: f32,
     /// How far into close combat it is (0..1, eased; see `COMBAT`).
     combat: f32,
+    /// How far into the measured walk it is (0..1, eased; see `Intent`'s
+    /// `walk`), and its body through its cycle now, as much as it is moving.
+    walking: f32,
+    walked: steps::Body,
+    /// How far up off its stilts it is, hovering (0..1, eased; see
+    /// `Intent`'s `hover`); and walking the air, where in its cycle.
+    hover: f32,
+    air_phase: f32,
     /// Lowering it from its aim, its muzzle to the ground before it; and
     /// just landed there (the dragged tip put down where it fell).
     dropping: bool,
@@ -751,6 +778,72 @@ const COMBAT: (f32, f32, f32) = (6.0, 0.3, 3.0);
 /// In close combat, how much further a foot is let out of place before it
 /// steps (of a stride, over the 0.3 standing).
 const COMBAT_STEP: f32 = 0.5;
+/// Walking the measured walk (`Steps`, the stalker hunting): how quickly it
+/// gets going and stops (m/s each s: its own, 1.5 and 3, a struggle); how
+/// quickly it goes into it and out (per s); at what pace its steps are full
+/// (m/s: slower, its body moves less and its feet lift lower); the least
+/// pace its stride is made for (m/s: standing, how far a foot may be out of
+/// place before it steps); its cadence, of the walk's own (the gladiator's,
+/// 1.03 s a cycle), quicker as it goes faster, its stride never longer for
+/// its legs than the walk's (at 3 to 4.5 m/s, shifting, the user: at its
+/// own cadence its stride outran its legs). (Getting going and stopping:
+/// 6 and 9, it took most of a second to get to 4 m/s.)
+const WALK_ACCEL: (f32, f32) = (16.0, 20.0);
+/// Hovering (`Intent`'s `hover`; the user, 2026-11-06: its walk would not
+/// come right with our means, so fighting it floats, its stilts hanging,
+/// and anchors on them to fire, the tell): how high its feet hang over the
+/// ground (m), straight down under its hips; its body's slow bob (m, and
+/// rad/s); how
+/// quickly it rises off its stilts and comes down on them (per s); how
+/// quickly it gets going and stops (m/s each s: sudden, its darts a fifth
+/// of a second long). Its body upright, as one
+/// piece (leaning 6 degrees into its way, it looked as if skiing, the
+/// user).
+const HOVER_FEET: f32 = 0.25;
+const HOVER_BOB: (f32, f32) = (0.04, 1.9);
+const HOVER_EASE: (f32, f32) = (6.0, 10.0);
+/// Hovering: how far up off its stilts before it moves off (of all the
+/// way), and how slow it must be going before it comes down on them (m/s).
+/// (Moving off on the ground, its stilts were dragged after it; coming down
+/// as it braked, they reached out before it like skis, the user's
+/// leaning.)
+const HOVER_OFF: f32 = 0.7;
+const HOVER_LAND: f32 = 0.5;
+/// Walking the air, hovering (`Intent`'s `air`; the user, 2026-11-06: its
+/// legs moving as they would were it walking, untethered from the ground,
+/// strangely): its legs go through the measured walk (`Steps`) as at its
+/// pace, a foot "down" going back under it as on a floor that is not
+/// there, then swung on, lifting less the slower; at its cadence divided by
+/// `air` (2: half the steps, twice as long). Each foot on an arc round its
+/// hip, so much of its leg out from it, rising as it swings out (held at
+/// one height over the ground, it had 40 cm to swing in before its leg ran
+/// out); a foot never further from under its hip than so much of its leg;
+/// and aside, each leg swinging in its own plane, the one so far (m) before
+/// the other, passing it (one went through the other).
+const AIR_LEG: f32 = 0.95;
+const AIR_REACH: f32 = 0.55;
+const AIR_CROSS: f32 = 0.3;
+const HOVER_ACCEL: (f32, f32) = (30.0, 36.0);
+const WALK_EASE: f32 = 4.0;
+const WALK_FULL: f32 = 1.2;
+const WALK_STANDING: f32 = 0.75;
+const WALK_TEMPO: f32 = 1.0;
+/// Walking it, how far apart across its feet always are (m); and aside, its
+/// longest stride (legs: the walk's, 1.8, on ahead; at 4 m/s aside at that,
+/// its lifting stilt was left a quarter of its length out of reach, its
+/// hips dropping 45 cm).
+const WALK_APART: f32 = 0.15;
+const WALK_ASIDE: f32 = 1.0;
+/// Walking it, how much of its hips' sway and surge its chest follows: its
+/// upper body steady, square, as one carrying a rifle walks. (The walk's
+/// own upper body, its shoulders twisting 24 degrees through each stride,
+/// against arms swinging, and its trunk leaning and rolling, on one holding
+/// its lance in both hands read as wiggling, the user, 2026-11-06; with the
+/// stilt's lurch at each step, its chest went 20 cm side to side.)
+const WALK_CHEST: f32 = 0.3;
+/// Walking it aside, how much its pace rises and falls with each step (of
+/// its pace, either way: 1, still at each footfall, a robot's).
+const WALK_THROWN: f32 = 0.3;
 /// Dragged: how high over the ground its tip rides (m); how far back its
 /// arm hangs, pulled straight by it (radians from straight down, standing,
 /// and more at a walk: falling behind as it pulls it, the user), and how
@@ -838,6 +931,19 @@ fn ik(a: Vec3, target: Vec3, l1: f32, l2: f32, pole: Vec3) -> (Vec3, Vec3) {
 }
 
 impl Rig {
+    /// Moved at once to `root` (a teleport, see `navmesh/district.rs`):
+    /// stood there afresh, as it faced, keeping what it was set to (its
+    /// lost legs, its steps' length, what it holds, its gun).
+    pub fn moved_to(&mut self, root: Vec3, ground: &impl Fn(f32, f32) -> f32) {
+        let mut fresh = Rig::new(self.plan.clone(), root, self.heading, self.seed, ground);
+        fresh.lost = std::mem::take(&mut self.lost);
+        fresh.step_scale = self.step_scale;
+        fresh.holding = self.holding;
+        fresh.gun = self.gun;
+        fresh.gun_frame = self.gun_frame;
+        *self = fresh;
+    }
+
     pub fn new(plan: Plan, root: Vec3, heading: f32, seed: u32, ground: &impl Fn(f32, f32) -> f32) -> Self {
         let mut rig = Rig {
             feet: Vec::new(),
@@ -903,6 +1009,10 @@ impl Rig {
             gun_aim: None,
             gun_spin: 0.0,
             combat: 0.0,
+            walking: 0.0,
+            walked: steps::Body::default(),
+            hover: 0.0,
+            air_phase: 0.0,
             dropping: false,
             landed: false,
             bones: Vec::new(),
@@ -952,11 +1062,13 @@ impl Rig {
         let flex = if root == Root::Hips { self.plan.rock * 2.5 * self.gallop * (self.phase * std::f32::consts::TAU + 1.6).sin() } else { 0.0 };
         // Walking, the spine swings from side to side, chest and hips in
         // opposition.
-        let sway = self.plan.sway * moving * (1.0 - self.gallop) * wave * if root == Root::Chest { 1.0 } else { -1.0 };
+        let sway = self.plan.sway * moving * (1.0 - self.gallop) * wave * if root == Root::Chest { 1.0 } else { -1.0 } * (1.0 - self.walking.max(self.hover));
         let breath = 0.012 * (self.time * 1.6).sin() * (1.0 - moving) * self.alive;
         // Crouched: lower, and the chest lower still (the head goes down).
         // Running, the body drops, so the legs can reach far fore and aft.
-        let run = 0.3 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0);
+        // (Not hovering: its legs not reaching, at each dart its head
+        // dipped 27 cm, the user.)
+        let run = 0.3 * (Vec2::new(self.velocity.x, self.velocity.z).length() / 12.0).min(1.0) * (1.0 - self.hover);
         let low = (self.crouch * if root == Root::Chest { 0.42 } else { 0.3 }).max(run);
         // In a leap the body pitches with its arc: nose up rising, down
         // falling.
@@ -978,10 +1090,64 @@ impl Rig {
         let reel = self.reel * if root == Root::Chest { 1.0 } else { 0.4 };
         // Each stride lurches a little to one side or the other, the chest
         // more than the hips.
-        let lurch = if self.plan.style == Style::Porter { 0.0 } else { (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 } };
+        let lurch = if self.plan.style == Style::Porter { 0.0 } else { (self.vary(4) - 0.5) * 0.2 * moving * if root == Root::Chest { 1.0 } else { 0.4 } * (1.0 - self.walking.max(self.hover)) };
+        // The measured walk's sway, across the way it goes (its left,
+        // positive): the hips', the chest following a little, steady
+        // (`WALK_CHEST`). (Its surge is in its pace: see `surge`.)
+        let way = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or(forward);
+        let walked = Vec3::new(-way.z, 0.0, way.x) * self.walked.sway * if root == Root::Chest { WALK_CHEST } else { 1.0 };
         // (The porter's chest ahead of its hips, countering its load.)
         let tow = if self.plan.style == Style::Porter && root == Root::Chest { PORTER_TOW * (speed / 1.5).min(1.0) } else { 0.0 };
-        self.root + forward * (f - mid + flex + tow) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel
+        self.root + forward * (f - mid + flex + tow) + Vec3::Y * height + right * (sway - roll * height + lurch + slump * 0.18) + reel + walked
+    }
+
+    /// Whether it stands on its stilts, not hovering (see `Intent`'s
+    /// `hover`): anchored, it may fire.
+    pub fn anchored(&self) -> bool {
+        self.hover < 0.02
+    }
+
+    /// Whether it walks the measured walk (see `Intent`'s `walk`).
+    fn walks(&self) -> bool {
+        self.walking > 0.5
+    }
+
+    /// Walking the air (see `AIR`): where foot `i` is from under its hip,
+    /// across the ground, and how far it is lifted (m), its cadence divided
+    /// by `slow`.
+    fn air_foot(&self, i: usize, slow: f32) -> (Vec3, f32) {
+        let w = Steps::gladiator();
+        let way = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
+        let speed = way.length();
+        let Some(way) = way.try_normalize() else { return (Vec3::ZERO, 0.0) };
+        let leg = self.plan.legs[i].upper + self.plan.legs[i].lower;
+        let k = (speed / WALK_FULL).min(1.0);
+        // Down, it goes back as far as the body goes on over it.
+        let half = (speed * self.walk_cycle(speed) * slow * w.down * 0.5).min(leg * AIR_REACH);
+        let swing = 1.0 - w.down;
+        let local = (self.air_phase - w.lifts[i % 2]).rem_euclid(1.0);
+        let (along, up) = if local < swing {
+            let (along, up) = w.swing(local / swing);
+            (-half + 2.0 * half * along, up * leg * k)
+        } else {
+            (half - 2.0 * half * (local - swing) / (1.0 - swing), 0.0)
+        };
+        let fwd = self.forward_of(self.hips_yaw);
+        let across = Vec3::new(fwd.z, 0.0, -fwd.x).dot(way).abs();
+        let plane = if i % 2 == 0 { 0.5 } else { -0.5 } * AIR_CROSS * across * k;
+        (way * along + fwd * plane, up)
+    }
+
+    /// The measured walk's cycle at `speed` (s): at its cadence, quicker
+    /// as its stride would outrun its legs (aside, sooner: `WALK_ASIDE`).
+    fn walk_cycle(&self, speed: f32) -> f32 {
+        let w = Steps::gladiator();
+        let leg = self.plan.legs.first().map_or(1.0, |l| l.upper + l.lower);
+        let way = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero();
+        let fwd = self.forward_of(self.heading);
+        let across = Vec3::new(fwd.z, 0.0, -fwd.x).dot(way).abs();
+        let stride = w.stride + (WALK_ASIDE - w.stride) * across;
+        (w.cycle * WALK_TEMPO).min(stride * leg / speed.max(0.1))
     }
 
     fn hip(&self, i: usize) -> Vec3 {
@@ -1014,6 +1180,14 @@ impl Rig {
         let ahead = if self.plan.style == Style::Hauler && leg.root == Root::Chest { ((leg.upper + leg.lower) * 0.7).min((reach * reach - (hip.y - self.root.y).powi(2)).max(0.0).sqrt()) * (speed / 1.5).min(1.0) } else { ahead };
         // (The porter's, a little ahead of the hip: caught up, not striding.)
         let ahead = if self.plan.style == Style::Porter { PORTER_STEP.3 * (speed / 1.5).min(1.0) } else { ahead };
+        // (The measured walk's: as far ahead of its hip as its, for its
+        // stride.)
+        let ahead = if self.walks() {
+            let w = Steps::gladiator();
+            w.land.0 * self.stride / w.stride * (speed / WALK_STANDING).min(1.0)
+        } else {
+            ahead
+        };
         // (Never set down beyond its leg's reach from its hip's height, with
         // room to bear it: the shard beast's hind feet landed out of reach
         // ahead, its legs straight, its feet in the air. A stilt's own: the
@@ -1032,6 +1206,19 @@ impl Rig {
         let r = |j: i32| hash01(self.seed as i32 + i as i32 * 101, k, j, 0x61b) - 0.5;
         let jitter = Vec3::new(r(0), 0.0, r(1)) * 0.12 * (self.velocity.length() / 2.0).min(1.0);
         let p = Vec3::new(hip.x, 0.0, hip.z) + Vec3::new(lead.x, 0.0, lead.z) + jitter;
+        // (Walking the measured walk on two legs, never across the other
+        // foot: stepping aside, its stilts crossed, one through the other;
+        // so the leading foot steps out and the other closes up to it.)
+        let p = match (self.walks(), self.feet.len()) {
+            (true, 2) => {
+                let right = Vec3::new(fwd.z, 0.0, -fwd.x);
+                let other = self.feet[1 - i].planted;
+                let side = leg.side.signum();
+                let across = (p - other).dot(right) * side;
+                p + right * side * (WALK_APART - across).max(0.0)
+            }
+            _ => p,
+        };
         Vec3::new(p.x, ground(p.x, p.z), p.z)
     }
 
@@ -1081,24 +1268,31 @@ impl Rig {
             // as much again, about 3 g at a gallop: it swings wide round a
             // corner and slams into the wall, not turning on the spot (the
             // user: slamming into walls before toy physics).
-            let change = intent.velocity - self.velocity;
+            // (Hovering, it moves off only once up off its stilts.)
+            let asked = if intent.hover && self.hover < HOVER_OFF { Vec3::ZERO } else { intent.velocity };
+            let change = asked - self.velocity;
             let dir = self.velocity.normalize_or_zero();
             let along = dir * change.dot(dir);
-            let rate = if change.dot(dir) > 0.0 || dir == Vec3::ZERO { self.plan.accel } else { self.plan.decel };
+            let (accel, decel) = if self.hover > 0.02 { HOVER_ACCEL } else if self.walks() { WALK_ACCEL } else { (self.plan.accel, self.plan.decel) };
+            let rate = if change.dot(dir) > 0.0 || dir == Vec3::ZERO { accel } else { decel };
             let mut side = (change - along).clamp_length_max(rate * 1.5 * dt);
             let along = along.clamp_length_max(rate * dt);
             // (Turned no further round than where it is asked to go: given
             // the side of what it was asked whole, a body slower than that
             // turned past it, and back past it the next frame, zigzagging 4
             // degrees a frame as it set off, its heading shaking with it.)
-            let ahead = intent.velocity.dot(dir);
+            let ahead = asked.dot(dir);
             if ahead > 1e-3 {
-                let across = (intent.velocity - dir * ahead).length();
+                let across = (asked - dir * ahead).length();
                 side = side.clamp_length_max(across / ahead * (self.velocity + along).dot(dir).max(0.0));
             }
             self.velocity += along + side;
             self.velocity.y = 0.0;
-            let face = if self.velocity.length() > 0.5 { self.velocity } else { intent.look - self.root };
+            // (Walking the measured walk and stopping, where it looks: as a
+            // step aside ended, still going on aside, it turned 8 degrees
+            // to it and back, its chest twisting, a twitch, the user.)
+            let stopping = (self.walks() || self.hover > 0.02) && intent.velocity.length() < 0.01;
+            let face = if self.velocity.length() > 0.5 && !intent.strafe && !stopping { self.velocity } else { intent.look - self.root };
             if Vec2::new(face.x, face.z).length() > 0.01 {
                 let target = face.x.atan2(face.z);
                 let turn = (target - self.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -1108,7 +1302,7 @@ impl Rig {
             let before = self.root;
             // (Gathering itself between steps, it all but holds where it is,
             // easing to it and out of it.)
-            let creep = if self.beat > STILT_BEAT.0 + STILT_BEAT.1 { STILT_LINGER.3 } else if self.beat > 0.0 { STILT_GATHER.0 } else { 1.0 };
+            let creep = if self.walks() || self.hover > 0.02 { 1.0 } else if self.beat > STILT_BEAT.0 + STILT_BEAT.1 { STILT_LINGER.3 } else if self.beat > 0.0 { STILT_GATHER.0 } else { 1.0 };
             self.gather += (creep - self.gather) * (1.0 - (-STILT_GATHER.1 * dt).exp());
             let want = self.velocity * self.surge() * self.gather;
             self.root = sweep(self.root, (want + self.knock) * dt);
@@ -1186,14 +1380,61 @@ impl Rig {
         } else {
             0.0
         };
+        // (Walking the measured walk: no hauling, its pelvis turning as
+        // its did, its left side back a positive turn; its shoulders
+        // square, see `WALK_CHEST`.)
+        let haul = haul * (1.0 - self.walking);
         self.chest_yaw = follow(self.chest_yaw, self.heading + lead + haul, 10.0);
-        self.hips_yaw = follow(self.hips_yaw, self.heading - lead * 0.5, 5.0);
+        self.hips_yaw = follow(self.hips_yaw, self.heading - lead * 0.5 - self.walked.pelvis, 5.0);
 
         // The gait clock runs with the speed; standing, it runs on only until
         // every foot is down.
         let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
         let any_swinging = self.feet.iter().any(|f| f.swinging);
         let (mut offsets, swing, stride, gallop) = self.plan.gait(speed);
+        // (The measured walk's: its feet's timing, at its cadence, the
+        // stride as long as the pace makes it.)
+        self.walking += (intent.walk as u8 as f32 - self.walking) * (1.0 - (-dt * WALK_EASE).exp());
+        // Rising off its stilts or coming down on them; down, anchored: a
+        // thud, its stilts where they stand. (Its weight taken in a crouch
+        // too, at once as it touched down, its head dropped 29 cm more in
+        // a frame, a second motion after its landing, the user: the
+        // descent is its anchoring.)
+        let hovered = self.hover > 0.02;
+        // (Coming down only once it has all but stopped.)
+        let up = intent.hover || (self.hover > 0.02 && speed > HOVER_LAND);
+        let ease = if up { HOVER_EASE.0 } else { HOVER_EASE.1 };
+        self.hover += (up as u8 as f32 - self.hover) * (1.0 - (-dt * ease).exp());
+        if !up && self.hover < 0.02 {
+            self.hover = 0.0;
+            if hovered {
+                for i in 0..self.feet.len() {
+                    let home = self.home(i, ground);
+                    self.feet[i] = Foot { planted: home, from: home, swinging: false };
+                    if self.footfall.len() < 8 {
+                        self.footfall.push(home);
+                    }
+                }
+            }
+        }
+        if self.hover > 0.02 {
+            self.beat = 0.0;
+        }
+        // Walking the air, its cycle going on with its pace.
+        if self.hover > 0.02 && intent.air > 0.0 {
+            self.air_phase = (self.air_phase + dt * (speed / WALK_FULL).min(1.0) / (self.walk_cycle(speed) * intent.air)).fract();
+        }
+        let walks = self.walks();
+        let (swing, stride) = if walks {
+            let w = Steps::gladiator();
+            offsets = w.lifts.to_vec();
+            (1.0 - w.down, speed.max(WALK_STANDING) * self.walk_cycle(speed))
+        } else {
+            (swing, stride)
+        };
+        if walks {
+            self.beat = 0.0;
+        }
         // (Only a mammal gallops: its bound, rock and reaching swing.)
         let gallop = if self.plan.style == Style::Gallop { gallop } else { 0.0 };
         // Half lead with the other side.
@@ -1210,19 +1451,31 @@ impl Rig {
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
         let held = self.beat > 0.0;
         self.beat = (self.beat - dt).max(0.0);
-        if self.airborne.is_none() && (speed > 0.3 || any_swinging) && !held {
+        if self.airborne.is_none() && (speed > 0.3 || any_swinging) && !held && self.hover < 0.02 {
             // The tempo drifts a little.
             let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
             // (Each stride a little quicker or slower, by up to 15%; the
             // stalker's by up to 10%, less erratic, the user.)
             let spread = if self.plan.style == Style::Stilt { 0.2 } else { 0.3 };
             let tempo = 1.0 - spread * 0.5 + spread * self.vary(0);
-            let next = self.phase + speed.max(1.0) / self.stride * drift * tempo * dt;
+            let rate = if walks { 1.0 / self.walk_cycle(speed) } else { speed.max(1.0) / self.stride };
+            let next = self.phase + rate * drift * tempo * dt;
             if next >= 1.0 {
                 self.strides += 1;
             }
             self.phase = next.fract();
         }
+        // The measured walk's body through its cycle (from its left foot
+        // landing), as much as it walks it and is moving.
+        self.walked = if self.walking > 0.01 {
+            let w = Steps::gladiator();
+            let b = w.body((self.phase - self.offsets[0] - self.swing).rem_euclid(1.0));
+            let k = self.walking * (speed / WALK_FULL).min(1.0);
+            let leg = self.plan.legs.first().map_or(1.0, |l| l.upper + l.lower);
+            steps::Body { rise: b.rise * leg * k, sway: b.sway * leg * k, pelvis: b.pelvis * k }
+        } else {
+            steps::Body::default()
+        };
         // The porter's next step, after its rest: the foot furthest behind.
         let porter_next = if self.plan.style == Style::Porter && !any_swinging && speed > 0.1 {
             self.rest -= dt;
@@ -1235,6 +1488,29 @@ impl Rig {
             let local = (self.phase - self.offsets[i]).rem_euclid(1.0);
             self.local[i] = local;
             if self.lost.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            // Hovering: hanging straight down over the ground under its hip;
+            // coming down, reaching for where it will stand. (Trailing its
+            // way on springs, its stilts angled up to 21 degrees, the whole
+            // of it leaning as if skiing, the user.)
+            if self.hover > 0.02 {
+                let (hip, leg) = (self.hip(i), self.plan.legs[i]);
+                let fwd = self.forward_of(self.hips_yaw);
+                let out = self.out_of(&leg, fwd) * leg.spread;
+                let hang = if intent.air > 0.0 {
+                    let (across, up) = self.air_foot(i, intent.air);
+                    let from = out + across;
+                    let length = AIR_LEG * (leg.upper + leg.lower);
+                    let drop = (length * length - from.length_squared()).max(0.0).sqrt();
+                    Vec3::new(hip.x + from.x, hip.y - drop + up, hip.z + from.z)
+                } else {
+                    Vec3::new(hip.x, ground(hip.x, hip.z) + HOVER_FEET, hip.z) + out
+                };
+                let foot = &mut self.feet[i];
+                foot.planted = hang.lerp(home, 1.0 - self.hover);
+                foot.from = foot.planted;
+                foot.swinging = false;
                 continue;
             }
             // Grabbing: a forefoot shoots out to where it is driven in, and
@@ -1341,6 +1617,14 @@ impl Rig {
                 let even = s * s * (3.0 - 2.0 * s);
                 let across = even + (1.0 - (1.0 - s).powi(3) - even) * (0.5 + 0.5 * self.gallop);
                 let arc = (s.powf(0.85 - 0.1 * self.gallop) * std::f32::consts::PI).sin() * lift;
+                // (The measured walk's swing: along its way and up as its
+                // did, in its legs, lower the slower.)
+                let (across, arc) = if walks {
+                    let (along, up) = Steps::gladiator().swing(s);
+                    (along, up * reach * (0.6 + 0.4 * (speed / WALK_FULL).min(1.0)))
+                } else {
+                    (across, arc)
+                };
                 foot.planted = foot.from.lerp(home, across) + Vec3::Y * arc;
             } else if foot.swinging {
                 foot.swinging = false;
@@ -1350,7 +1634,7 @@ impl Rig {
                 }
                 // (A struggling walker: a beat once the foot is down, each
                 // its own length, now and then lingering.)
-                if self.plan.style == Style::Stilt && speed > 0.3 {
+                if self.plan.style == Style::Stilt && speed > 0.3 && !walks {
                     let r = |j: u32| hash01(self.seed as i32, i as i32, self.steps[i] as i32, j);
                     let linger = if r(0x62f) < STILT_LINGER.0 { STILT_LINGER.1 + STILT_LINGER.2 * r(0x630) } else { 0.0 };
                     self.beat = (STILT_BEAT.0 + STILT_BEAT.1 * r(0x61e)) * STILT_BEAT_SCALE + linger;
@@ -1369,7 +1653,12 @@ impl Rig {
         // lowest, standing on both), vaulting over each. A stilt lifting lets
         // go of it over the first of its swing (`STILT_LET_GO`): let go at
         // once, the body sprang up at every step, as with hiccups (the user).
-        if self.plan.style == Style::Stilt {
+        if self.plan.style == Style::Stilt && self.hover > 0.02 {
+            // Hovering: its hips as high as standing, and its feet's
+            // height over the ground, bobbing slowly.
+            self.stilt = self.plan.hips.1 + (HOVER_FEET + HOVER_BOB.0 * (self.time * HOVER_BOB.1).sin()) * self.hover;
+            self.dip = self.stilt;
+        } else if self.plan.style == Style::Stilt {
             let fwd = self.forward_of(self.hips_yaw);
             let right = Vec3::new(fwd.z, 0.0, -fwd.x);
             // (Each stilt's reach: a lifting one's from where it lifted.)
@@ -1398,7 +1687,12 @@ impl Rig {
             // recomputing its height from both as a foot came down, it rose
             // a second time at each landing, the user. It rises only on one,
             // over it, from where it was as it lifted the other.)
-            let held = if self.feet.iter().all(|f| !f.swinging) {
+            // (The measured walk: its hips rising and falling as its did,
+            // never higher than its stilts reach.)
+            let walk = self.walks().then(|| (self.plan.hips.1 + self.walked.rise).min(standing));
+            let held = if let Some(h) = walk {
+                h
+            } else if self.feet.iter().all(|f| !f.swinging) {
                 let held = held.min(self.stilt);
                 self.dip = held;
                 held
@@ -1409,6 +1703,12 @@ impl Rig {
             };
             if held < f32::MAX {
                 self.stilt += (held - self.stilt) * (1.0 - (-dt * 20.0).exp());
+                // (Walking the measured walk, never above what its stilts
+                // reach: eased down after them, thrown aside at twice its
+                // pace, its leg stretched past its length.)
+                if walk.is_some() {
+                    self.stilt = self.stilt.min(held);
+                }
             }
         }
 
@@ -1449,8 +1749,11 @@ impl Rig {
                     let lift = (s * std::f32::consts::PI).sin();
                     // (Dragging its gun, steadied by its weight.)
                     let steadied = if self.gun.is_some() { GUN_SWAYS } else { 1.0 };
-                    target -= right * leg.side.signum() * sway.2 * lift * steadied;
-                    target += fwd * heave.1 * lift;
+                    // (Not walking the measured walk: its struggle's, at its
+                    // cadence a lurch at every step.)
+                    let struggle = 1.0 - self.walking;
+                    target -= right * leg.side.signum() * sway.2 * lift * steadied * struggle;
+                    target += fwd * heave.1 * lift * struggle;
                 }
             }
             let length = (target - hips).length();
@@ -1459,6 +1762,12 @@ impl Rig {
             v += ((target - p) * sway.0 - v * sway.1) * step;
             p += v * step;
             p = hips + (p - hips).normalize_or(Vec3::Y) * length;
+            // (Hovering, its chest on its hips, the spring held at rest
+            // there: coming down, half on a spring that had lagged all the
+            // while, its trunk tilted 9 degrees aside.)
+            if self.hover > 0.02 {
+                (p, v) = (hips + (self.anchor(Root::Chest) - hips).normalize_or(Vec3::Y) * length, Vec3::ZERO);
+            }
             self.sway = Some((p, v));
         }
         let chest = self.chest_now();
@@ -1863,11 +2172,12 @@ impl Rig {
     }
 
     /// Gone limp (killed: the stalker's collapse), falling as it was moving,
-    /// pushed by `push` (m/s), letting go of its gun (see `ragdoll.rs`).
-    pub fn collapse(&mut self, push: Vec3) {
+    /// pushed by `push` (m/s), letting go of its gun, as `limp` says (see
+    /// `ragdoll.rs`).
+    pub fn collapse(&mut self, push: Vec3, limp: crate::ragdoll::Limp) {
         let hand = |g: &GunHold| 5 + 2 * self.plan.legs.len() + 2 * g.arm + 1;
         let gun = self.gun.zip(self.gun_frame).map(|(g, f)| (f, g.length, hand(&g)));
-        self.ragdoll = Some(crate::ragdoll::Ragdoll::new(&self.bones, &self.before, self.dt, 3, push, gun));
+        self.ragdoll = Some(crate::ragdoll::Ragdoll::new(&self.bones, &self.before, self.dt, 3, push, gun, limp));
         if let Some(g) = self.gun.as_mut() {
             g.aim = 0.0;
         }
@@ -1876,7 +2186,7 @@ impl Rig {
 
     /// Limp, on `dt` s (`floor`: the ground's height under a point; `wall`:
     /// where a point moving from one place to another is stopped).
-    pub fn fall(&mut self, dt: f32, floor: &dyn Fn(Vec3) -> f32, wall: &dyn Fn(Vec3, Vec3) -> Vec3) {
+    pub fn fall(&mut self, dt: f32, floor: &dyn Fn(Vec3) -> f32, wall: &dyn Fn(Vec3, Vec3) -> Option<Vec3>) {
         let Some(doll) = self.ragdoll.as_mut() else { return };
         doll.step(dt, floor, wall);
         self.bones = doll.bones();
@@ -1966,7 +2276,14 @@ impl Rig {
     /// porter's); else as posed.
     fn chest_now(&self) -> Vec3 {
         match self.sway {
-            Some((p, _)) if self.sways() => p,
+            // (Walking the measured walk, its chest on its hips, not sprung
+            // after them: thrown with each step aside, sprung, it trailed
+            // 29 cm behind and swung, its trunk tilting, the user's
+            // wiggling.)
+            // (Hovering too: sprung, its chest trailed its hips 30 cm and
+            // swung past them as it turned back, bent near 45 degrees, its
+            // waist driving it, comic, the user.)
+            Some((p, _)) if self.sways() => p.lerp(self.anchor(Root::Chest), self.walking.max(self.hover)),
             _ => self.anchor(Root::Chest),
         }
     }
@@ -2017,6 +2334,27 @@ impl Rig {
     /// hauling, almost still as the arms reach (a sixth), surging as they
     /// haul (nearly twice), its speed on the whole; else all of it.
     fn surge(&self) -> f32 {
+        // (Walking the measured walk, its legs drive its body: going on
+        // ahead, as fast through each step as its hips went; aside, thrown
+        // with each step, slowest as each foot comes down. At an
+        // even pace it floated, its feet stepping under it, the user,
+        // 2026-11-06.)
+        if self.walking > 0.01 {
+            let speed = Vec2::new(self.velocity.x, self.velocity.z).length();
+            let k = self.walking * (speed / WALK_FULL).min(1.0);
+            let w = Steps::gladiator();
+            let u = (self.phase - self.offsets[0] - self.swing).rem_euclid(1.0);
+            let ahead = w.pace(u);
+            // (Slowest as each foot lands, its left at the cycle's start,
+            // its right halfway, quickest between; its pace on the whole.
+            // Stopping at each, it read as a robot's, one leg moving and
+            // stopping, then the other, the user.)
+            let thrown = 1.0 - WALK_THROWN * (2.0 * std::f32::consts::TAU * u).cos();
+            let way = Vec3::new(self.velocity.x, 0.0, self.velocity.z).normalize_or_zero();
+            let fwd = self.forward_of(self.heading);
+            let across = Vec3::new(fwd.z, 0.0, -fwd.x).dot(way).abs();
+            return 1.0 + k * ((ahead - 1.0) * (1.0 - across) + (thrown - 1.0) * across);
+        }
         // (The porter: its body surging with each step, all but still as it
         // rests; the same pace overall.)
         if self.plan.style == Style::Porter {
@@ -2076,6 +2414,232 @@ impl Rig {
 #[cfg(test)]
 mod stalker {
     use super::*;
+
+    /// Hovering, it walks the air (`AIR`): its legs going through a walk
+    /// as it darts, clear of the ground, within their reach, never one
+    /// through the other; holding still, hanging straight again.
+    #[test]
+    fn walks_the_air() {
+        for (air, way) in [(1.0, Vec3::X), (2.0, Vec3::X), (1.0, Vec3::Z), (2.0, Vec3::new(0.6, 0.0, -0.8))] {
+            let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 3, &|_, _| 0.0);
+            let (mut lowest, mut reach, mut apart, mut moved) = (f32::MAX, 0.0f32, f32::MAX, (f32::MAX, f32::MIN));
+            let mut hung = 0.0f32;
+            for k in 0..600 {
+                let darting = (100..400).contains(&k);
+                let intent = Intent { velocity: if darting { way * 3.75 } else { Vec3::ZERO }, look: rig.root + Vec3::new(0.0, 1.5, 20.0), strafe: true, hover: true, air, ..Default::default() };
+                rig.update(0.01, intent, &|_, _| 0.0, &|from, step| from + step);
+                if k < 150 {
+                    continue;
+                }
+                for i in 0..2 {
+                    let (f, hip) = (rig.feet[i].planted, rig.bones[5 + 2 * i].a);
+                    let leg = rig.plan.legs[i];
+                    lowest = lowest.min(f.y);
+                    reach = reach.max(hip.distance(f) / (leg.upper + leg.lower));
+                    let along = (f - hip).dot(way);
+                    if darting {
+                        moved = (moved.0.min(along), moved.1.max(along));
+                    }
+                    if k > 550 {
+                        hung = hung.max(Vec2::new(f.x - hip.x, f.z - hip.z).length());
+                    }
+                }
+                apart = apart.min(rig.feet[0].planted.distance(rig.feet[1].planted));
+            }
+            println!("air {air}, way {way}: feet at least {lowest:.2} m up, out to {reach:.3} of the leg, at least {apart:.2} m apart, swinging {:.2} m fore and aft; holding, {hung:.2} m from under the hip", moved.1 - moved.0);
+            assert!(lowest > 0.12, "walking the air, a foot came down to {lowest} m");
+            assert!(reach < 1.0, "a foot out of its leg's reach, {reach}");
+            assert!(apart > 0.1, "its feet {apart} m apart: one through the other");
+            assert!(moved.1 - moved.0 > 0.5, "its legs swung only {} m: not walking", moved.1 - moved.0);
+            assert!(hung < 0.35, "holding still, a foot {hung} m from under its hip");
+        }
+    }
+
+    /// Hovering, its head keeps its height as it darts: it does not dip
+    /// with each move.
+    #[test]
+    fn hovers_level() {
+        let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 3, &|_, _| 0.0);
+        let (mut low, mut high) = (f32::MAX, f32::MIN);
+        for k in 0..400 {
+            let darting = (200..230).contains(&k);
+            let intent = Intent { velocity: if darting { Vec3::X * 3.75 } else { Vec3::ZERO }, look: rig.root + Vec3::new(0.0, 1.5, 20.0), strafe: true, hover: true, ..Default::default() };
+            rig.update(0.01, intent, &|_, _| 0.0, &|from, step| from + step);
+            if (190..280).contains(&k) {
+                let head = rig.bones[4].b.y;
+                (low, high) = (low.min(head), high.max(head));
+            }
+        }
+        println!("darting, its head rose and fell {:.1} cm", (high - low) * 100.0);
+        assert!(high - low < 0.04, "darting, its head dipped {} m", high - low);
+    }
+
+    /// Standing, it lifts off; hovering, it goes with its stilts hanging
+    /// straight down, clear of the ground; let go, it stops and comes down
+    /// and anchors on them, its stilts planted, within their reach, and
+    /// staying put. Lifting off, hovering and coming down, its stilts
+    /// never angled, its trunk never tilted: no skiing.
+    #[test]
+    fn hovers_and_anchors() {
+        let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 3, &|_, _| 0.0);
+        let (mut lowest, mut down, mut slid, mut reach) = (f32::MAX, None, 0.0f32, 0.0f32);
+        let (mut bent, mut swung, mut sank) = (0.0f32, 0.0f32, 0.0f32);
+        let mut head = rig.bones.get(4).map_or(0.0, |b| b.b.y);
+        let rest = Vec3::new(0.0, rig.plan.chest.1 - rig.plan.hips.1, rig.plan.chest.0 - rig.plan.hips.0);
+        let mut planted = Vec::new();
+        for k in 0..900 {
+            let hover = (100..500).contains(&k);
+            let way = if k % 200 < 100 { Vec3::X } else { Vec3::NEG_X };
+            let intent = Intent { velocity: if hover { way * 3.75 } else { Vec3::ZERO }, look: rig.root + Vec3::new(0.0, 1.5, 20.0), strafe: hover, hover, ..Default::default() };
+            rig.update(0.01, intent, &|_, _| 0.0, &|from, step| from + step);
+            if (200..500).contains(&k) {
+                lowest = lowest.min(rig.feet.iter().map(|f| f.planted.y).fold(f32::MAX, f32::min));
+            }
+            if k >= 100 && !rig.anchored() {
+                // Its trunk against how it stands (facing +z), and its
+                // stilts from straight down.
+                let trunk = rig.bones[2].b - rig.bones[0].a;
+                bent = bent.max(trunk.angle_between(rest).to_degrees());
+                for i in 0..2 {
+                    swung = swung.max((rig.feet[i].planted - rig.bones[5 + 2 * i].a).angle_between(Vec3::NEG_Y).to_degrees());
+                }
+            }
+            // (Coming down, its head never dropping in a frame.)
+            if k >= 500 {
+                sank = sank.max(head - rig.bones[4].b.y);
+            }
+            head = rig.bones[4].b.y;
+            if k >= 500 && down.is_none() && rig.anchored() {
+                down = Some((k - 500) as f32 * 0.01);
+                planted = rig.feet.iter().map(|f| f.planted).collect();
+            }
+            if down.is_some() {
+                for (i, f) in rig.feet.iter().enumerate() {
+                    slid = slid.max(f.planted.distance(planted[i]));
+                    let leg = rig.plan.legs[i];
+                    reach = reach.max(rig.bones[5 + 2 * i].a.distance(f.planted) / (leg.upper + leg.lower));
+                }
+            }
+        }
+        println!("hovering, its trunk bent up to {bent:.1} deg, its stilts out to {swung:.1} deg; its feet at least {lowest:.2} m up; anchored in {down:?} s, its stilts sliding {slid:.3} m, out to {reach:.3} of their length");
+        assert!(lowest > 0.12, "hovering, a foot came down to {lowest} m");
+        assert!(bent < 3.0, "hovering, its trunk bent {bent} deg: its waist driving it, or leaning, skiing");
+        assert!(swung < 8.0, "hovering, its stilts angled {swung} deg from straight down: leaning, skiing");
+        assert!(down.is_some_and(|t| t < 0.9), "it took {down:?} s to stop and anchor");
+        assert!(sank < 0.03, "coming down, its head dropped {sank} m in a frame: a second motion");
+        assert!(slid < 0.02 && reach < 1.001, "anchored, its stilts slid {slid} m, out to {reach}");
+    }
+
+    /// Walking the measured walk, stopping from a step aside, it keeps
+    /// facing where it looks: no twitch.
+    #[test]
+    fn stops_without_twitching() {
+        let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 3, &|_, _| 0.0);
+        let (mut turned, mut twisted) = (0.0f32, 0.0f32);
+        for k in 0..500 {
+            let moving = k < 300;
+            let intent = Intent { velocity: if moving { Vec3::X * 1.6 } else { Vec3::ZERO }, look: rig.root + Vec3::new(0.0, 1.5, 20.0), walk: true, strafe: moving, ..Default::default() };
+            rig.update(0.01, intent, &|_, _| 0.0, &|from, step| from + step);
+            if k >= 290 {
+                let side = rig.bones[2].side;
+                turned = turned.max(rig.heading.to_degrees().abs());
+                twisted = twisted.max(side.z.atan2(side.x).to_degrees().abs());
+            }
+        }
+        println!("stopping, it turned {turned:.2} deg, its chest {twisted:.2}");
+        assert!(turned < 1.0 && twisted < 2.0, "stopping, it turned {turned} deg, its chest {twisted}: a twitch");
+    }
+
+    /// Hunting, it walks the gladiator's walk on its stilts (`Steps`): its
+    /// planted stilts stay where they land, within their reach; it keeps
+    /// its pace, no struggling beats; its hips rise and fall with its steps;
+    /// its upper body steady (`WALK_CHEST`); its legs drive its body, its
+    /// pace pulsing with its steps, as asked on the whole; stepping aside,
+    /// it faces where it looks.
+    #[test]
+    fn walks_the_gladiators_walk() {
+        // (And shifting fast, its steps quicker, its stride within its legs.)
+        for (way, strafe, pace) in [(Vec3::Z, false, 1.6), (Vec3::X, true, 1.6), (Vec3::NEG_X, true, 1.6), (Vec3::new(0.7, 0.0, -0.7), true, 1.6), (Vec3::X, true, 4.0), (Vec3::Z, false, 4.0)] {
+            let mut rig = Rig::new(Plan::stalker(), Vec3::ZERO, 0.0, 3, &|_, _| 0.0);
+            let (mut planted, mut slide, mut steps, mut slowest, mut reach, mut off) = ([None::<Vec3>; 2], 0.0f32, 0, f32::MAX, 0.0f32, 0.0f32);
+            let (mut low, mut high, mut apart) = (f32::MAX, f32::MIN, f32::MAX);
+            let (mut turns, mut sides) = ((f32::MAX, f32::MIN), (f32::MAX, f32::MIN));
+            let (mut was, mut jump) = (rig.feet.iter().map(|f| f.planted).collect::<Vec<_>>(), 0.0f32);
+            let (mut paces, mut from, mut short) = (Vec::new(), rig.root, 0.0f32);
+            for k in 0..600 {
+                let intent = Intent { velocity: way * pace, look: rig.root + Vec3::new(0.0, 1.5, 20.0), walk: true, strafe, ..Default::default() };
+                rig.update(0.01, intent, &|_, _| 0.0, &|from, step| from + step);
+                // (No foot leaping in a frame.)
+                for (i, f) in rig.feet.iter().enumerate() {
+                    jump = jump.max((f.planted.y - was[i].y).abs());
+                    was[i] = f.planted;
+                }
+                let pace = Vec2::new(rig.root.x - from.x, rig.root.z - from.z).length() / 0.01;
+                from = rig.root;
+                if k < 200 {
+                    continue;
+                }
+                paces.push(pace);
+                for i in 0..2 {
+                    let f = rig.feet[i];
+                    if f.swinging {
+                        planted[i] = None;
+                    } else if let Some(p) = planted[i] {
+                        slide = slide.max(p.distance(f.planted));
+                    } else {
+                        planted[i] = Some(f.planted);
+                        steps += 1;
+                    }
+                    let leg = rig.plan.legs[i];
+                    // (A planted stilt within its reach; a lifting one, the
+                    // body thrown on from it, a little short of its way.)
+                    let out = rig.bones[5 + 2 * i].a.distance(f.planted) / (leg.upper + leg.lower);
+                    if f.swinging {
+                        short = short.max(out);
+                    } else {
+                        reach = reach.max(out);
+                    }
+                }
+                slowest = slowest.min(rig.speed());
+                let hips = rig.anchor(Root::Hips).y;
+                (low, high) = (low.min(hips), high.max(hips));
+                off = off.max(rig.heading.abs());
+                // (Its left stilt to its left of its right: facing +z, its
+                // left is -x.)
+                apart = apart.min(rig.feet[1].planted.x - rig.feet[0].planted.x);
+                // Its chest's turn and its side to side (facing +z: x).
+                let side = rig.bones[2].side;
+                let turn = side.z.atan2(side.x).to_degrees();
+                let x = rig.bones[2].b.x - rig.root.x;
+                (turns, sides) = ((turns.0.min(turn), turns.1.max(turn)), (sides.0.min(x), sides.1.max(x)));
+            }
+            let (turned, swayed) = (turns.1 - turns.0, (sides.1 - sides.0) * 100.0);
+            let mean = paces.iter().sum::<f32>() / paces.len() as f32;
+            let (lo, hi) = paces.iter().fold((f32::MAX, f32::MIN), |(a, b), &p| (a.min(p), b.max(p)));
+            println!("{} m/s {}: {steps} steps in 4 s, slid {slide:.4} m, legs out to {reach:.3} of their length, slowest {slowest:.2} m/s, hips {:.1} cm up and down, facing {:.0} deg off, its feet at least {apart:.2} m apart across; its chest turning {turned:.1} deg, {swayed:.1} cm side to side; its body going {lo:.2} to {hi:.2} m/s, {mean:.2} on the whole", pace, if strafe { "aside" } else { "ahead" }, (high - low) * 100.0, off.to_degrees());
+            assert!(slide < 1e-3, "a planted stilt slid {slide} m");
+            assert!(reach < 1.001, "a planted leg stretched to {reach} of its length");
+            assert!(short < 1.05, "a lifting stilt fell {short} of its length short");
+            // (A step each half cycle: at its cadence, or quicker as its
+            // stride would outrun its legs.)
+            let expected = 4.0 * 2.0 / rig.walk_cycle(pace);
+            assert!((steps as f32 - expected).abs() <= 2.5, "{steps} steps in 4 s, not about {expected:.0}");
+            assert!(slowest > pace * 0.9, "it slowed to {slowest} m/s");
+            assert!(high - low > 0.04, "its hips rose and fell {} m", high - low);
+            // (Lifting fast, as its walk does, 3 cm in a frame, quicker the
+            // quicker its steps; leaping, as it did off its heelless tip, 17.)
+            assert!(jump < 0.05 * (pace / 1.6).max(1.0), "a foot leapt {jump} m in a frame");
+            assert!((mean - pace).abs() < pace * 0.1, "its body went {mean} m/s on the whole");
+            let (least, most) = if strafe { (0.85, 1.15) } else { (0.9, 1.1) };
+            assert!(lo > pace * 0.5, "its body all but stopped, {lo} m/s: a robot's");
+            assert!(lo < pace * least && hi > pace * most, "its body went {lo} to {hi} m/s: floating, not driven by its steps");
+            assert!(turned < 8.0 && swayed < 10.0, "its chest turned {turned} deg, {swayed} cm side to side: wiggling");
+            if strafe {
+                assert!(off < 0.1, "stepping aside it turned {off} rad from where it looks");
+                assert!(apart > 0.05, "stepping aside its stilts crossed, {apart} m apart");
+            }
+        }
+    }
 
     /// Walking on flat ground, the stalker's planted stilts stay on the
     /// ground and within their reach, its hips high (held higher than its
@@ -2350,12 +2914,14 @@ mod stalker {
         // or walking; shot from before it; at the world's middle, and out
         // where the arena is), the stalker falls: nothing of it or its gun
         // ever in the ground, its bones never stretched, its chest down near
-        // the ground, and lying still within 4.5 s. (Out at 1200 m, a float's
-        // rounding kept it twitching on the ground for ever, the gladiator's,
-        // 2026-10-31.)
+        // the ground, and lying still within 4.5 s; its chest down within
+        // 1.2 s, falling, not sinking. (Out at 1200 m, a float's rounding
+        // kept it twitching on the ground for ever, the gladiator's,
+        // 2026-10-31; out at 5300 m, it sank over seconds, its speed taken
+        // away every frame, 2026-11-04: see `Ragdoll::step`.)
         let grounds: [(&str, fn(f32, f32) -> f32); 3] = [("flat", |_, _| 0.0), ("slope", |x, z| 0.25 * x + 0.1 * z), ("rolling", |x, z| (x * 0.7).sin() * 0.4 + (z * 0.5).cos() * 0.3)];
         for (name, shape) in grounds {
-            for (walking, at) in [(false, Vec3::ZERO), (true, Vec3::ZERO), (false, Vec3::new(1170.0, 1200.0, 1000.0))] {
+            for (walking, at) in [(false, Vec3::ZERO), (true, Vec3::ZERO), (false, Vec3::new(1170.0, 1200.0, 1000.0)), (false, Vec3::new(5298.0, 48.0, 723.0))] {
                 let ground = move |x: f32, z: f32| shape(x - at.x, z - at.z) + at.y;
                 let name = &format!("{name} at {at}");
                 let mut rig = Rig::new(Plan::stalker(), at, 0.0, 5, &ground);
@@ -2366,12 +2932,12 @@ mod stalker {
                     rig.update(1.0 / 60.0, intent, &ground, &|from, step| from + step);
                 }
                 let lengths: Vec<f32> = rig.bones.iter().map(|b| b.a.distance(b.b)).collect();
-                rig.collapse(Vec3::new(0.3, 0.0, -1.5));
+                rig.collapse(Vec3::new(0.3, 0.0, -1.5), crate::ragdoll::Limp::STALKER);
                 let floor = |p: Vec3| ground(p.x, p.z);
-                let (mut deepest, mut stretched, mut rest_at) = (0.0f32, 0.0f32, None);
+                let (mut deepest, mut stretched, mut rest_at, mut down_at) = (0.0f32, 0.0f32, None, None);
                 let (mut last_points, mut moving_till): (Option<Vec<Vec3>>, f32) = (None, 0.0);
                 for k in 0..480 {
-                    rig.fall(1.0 / 60.0, &floor, &|_, to| to);
+                    rig.fall(1.0 / 60.0, &floor, &|_, _| None);
                     let doll = rig.ragdoll.as_ref().unwrap();
                     for (p, r) in doll.points() {
                         deepest = deepest.max(floor(p) + r - p.y);
@@ -2390,17 +2956,21 @@ mod stalker {
                     if rest_at.is_none() && doll.at_rest() {
                         rest_at = Some(k as f32 / 60.0);
                     }
+                    if down_at.is_none() && rig.chest().y - floor(rig.chest()) < 0.6 {
+                        down_at = Some(k as f32 / 60.0);
+                    }
                 }
                 let chest = rig.chest();
                 let low = chest.y - floor(chest);
                 let gun = rig.gun_frame.unwrap();
                 let gun_low = (gun.grip + gun.up * GUN_BORE).y - floor(gun.grip);
-                println!("{name}, {}: deepest {deepest:.3} m into the ground, bones stretched {:.1}%, chest {low:.2} m up, gun {gun_low:.2} m up, still at {rest_at:?} s, last moving at {moving_till:.2} s", if walking { "walking" } else { "aimed" }, stretched * 100.0);
+                println!("{name}, {}: deepest {deepest:.3} m into the ground, bones stretched {:.1}%, chest {low:.2} m up, gun {gun_low:.2} m up, down at {down_at:?} s, still at {rest_at:?} s, last moving at {moving_till:.2} s", if walking { "walking" } else { "aimed" }, stretched * 100.0);
                 assert!(deepest < 0.03, "{name}: {deepest} m into the ground");
                 assert!(stretched < 0.03, "{name}: bones stretched {stretched}");
                 assert!(low < 0.6, "{name}: its chest still {low} m up");
                 assert!(gun_low < 0.4, "{name}: its gun {gun_low} m up");
                 assert!(rest_at.is_some_and(|t| t < 4.5), "{name}: still only at {rest_at:?} s");
+                assert!(down_at.is_some_and(|t| t < 1.2), "{name}: its chest down only at {down_at:?} s");
             }
         }
     }

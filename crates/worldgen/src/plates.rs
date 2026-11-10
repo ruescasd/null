@@ -64,6 +64,11 @@ pub struct PlateWorld {
     /// wall that shuts the view panelled. 1.5: just under the eye, and
     /// always a course's line through it.)
     pub wall_least: f64,
+    /// The largest height step any district's plates take (m; none by
+    /// default): navigation's measure of the terrain lever, how much the
+    /// ground joins up when its steps are made walkable (see
+    /// docs/outdoor-navigation.md).
+    pub step_cap: Option<f64>,
 }
 
 mod bricks;
@@ -168,6 +173,7 @@ impl PlateWorld {
             slabs: 0,
             kerbs: false,
             wall_least: 1.5,
+            step_cap: None,
         }
     }
 
@@ -430,7 +436,11 @@ impl PlateWorld {
             return Plate { height: 0.0, albedo, level, sites, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, center: DVec2::ZERO };
         }
         let s0 = self.site(0, sites[0]);
-        let rules = self.districts.at(s0.x, s0.y).rules();
+        let mut rules = self.districts.at(s0.x, s0.y).rules();
+        if let Some(cap) = self.step_cap {
+            rules.quantum0 = rules.quantum0.min(cap);
+            rules.quantum = rules.quantum.min(cap);
+        }
         let base_albedo = self.districts.blended(s0.x, s0.y).albedo;
         let step = |h: f64, q: f64| (h / q).round() * q;
 
@@ -701,6 +711,18 @@ impl PlateWorld {
         max_level: usize,
         origin: (f64, f64),
     ) {
+        self.visit_split(cache, poly, sites, level, max_level, &mut |cache, piece, plate, kept| {
+            if kept {
+                self.emit_prism(cache, mesh, piece, plate, max_level, origin);
+            }
+        });
+    }
+
+    /// Each plate's pieces within `poly` (its site chain from `level`
+    /// down), cut by the canals, each with its plate and whether it is
+    /// meshed (not under `LEAST_PIECE`): the mesher's and navigation's one
+    /// source of the plates' outlines.
+    fn visit_split(&self, cache: &mut Cache, poly: &[DVec2], sites: &mut [(i32, i32); 3], level: usize, max_level: usize, f: &mut dyn FnMut(&mut Cache, &[DVec2], &Plate, bool)) {
         if poly.len() < 3 {
             return;
         }
@@ -708,9 +730,7 @@ impl PlateWorld {
             let plate = self.plate(cache, *sites, level);
             let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec()) };
             for piece in pieces {
-                if area(&piece) >= LEAST_PIECE {
-                    self.emit_prism(cache, mesh, &piece, &plate, max_level, origin);
-                }
+                f(cache, &piece, &plate, area(&piece) >= LEAST_PIECE);
             }
             return;
         }
@@ -727,13 +747,54 @@ impl PlateWorld {
         for iz in iz0..=iz1 {
             for ix in ix0..=ix1 {
                 let piece = self.cell(next, (ix, iz), poly);
-                if piece.len() < 3 || area(&piece) < LEAST_PIECE {
+                if piece.len() < 3 {
                     continue;
                 }
                 sites[next] = (ix, iz);
-                self.emit_split(cache, mesh, &piece, sites, next, max_level, origin);
+                // (Under `LEAST_PIECE`, nothing to mesh: told as a hole.)
+                if area(&piece) < LEAST_PIECE {
+                    let plate = self.plate(cache, *sites, next);
+                    f(cache, &piece, &plate, false);
+                    continue;
+                }
+                self.visit_split(cache, &piece, sites, next, max_level, f);
             }
         }
+    }
+
+    /// Every plate piece whose biggest plate's site lies within `lo`..`hi`
+    /// (x, z), at full detail, with its plate and whether `mesh_column`
+    /// meshes it (pieces under `LEAST_PIECE` are left out: holes).
+    pub fn plate_pieces(&self, lo: DVec2, hi: DVec2) -> Vec<(Vec<DVec2>, Plate, bool)> {
+        let mut cache = Cache::default();
+        let mut out = Vec::new();
+        let g0 = GRID[0];
+        let (gx0, gz0) = ((lo.x / g0).floor() as i32 - 1, (lo.y / g0).floor() as i32 - 1);
+        let (gx1, gz1) = ((hi.x / g0).ceil() as i32 + 1, (hi.y / g0).ceil() as i32 + 1);
+        for gz in gz0..=gz1 {
+            for gx in gx0..=gx1 {
+                let g = (gx, gz);
+                let s = self.site(0, g);
+                if s.x < lo.x || s.x >= hi.x || s.y < lo.y || s.y >= hi.y {
+                    continue;
+                }
+                let poly = self.big_cell(g);
+                let mut sites = [g, (0, 0), (0, 0)];
+                self.visit_split(&mut cache, &poly, &mut sites, 0, 2, &mut |_, piece, plate, kept| out.push((piece.to_vec(), *plate, kept)));
+            }
+        }
+        out
+    }
+
+    /// A plate's top at `p` (x, z): flat, tilted, or on an earthwork.
+    pub fn plate_top(&self, plate: &Plate, p: DVec2) -> f64 {
+        plate.top(self, p)
+    }
+
+    /// Whether, at full detail, pillar plates grow the library's form (open
+    /// stacked slabs narrower than their plate) rather than a solid prism.
+    pub fn grows_pillars_at_full_detail(&self) -> bool {
+        self.grows_pillars(2)
     }
 
     /// Fraction of open sky above a point on a plate, from the horizon angle
@@ -950,6 +1011,13 @@ impl PlateWorld {
     /// and scales the result to the pillar's height exactly (so it matches
     /// coarser levels of detail, collision and `height_at`).
     fn emit_pillar(&self, library: &Library, mesh: &mut ColumnMesh, poly: &[DVec2], plate: &Plate, origin: (f64, f64)) {
+        forms::mesh_into(mesh, &self.grown_pillar(library, poly, plate, origin));
+    }
+
+    /// A pillar plate's grown form: its prisms, `origin` taken off their
+    /// points, scaled to the pillar's height exactly. The mesher's and
+    /// navigation's one source of pillars.
+    fn grown_pillar(&self, library: &Library, poly: &[DVec2], plate: &Plate, origin: (f64, f64)) -> Vec<forms::Prism> {
         let local: Vec<glam::Vec2> =
             poly.iter().map(|p| glam::Vec2::new((p.x - origin.0) as f32, (p.y - origin.1) as f32)).collect();
         let floor = (plate.height - plate.pillar) as f32;
@@ -960,7 +1028,7 @@ impl PlateWorld {
         let mut prisms = grower.out.prisms;
         let top = prisms.iter().map(|p| p.y1).fold(floor, f32::max);
         if top <= floor + 0.01 {
-            return;
+            return Vec::new();
         }
         let k = plate.pillar as f32 / (top - floor);
         for p in &mut prisms {
@@ -971,7 +1039,17 @@ impl PlateWorld {
                 p.y0 = floor - 0.5;
             }
         }
-        forms::mesh_into(mesh, &prisms);
+        prisms
+    }
+
+    /// A pillar plate's grown form, as `mesh_column` meshes it at full
+    /// detail: its prisms, their points less `origin` (none if pillars are
+    /// not grown here).
+    pub fn pillar_prisms(&self, poly: &[DVec2], plate: &Plate, origin: DVec2) -> Vec<forms::Prism> {
+        match self.library.as_ref() {
+            Some(library) if plate.pillar > 0.0 && self.grows_pillars(2) => self.grown_pillar(library, poly, plate, (origin.x, origin.y)),
+            _ => Vec::new(),
+        }
     }
 }
 

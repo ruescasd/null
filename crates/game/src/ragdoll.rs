@@ -11,7 +11,6 @@ use bevy::prelude::*;
 /// Its fixed step (s), and how many passes over its links in each.
 const STEP: f32 = 1.0 / 120.0;
 const PASSES: usize = 10;
-const GRAVITY: f32 = 9.8;
 /// How much of its speed it keeps each step: falling; and fallen, from so
 /// long after it fell to so long (s), settling (its neck swung on between
 /// its chest and its head for seconds, lying).
@@ -21,9 +20,23 @@ const SLIDE: f32 = 0.3;
 /// Sliding slower than this (m/s) on the ground, a point stops dead.
 const STICK: f32 = 0.3;
 /// Its tone: how strongly each limb keeps the bend it had (0..1 a step), at
-/// first; ebbing by half every so long (s), down to the least it keeps
-/// (any at all, it crept on along the ground for seconds, lying).
-const TONE: (f32, f32, f32) = (0.2, 0.3, 0.0);
+/// first (`Limp::tone`); ebbing by half every so long (s), down to the
+/// least it keeps (any at all, it crept on along the ground for seconds,
+/// lying).
+const TONE: (f32, f32) = (0.3, 0.0);
+
+/// How a body falls limp: its gravity (m/s²), and its tone at first (see
+/// `TONE`).
+#[derive(Clone, Copy, Debug)]
+pub struct Limp {
+    pub gravity: f32,
+    pub tone: f32,
+}
+
+impl Limp {
+    /// The stalker's: earth's gravity, its knees holding a moment.
+    pub const STALKER: Limp = Limp { gravity: 9.8, tone: 0.2 };
+}
 /// Folded, a limb's ends kept at least this much of its reach apart.
 const FOLD: f32 = 0.3;
 /// How long its hand holds on to what it carries, falling (s).
@@ -98,6 +111,7 @@ pub struct Ragdoll {
     pub age: f32,
     clock: f32,
     still: f32,
+    limp: Limp,
 }
 
 impl Ragdoll {
@@ -105,8 +119,8 @@ impl Ragdoll {
     /// its trunk), each joint moving as it was (`before`, `dt` s earlier),
     /// pushed by `push` (m/s, all of it); and what it carried, let go from the
     /// hand at the end of bone `hand`: its frame and how long from its grip
-    /// to its tip.
-    pub fn new(bones: &[Bone], before: &[Bone], dt: f32, trunk: usize, push: Vec3, gun: Option<(GunFrame, f32, usize)>) -> Self {
+    /// to its tip; falling as `limp` says.
+    pub fn new(bones: &[Bone], before: &[Bone], dt: f32, trunk: usize, push: Vec3, gun: Option<(GunFrame, f32, usize)>, limp: Limp) -> Self {
         let mut p: Vec<Vec3> = Vec::new();
         let mut was: Vec<Vec3> = Vec::new();
         let mut radius: Vec<f32> = Vec::new();
@@ -161,7 +175,7 @@ impl Ragdoll {
             }
         }
         let trunk_ix = [rump, chest, across.0, across.1];
-        let mut doll = Ragdoll { origin: Vec3::ZERO, p, q: was, radius, links, hinges: Vec::new(), bones: Vec::new(), trunk: trunk_ix, rod: None, age: 0.0, clock: 0.0, still: 0.0 };
+        let mut doll = Ragdoll { origin: Vec3::ZERO, p, q: was, radius, links, hinges: Vec::new(), bones: Vec::new(), trunk: trunk_ix, rod: None, age: 0.0, clock: 0.0, still: 0.0, limp };
         let r0 = doll.frame(bones[0].side);
         doll.bones = bones.iter().zip(&ends).map(|(b, &(a, e))| (a, e, b.radius, r0.inverse() * b.side, r0.inverse() * (b.b - b.a).normalize_or(Vec3::Y))).collect();
         // Its limbs' middle joints, each bending the way it bent, its tone
@@ -237,11 +251,16 @@ impl Ragdoll {
     }
 
     /// On `dt` s: falling, lying; `floor` the ground's height under a point,
-    /// `wall` where a point moving from one place to another is stopped.
-    pub fn step(&mut self, dt: f32, floor: &dyn Fn(Vec3) -> f32, wall: &dyn Fn(Vec3, Vec3) -> Vec3) {
+    /// `wall` where a point moving from one place to another is stopped, if
+    /// it is. (Not where it ends up, stopped or not: out where the world is
+    /// thousands of metres off its middle, a point carried there and back
+    /// came back a fraction of a millimetre off, was taken for stopped, and
+    /// its speed taken away, every frame: the gladiator sank to the ground
+    /// over seconds, the user, 2026-11-04.)
+    pub fn step(&mut self, dt: f32, floor: &dyn Fn(Vec3) -> f32, wall: &dyn Fn(Vec3, Vec3) -> Option<Vec3>) {
         let o = self.origin;
         let floor = &|p: Vec3| floor(p + o) - o.y;
-        let wall = &|a: Vec3, b: Vec3| wall(a + o, b + o) - o;
+        let wall = &|a: Vec3, b: Vec3| wall(a + o, b + o).map(|w| w - o);
         self.age += dt;
         if self.at_rest() {
             return;
@@ -255,12 +274,11 @@ impl Ragdoll {
         // (Not through what is built: each point, the way it went this
         // frame.)
         for i in 0..self.p.len() {
-            if from[i].distance_squared(self.p[i]) > 1e-8 {
-                let to = wall(from[i], self.p[i]);
-                if to.distance_squared(self.p[i]) > 1e-8 {
-                    self.p[i] = to;
-                    self.q[i] = to;
-                }
+            if from[i].distance_squared(self.p[i]) > 1e-8
+                && let Some(to) = wall(from[i], self.p[i])
+            {
+                self.p[i] = to;
+                self.q[i] = to;
             }
         }
         let fastest = (0..self.p.len()).map(|i| (self.p[i] - from[i]).length()).fold(0.0, f32::max) / dt.max(1e-4);
@@ -269,7 +287,7 @@ impl Ragdoll {
 
     fn tick(&mut self, floor: &dyn Fn(Vec3) -> f32) {
         let n = self.p.len();
-        let g = Vec3::NEG_Y * GRAVITY * STEP * STEP;
+        let g = Vec3::NEG_Y * self.limp.gravity * STEP * STEP;
         let settled = ((self.age - DRAG.2) / (DRAG.3 - DRAG.2)).clamp(0.0, 1.0);
         let drag = DRAG.0 + (DRAG.1 - DRAG.0) * settled;
         for i in 0..n {
@@ -277,7 +295,7 @@ impl Ragdoll {
             self.q[i] = self.p[i];
             self.p[i] += v + g;
         }
-        let tone = TONE.2 + (TONE.0 - TONE.2) * 0.5f32.powf(self.age / TONE.1);
+        let tone = TONE.1 + (self.limp.tone - TONE.1) * 0.5f32.powf(self.age / TONE.0);
         if let Some(rod) = self.rod.as_mut()
             && rod.hand.is_some_and(|_| self.age > GRIP)
         {

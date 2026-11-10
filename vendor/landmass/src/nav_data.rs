@@ -55,6 +55,10 @@ pub(crate) struct NavigationData<CS: CoordinateSystem> {
   pub(crate) modified_nodes: HashMap<NodeRef, ModifiedNode>,
   /// The islands that have been deleted since the last update.
   deleted_islands: HashSet<IslandId>,
+  /// (null) The islands' bounds in a tree, as of the last update, to sample
+  /// points by (a point was sampled against every island in turn: with a
+  /// thousand tiles, 0.03 ms a point, two points an agent a frame).
+  island_tree: Option<BoundingBoxHierarchy<IslandId>>,
   /// The set of animation links created since the last update.
   new_animation_links: HashSet<AnimationLinkId>,
   /// The set of animation links deleted since the last update.
@@ -157,6 +161,7 @@ impl<CS: CoordinateSystem> NavigationData<CS> {
       node_to_off_mesh_link_ids: HashMap::new(),
       modified_nodes: HashMap::new(),
       deleted_islands: HashSet::new(),
+      island_tree: None,
       new_animation_links: HashSet::new(),
       deleted_animation_links: HashSet::new(),
     }
@@ -272,7 +277,30 @@ impl<CS: CoordinateSystem> NavigationData<CS> {
     point_sample_distance: &CorePointSampleDistance,
   ) -> Option<(Vec3, NodeRef)> {
     let mut best_point = None;
-    for (island_id, island) in self.islands.iter() {
+    // (null: only the islands whose bounds it is within reach of.)
+    let near: Vec<IslandId> = match &self.island_tree {
+      Some(tree) => tree
+        .query_box(BoundingBox::new_box(
+          point
+            - Vec3::new(
+              point_sample_distance.horizontal_distance,
+              point_sample_distance.horizontal_distance,
+              point_sample_distance.distance_below,
+            ),
+          point
+            + Vec3::new(
+              point_sample_distance.horizontal_distance,
+              point_sample_distance.horizontal_distance,
+              point_sample_distance.distance_above,
+            ),
+        ))
+        .into_iter()
+        .copied()
+        .collect(),
+      None => self.islands.keys().collect(),
+    };
+    for island_id in near {
+      let Some(island) = self.islands.get(island_id) else { continue };
       let relative_point = island.transform.apply_inverse(point);
       if !island
         .nav_mesh
@@ -1171,6 +1199,16 @@ impl<CS: CoordinateSystem> NavigationData<CS> {
 
     let (dropped_links, changed_islands, modified_node_refs_to_update) =
       self.update_islands(edge_link_distance, animation_link_distance);
+    if !changed_islands.is_empty() {
+      let mut island_bounds = self
+        .islands
+        .iter()
+        .filter(|(_, island)| !island.transformed_bounds.is_empty())
+        .map(|(island_id, island)| (island.transformed_bounds, Some(island_id)))
+        .collect::<Vec<_>>();
+      self.island_tree = (!island_bounds.is_empty())
+        .then(|| BoundingBoxHierarchy::new(&mut island_bounds));
+    }
     for node_ref in modified_node_refs_to_update {
       self.update_modified_node(node_ref, edge_link_distance);
     }
@@ -1277,6 +1315,43 @@ fn link_edges_between_islands<CS: CoordinateSystem>(
         island_2_edge,
         edge_link_distance_squared,
       ) {
+        // (null: only where the floors either side are within a climb of
+        // each other, by their height meshes, not the polygons' rough
+        // heights; see `LINK_RISE`. Joined over a step of 0.9 m, a creature
+        // pressed into it.)
+        let floor = |island: &Island<CS>, polygon: usize, at: Vec3| {
+          island
+            .nav_mesh
+            .floor_height_on_node(island.transform.apply_inverse(at), polygon)
+            .map(|h| h + island.transform.apply(Vec3::ZERO).z)
+        };
+        let rise = |at: Vec3| {
+          Some(
+            floor(island_2, island_2_edge_ref.polygon_index, at)?
+              - floor(island_1, island_1_edge_ref.polygon_index, at)?,
+          )
+        };
+        let portal = match (rise(portal.0), rise(portal.1)) {
+          (Some(r0), Some(r1)) => {
+            // Where along it the rise is within a climb, taken as straight.
+            let within = |r: f32| r.abs() <= crate::geometry::LINK_CLIMB;
+            let cross = |to: f32| {
+              if (r1 - r0).abs() < 1e-6 { 0.0 } else { (to - r0) / (r1 - r0) }
+            };
+            let (mut t0, mut t1) = (0.0f32, 1.0f32);
+            if !within(r0) {
+              t0 = cross(crate::geometry::LINK_CLIMB.copysign(r0)).clamp(0.0, 1.0);
+            }
+            if !within(r1) {
+              t1 = cross(crate::geometry::LINK_CLIMB.copysign(r1)).clamp(0.0, 1.0);
+            }
+            if (!within(r0) && !within(r1) && r0 * r1 > 0.0) || t1 <= t0 {
+              continue;
+            }
+            (portal.0.lerp(portal.1, t0), portal.0.lerp(portal.1, t1))
+          }
+          _ => portal,
+        };
         if portal.0.distance_squared(portal.1) < edge_link_distance_squared {
           continue;
         }

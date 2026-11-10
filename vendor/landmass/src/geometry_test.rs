@@ -1,4 +1,4 @@
-use glam::{Vec2, Vec3};
+use glam::{Vec2, Vec3, Vec3Swizzles};
 use googletest::{expect_eq, expect_that, matchers::*};
 
 use crate::geometry::project_point_to_line_segment;
@@ -45,35 +45,86 @@ fn edge_intersects_only_when_nearby() {
       /* edge_1= */
       (Vec3::new(7.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)),
       /* edge_2= */
-      (Vec3::new(4.0, 0.0, 0.11), Vec3::new(6.0, 0.0, 0.11)),
+      (Vec3::new(4.0, 0.11, 0.0), Vec3::new(6.0, 0.11, 0.0)),
+      /* intersection_distance_squared= */ 0.1 * 0.1,
+    ),
+    None,
+  );
+  // (null: in height, as Detour: within `LINK_RISE` at either end, not the
+  // distance given.)
+  assert_eq!(
+    edge_intersection(
+      /* edge_1= */
+      (Vec3::new(7.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)),
+      /* edge_2= */
+      (Vec3::new(4.0, 0.0, 1.0), Vec3::new(6.0, 0.0, 1.0)),
+      /* intersection_distance_squared= */ 0.1 * 0.1,
+    ),
+    Some((Vec3::new(6.0, 0.0, 0.5), Vec3::new(4.0, 0.0, 0.5)))
+  );
+  assert!(
+    edge_intersection(
+      /* edge_1= */
+      (Vec3::new(7.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)),
+      /* edge_2= */
+      (Vec3::new(4.0, 0.0, 1.0), Vec3::new(6.0, 0.0, 3.0)),
+      /* intersection_distance_squared= */ 0.1 * 0.1,
+    )
+    .is_some()
+  );
+  assert_eq!(
+    edge_intersection(
+      /* edge_1= */
+      (Vec3::new(7.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)),
+      /* edge_2= */
+      (Vec3::new(4.0, 0.0, 1.3), Vec3::new(6.0, 0.0, 1.5)),
       /* intersection_distance_squared= */ 0.1 * 0.1,
     ),
     None,
   );
 }
 
+/// (null) Edges crossing in height are joined, as Detour joins them; not
+/// edges apart by more than `LINK_RISE` at both ends.
 #[test]
 fn crossed_edges_dont_intersect_unless_close() {
+  let (a, b) = edge_intersection(
+    /* edge_1= */
+    (Vec3::new(5.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0)),
+    /* edge_2= */
+    (Vec3::new(14.0, 0.0, 6.5), Vec3::new(9.0, 0.0, -1.5)),
+    /* intersection_distance_squared= */ 0.1 * 0.1,
+  )
+  .unwrap();
+  assert!(a.distance(Vec3::new(9.0, 0.0, -0.75)) < 1e-5, "{a}");
+  assert!(b.distance(Vec3::new(10.0, 0.0, 0.05)) < 1e-5, "{b}");
   assert_eq!(
     edge_intersection(
       /* edge_1= */
       (Vec3::new(5.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0)),
       /* edge_2= */
-      (Vec3::new(14.0, 0.0, 4.5), Vec3::new(9.0, 0.0, -0.5)),
-      /* intersection_distance_squared= */ 0.51 * 0.51,
-    ),
-    Some((Vec3::new(9.0, 0.0, -0.25), Vec3::new(9.875, 0.0, 0.125)))
-  );
-  assert_eq!(
-    edge_intersection(
-      /* edge_1= */
-      (Vec3::new(5.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0)),
-      /* edge_2= */
-      (Vec3::new(14.0, 0.0, 4.5), Vec3::new(9.0, 0.0, -0.5)),
-      /* intersection_distance_squared= */ 0.49 * 0.49,
+      (Vec3::new(14.0, 0.0, 9.0), Vec3::new(9.0, 0.0, 1.5)),
+      /* intersection_distance_squared= */ 0.1 * 0.1,
     ),
     None,
   );
+}
+
+/// (null) Edges apart in height still meet at their corners across: a
+/// sloping edge and a level one, each end of their overlap where a corner
+/// is.
+#[test]
+fn edges_apart_in_height_meet_at_their_corners() {
+  let (a, b) = edge_intersection(
+    /* edge_1= */
+    (Vec3::new(7875.0, -8166.667, 20.53), Vec3::new(7875.0, -8225.0, 20.0)),
+    /* edge_2= */
+    (Vec3::new(7875.0, -8225.0, 20.0), Vec3::new(7875.0, -8179.033, 20.0)),
+    /* intersection_distance_squared= */ 0.01 * 0.01,
+  )
+  .unwrap();
+  assert!(a.xy().distance(Vec2::new(7875.0, -8179.033)) < 1e-3, "{a}");
+  assert!(b.xy().distance(Vec2::new(7875.0, -8225.0)) < 1e-3, "{b}");
 }
 
 #[googletest::test]

@@ -14,6 +14,8 @@ mod streetlights;
 mod landmarks;
 mod loading;
 mod navmesh;
+mod places;
+mod show;
 /// Every option name the game reads, gathered from its source by `build.rs`.
 mod options {
     include!(concat!(env!("OUT_DIR"), "/options.rs"));
@@ -25,6 +27,7 @@ mod rig;
 mod rope;
 mod cloth;
 mod fabric;
+mod flight;
 mod groundlab;
 mod structures;
 mod terrain;
@@ -95,6 +98,18 @@ impl Args {
         while let Some(flag) = it.next() {
             match flag.as_str() {
                 "--cam" => args.cam = floats(it.next()).try_into().ok(),
+                // (A place kept by name, see `places.rs`; one not there
+                // stops the game, said why.)
+                "--tp" => {
+                    let name = it.next().unwrap_or_default();
+                    match places::find(&name) {
+                        Ok(at) => args.cam = Some(at),
+                        Err(e) => {
+                            eprintln!("--tp {name}: {e}");
+                            std::process::exit(2);
+                        }
+                    }
+                }
                 "--time" => args.time = it.next().and_then(|s| s.parse().ok()),
                 "--shot" => args.shot = it.next(),
                 "--focus" => args.focus = it.next(),
@@ -263,7 +278,7 @@ fn main() {
             terrain::TerrainPlugin,
             camera::FlyCameraPlugin,
             look::LookPlugin,
-            (beams::BeamsPlugin, canal_light::CanalLightPlugin, streetlights::StreetlightsPlugin),
+            (beams::BeamsPlugin, canal_light::CanalLightPlugin, streetlights::StreetlightsPlugin, show::plugin),
             capture::CapturePlugin,
             combat::CombatPlugin,
             figure::FigurePlugin,

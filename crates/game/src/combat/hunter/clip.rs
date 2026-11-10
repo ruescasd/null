@@ -8,17 +8,21 @@
 //!
 //! The hunter under it is a biped's, unseen: its mind, its way through built
 //! places, its body's place and pace (see `hunt`, its `clip` stances). On it
-//! the model is set and its clips played: walk and run blended by its pace,
-//! in step, one phase for both, each at its own ground speed, so its feet
-//! stay where they come down; its attack as it winds up, timed so the blow
-//! lands as the clip's does. Over the clips its head turns to you; shot, it
+//! the model is set and its clips played: its walk at its own ground speed,
+//! so its feet stay where they come down, walking on as it dashes (it
+//! walks or dashes, never runs: a `run` line in its file is not read, see
+//! `hunt`); its attack as it winds up, timed so the blow lands as the clip's
+//! does. Over the clips its head turns to you; shot, it
 //! leans with its hunter's reel and a limb struck flinches (see `aim`); its
 //! hits are taken on its joints. Killed, it falls limp:
 //! the stalker's ragdoll on its bones as drawn, its joints turned after it
 //! (see `fall`). With `echo`, a second body beside it, a moment behind
-//! (see `echo.rs`).
+//! (see `echo.rs`). On district ground (`--opt blink`), its shade, its
+//! teleports' look (see `shade.rs`).
 
 mod echo;
+mod gait;
+mod shade;
 
 use std::path::PathBuf;
 
@@ -73,7 +77,6 @@ pub(crate) struct Spec {
     /// Ground speed (model units/s), where its left foot comes down (of the
     /// clip), length (s).
     walk: Clip,
-    run: Clip,
     /// When the blow lands (of the clip), length (s).
     attack: Clip,
     /// Length (s).
@@ -146,7 +149,6 @@ impl Spec {
             forward: Vec2::new(forward[0], forward[1]).normalize_or(Vec2::Y),
             idle: clip("idle", 1, false)?,
             walk: clip("walk", 3, true)?,
-            run: clip("run", 3, true)?,
             attack: clip("attack", 2, false)?,
             hit: clip("hit", 1, false)?,
             death: clip("death", 1, false)?,
@@ -170,8 +172,8 @@ impl Spec {
         if spec.spine.len() < 2 {
             return Err("spine: from the hips up to the neck, two joints or more".into());
         }
-        if spec.height <= 0.0 || spec.model_height <= 0.0 || spec.walk.numbers[0] <= 0.0 || spec.run.numbers[0] <= spec.walk.numbers[0] {
-            return Err("height, model_height and the walk's speed must be more than 0, and the run's more than the walk's".into());
+        if spec.height <= 0.0 || spec.model_height <= 0.0 || spec.walk.numbers[0] <= 0.0 {
+            return Err("height, model_height and the walk's speed must be more than 0".into());
         }
         Ok(spec)
     }
@@ -181,9 +183,9 @@ impl Spec {
         self.height / self.model_height
     }
 
-    /// Its walk's and run's ground speeds (m/s).
-    fn paces(&self) -> (f32, f32) {
-        (self.walk.numbers[0] * self.scale(), self.run.numbers[0] * self.scale())
+    /// Its walk's ground speed (m/s).
+    fn pace(&self) -> f32 {
+        self.walk.numbers[0] * self.scale()
     }
 
     /// The model's turn about up from its own facing to +z.
@@ -193,22 +195,21 @@ impl Spec {
 
     /// What its hunter needs of it (see `hunt`).
     fn moves(&self) -> Moves {
-        let (walk, run) = self.paces();
+        let walk = self.pace();
         let (impact, attack) = match self.attack.numbers.as_slice() {
             [f, length] => (f * length, *length),
             _ => (0.3, 0.6),
         };
-        Moves { walk, run, impact, attack, reach: self.height * 0.7, height: self.height }
+        Moves { walk, impact, attack, reach: self.height * 0.7, height: self.height }
     }
 }
 
-/// What a hunter with an authored body moves by: its walk's and run's
-/// ground speeds (m/s), how long its attack takes to land and all of it
+/// What a hunter with an authored body moves by: its walk's ground speed
+/// (m/s), how long its attack takes to land and all of it
 /// (s), how near it strikes from (m), and how tall it stands (m).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Moves {
     pub(super) walk: f32,
-    pub(super) run: f32,
     pub(super) impact: f32,
     pub(super) attack: f32,
     pub(super) reach: f32,
@@ -225,13 +226,14 @@ pub(crate) struct Kit {
     gltf: Handle<Gltf>,
     scene: Handle<WorldAsset>,
     graph: Option<(Handle<AnimationGraph>, Nodes)>,
+    /// Its walk as waves (`NAME.gait`, see `gait.rs`), if it has one.
+    gait: Option<gait::Gait>,
 }
 
 #[derive(Clone, Copy)]
 struct Nodes {
     idle: Option<AnimationNodeIndex>,
     walk: AnimationNodeIndex,
-    run: AnimationNodeIndex,
     attack: Option<AnimationNodeIndex>,
     hit: Option<AnimationNodeIndex>,
     death: Option<AnimationNodeIndex>,
@@ -247,9 +249,21 @@ pub(super) fn load(mut commands: Commands, server: Res<AssetServer>) {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let spec = Spec::parse(&name, &text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(dir.join(&spec.model).is_file(), "{}: its model {} is not in {}", path.display(), spec.model, dir.display());
+        // (Its walk as waves, if fitted: of the walk it names, else stale.)
+        let waves = path.with_extension("gait");
+        let gait = waves.is_file().then(|| {
+            let text = std::fs::read_to_string(&waves).unwrap_or_else(|e| panic!("{}: {e}", waves.display()));
+            let mut gait = gait::Gait::parse(&text).unwrap_or_else(|e| panic!("{}: {e}", waves.display()));
+            assert!(gait.clip == spec.walk.name, "{}: fitted to the clip {:?}, but its walk is {:?}: run tools/gait_fit.py {} --write 6 again", waves.display(), gait.clip, spec.walk.name, dir.join(&spec.model).display());
+            let trunk: Vec<String> = spec.spine.iter().chain([&spec.head]).cloned().collect();
+            let plan = gait.plan(&spec.legs, &spec.arms, &trunk, spec.walk.numbers[1]).unwrap_or_else(|e| panic!("{}: {e}", waves.display()));
+            info!("creature {name}: its steps' shape changes at {:.2} and {:.2} of its stride", plan.lulls[0], plan.lulls[1]);
+            gait.plan = Some(plan);
+            gait
+        });
         let at = format!("creatures://{}", spec.model);
-        info!("creature {}: `spawn {name}`", kits.len());
-        kits.push(Kit { gltf: server.load(at.clone()), scene: server.load(GltfAssetLabel::Scene(0).from_asset(at)), graph: None, spec });
+        info!("creature {}: `spawn {name}`{}", kits.len(), if gait.is_some() { " (its walk as waves too: walk=1)" } else { "" });
+        kits.push(Kit { gltf: server.load(at.clone()), scene: server.load(GltfAssetLabel::Scene(0).from_asset(at)), graph: None, spec, gait });
     }
     commands.insert_resource(Kits(kits));
 }
@@ -276,7 +290,7 @@ pub(super) fn prepare(server: Res<AssetServer>, gltfs: Res<Assets<Gltf>>, mut gr
             Some(graph.add_clip(clip.clone(), 1.0, root))
         };
         let spec = &kit.spec;
-        let nodes = Nodes { idle: add(&spec.idle), walk: add(&spec.walk).expect("a walk"), run: add(&spec.run).expect("a run"), attack: add(&spec.attack), hit: add(&spec.hit), death: add(&spec.death) };
+        let nodes = Nodes { idle: add(&spec.idle), walk: add(&spec.walk).expect("a walk"), attack: add(&spec.attack), hit: add(&spec.hit), death: add(&spec.death) };
         kit.graph = Some((graphs.add(graph), nodes));
     }
 }
@@ -294,8 +308,26 @@ pub(crate) struct Body {
     /// Its clips' player, and its joints by role, once its model is in.
     player: Option<Entity>,
     joints: Option<Joints>,
-    /// Through its walk and run together (0..1).
+    /// Through its walk (0..1); its steps so far (each drawing its pace).
     phase: f32,
+    steps: u32,
+    /// With `walk=1`, its walk played from its waves (see `gait.rs`): each
+    /// joint of them and its track, once its model is in; and the walk's
+    /// share of what is played (0..1).
+    fitted: Option<Vec<(Entity, usize)>>,
+    walking: f32,
+    /// With `walk=1`, its steps' shapes (see `gait::Steps`).
+    shaping: Option<gait::Steps>,
+    /// How it holds itself (radians): its trunk stooped forward, its arms
+    /// in toward its sides (the user, 2026-11-07: its clips' upright chest
+    /// and flared arms, a swagger); and how much of what is played they
+    /// hold for (not its attack's or a hit's share).
+    hunch: f32,
+    arms_in: f32,
+    posing: f32,
+    /// With `still`: the way it faces (its heading) and how far it is
+    /// through its showing (s, see `STILL`).
+    still: Option<(f32, f32)>,
     /// What it plays over its walking, and how long it has (s).
     act: Option<(Act, f32)>,
     /// How long since it died (s).
@@ -338,8 +370,8 @@ struct Joints {
 }
 
 /// Hunters wanting a body get one, once its creature's clips are ready.
-pub(super) fn dress(mut commands: Commands, kits: Res<Kits>, mut hunters: Query<(Entity, &mut Hunter, &Wants)>) {
-    for (entity, mut h, wants) in &mut hunters {
+pub(super) fn dress(mut commands: Commands, args: Res<crate::Args>, kits: Res<Kits>, mut hunters: Query<(Entity, &mut Hunter, &Wants, Option<&mut crate::navmesh::district::Blink>)>) {
+    for (entity, mut h, wants, blink) in &mut hunters {
         let Some(kit) = kits.0.get(wants.0) else {
             error!("creature {}: there are {} in {} (see the log at start)", wants.0, kits.0.len(), folder().display());
             commands.entity(entity).despawn();
@@ -349,14 +381,36 @@ pub(super) fn dress(mut commands: Commands, kits: Res<Kits>, mut hunters: Query<
             continue;
         }
         let spec = &kit.spec;
+        // Its walk as waves, if fitted (`walk=0`, its clip's; asked for and
+        // none fitted: said, not made).
+        let fitted = h.traits.value("walk", if kit.gait.is_some() { 1.0 } else { 0.0 }) == 1.0;
+        if fitted && kit.gait.is_none() {
+            error!("{}: walk=1, but it has no walk as waves: run tools/gait_fit.py creatures/{} --write 6", spec.name, spec.model);
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let t = |name: &str, or: f32| h.traits.value(name, or);
+        let shaping = fitted.then(|| gait::Steps::new(gait::Amounts { reach: t("step_reach", 0.1), arms: t("step_arms", 0.25), lift: t("step_lift", 0.25), lean: t("step_lean", 3.0).to_radians() }, t("arm_swing", -1.0), t("torso", -1.0), t("sway", -1.0)));
+        let (hunch, arms_in) = (t("hunch", 0.0).to_radians(), t("arms_in", 0.0).to_radians());
         h.clip = Some(spec.moves());
         commands.entity(entity).remove::<Wants>();
         let body = commands.spawn((
-            Body { hunter: entity, kit: wants.0, player: None, joints: None, phase: 0.0, act: None, dying: None, look: Quat::IDENTITY, flinch: [(Vec3::ZERO, Vec3::ZERO); 13], turned: Default::default(), fallen: None, weapon: None, bloom: 0.0 },
+            Body { hunter: entity, kit: wants.0, player: None, joints: None, phase: 0.0, steps: 0, fitted: fitted.then(Vec::new), walking: 0.0, shaping, hunch, arms_in, posing: 0.0, still: None, act: None, dying: None, look: Quat::IDENTITY, flinch: [(Vec3::ZERO, Vec3::ZERO); 13], turned: Default::default(), fallen: None, weapon: None, bloom: 0.0 },
             WorldAssetRoot(kit.scene.clone()),
             placed(spec, h.rig.root, h.rig.heading),
             Visibility::default(),
         )).id();
+        if args.opt("blink")
+            && let Some(mut blink) = blink
+        {
+            blink.shaded = true;
+            // (No tell, standing, before it goes: its shade leaving it is
+            // the tell; it paused, the user, 2026-11-04. Given, kept.)
+            if !h.traits.has("blink_tell") {
+                blink.tell = 0.0;
+            }
+            commands.spawn((shade::Shade::new(body, entity), WorldAssetRoot(kit.scene.clone()), placed(spec, h.rig.root, h.rig.heading), Visibility::Hidden));
+        }
         if h.traits.has("echo") {
             commands.spawn((echo::Echo::new(body, h.traits.value("echo_lag", echo::LAG), h.traits.value("echo_off", echo::OFF)), WorldAssetRoot(kit.scene.clone()), placed(spec, h.rig.root, h.rig.heading), Visibility::default()));
         }
@@ -394,9 +448,13 @@ pub(super) fn bind(mut commands: Commands, kits: Res<Kits>, mut bodies: Query<(E
         let spec = &kit.spec;
         let limb = |l: &[String; 3]| [joint(&l[0]), joint(&l[1]), joint(&l[2])];
         body.joints = Some(Joints { spine: spec.spine.iter().map(joint).collect(), head: joint(&spec.head), legs: [limb(&spec.legs[0]), limb(&spec.legs[1])], arms: [limb(&spec.arms[0]), limb(&spec.arms[1])] });
+        if body.fitted.is_some() {
+            let gait = kit.gait.as_ref().expect("checked in dress");
+            body.fitted = Some(gait.tracks.iter().enumerate().map(|(k, t)| (*named.get(t.name.as_str()).unwrap_or_else(|| panic!("creatures/{}.gait names a joint {:?} that {} has not", kit.spec.name, t.name, kit.spec.model)), k)).collect());
+        }
         commands.entity(player).insert(AnimationGraphHandle(graph.clone()));
         let mut p = players.get_mut(player).expect("found above");
-        for node in [nodes.idle, Some(nodes.walk), Some(nodes.run)].into_iter().flatten() {
+        for node in [nodes.idle, Some(nodes.walk)].into_iter().flatten() {
             p.play(node).repeat().set_weight(0.0);
         }
         body.player = Some(player);
@@ -493,22 +551,32 @@ const FLINCH: (f32, f32, f32, f32) = (2.0, 160.0, 13.0, 0.8);
 /// how long after it closes (s).
 const BLOOM: (f32, f32) = (0.2, 0.5);
 
+/// Where in its walk a foot leaves the ground (of the stride, from its left
+/// foot coming down; the left's half a stride on): its right, a tenth of a
+/// stride after its left comes down, as in a walk both are down a while.
+const TOE_OFF: f32 = 0.1;
+
 /// How long a clip's blend in and out takes (s).
 const BLEND: f32 = 0.12;
 /// How long a body lies once its death is played (s).
 const LIES: f32 = 6.0;
 
+/// With `still` (the user, 2026-11-07: to judge its animations without it
+/// turning back and forth): how long it walks in place, then stands, then
+/// (after its attack) stands again (s).
+const STILL: (f32, f32, f32) = (6.0, 2.5, 1.5);
+
 /// Each body set on its hunter and its clips played (see the module's
 /// account); its hunter gone, its death.
 #[allow(clippy::type_complexity)]
-pub(super) fn animate(mut commands: Commands, time: Res<Time>, kits: Res<Kits>, hunters: Query<&Hunter>, mut bodies: Query<(Entity, &mut Body, &mut Transform)>, mut players: Query<&mut AnimationPlayer>) {
+pub(super) fn animate(mut commands: Commands, time: Res<Time>, kits: Res<Kits>, mut hunters: Query<&mut Hunter>, mut bodies: Query<(Entity, &mut Body, &mut Transform), Without<FlyCam>>, mut players: Query<&mut AnimationPlayer>, camera: Single<&Transform, With<FlyCam>>) {
     let dt = time.delta_secs();
     for (entity, mut body, mut transform) in &mut bodies {
         let kit = &kits.0[body.kit];
         let spec = &kit.spec;
         let Some((_, nodes)) = kit.graph else { continue };
         let Some(mut player) = body.player.and_then(|p| players.get_mut(p).ok()) else { continue };
-        let Ok(h) = hunters.get(body.hunter) else {
+        let Ok(mut h) = hunters.get_mut(body.hunter) else {
             // (Fallen limp, its hunter gone at last: gone with it.)
             if body.fallen.is_some() {
                 commands.entity(entity).despawn();
@@ -536,7 +604,33 @@ pub(super) fn animate(mut commands: Commands, time: Res<Time>, kits: Res<Kits>, 
             player.stop_all();
             continue;
         }
-        *transform = placed(spec, h.rig.root, h.rig.heading);
+        // (Its shade away along a teleport's line: left behind, held still
+        // where it was in its stride, till its shade is there; see
+        // `shade.rs`.)
+        if h.gliding {
+            // (Its walk is where it is set, each frame; its idle stopped.)
+            if let Some(idle) = nodes.idle
+                && let Some(active) = player.animation_mut(idle)
+            {
+                active.set_speed(0.0);
+            }
+            h.push = false;
+            continue;
+        }
+        // With `still`: in one place, facing one way (`still_turn` degrees
+        // from you as it first stood, 90 side on), walking in place, then
+        // standing, then its attack, over and over.
+        let still = h.traits.has("still").then(|| {
+            let (heading, clock) = *body.still.get_or_insert_with(|| {
+                let to = camera.translation - h.rig.root;
+                (to.x.atan2(to.z) + h.traits.value("still_turn", 90.0).to_radians(), 0.0)
+            });
+            let length = spec.attack.numbers.get(1).copied().unwrap_or(0.0);
+            let clock = (clock + dt).rem_euclid(STILL.0 + STILL.1 + length + STILL.2);
+            body.still = Some((heading, clock));
+            (heading, clock < STILL.0, (STILL.0 + STILL.1..STILL.0 + STILL.1 + 0.1).contains(&clock))
+        });
+        *transform = placed(spec, h.rig.root, still.map_or(h.rig.heading, |s| s.0));
         // A limb, its neck or its head struck: turned by each shard the way
         // it flew, its bone's parent by half, sprung back (its trunk leans
         // with its hunter's reel instead, see `aim`).
@@ -559,7 +653,7 @@ pub(super) fn animate(mut commands: Commands, time: Res<Time>, kits: Res<Kits>, 
 
         // Over its walking: its attack as it winds up, a hit as it is struck
         // (if it has one).
-        let winding = matches!(h.stance, Stance::Windup);
+        let winding = matches!(h.stance, Stance::Windup) || still.is_some_and(|s| s.2);
         let act = match body.act {
             Some((Act::Attack, left)) if left > 0.0 => Some((Act::Attack, left - dt)),
             Some((Act::Hit, left)) if left > 0.0 && !winding => Some((Act::Hit, left - dt)),
@@ -602,26 +696,61 @@ pub(super) fn animate(mut commands: Commands, time: Res<Time>, kits: Res<Kits>, 
             }
         }
 
-        // Walking: walk and run at one phase, each at its ground speed, so a
-        // foot down stays down; idle as it stops.
-        let speed = h.rig.speed();
-        let (walk, run) = spec.paces();
+        // Walking: its walk at its ground speed, so a foot down stays down;
+        // idle as it stops. Dashing: its walk played on at its walking pace,
+        // its feet sliding (held mid-stride first; the user, 2026-11-04: the
+        // walk playing).
+        let dashing = h.dashing();
+        let walk = spec.pace();
+        let speed = match still {
+            Some((_, walking, _)) => if walking { walk * h.pace } else { 0.0 },
+            None if dashing => walk,
+            None => h.rig.speed(),
+        };
         let ease = |t: f32| t * t * (3.0 - 2.0 * t);
-        let running = ease(((speed - walk) / (run - walk)).clamp(0.0, 1.0));
-        let moving = ease((speed / (0.3 * walk)).clamp(0.0, 1.0));
-        let cycle = |c: &Clip| c.numbers[0] * c.numbers[2] * spec.scale();
-        let stride = cycle(&spec.walk) * (1.0 - running) + cycle(&spec.run) * running;
-        body.phase = (body.phase + dt * speed / stride.max(0.05)).fract();
-        let rest = 1.0 - acting;
-        for (node, clip, weight) in [(nodes.walk, &spec.walk, (1.0 - running) * moving), (nodes.run, &spec.run, running * moving)] {
-            if let Some(active) = player.animation_mut(node) {
-                active.set_weight(weight * rest + 1e-4).set_speed(0.0).set_seek_time(((body.phase + clip.numbers[1]).fract()) * clip.numbers[2]);
-            }
+        let moving = if dashing { 1.0 } else { ease((speed / (0.3 * walk)).clamp(0.0, 1.0)) };
+        let stride = spec.walk.numbers[0] * spec.walk.numbers[2] * spec.scale();
+        // (Its step reaching further, as drawn: the same ground covered in
+        // fewer strides, so a planted foot stays planted.)
+        let plan = kit.gait.as_ref().and_then(|g| g.plan.as_ref());
+        let reach = match (&body.shaping, plan) {
+            (Some(s), Some(plan)) => s.now(plan, body.phase).reach,
+            _ => 1.0,
+        };
+        let was = body.phase;
+        body.phase = (body.phase + dt * speed / (stride * reach).max(0.05)).fract();
+        let now = body.phase;
+        if let (Some(s), Some(plan)) = (&mut body.shaping, plan) {
+            s.step(plan, was, now, dt, |n, k| worldgen::noise::hash01(entity.index_u32() as i32, n as i32, k, 0x5e9));
         }
+        // A foot leaving the ground, walking: its push for a dash (see
+        // `hunt`). (Each a little after the other comes down, at `TOE_OFF`.)
+        let past = |at: f32| gait::passed(was, now, at);
+        h.push = !dashing && moving > 0.5 && (past(TOE_OFF) || past(TOE_OFF + 0.5));
+        // A foot down: the next step's pace drawn (the user, 2026-11-05: its
+        // strides as regular as a machine's). Its walk goes at its ground
+        // speed, so a foot down stays down whatever the pace; now and then
+        // a short, slow step, as if it checked.
+        if past(0.0) || past(0.5) {
+            body.steps = body.steps.wrapping_add(1);
+            let r = |k: i32| worldgen::noise::hash01(entity.index_u32() as i32, body.steps as i32, k, 0x6d2);
+            let vary = h.traits.value("stride_vary", 0.15);
+            h.pace = if r(0) < vary * 0.8 { 1.0 - 2.5 * vary } else { 1.0 + vary * (2.0 * r(1) - 1.0) };
+        }
+        let rest = 1.0 - acting;
+        let walk_weight = moving * rest + 1e-4;
+        if let Some(active) = player.animation_mut(nodes.walk) {
+            active.set_weight(walk_weight).set_speed(0.0).set_seek_time(((body.phase + spec.walk.numbers[1]).fract()) * spec.walk.numbers[2]);
+        }
+        // (The walk's share of all that is played: its waves, with
+        // `walk=1`, take that much of each joint, see `gait.rs`.)
+        let others = if nodes.idle.is_some() { (1.0 - moving) * rest } else { 0.0 } + if act.is_some() { acting } else { 0.0 };
+        body.walking = walk_weight / (walk_weight + others);
+        body.posing = rest;
         if let Some(idle) = nodes.idle
             && let Some(active) = player.animation_mut(idle)
         {
-            active.set_weight((1.0 - moving) * rest);
+            active.set_weight((1.0 - moving) * rest).set_speed(1.0);
         }
     }
 }
@@ -641,12 +770,14 @@ pub(super) fn aim(time: Res<Time>, kits: Res<Kits>, hunters: Query<&Hunter>, cam
         let head = j.head;
         let (low, top) = (j.spine[1], j.spine[j.spine.len() - 1]);
         let ends = [top, j.head, j.legs[0][0], j.legs[0][1], j.legs[1][0], j.legs[1][1], j.arms[0][0], j.arms[0][1], j.arms[1][0], j.arms[1][1]];
+        let stoop: Vec<Entity> = j.spine[1..j.spine.len() - 1].to_vec();
+        let upper_arms = [j.arms[0][0], j.arms[1][0]];
         let spec = &kits.0[body.kit].spec;
         let alive = body.dying.is_none();
         let world_rot = |e: Entity| parents.get(e).ok().and_then(|p| globals.get(p.parent()).ok()).map(|g| g.to_scale_rotation_translation().1);
         // Its face's way: its body's, turned to you up to 70 degrees.
         let faces = placed.rotation * Vec3::new(spec.forward.x, 0.0, spec.forward.y);
-        let want = match (alive, globals.get(head)) {
+        let want = match (alive && body.still.is_none(), globals.get(head)) {
             (true, Ok(g)) => {
                 let to = (camera.translation - g.translation()).normalize_or(faces);
                 let turn = Quat::from_rotation_arc(faces, to);
@@ -663,6 +794,33 @@ pub(super) fn aim(time: Res<Time>, kits: Res<Kits>, hunters: Query<&Hunter>, cam
             let reel = h.rig.reeling().with_y(0.0);
             let lever = from.translation().distance(to.translation()).max(0.1);
             turns.push((low, Quat::from_axis_angle(Vec3::Y.cross(reel).normalize_or(Vec3::X), (reel.length() / lever).atan())));
+        }
+        // Walking, its trunk leant as this step's drawn: forward, sideways,
+        // twisted (see `gait::Steps`).
+        if let (Some(steps), Some(plan)) = (&body.shaping, kits.0[body.kit].gait.as_ref().and_then(|g| g.plan.as_ref()))
+            && alive
+        {
+            let lean = steps.now(plan, body.phase).lean * body.walking;
+            let ahead = faces.with_y(0.0).normalize_or(Vec3::Z);
+            turns.push((low, Quat::from_scaled_axis(Vec3::Y.cross(ahead) * lean.x + ahead * lean.y + Vec3::Y * lean.z)));
+        }
+        // How it holds itself: its trunk stooped from its spine's joints
+        // (each a share), its neck turned back by half so it looks ahead; its
+        // arms turned in toward its sides about its forward.
+        if alive && body.posing > 0.0 {
+            let ahead = faces.with_y(0.0).normalize_or(Vec3::Z);
+            let across = Vec3::Y.cross(ahead);
+            for &joint in &stoop {
+                turns.push((joint, Quat::from_axis_angle(across, body.hunch * body.posing / stoop.len() as f32)));
+            }
+            turns.push((top, Quat::from_axis_angle(across, -0.5 * body.hunch * body.posing)));
+            if let Ok(chest) = globals.get(top) {
+                for arm in upper_arms {
+                    let Ok(shoulder) = globals.get(arm) else { continue };
+                    let out = (shoulder.translation() - chest.translation()).dot(across).signum();
+                    turns.push((arm, Quat::from_axis_angle(ahead, -out * body.arms_in * body.posing)));
+                }
+            }
         }
         for (k, &joint) in ends.iter().enumerate() {
             let turn = body.flinch[3 + k].0;
@@ -839,11 +997,12 @@ pub(super) fn hitbox(time: Res<Time>, kits: Res<Kits>, bodies: Query<(&Body, &Tr
             }
         }
         // (Its `rigtrace` option: its feet as drawn, every frame, to measure
-        // how far a foot down slides.)
+        // how far a foot down slides; and its hips' and head's heights as
+        // drawn, to see how it falls, killed.)
         if h.traits.has("rigtrace") {
             let (l, r) = (at(j.legs[0][2]), at(j.legs[1][2]));
             let root = h.rig.root;
-            super::trace(&format!("cliptrace: {:.4} {:.4} {:.4} {:.4} {:.3} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}", time.elapsed_secs(), root.x, root.y, root.z, h.rig.speed(), l.x, l.y, l.z, r.x, r.y, r.z));
+            super::trace(&format!("cliptrace: {:.4} {:.4} {:.4} {:.4} {:.3} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}", time.elapsed_secs(), root.x, root.y, root.z, h.rig.speed(), l.x, l.y, l.z, r.x, r.y, r.z, thirds[0].y, head.y));
         }
         h.hitbox = bones;
     }
@@ -851,9 +1010,12 @@ pub(super) fn hitbox(time: Res<Time>, kits: Res<Kits>, bodies: Query<(&Body, &Tr
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<Kits>()
-        .add_systems(Startup, load)
+        .add_systems(Startup, (load, shade::setup))
         .add_systems(Update, (prepare, dress, bind, animate, wield).chain().after(super::apart).before(super::flesh).run_if(crate::loading::playing))
-        .add_systems(PostUpdate, ((aim, fall), echo::follow).chain().after(AnimationSystems).before(TransformSystems::Propagate))
+        // (Its waves first, then turned over them: unchained, the waves came
+        // last and its head's turn to you, its flinches and its lean were
+        // lost, walking; found 2026-11-05.)
+        .add_systems(PostUpdate, ((gait::play, aim, fall).chain(), echo::follow, shade::follow).chain().after(AnimationSystems).before(TransformSystems::Propagate))
         .add_systems(PostUpdate, hitbox.after(TransformSystems::Propagate));
 }
 
@@ -872,8 +1034,8 @@ mod tests {
             if path.extension().is_some_and(|x| x == "creature") {
                 let spec = Spec::parse("test", &std::fs::read_to_string(&path).expect("readable")).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                 assert!(dir.join(&spec.model).is_file(), "{}: no {}", path.display(), spec.model);
-                let (walk, run) = spec.paces();
-                assert!(walk > 0.3 && run > walk, "{}: walk {walk} m/s, run {run} m/s", path.display());
+                let walk = spec.pace();
+                assert!(walk > 0.3, "{}: walk {walk} m/s", path.display());
                 seen += 1;
             }
         }

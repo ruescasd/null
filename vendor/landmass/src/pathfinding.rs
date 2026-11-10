@@ -3,7 +3,7 @@ use std::{
   collections::{HashMap, HashSet},
 };
 
-use glam::Vec3;
+use glam::{Vec3, Vec3Swizzles};
 
 use crate::{
   CoordinateSystem, NavigationData,
@@ -69,6 +69,25 @@ enum PathNode {
 }
 
 impl<CS: CoordinateSystem> ArchipelagoPathProblem<'_, CS> {
+  /// (null) Where a way is taken to cross the edge or portal from `a` to
+  /// `b`: where it crosses the straight line from the start to the end
+  /// (across, from above), if it does; else its middle. Each is the same
+  /// for a whole search, so the search is still sound; and a way straight
+  /// across a long edge costs what it is. (Our navmeshes' tiles meet along
+  /// edges of tens of metres, a plate's, and priced by their middles a way
+  /// stepping across one went tens of metres round to another.)
+  fn crossing(&self, a: Vec3, b: Vec3) -> Vec3 {
+    let from = self.start_point.xy();
+    let line = (self.end_point - self.start_point).xy();
+    let da = line.perp_dot(a.xy() - from);
+    let db = line.perp_dot(b.xy() - from);
+    if line.length_squared() > 1e-6 && da * db <= 0.0 && da != db {
+      a + (b - a) * (da / (da - db))
+    } else {
+      a.midpoint(b)
+    }
+  }
+
   /// Determines the cost of `type_index`.
   fn type_index_to_cost(&self, type_index: usize) -> f32 {
     self.override_type_index_to_cost.get(&type_index).copied().unwrap_or_else(
@@ -102,14 +121,16 @@ impl<CS: CoordinateSystem> AStarProblem for ArchipelagoPathProblem<'_, CS> {
         let polygon = &island.nav_mesh.polygons[node.polygon_index];
 
         let (i, j) = polygon.get_edge_indices(*edge);
-        let local_midpoint =
-          island.nav_mesh.vertices[i].midpoint(island.nav_mesh.vertices[j]);
+        let crossing = self.crossing(
+          island.transform.apply(island.nav_mesh.vertices[i]),
+          island.transform.apply(island.nav_mesh.vertices[j]),
+        );
 
         (
           *node,
           island,
           polygon,
-          island.transform.apply(local_midpoint),
+          crossing,
           Some(PathStep::NodeConnection(*edge)),
         )
       }
@@ -133,7 +154,7 @@ impl<CS: CoordinateSystem> AStarProblem for ArchipelagoPathProblem<'_, CS> {
           link.destination_node,
           island,
           polygon,
-          portal.0.midpoint(portal.1),
+          self.crossing(portal.0, portal.1),
           ignore_step,
         )
       }
@@ -176,10 +197,11 @@ impl<CS: CoordinateSystem> AStarProblem for ArchipelagoPathProblem<'_, CS> {
         }
 
         let (i, j) = polygon.get_edge_indices(edge_index);
-        let local_midpoint =
-          island.nav_mesh.vertices[i].midpoint(island.nav_mesh.vertices[j]);
-        let cost = point.distance(island.transform.apply(local_midpoint))
-          * current_node_cost;
+        let crossing = self.crossing(
+          island.transform.apply(island.nav_mesh.vertices[i]),
+          island.transform.apply(island.nav_mesh.vertices[j]),
+        );
+        let cost = point.distance(crossing) * current_node_cost;
 
         Some((
           cost,
@@ -218,7 +240,7 @@ impl<CS: CoordinateSystem> AStarProblem for ArchipelagoPathProblem<'_, CS> {
           }
         };
 
-        let cost = point.distance(link.portal.0.midpoint(link.portal.1))
+        let cost = point.distance(self.crossing(link.portal.0, link.portal.1))
           * current_node_cost
           + link_cost;
         Some((
@@ -240,7 +262,10 @@ impl<CS: CoordinateSystem> AStarProblem for ArchipelagoPathProblem<'_, CS> {
           polygon_index: node.polygon_index,
           edge_index: *edge,
         });
-        island.transform.apply(edge.0.midpoint(edge.1))
+        self.crossing(
+          island.transform.apply(edge.0),
+          island.transform.apply(edge.1),
+        )
       }
       PathNode::OffMeshLink(link) => {
         let off_mesh_link = self.nav_data.off_mesh_links.get(*link).unwrap();
@@ -250,7 +275,7 @@ impl<CS: CoordinateSystem> AStarProblem for ArchipelagoPathProblem<'_, CS> {
             *destination_portal
           }
         };
-        portal.0.midpoint(portal.1)
+        self.crossing(portal.0, portal.1)
       }
     };
     world_point.distance(self.end_point) * self.cheapest_type_index_cost

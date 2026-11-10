@@ -52,7 +52,8 @@ fn yaw(rotation: Quat) -> Option<f32> {
 /// Groups boxes (`(center, rotation, half)`, `None` for solids that are not
 /// boxes) by frame.
 pub fn groups(boxes: &[Option<(Vec3, Quat, Vec3)>]) -> Vec<Group> {
-    let mut by_yaw: HashMap<i64, Group> = HashMap::new();
+    // (Ordered: the groups, and so the meshes, the same every time.)
+    let mut by_yaw: std::collections::BTreeMap<i64, Group> = std::collections::BTreeMap::new();
     for (i, b) in boxes.iter().enumerate() {
         let Some((center, rotation, half)) = *b else { continue };
         let Some(a) = yaw(rotation) else { continue };

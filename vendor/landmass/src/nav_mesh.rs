@@ -306,12 +306,18 @@ impl<CS: CoordinateSystem> NavigationMesh<CS> {
         let left_edge = left_vertex - center_vertex;
         let right_edge = right_vertex - center_vertex;
 
-        match right_edge.perp_dot(left_edge).partial_cmp(&0.0) {
+        // (null: parallel within a rounding of f32's: a corner in a row,
+        // as where a neighbour of a polygon of no area was given its
+        // corners; see the game's navmesh.rs.)
+        let cross = right_edge.perp_dot(left_edge);
+        let parallel =
+          cross.abs() <= 1e-5 * right_edge.length() * left_edge.length();
+        match cross.partial_cmp(&0.0) {
           // The right edge is to the right of the left edge.
           Some(Ordering::Greater) => {}
           // The right edge is parallel to the left edge, but they point in
           // opposite directions.
-          Some(Ordering::Equal) if right_edge.dot(left_edge) < 0.0 => {}
+          _ if parallel && right_edge.dot(left_edge) < 0.0 => {}
           // right_edge is to the left of the left_edge (or they are parallel
           // and point in the same direciton), so the polygon is
           // concave.
@@ -734,6 +740,41 @@ impl<CS: CoordinateSystem> ValidNavigationMesh<CS> {
     best_node.map(|(polygon_index, projected_point, _)| {
       (projected_point, polygon_index)
     })
+  }
+
+  /// (null) The floor's height under `point` (local) on `node`, from its
+  /// height mesh: its triangle nearest across, its plane there; none without
+  /// a height mesh. Unlike `sample_point_on_node`, safe for a point just off
+  /// the node, as on its edge.
+  pub(crate) fn floor_height_on_node(
+    &self,
+    point: Vec3,
+    node: usize,
+  ) -> Option<f32> {
+    let height_mesh = self.height_mesh.as_ref()?;
+    let height_polygon = &height_mesh.polygons[node];
+    let mut best: Option<(f32, f32)> = None;
+    for i in height_polygon.triangle_range() {
+      let [a, b, c] = height_mesh.triangles[i]
+        .map(|v| height_mesh.vertices[height_polygon.vertex(v)]);
+      let (p, a2, b2, c2) = (point.xy(), a.xy(), b.xy(), c.xy());
+      let area = (b2 - a2).perp_dot(c2 - a2);
+      if area.abs() < 1e-9 {
+        continue;
+      }
+      // Barycentric, clamped into the triangle: its nearest point there.
+      let u = (b2 - p).perp_dot(c2 - p) / area;
+      let v = (c2 - p).perp_dot(a2 - p) / area;
+      let w = 1.0 - u - v;
+      let off = (-u).max(0.0) + (-v).max(0.0) + (-w).max(0.0);
+      let (u, v, w) = (u.max(0.0), v.max(0.0), w.max(0.0));
+      let sum = u + v + w;
+      let height = (a.z * u + b.z * v + c.z * w) / sum;
+      if best.is_none_or(|(o, _)| off < o) {
+        best = Some((off, height));
+      }
+    }
+    best.map(|(_, h)| h)
   }
 
   /// Finds the point on the provided node.

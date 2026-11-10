@@ -52,7 +52,11 @@ const BACK_ON: f32 = 0.7;
 /// After it fires, how long before it gathers again, its aim held (s;
 /// standing near, it fired once only, never let go of its aim, the user's
 /// captures).
-const AGAIN: f32 = 2.8;
+pub(super) const AGAIN: f32 = 2.8;
+/// How long it takes to gather from nothing to its lock (s, far off): the
+/// stalker steps aside so long between shots, gathering as it goes, and
+/// plants its feet to lock and fire (see `stalker::SHIFT`).
+pub(super) const GATHERED: f32 = (1.0 - LOCK.0 * GATHER.0) / GATHER.0;
 
 /// The arch's mesh and its two layers' veins, built once.
 #[derive(Resource, Clone)]
@@ -169,11 +173,17 @@ pub(super) fn animate(
             continue;
         };
         let (frame, hold, speed) = (h.rig().gun_frame, h.rig().gun, h.rig().speed());
-        // (Gathering only as it stands, its aim held: walking on, it may
-        // gather again when it stops.)
-        let aimed = frame.is_some_and(|f| f.aim > 0.98) && speed < 0.15 && h.may_fire();
-        if aimed && !halo.fired {
-            halo.charge = (halo.charge + GATHER.0 * dt).min(1.0);
+        // (Gathering as it stands, its aim held, or as it steps aside, its
+        // aim held, up to its lock: it locks and fires standing. Walking on,
+        // it may gather again when it stops.)
+        // (Hovering, it locks only once anchored on its stilts: see
+        // `rig::HOVER`.)
+        let still = speed < 0.15 && h.rig().anchored();
+        let aimed = frame.is_some_and(|f| f.aim > 0.98) && h.may_fire();
+        let lock = LOCK.0 + (LOCK_CLOSE - LOCK.0) * h.rig().combat();
+        let gathered = 1.0 - lock * GATHER.0;
+        if aimed && !halo.fired && (still || halo.charge < gathered) {
+            halo.charge = (halo.charge + GATHER.0 * dt).min(if still { 1.0 } else { gathered });
             // Its shot's sound, begun as long before it fires as its charge
             // runs before its bang.
             if !halo.sounded && (1.0 - halo.charge) / GATHER.0 <= SHOT_LEAD {
@@ -183,11 +193,10 @@ pub(super) fn animate(
             }
             // Nearly full, its aim locks; full, it fires, from its muzzle
             // along its aim.
-            let lock = LOCK.0 + (LOCK_CLOSE - LOCK.0) * h.rig().combat();
-            let locking = halo.charge >= 1.0 - lock * GATHER.0;
+            let locking = still && halo.charge >= gathered;
             if let (1.0, Some(f), Some(_)) = (halo.charge, frame, hold) {
                 let emitter = super::lance::EMITTER;
-                super::beam::fire(&mut commands, &mut rays, &mut meshes, &mut materials, &shot, &strikes, &layers, &ground, f.grip + f.up * GUN_BORE + f.axis * emitter, f.axis, (halo.hunter, emitter));
+                super::beam::fire(&mut commands, &mut rays, &mut meshes, &mut materials, &shot, &strikes, &layers, &ground, f.grip + f.up * GUN_BORE + f.axis * emitter, f.axis, (halo.hunter, emitter), h.traits.value("searchlight", 0.0) <= 0.5);
                 halo.fired = true;
                 halo.since = 0.0;
                 // (Its aim let go at once: it carries on as it was, its zone
@@ -197,6 +206,10 @@ pub(super) fn animate(
             } else {
                 h.lock(locking);
             }
+        } else if aimed && !halo.fired {
+            // (Stepping aside, gathered but for its lock: held till it
+            // plants its feet.)
+            h.lock(false);
         } else {
             // (Fired, it gathers again after `AGAIN`, or once it lowers its
             // gun.)

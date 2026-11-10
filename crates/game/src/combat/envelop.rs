@@ -228,6 +228,14 @@ pub(super) struct Zone {
     glow: Handle<StandardMaterial>,
 }
 
+/// How deep in a zone you are (0..1), your eye `eye` from where it struck:
+/// on it, over it, not far above. (A strike's flash and jolt too, only
+/// then: see `strike::strikes`.)
+pub(super) fn depth(eye: Vec3) -> f32 {
+    let off = Vec2::new(eye.x, eye.z).length();
+    if eye.y - crate::player::EYE < 2.0 { ((ZONE.0 - off) / EDGE).clamp(0.0, 1.0) } else { 0.0 }
+}
+
 /// A pillar of light where a shot struck: how long it has stood.
 #[derive(Component)]
 pub(super) struct Pillar {
@@ -391,11 +399,7 @@ pub(super) fn envelop(
         if let Some(mut m) = materials.get_mut(&zone.glow) {
             m.base_color = Color::LinearRgba(LinearRgba::gray(ZONE_GLOW * flicker));
         }
-        // On it (over it, not far above).
-        let off = Vec2::new(eye.x, eye.z).length();
-        if eye.y - crate::player::EYE < 2.0 {
-            strength = strength.max(((ZONE.0 - off) / EDGE).clamp(0.0, 1.0));
-        }
+        strength = strength.max(depth(eye));
     }
     for (entity, mut pillar) in &mut pillars {
         pillar.age += dt;
@@ -429,6 +433,19 @@ pub(super) fn envelop(
 mod tests {
     use super::*;
 
+    /// A strike strikes you only in its zone: on it, not beside it, nor
+    /// high over it (its flash and jolt only then; within 40 m, hit or
+    /// not, they were always there, the user).
+    #[test]
+    fn strikes_you_only_in_its_zone() {
+        let eye = |x: f32, up: f32| Vec3::new(x, crate::player::EYE + up, 0.0);
+        assert_eq!(depth(eye(0.0, 0.0)), 1.0);
+        assert!(depth(eye(ZONE.0 - EDGE * 0.5, 0.0)) > 0.0 && depth(eye(ZONE.0 - EDGE * 0.5, 0.0)) < 1.0, "easing out over its edge");
+        assert_eq!(depth(eye(ZONE.0 + 0.1, 0.0)), 0.0, "beside it");
+        assert_eq!(depth(eye(10.0, 0.0)), 0.0, "a miss");
+        assert_eq!(depth(eye(0.0, 3.0)), 0.0, "high over it");
+    }
+
     /// A way grown part of its way: whole, and part, its tip between two
     /// of its points.
     #[test]
@@ -439,3 +456,4 @@ mod tests {
         assert!((part.last().unwrap().x - 2.4).abs() < 1e-5 && part.len() == 4, "{part:?}");
     }
 }
+

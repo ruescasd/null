@@ -43,7 +43,7 @@ pub use nav_mesh::{
   HeightNavigationMesh, HeightPolygon, NavigationMesh, ValidNavigationMesh,
   ValidationError,
 };
-pub use query::{FindPathError, PathStep, SamplePointError, SampledPoint};
+pub use query::{FindPathError, PathStep, STALLED_PATHS, SamplePointError, SampledPoint};
 pub use util::Transform;
 
 use crate::{

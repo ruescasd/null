@@ -380,7 +380,8 @@ pub struct Prism {
 }
 
 impl Prism {
-    fn top(&self) -> Vec<Vec2> {
+    /// Its top's outline: its footprint scaled about its middle and leant.
+    pub fn top(&self) -> Vec<Vec2> {
         let c = centroid(&self.points);
         self.points.iter().map(|&p| c + (p - c) * self.top_scale + self.lean).collect()
     }

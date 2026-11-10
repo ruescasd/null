@@ -300,6 +300,51 @@ pub(crate) struct Hunter {
     /// (none: on the rig's own).
     clip: Option<clip::Moves>,
     hitbox: Vec<crate::rig::Bone>,
+    /// An authored body's dash (it walks or dashes, never runs): what it is
+    /// doing, and how long till it may dash again (s).
+    dash: Dash,
+    dash_rest: f32,
+    /// Gliding along a teleport's line (on district ground, see
+    /// `navmesh/district.rs`): its body moved as in a dash.
+    gliding: bool,
+    /// A foot of its authored body left the ground this frame (pushing off,
+    /// see `clip.rs`): a dash goes on it.
+    pub(super) push: bool,
+    /// Its authored body's pace this step, of its walk's (drawn as each
+    /// foot comes down, see `clip.rs`: no two steps quite alike).
+    pub(super) pace: f32,
+}
+
+/// An authored body's dash: walking; walking on to the step it pushes off
+/// from (how long it has waited, s); dashing (how long yet, s).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Dash {
+    Walk,
+    Gather(f32),
+    Go(f32),
+}
+
+/// How long it waits for a foot to push off from before it dashes anyway
+/// (s; a step comes every half second).
+const DASH_WAIT: f32 = 0.7;
+
+/// How much further than its reach it must be from where it is going to
+/// dash (m): nearer, it walks.
+const DASH_LEAST: f32 = 3.0;
+
+/// Within how far of you it fights (m): there it dashes more often (its
+/// rest `dash_rest_close`, not `dash_rest`), at times twice running.
+const DASH_CLOSE: f32 = 12.0;
+/// How far its rest after a dash strays from its mean, either way (of it);
+/// and, fighting, how often it dashes again at once.
+const DASH_SPREAD: f32 = 0.6;
+const DASH_TWICE: f32 = 0.25;
+
+impl Hunter {
+    /// Whether it is dashing (its walk played on, see `clip.rs`).
+    pub(super) fn dashing(&self) -> bool {
+        matches!(self.dash, Dash::Go(..))
+    }
 }
 
 /// Gestures that break up a prowl.
@@ -450,20 +495,39 @@ pub(super) fn spawn(
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
     for (kind, count, traits, places) in std::mem::take(&mut spawns.creatures) {
-        // (Bishops are the bishops' to make: see `bishop::arrive`.)
-        if kind == "bishop" {
+        // (Bishops are the bishops' to make, brutes the brutes': see
+        // `bishop::arrive`, `impaled::arrive`; left for them, whichever
+        // frame the console asked in.)
+        if kind == "bishop" || kind == "impaled" {
             spawns.creatures.push((kind, count, traits, places));
             continue;
         }
+        // (`blind`: one behind the other, 5 m apart, each on its own line
+        // across before you; half its walk as waves, half the clip, which at
+        // random, said only in `blind.txt`, to be compared unknowing.)
+        let blind = traits.has("blind") && count >= 2;
+        let coin = (time.elapsed_secs() * 1000.0) as u32 % 2;
+        let mut which = Vec::new();
         for n in 0..count {
             let (base, aside) = match places.len() {
                 0 => (camera.translation + forward * AHEAD, (n as f32 - (count - 1) as f32 * 0.5) * 1.6),
                 k => (places[n as usize % k], (n as usize / k) as f32 * 1.6),
             };
-            let mut at = base + across * aside;
+            // (Staggered aside too: one straight behind the other, walking
+            // their lines in step, the nearer hid the further.)
+            let mut at = if blind { base + forward * (n as f32 * 5.0) + across * ((n as f32 - (count - 1) as f32 * 0.5) * 6.0) } else { base + across * aside };
+            let traits = if blind {
+                let waves = (n + coin) % 2 == 0;
+                let off = (at - camera.translation).with_y(0.0).length();
+                which.push(format!("{off:.0} m off: {}", if waves { "waves (walk=1)" } else { "the clip" }));
+                traits.clone().with("walk", if waves { 1.0 } else { 0.0 })
+            } else {
+                traits.clone()
+            };
+            let asked = at;
             at = Vec3::new(at.x, ground.at(at), at.z);
             if let Some(f) = navs.as_deref().and_then(|n| n.floors(Body::Biped))
-                && let Some(q) = f.on(base + across * aside, 4.0)
+                && let Some(q) = f.on(asked, 4.0)
             {
                 at = q;
             }
@@ -490,6 +554,15 @@ pub(super) fn spawn(
                 commands.entity(stalker).insert(super::chain::Keeps(porter));
             } else {
                 spawn_hunter(&mut commands, &ground, &assets, &heads, &mut materials, seed, at, camera.translation, Some(&kind), &traits);
+            }
+        }
+        if blind {
+            let said = which;
+            let path = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("blind.txt")));
+            let kept = path.as_ref().map(|p| std::fs::write(p, format!("{kind}, nearest first:\n{}\n", said.join("\n"))));
+            match (path, kept) {
+                (Some(p), Some(Ok(()))) => info!("blind: which is which kept in {}", p.display()),
+                (p, e) => error!("blind: could not keep which is which in {p:?}: {e:?}; it was {}", said.join(", ")),
             }
         }
     }
@@ -587,6 +660,39 @@ pub(super) fn bodies(hunters: Query<&Hunter>, mut bodies: ResMut<crate::player::
         if let Some(moves) = &h.clip {
             bodies.0.push((h.rig.root, 0.35, moves.height));
         }
+    }
+}
+
+/// On district ground (`--opt blink`): each hunter kept on its node's
+/// walking space after whatever else moved it this frame (kept apart from
+/// another, say; its own steps are kept on it as they are made, see
+/// `hunt`'s sweep). Off the ground (shoved into the air), its node
+/// forgotten, and found again where it lands.
+pub(super) fn keep_on_nodes(districts: Option<Res<crate::navmesh::district::Districts>>, mut hunters: Query<(&mut Hunter, &mut crate::navmesh::district::Blink)>) {
+    let Some(nodes) = districts.as_deref().and_then(|d| d.nodes.as_deref()) else { return };
+    for (mut h, mut b) in &mut hunters {
+        let root = h.rig.root;
+        if h.rig.ragdoll.is_some() || h.health <= 0.0 || !nodes.covers(root) || b.gliding() {
+            continue;
+        }
+        if h.rig.airborne.is_some() {
+            b.node = None;
+            continue;
+        }
+        let Some(node) = b.node else {
+            b.node = nodes.locate(root, 0.0, None).map(|n| n.0);
+            continue;
+        };
+        let Some(kept) = nodes.keep_on(node, Vec2::new(root.x, root.z)) else { continue };
+        let back = Vec3::new(kept.x - root.x, 0.0, kept.y - root.z);
+        if back.length_squared() < 1e-10 {
+            continue;
+        }
+        h.rig.root = Vec3::new(kept.x, root.y, kept.y);
+        // (Its pace out over the edge taken away, as against a wall.)
+        let inward = back.normalize();
+        let out = h.rig.velocity.dot(-inward).max(0.0);
+        h.rig.velocity += inward * out;
     }
 }
 
@@ -896,6 +1002,13 @@ fn spawn_hunter(
     // stilts; the porter, hunched under its load.)
     let plan = match want {
         Some("sprawl") => Plan::sprawl(),
+        // (Its body cut from a generated mesh, its build fitted to it: see
+        // `pieces.rs`.)
+        Some("stalker") if traits.value("mesh", 2.0) == 1.0 => super::pieces::joints().plan(),
+        Some("stalker") if traits.value("mesh", 2.0) == 2.0 => {
+            super::pieces::joints();
+            Plan::stalker()
+        }
         Some("stalker") => Plan::stalker(),
         Some("porter") => Plan::porter(),
         _ => plan,
@@ -916,10 +1029,13 @@ fn spawn_hunter(
     let health = traits.value("health", HUNTER_HEALTH) * if traits.has("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, detour: (hash01(seed as i32, 5, 0, 0x6c7) * DETOUR, 0.0), aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new(), clip: None, hitbox: Vec::new() },
+            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, detour: (hash01(seed as i32, 5, 0, 0x6c7) * DETOUR, 0.0), aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new(), clip: None, hitbox: Vec::new(), dash: Dash::Walk, dash_rest: 0.0, gliding: false, push: false, pace: 1.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
             Walker::new(if kind == Kind::Beast { Body::Beast } else { Body::Biped }, feet, 5.0),
+            // (On district ground, `--opt blink`: its teleports; see
+            // `navmesh/district.rs`.)
+            crate::navmesh::district::Blink::new(traits.value("blink_range", 10.0), traits.value("blink_tell", 0.6), traits.value("blink_rest", 1.5), traits.value("blink_cost", 8.0), traits.value("blink_speed", 20.0)),
         ))
         .id();
     // The stalker's gun (its `nolance` option, none; see `lance.rs`).
@@ -947,6 +1063,18 @@ fn spawn_hunter(
         return hunter;
     }
     info!("{} forms", if angler { "an angler" } else if sprawl { "a sprawl" } else if kind == Kind::Beast { "a harrow" } else { "a biped" });
+    // (The stalker's body cut from a generated mesh, once it is in (see
+    // `pieces.rs`): its head the mesh's or, `head=1`, its cage; its arch
+    // round it either way.)
+    if stilt && traits.value("mesh", 2.0) > 0.0 {
+        let cage = traits.value("head", 0.0) == 1.0;
+        if cage {
+            stalker_head(commands, heads, hunter, &bones);
+        }
+        super::halo::spawn(commands, materials, &heads.halo, hunter, bones[4].a, || Part { hunter, bone: 4, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID });
+        commands.entity(hunter).insert(super::pieces::Wants { head: !cage, own: traits.value("mesh", 2.0) == 2.0 });
+        return hunter;
+    }
 
     // Its body: shards along every bone, thicker bones more and bigger,
     // with pale markings.
@@ -1059,20 +1187,7 @@ fn spawn_hunter(
             continue;
         }
         if i == 4 && stilt {
-            // The stalker's head (see `setup`), no jaw (it is silent), no
-            // lights: a lattice cage, its skull on the head, its legs on the
-            // neck, from the neck's end.
-            let (pieces, white, black) = &heads.stalker_head;
-            for ((pale, dark), (on, along)) in pieces.iter().zip([(i, 0.0), (i - 1, 1.0)]) {
-                for (mesh, finish) in [(pale, white), (dark, black)] {
-                    commands.spawn((
-                        Part { hunter, bone: on, along, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(finish.clone()),
-                        Transform::from_translation(bone.a),
-                    ));
-                }
-            }
+            stalker_head(commands, heads, hunter, &bones);
             // Its arch, round its head, dark till it is about to fire.
             super::halo::spawn(commands, materials, &heads.halo, hunter, bone.a, || Part { hunter, bone: i, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID });
             continue;
@@ -1304,6 +1419,23 @@ fn spawn_hunter(
     hunter
 }
 
+/// The stalker's head (see `setup`), no jaw (it is silent), no lights: a
+/// lattice cage, its skull on the head, its legs on the neck, from the
+/// neck's end.
+fn stalker_head(commands: &mut Commands, heads: &Heads, hunter: Entity, bones: &[crate::rig::Bone]) {
+    let (pieces, white, black) = &heads.stalker_head;
+    for ((pale, dark), (on, along)) in pieces.iter().zip([(4, 0.0), (3, 1.0)]) {
+        for (mesh, finish) in [(pale, white), (dark, black)] {
+            commands.spawn((
+                Part { hunter, bone: on, along, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID },
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(finish.clone()),
+                Transform::from_translation(bones[4].a),
+            ));
+        }
+    }
+}
+
 /// Hunters stalk and attack; a broken one bursts.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hunt(
@@ -1312,11 +1444,12 @@ pub(super) fn hunt(
     args: Res<Args>,
     ground: crate::ground::Ground,
     navs: Option<Res<crate::navmesh::Navmeshes>>,
+    districts: Option<Res<crate::navmesh::district::Districts>>,
     assets: Res<Assets3>,
     mut director: ResMut<Director>,
     ichor: Res<ichor::Ichor>,
     mut player: Single<(&Transform, &mut Player), Without<Hunter>>,
-    mut hunters: Query<(Entity, &mut Hunter, &mut Transform, Option<&super::chain::Keeps>, Option<&mut Walker>), Without<Player>>,
+    mut hunters: Query<(Entity, &mut Hunter, &mut Transform, Option<&super::chain::Keeps>, Option<&mut Walker>, Option<&mut crate::navmesh::district::Blink>), Without<Player>>,
     parts: Query<(Entity, &Part, &Transform), (Without<Hunter>, Without<Player>)>,
     eyes: Query<(Entity, &Eye)>,
     mut gun: ResMut<Gun>,
@@ -1346,9 +1479,10 @@ pub(super) fn hunt(
     // (Where each is, and which way it faces: a chained pair's each walks
     // by where the other is.)
     let spots: std::collections::HashMap<Entity, (Vec3, f32)> = hunters.iter().map(|(e, h, ..)| (e, (h.rig.root, h.rig.heading))).collect();
+    let nodes = districts.as_deref().and_then(|d| d.nodes.as_deref());
     // (And where a kept porter has walked: its stalker follows its steps.)
-    let trails: std::collections::HashMap<Entity, Vec<Vec3>> = hunters.iter().filter(|(_, _, _, k, _)| k.is_some()).filter_map(|(_, _, _, k, _)| k.map(|k| k.0)).filter_map(|p| hunters.get(p).ok().map(|(_, h, ..)| (p, h.trail.iter().copied().collect()))).collect();
-    for (entity, mut h, mut transform, keeps, mut walker) in &mut hunters {
+    let trails: std::collections::HashMap<Entity, Vec<Vec3>> = hunters.iter().filter(|(_, _, _, k, ..)| k.is_some()).filter_map(|(_, _, _, k, ..)| k.map(|k| k.0)).filter_map(|p| hunters.get(p).ok().map(|(_, h, ..)| (p, h.trail.iter().copied().collect()))).collect();
+    for (entity, mut h, mut transform, keeps, mut walker, mut blink) in &mut hunters {
         // (Dead, its agent gone: not in the others' way.)
         if h.health <= 0.0 && walker.is_some() {
             commands.entity(entity).remove::<Walker>();
@@ -1376,7 +1510,13 @@ pub(super) fn hunt(
                     stalker_dies(&mut commands, &assets, h.rig.head().0, true);
                     info!("a stalker falls: {shards} shards, {:.1} m off", h.rig.chest().distance(target));
                 }
-                h.rig.collapse(push);
+                // (An authored body: its knees giving way at once, falling
+                // faster than the earth's gravity: at the stalker's, the
+                // gladiator's fall looked slowed down, the user, 2026-11-04;
+                // its hips took 1.15 s to come down, held on its knees a
+                // while, half a second now.)
+                let limp = if authored { crate::ragdoll::Limp { gravity: h.traits.value("fall_gravity", 20.0), tone: h.traits.value("fall_tone", 0.05) } } else { crate::ragdoll::Limp::STALKER };
+                h.rig.collapse(push, limp);
                 h.may_fire = false;
                 h.locked = None;
             }
@@ -1386,7 +1526,7 @@ pub(super) fn hunt(
             // (Not through what is built.)
             let wall = |from: Vec3, to: Vec3| {
                 let (d, l) = ((to - from).normalize_or_zero(), from.distance(to));
-                ground.hit(from, d, l + 0.05).map_or(to, |t| from + d * (t - 0.05).max(0.0))
+                ground.hit(from, d, l + 0.05).map(|t| from + d * (t - 0.05).max(0.0))
             };
             h.rig.fall(dt, &|p| ground.at(p), &wall);
             transform.translation = h.rig.chest();
@@ -1601,13 +1741,15 @@ pub(super) fn hunt(
         // (How much of its pace it keeps: less coming onto a spot, none
         // standing where it cannot get on.)
         let mut settle = 1.0f32;
+        // (Gliding along a teleport's line, on district ground: where it is.)
+        let mut glide: Option<Vec3> = None;
         // In a built place: by its navmesh agent's way (see `navmesh.rs`),
         // once its place's mesh is in, and as far as that way is.
         if let Some(w) = walker.as_deref_mut() {
             w.at = root;
             w.goal = goal;
             w.velocity = h.rig.velocity;
-            w.speed = h.clip.as_ref().map_or(5.0, |m| m.run);
+            w.speed = h.clip.as_ref().map_or(5.0, |m| m.walk);
         }
         if let Some(navs) = navs.as_deref() {
             let floors = navs.floors(if beast { Body::Beast } else { Body::Biped });
@@ -1670,6 +1812,38 @@ pub(super) fn hunt(
             }
             straight = straight && ground.clear(root + Vec3::Y * 1.0, target);
         }
+        // On district ground (`--opt blink`, see `navmesh/district.rs`):
+        // within its node by its way across it; to another, by teleports,
+        // each told first, standing. (A straight run at you only within its
+        // node: a leap off a terrace's edge is a fall.)
+        if navs.is_none()
+            && let Some(nodes) = nodes
+            && let Some(b) = blink.as_deref_mut()
+            && nodes.covers(root)
+            && h.rig.airborne.is_none()
+        {
+            let steer = b.steer(nodes, root, goal, crate::player::EYE, dt);
+            if log {
+                info!("huntlog: {} on district node {:?}, {:?}", entity.index_u32(), b.node, steer);
+            }
+            match steer {
+                crate::navmesh::district::Steer::Toward(way) => toward = way,
+                crate::navmesh::district::Steer::Glide(at) => {
+                    glide = Some(at);
+                    settle = 0.0;
+                }
+                crate::navmesh::district::Steer::There | crate::navmesh::district::Steer::Off => {}
+                crate::navmesh::district::Steer::Stand => settle = 0.0,
+                crate::navmesh::district::Steer::Snap(to) => {
+                    h.rig.moved_to(to, &|x, z| ground.at(Vec3::new(x, to.y + 1.0, z)));
+                    settle = 0.0;
+                    if args.opt("huntlog") {
+                        info!("huntlog: {} teleported from {:.1} to {:.1} ({} so far)", entity.index_u32(), root, to, b.teleports);
+                    }
+                }
+            }
+            straight = straight && !b.telling() && b.node == nodes.locate(target, crate::player::EYE, None).map(|n| n.0);
+        }
         // There, and you are not (or there is no way there): it searches.
         if h.aware == Aware::Pursuing && (distance < 2.0 || lost) {
             h.aware = Aware::Searching(SEARCH);
@@ -1699,6 +1873,9 @@ pub(super) fn hunt(
         }
         if log {
             info!("huntlog: {} at {:.1}, {:?}, {:.1} m to go{}, {} at {:.1} m/s", entity.index_u32(), h.rig.root, h.aware, distance, match (&walker, navs.is_some()) { (Some(w), true) => format!(" ({:?})", w.way), _ => String::new() }, match h.stance { Stance::Stalk => "stalking", Stance::Freeze => "still", Stance::Charge => "charging", Stance::Windup => "gathering", Stance::Attack(_) => "attacking", Stance::Recover => "recovering", Stance::Stagger => "staggered", Stance::Rear => "rearing", Stance::Reach => "reaching", Stance::Haul(_) => "hauling" }, h.rig.speed());
+            if h.clip.is_some() && h.dash != Dash::Walk {
+                info!("huntlog: {} {:?}", entity.index_u32(), h.dash);
+            }
         }
         // Seeing you, it looks at you; else where it is going.
         let look = if sees { target } else { root + toward * 6.0 + Vec3::Y * 1.3 };
@@ -1725,7 +1902,7 @@ pub(super) fn hunt(
         if !matches!(h.stance, Stance::Reach | Stance::Haul(_)) {
             h.rig.grab = None;
         }
-        let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false, combat: 0.0 };
+        let mut intent = Intent { velocity: Vec3::ZERO, look, crouch: 0.0, paw: None, tilt: 0.0, head_rate: 0.0, stretch: 0.0, still: false, combat: 0.0, walk: false, strafe: false, hover: false, air: 0.0 };
         if stunned {
         } else if h.stance == Stance::Stagger {
             // Low, sliding on with the shove; once down (and the time up), on
@@ -1735,7 +1912,7 @@ pub(super) fn hunt(
                 h.stance = Stance::Stalk;
                 h.timer = 0.4;
             }
-        } else if h.traits.has("tame") || matches!(h.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter) {
+        } else if h.traits.has("tame") || h.traits.has("still") || matches!(h.rig.plan.style, crate::rig::Style::Stilt | crate::rig::Style::Porter) {
             // (The stalker and the porter never hunt: their only motion, for
             // now, what has been tuned in tame mode, the user.)
             // (Its `tame` option: it circles at a distance, side on, its
@@ -1747,7 +1924,19 @@ pub(super) fn hunt(
             // crouched, its gait was wrong, the user.)
             let porter = h.rig.plan.style == crate::rig::Style::Porter;
             let stalker = h.rig.plan.style == crate::rig::Style::Stilt;
-            let pace = if fixed > 0.0 { fixed } else if porter { 0.7 } else if stalker { 1.0 } else { [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3] };
+            // (An authored body at its walk's pace, as this step goes: it
+            // walks or dashes, never runs; at a run's paces its feet skated.)
+            let pace = if fixed > 0.0 {
+                fixed
+            } else if porter {
+                0.7
+            } else if stalker {
+                1.0
+            } else if let Some(moves) = h.clip {
+                moves.walk * h.pace
+            } else {
+                [2.5, 6.0, 12.0][(time.elapsed_secs() / 8.0) as usize % 3]
+            };
             intent.velocity = (around + toward * ((distance - keep) / 3.0).clamp(-1.0, 1.0)).normalize_or(around) * pace;
             // (Its `tame_line` option: back and forth along a straight line across
             // in front of you instead (along x, `tame_at` off in z), `tame_span`
@@ -1764,16 +1953,38 @@ pub(super) fn hunt(
                 let off = Vec3::Z * ((line - root.z) / 3.0).clamp(-1.0, 1.0);
                 intent.velocity = (way + off).normalize_or(way) * pace;
             }
+            // (An authored body's `still` option: it stays put, its body
+            // showing its animations in place, see `clip::animate`.)
+            if h.clip.is_some() && h.traits.has("still") {
+                intent.velocity = Vec3::ZERO;
+            }
             // (The stalker, minded: see `stalker.rs`; tame, as before, with
-            // its `tame` or `tame_line` option, to judge its gait and poses.)
+            // its `tame` or `tame_line` option, to judge its gait and poses,
+            // its hunting walk with `walk=1`.)
+            intent.walk = stalker && h.traits.value("walk", 0.0) > 0.5;
+            intent.hover = stalker && h.traits.value("hover", 0.0) > 0.5 && intent.velocity != Vec3::ZERO;
+            intent.air = h.traits.value("air", 2.0);
             if stalker && !h.traits.has("tame") && !h.traits.has("tame_line") {
                 let (eye, head) = h.rig.head();
+                let hovers = h.traits.value("hover", 1.0) > 0.5;
+                let (shots, shifts, shift_pace) = (h.shots, h.traits.value("shift", super::stalker::SHIFT), h.traits.value("shift_pace", super::stalker::SHIFT_PACE));
                 let mind = h.mind.get_or_insert_with(|| super::stalker::Mind::new(root, entity.index_u32() as i32));
+                (mind.shifts, mind.shift_pace) = (shifts, shift_pace);
                 let you = target - Vec3::Y * 0.6;
-                let senses = super::stalker::Senses { clear: ground.sight(eye, you), speed: player.1.velocity.with_y(0.0).length(), shot };
+                let senses = super::stalker::Senses { clear: ground.sight(eye, you), speed: player.1.velocity.with_y(0.0).length(), shot, shots };
                 let orders = mind.think(dt, root, eye, head, you, senses);
                 intent.velocity = orders.velocity;
                 intent.look = orders.look;
+                // (Having seen you, its struggling walk shed: the
+                // gladiator's, energetic, the user, 2026-11-06; wandering,
+                // its own.)
+                // (Hunting it hovers, its stilts hanging, coming down on
+                // them to stand, to fire: see `rig::HOVER`; `hover=0`, it
+                // walks the gladiator's walk.)
+                let hunting = mind.mode != super::stalker::Mode::Wander;
+                intent.walk = hunting && !hovers;
+                intent.hover = hunting && hovers && orders.hover;
+                intent.strafe = orders.strafe;
                 let hunting = mind.mode == super::stalker::Mode::Hunt;
                 h.may_fire = orders.fire;
                 // (Near, hunting you: a stronger nature revealed, braced,
@@ -2050,10 +2261,15 @@ pub(super) fn hunt(
                 }
             }
         } else if let Some(moves) = h.clip {
-            // An authored body (see `clip.rs`): it comes at you no faster
-            // than its run clip carries it (faster, its feet would slide or
-            // its legs whirl), stops within reach, and strikes as its attack
-            // clip lands: its wind-up the clip's, up to the blow.
+            // An authored body (see `clip.rs`): it walks at its walk clip's
+            // pace, or dashes (it never runs: running at you it was slower
+            // than you walking backwards, the user, 2026-11-04), stops within
+            // reach, and strikes as its attack clip lands: its wind-up the
+            // clip's, up to the blow.
+            h.dash_rest -= dt;
+            if !matches!(h.stance, Stance::Stalk | Stance::Freeze | Stance::Charge) && h.dash != Dash::Walk {
+                h.dash = Dash::Walk;
+            }
             match h.stance {
                 Stance::Windup => {
                     if h.timer <= 0.0 {
@@ -2076,16 +2292,73 @@ pub(super) fn hunt(
                 }
                 Stance::Stagger => {}
                 _ => {
-                    let pace = match h.aware {
-                        Aware::Chasing | Aware::Pursuing => moves.run,
-                        Aware::Searching(_) => (moves.walk + moves.run) * 0.5,
-                        Aware::Unaware => moves.walk,
-                    };
                     let stop = moves.reach * 0.8;
-                    if distance > stop {
-                        intent.velocity = toward * pace * ((distance - stop) / 2.0).min(1.0);
+                    // A dash: hunting you, far enough off, its way open
+                    // (`settle`: not standing, telling a teleport, say), it
+                    // walks on to its next step, and as a foot leaves the
+                    // ground (`Hunter::push`, from its walk clip, see
+                    // `clip.rs`), pushing off, goes along its way at
+                    // `dash_speed` for `dash_time` (or less, to end short of
+                    // you), steered along it as it goes; then walks again
+                    // till it may dash again. (It stood still a moment
+                    // first: a dash pushed off a foot, a sound going and a
+                    // landing, has more weight, the user, 2026-11-04. A low
+                    // arc, its look alone, was tried and taken out: it did
+                    // not work, the user.)
+                    let hunting = matches!(h.aware, Aware::Chasing | Aware::Pursuing);
+                    let speed = h.traits.value("dash_speed", 20.0);
+                    match h.dash {
+                        Dash::Walk | Dash::Gather(_) => {
+                            if distance > stop {
+                                intent.velocity = toward * moves.walk * h.pace * ((distance - stop) / 2.0).min(1.0);
+                            }
+                            if let Dash::Gather(waited) = h.dash {
+                                if !hunting || settle <= 0.0 || distance <= stop + DASH_LEAST {
+                                    h.dash = Dash::Walk;
+                                } else if h.push || waited > DASH_WAIT {
+                                    let time = h.traits.value("dash_time", 0.4).min((distance - stop) / speed);
+                                    h.dash = Dash::Go(time);
+                                    commands.spawn((
+                                        AudioPlayer::new(assets.pounce.clone()),
+                                        PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 1.6 })).with_speed(0.8),
+                                        Transform::from_translation(root + Vec3::Y),
+                                    ));
+                                } else {
+                                    h.dash = Dash::Gather(waited + dt);
+                                }
+                            } else if hunting && h.dash_rest <= 0.0 && settle > 0.0 && distance > stop + DASH_LEAST {
+                                h.dash = Dash::Gather(0.0);
+                            }
+                        }
+                        Dash::Go(left) => {
+                            if left <= dt || settle <= 0.0 || distance < stop + speed * dt {
+                                h.dash = Dash::Walk;
+                                // (Its rest drawn, not set: at a set rest it
+                                // dashed at the first step after, again and
+                                // again, mechanically, the user, 2026-11-05.
+                                // Not at every chance, coming; fighting,
+                                // more often, at times twice running.)
+                                let luck = |k: i32| hash01(entity.index_u32() as i32, (time.elapsed_secs() * 1000.0) as i32, k, 0x6d1);
+                                let close = distance < DASH_CLOSE;
+                                let mean = if close { h.traits.value("dash_rest_close", 0.8) } else { h.traits.value("dash_rest", 3.0) };
+                                h.dash_rest = if close && luck(0) < DASH_TWICE { 0.0 } else { mean * (1.0 + DASH_SPREAD * (2.0 * luck(1) - 1.0)) };
+                                h.rig.velocity = toward * moves.walk;
+                                // Landed: a thud, and chips of the ground
+                                // kicked up and on.
+                                commands.spawn((
+                                    AudioPlayer::new(assets.stalker_step.clone()),
+                                    PlaybackSettings::DESPAWN.with_spatial(true).with_volume(Volume::Linear(if h.silent() { 0.0 } else { 1.2 })).with_speed(0.75),
+                                    Transform::from_translation(root),
+                                ));
+                                super::kicked_up(&mut commands, &assets, root, toward * speed * 0.3, entity.index_u32());
+                            } else {
+                                h.dash = Dash::Go(left - dt);
+                                intent.velocity = toward * speed;
+                                h.rig.velocity = intent.velocity;
+                            }
+                        }
                     }
-                    if distance < moves.reach && h.timer <= 0.0 && straight {
+                    if h.dash == Dash::Walk && distance < moves.reach && h.timer <= 0.0 && straight {
                         h.stance = Stance::Windup;
                         h.timer = moves.impact;
                     }
@@ -2185,8 +2458,20 @@ pub(super) fn hunt(
         // look a metre and a half ahead for the drop took a flight down for
         // one, and stopped it there.)
         let footed = h.rig.airborne.is_none() && navs.is_some();
+        // (On district ground, `--opt blink`, on its feet: kept on its node's
+        // walking space, whatever moves it, its pace or a shot's knock, so
+        // that it leaves it only by a teleport or a fall. Outdoors nothing
+        // else stops it: no walls, its height the ground's wherever it
+        // steps; it walked up and down 2 m risers, the user, 2026-11-04.)
+        let kept = (h.rig.airborne.is_none() && navs.is_none() && glide.is_none()).then(|| nodes.zip(blink.as_deref().and_then(|b| b.node))).flatten();
         let sweep = |from: Vec3, step: Vec3| {
-            let to = ground.sweep(&shape, from + lift, Vec3::new(step.x, 0.0, step.z)) - lift + Vec3::Y * step.y;
+            let mut to = ground.sweep(&shape, from + lift, Vec3::new(step.x, 0.0, step.z)) - lift + Vec3::Y * step.y;
+            if let Some((nodes, node)) = kept
+                && nodes.covers(to)
+                && let Some(q) = nodes.keep_on(node, Vec2::new(to.x, to.z))
+            {
+                to = Vec3::new(q.x, to.y, q.y);
+            }
             if footed && ground.under(to).is_none_or(|g| g < from.y - 1.0) { from } else { to }
         };
         let before = h.rig.root;
@@ -2277,11 +2562,25 @@ pub(super) fn hunt(
         if !(h.traits.has("still") && !h.rig.bones.is_empty()) {
             h.rig.update(dt, intent, &|x: f32, z: f32| ground.at(Vec3::new(x, y, z)), &sweep);
         }
+        // Gliding: with a shade, it stays where it left, still, as its shade
+        // goes along the line (see `clip/shade.rs`; it went along it itself,
+        // hidden, and the user: the body should remain until the shadow
+        // reaches its destination); without, it goes along it itself,
+        // through whatever is in the way. Landed, set on its feet there (see
+        // the `Snap` above).
+        h.gliding = glide.is_some();
+        if let Some(at) = glide {
+            if !blink.as_deref().is_some_and(|b| b.shaded) {
+                h.rig.root = at;
+            }
+            h.rig.velocity = Vec3::ZERO;
+            h.rig.airborne = None;
+        }
         // (Its `rigtrace` option: its rig every frame, to find what moves
         // it in play that a test does not: time, frame, asked and got
         // velocity, root, heading, then each foot planted and whether it
         // swings, then each bone's ends; whether it is in the air, and its
-        // stance.)
+        // stance; a stalker's mind, shots, lock and whether it may fire.)
         if h.traits.has("rigtrace") {
             let r = &h.rig;
             let mut line = format!("rigtrace: {} {:.3} {:.5} {:.3} {:.3} {:.3} {:.3} {:.4} {:.4} {:.4} {:.4}", entity.index_u32(), time.elapsed_secs(), dt, intent.velocity.x, intent.velocity.z, r.velocity.x, r.velocity.z, r.root.x, r.root.y, r.root.z, r.heading);
@@ -2291,7 +2590,7 @@ pub(super) fn hunt(
             for b in &r.bones {
                 line += &format!(" {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}", b.a.x, b.a.y, b.a.z, b.b.x, b.b.y, b.b.z);
             }
-            trace(&format!("{line} | {} {:?} | {:?} {:?} crouch {:.2} stretch {:.2} look {:.2} {:.2} {:.2}", r.airborne.is_some() as u8, h.stance, h.aware, h.gesture, intent.crouch, intent.stretch, intent.look.x, intent.look.y, intent.look.z));
+            trace(&format!("{line} | {} {:?} | {:?} {:?} crouch {:.2} stretch {:.2} look {:.2} {:.2} {:.2} | mind {:?} shots {} locked {} may_fire {}", r.airborne.is_some() as u8, h.stance, h.aware, h.gesture, intent.crouch, intent.stretch, intent.look.x, intent.look.y, intent.look.z, h.mind.as_ref().map(|m| m.mode), h.shots, h.locked.is_some() as u8, h.may_fire as u8));
         }
         if args.opt("huntlog") && !ground.clear(before + lift, h.rig.root + lift) {
             info!("huntlog: {} went through something built, from {:.1} to {:.1}", entity.index_u32(), before, h.rig.root);

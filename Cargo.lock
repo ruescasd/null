@@ -3000,6 +3000,7 @@ dependencies = [
  "bevy",
  "bevy_landmass",
  "bevy_rerecast",
+ "geo",
  "landmass",
  "landmass_rerecast",
  "manifold-csg",

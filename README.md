@@ -29,7 +29,7 @@ again. F1 toggles the status overlay (frame rate, position, time, shadows).
 | Left / Right | scrub time |
 | Up / Down | time speed |
 | P | soft / hard shadows |
-| F12 | screenshot to `screenshots/` |
+| F12 | screenshot to `screenshots/`, no HUD or gun; beside it a `.txt` with the command line back there, the spot kept as the place `shot_STAMP` (for the catalogue, `../null-catalogue`) |
 | ~ (the key under Esc) | console (`spawn KIND [N]`: N creatures 3 m before you, harrow, angler, biped, sprawl, stalker, porter, chained (a stalker keeping a porter on a chain), bud, grove, bishop, clip (a creature with an authored body: `docs/creatures.md`)): reads and sets the command line's switches as the game runs (a setting is its name then its value: `fullbright on`, `fullbright off`, `ev 9`, `ev default`, `ev` alone its value; `help`, `list`, `where`, `clear`; Up for the last command); live where read each frame (`nolampshadows`, `ev`, `fog`, ...) and for `nocontact`, `notaa`, `fullbright` (an even light everywhere, no shadows, to see shapes); `where` prints the view as `--cam` and copies it, `cam X,Y,Z,YAW,PITCH` goes there. Left/Right, Home/End, Delete and Ctrl+Left/Right/Backspace edit the line, Tab completes, Ctrl+V pastes (each line run), Ctrl+C copies the line, Up/Down the commands before (kept between runs). Esc or ~ puts it away; `--opt console` starts with it down |
 
 Command-line options, mostly for tuning and capturing reference frames (a switch, `--opt name`, can
@@ -115,6 +115,27 @@ also be given as at the console, `--set name on` or `--set name off`; a number `
     --set ev=11.2 --set bounce=2 --set fill=6000 --set night_fill=2500 --set contrast=1.1
     --set soft0=1 --set soft1=1                tuning numbers
     --set fog=4500 --set fog_day=0.04 --set fog_night=0.01 --set fog_glow=0.15   haze (fog=0: none)
+
+### Places outside the world
+
+Where each standalone place is, until it joins the world (`target\fast\game.exe` and these):
+
+| Place | Options |
+|---|---|
+| The void (cylinders on a grid, current direction) | `--ground void_inlay` (also `_screen`, `_balcony`, `_trees`; every ground in `worldgen/src/grounds.rs`) |
+| The void with lamps | `--ground void_lamp_echo_socket` (also `void_lamp_monolith`, `_cradle`, `_pendant`, `_echo`) |
+| The chasm | `--opt chasm` |
+| The chasm region (the plan's network, its places' fitted rooms) | `--opt chasm --opt region` |
+| Fitted rooms in a row | `--opt chasm --opt rooms --opt fit --set kind=N`: 0 Atrium I (a large painting on its longest wall), 1 cascade, 2 Atrium II (the ichor pool), 3 hypostyle (paintings in the central bay, seven in ten), 4 rotunda (half of them planetaria), 5 crossing |
+| The orb's shrine | `--opt chasm --opt rooms --opt orb` |
+| The court stepwell | `--opt chasm --opt rooms --opt well` |
+| The woven hall (a hypostyle, one column of cables) | `--opt chasm --opt rooms --opt woven` |
+| The room lab (the first rooms; not yet in the region) | `--opt chasm --opt rooms` (12 rooms from `--seed`, default 1; `--set rooms=N`). The seed sets the kind, in turn: 1 rotunda, 2 crossing, 3 overlook, 4 cascade, 5 ring, 6 hypostyle, 7 court stepwell, 8 rotunda again... Each kind's variant changes every 7 seeds |
+| The ring's round well (a corridor round a well open to the sky, a colonnade on a ring of stone, a pit below) | `--opt chasm --opt rooms --seed 5 --set rooms=1` (also seeds 33, 61) |
+| The junction catalogue | `--opt chasm --opt junctions --opt noclip` |
+| The chasm plan's blockout | `--opt chasm --opt plan` |
+| The arena | `--opt arena` (`--set floor=N`) |
+| The pattern lab | `--opt lab` |
 
 `tools\visit.ps1 <place>` opens the game at a place from the review pages
 (without one it lists them); `tools\haze.ps1 none|light|dense|dark` runs a

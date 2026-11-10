@@ -1,0 +1,11 @@
+; The navigation bench's Godot candidate (tools/navbench/CRITERIA.md).
+config_version=5
+
+[application]
+config/name="navbench"
+
+[threading]
+worker_pool/max_threads=12
+
+[physics]
+common/physics_ticks_per_second=60

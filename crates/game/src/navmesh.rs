@@ -29,7 +29,7 @@ pub struct NavmeshPlugin;
 
 impl Plugin for NavmeshPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(Landmass3dPlugin::default()).add_systems(Update, (ready, walk.after(ready)));
+        app.add_plugins(Landmass3dPlugin::default()).add_systems(Startup, district::setup).add_systems(Update, (ready, walk.after(ready), district::ask, district::ready, district::tells, district::glows));
     }
 }
 
@@ -64,22 +64,29 @@ impl Body {
 /// has them, to be asked of.
 pub(crate) struct Floors {
     archipelago: landmass::Archipelago<ThreeD>,
-    tiles: Vec<Arc<ValidNavigationMesh3d>>,
+    /// Each tile where it lies (its least corner), and its mesh from there.
+    tiles: Vec<(Vec3, Arc<ValidNavigationMesh3d>)>,
     polygons: usize,
+    /// How many of them were wound the wrong way, and dropped.
+    dropped: usize,
     /// Its triangles, to be drawn (`--opt navdraw`).
     drawn: Vec<[f32; 3]>,
 }
 
 impl Floors {
     /// Over `tiles`, for a body of `radius`.
-    pub(crate) fn new(tiles: &[bevy_rerecast::Navmesh], radius: f32, draw: bool) -> Result<Floors, String> {
+    pub(crate) fn new(tiles: &[(IVec2, bevy_rerecast::Navmesh)], radius: f32, draw: bool) -> Result<Floors, String> {
         let mut archipelago = landmass::Archipelago::new(options(radius));
         let mut valid = Vec::new();
         let mut drawn = Vec::new();
-        for (k, tile) in tiles.iter().enumerate() {
-            let mesh = Arc::new(landmass_rerecast::convert_rerecast_navmesh_to_landmass_navmesh(tile).validate().map_err(|e| format!("tile {k}: {e:?}"))?);
-            archipelago.add_island(landmass::Island::new(landmass::Transform { translation: Vec3::ZERO, rotation: 0.0 }, mesh.clone()));
-            valid.push(mesh);
+        let mut dropped = 0;
+        for (k, (_, tile)) in tiles.iter().enumerate() {
+            let origin = tile.polygon.aabb.min;
+            let (mesh, wrong) = landmass_mesh(tile);
+            dropped += wrong;
+            let mesh = Arc::new(mesh.validate().map_err(|e| format!("tile {k}: {e:?}"))?);
+            archipelago.add_island(landmass::Island::new(landmass::Transform { translation: origin, rotation: 0.0 }, mesh.clone()));
+            valid.push((origin, mesh));
             if draw {
                 let detail = &tile.detail;
                 for sub in &detail.meshes {
@@ -92,7 +99,7 @@ impl Floors {
         }
         // (Its islands joined, edge to edge.)
         archipelago.update(0.0);
-        Ok(Floors { archipelago, tiles: valid, polygons: tiles.iter().map(|t| t.polygon.polygon_count()).sum(), drawn })
+        Ok(Floors { archipelago, tiles: valid, polygons: tiles.iter().map(|(_, t)| t.polygon.polygon_count()).sum(), dropped, drawn })
     }
 
     fn sample(&self, p: Vec3, reach: f32, above: f32) -> Option<landmass::SampledPoint<'_, ThreeD>> {
@@ -134,6 +141,78 @@ impl Floors {
         let way = self.way(from, to)?;
         Some(std::iter::once(from).chain(way).collect::<Vec<_>>().windows(2).map(|w| w[0].distance(w[1])).sum())
     }
+}
+
+/// A tile's navmesh as landmass takes it, in its own frame, from its least
+/// corner (in f32, 8 km out, the world's own frame is millimetres coarse,
+/// too coarse to tell a polygon convex); and how many of its polygons were
+/// wound the wrong way, and dropped (Recast leaves the odd one, a sliver,
+/// where it could not triangulate a contour whole).
+///
+/// Mended as Detour need not be: a polygon of no area (its corners in a
+/// row, where a contour's last corners lay in a row) is taken out, and its
+/// corners put into its neighbours' edges along it, so that they meet edge
+/// to edge across where it was (landmass's straightening of a way through
+/// one went back and forth for ever).
+fn landmass_mesh(tile: &bevy_rerecast::Navmesh) -> (bevy_landmass::NavigationMesh3d, usize) {
+    let origin = tile.polygon.aabb.min;
+    let mut mesh = landmass_rerecast::convert_rerecast_navmesh_to_landmass_navmesh(tile);
+    let cell = Vec3::new(tile.polygon.cell_size, tile.polygon.cell_height, tile.polygon.cell_size);
+    mesh.vertices = tile.polygon.vertices.iter().map(|v| v.as_vec3() * cell).collect();
+    if let Some(height) = mesh.height_mesh.as_mut() {
+        height.vertices.iter_mut().for_each(|v| *v -= origin);
+        // (Its triangles wound as its polygons are: Recast winds the odd
+        // sliver's the other way, and landmass will not take it.)
+        for polygon in &height.polygons {
+            let corners = &height.vertices[polygon.base_vertex_index as usize..];
+            for t in &mut height.triangles[polygon.base_triangle_index as usize..][..polygon.triangle_count as usize] {
+                let [a, b, c] = t.map(|i| corners[i as usize].xz());
+                if (b - a).perp_dot(c - a) < 0.0 {
+                    t.swap(1, 2);
+                }
+            }
+        }
+    }
+    // (Wound as landmass has them, anticlockwise from above in x and z.)
+    let corners = |p: &Vec<usize>| p.iter().map(|&v| mesh.vertices[v].xz()).collect::<Vec<_>>();
+    let area = |c: &[Vec2]| (0..c.len()).map(|i| c[i].perp_dot(c[(i + 1) % c.len()])).sum::<f32>();
+    let around = |c: &[Vec2]| (0..c.len()).map(|i| c[i].distance(c[(i + 1) % c.len()])).sum::<f32>();
+    let flat: Vec<bool> = mesh.polygons.iter().map(|p| { let c = corners(p); area(&c).abs() <= 1e-5 * around(&c).powi(2) }).collect();
+    let wrong: Vec<bool> = mesh.polygons.iter().zip(&flat).map(|(p, &f)| !f && area(&corners(p)) < 0.0).collect();
+    for f in (0..mesh.polygons.len()).filter(|&f| flat[f]) {
+        // Its corners in their row, and each of its edges' neighbour given
+        // those between that edge's ends.
+        let row = mesh.polygons[f].clone();
+        let (a, b) = row.iter().flat_map(|&a| row.iter().map(move |&b| (a, b))).max_by(|x, y| mesh.vertices[x.0].distance_squared(mesh.vertices[x.1]).total_cmp(&mesh.vertices[y.0].distance_squared(mesh.vertices[y.1]))).unwrap();
+        let line = (mesh.vertices[b] - mesh.vertices[a]).xz();
+        let along = |v: usize| (mesh.vertices[v] - mesh.vertices[a]).xz().dot(line);
+        for i in 0..row.len() {
+            let (p, q) = (row[i], row[(i + 1) % row.len()]);
+            let Some(n) = (0..mesh.polygons.len()).find(|&n| n != f && !flat[n] && !wrong[n] && { let m = &mesh.polygons[n]; (0..m.len()).any(|j| m[j] == q && m[(j + 1) % m.len()] == p) }) else { continue };
+            let (lo, hi) = (along(p).min(along(q)), along(p).max(along(q)));
+            let mut between: Vec<usize> = row.iter().copied().filter(|&v| v != p && v != q && along(v) > lo && along(v) < hi).collect();
+            // (From q to p, as the neighbour goes.)
+            between.sort_by(|&x, &y| along(x).total_cmp(&along(y)));
+            if along(q) > along(p) {
+                between.reverse();
+            }
+            let m = &mut mesh.polygons[n];
+            let j = (0..m.len()).find(|&j| m[j] == q && m[(j + 1) % m.len()] == p).unwrap();
+            for (k, v) in between.into_iter().enumerate() {
+                m.insert(j + 1 + k, v);
+            }
+        }
+    }
+    let kept: Vec<bool> = flat.iter().zip(&wrong).map(|(f, w)| !f && !w).collect();
+    let mut keep = kept.iter().copied();
+    mesh.polygons.retain(|_| keep.next().unwrap());
+    let mut keep = kept.iter().copied();
+    mesh.polygon_type_indices.retain(|_| keep.next().unwrap());
+    if let Some(height) = mesh.height_mesh.as_mut() {
+        let mut keep = kept.iter().copied();
+        height.polygons.retain(|_| keep.next().unwrap());
+    }
+    (mesh, wrong.iter().filter(|w| **w).count())
 }
 
 /// How an archipelago for a body of `radius` finds things on it: a body's
@@ -198,15 +277,16 @@ fn ready(mut commands: Commands, args: Res<Args>, navs: Option<ResMut<Navmeshes>
     for (floors, body) in built.into_iter().zip(Body::ALL) {
         let failed = unreached(&floors, &navs.checks);
         info!(
-            "{}: navmesh for the {body:?}: {} tiles, {} polygons; {}",
+            "{}: navmesh for the {body:?}: {} tiles, {} polygons ({} wound wrong, dropped); {}",
             navs.place,
             floors.tiles.len(),
             floors.polygons,
+            floors.dropped,
             failed.iter().map(|(group, n, lost)| format!("{group}: {} of {n} not reached{}", lost.len(), lost.iter().take(6).map(|l| format!(" ({l})")).collect::<String>())).collect::<Vec<_>>().join("; ")
         );
         let archipelago = commands.spawn(Archipelago3d::new(options(body.size().0))).id();
-        for tile in &floors.tiles {
-            commands.spawn(Island3dBundle { island: Island, archipelago_ref: ArchipelagoRef3d::new(archipelago), nav_mesh: NavMeshHandle(navmeshes.add(NavMesh3d { nav_mesh: tile.clone() })) });
+        for (origin, tile) in &floors.tiles {
+            commands.spawn((Island3dBundle { island: Island, archipelago_ref: ArchipelagoRef3d::new(archipelago), nav_mesh: NavMeshHandle(navmeshes.add(NavMesh3d { nav_mesh: tile.clone() })) }, Transform::from_translation(*origin)));
         }
         if args.opt("navdraw") && !floors.drawn.is_empty() {
             let drawn = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()).with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, floors.drawn.clone()).with_computed_flat_normals();
@@ -297,29 +377,42 @@ fn walk(mut commands: Commands, navs: Option<Res<Navmeshes>>, mut walkers: Query
 /// How many cells along a tile's side (58 m for the gladiator's body).
 const TILE: u16 = 500;
 
+/// Recast's settings for a body of `(radius, height, climb, slope)`, a tile
+/// within `min` and `max`.
+fn config(body: (f32, f32, f32, f32), min: Vec3, max: Vec3) -> bevy_rerecast::rerecast::Config {
+    let (radius, height, climb, slope) = body;
+    bevy_rerecast::rerecast::ConfigBuilder { agent_height: height, agent_radius: radius, walkable_climb: climb, walkable_slope_angle: slope.to_radians(), tile_size: TILE, tiling: true, aabb: bevy_rerecast::rerecast::Aabb3d { min, max }, ..default() }.build()
+}
+
+/// How long a side a body's tiles have (m): tile `(x, z)` lies from `x`,
+/// `z` times that to the next, the world over.
+pub(crate) fn tile_side(body: (f32, f32, f32, f32)) -> f32 {
+    TILE as f32 * config(body, Vec3::ZERO, Vec3::ONE).cell_size
+}
+
 /// The navmesh for a body of `(radius, height, climb, slope)` over the
-/// triangles of `colliders`, within `aabb` (min, max), in tiles: each tile
-/// with anything in it built by Recast's steps (as `bevy_rerecast`'s
-/// generator takes them), on every core; neighbouring tiles' edges meet
-/// (landmass joins them). (Built whole, the arena's 1200 m took 56 s, and
-/// the region's 2 km would not build at all.)
-pub(crate) fn build(colliders: &[avian3d::prelude::Collider], body: (f32, f32, f32, f32), aabb: (Vec3, Vec3)) -> Result<Vec<bevy_rerecast::Navmesh>, String> {
+/// triangles of `colliders`, within `aabb` (min, max), in tiles, each with
+/// its place on the world's grid of them (see `tile_side`): each tile with
+/// anything in it built by Recast's steps (as `bevy_rerecast`'s generator
+/// takes them), on half the cores; neighbouring tiles' edges meet (landmass
+/// joins them). (Built whole, the arena's 1200 m took 56 s, and the
+/// region's 2 km would not build at all.)
+pub(crate) fn build(colliders: &[avian3d::prelude::Collider], body: (f32, f32, f32, f32), aabb: (Vec3, Vec3)) -> Result<Vec<(IVec2, bevy_rerecast::Navmesh)>, String> {
     use avian_rerecast::ColliderToTriMesh;
     use avian3d::prelude::{Position, Rotation};
     use bevy_rerecast::rerecast;
     let (radius, height, climb, slope) = body;
-    let config = |min: Vec3, max: Vec3| {
-        rerecast::ConfigBuilder { agent_height: height, agent_radius: radius, walkable_climb: climb, walkable_slope_angle: slope.to_radians(), tile_size: TILE, tiling: true, aabb: rerecast::Aabb3d { min, max }, ..default() }.build()
-    };
     let mut all = rerecast::TriMesh::default();
     for c in colliders {
         all.extend(c.to_trimesh(Position(Vec3::ZERO), Rotation::IDENTITY, 8).ok_or("a collider of no triangles")?);
     }
-    let probe = config(aabb.0, aabb.1);
+    let probe = config(body, aabb.0, aabb.1);
     all.mark_walkable_triangles(probe.walkable_slope_angle);
-    let (cell, border) = (probe.cell_size, probe.border_size as f32 * probe.cell_size);
-    let side = TILE as f32 * cell;
-    let count = (((aabb.1.x - aabb.0.x) / side).ceil() as i32, ((aabb.1.z - aabb.0.z) / side).ceil() as i32);
+    let (side, border) = (tile_side(body), probe.border_size as f32 * probe.cell_size);
+    // (From the grid's line at or before its least corner.)
+    let first = IVec2::new((aabb.0.x / side).floor() as i32, (aabb.0.z / side).floor() as i32);
+    let origin = first.as_vec2() * side;
+    let count = (((aabb.1.x - origin.x) / side).ceil() as i32, ((aabb.1.z - origin.y) / side).ceil() as i32);
     // Each triangle in every tile it touches, its border with it.
     let mut tiles: Vec<Vec<u32>> = vec![Vec::new(); (count.0 * count.1) as usize];
     for (i, t) in all.indices.iter().enumerate() {
@@ -329,8 +422,8 @@ pub(crate) fn build(colliders: &[avian3d::prelude::Collider], body: (f32, f32, f
             continue;
         }
         let range = |lo: f32, hi: f32, min: f32, n: i32| (((lo - border - min) / side).floor().max(0.0) as i32, ((hi + border - min) / side).floor().min(n as f32 - 1.0) as i32);
-        let (x0, x1) = range(lo.x, hi.x, aabb.0.x, count.0);
-        let (z0, z1) = range(lo.z, hi.z, aabb.0.z, count.1);
+        let (x0, x1) = range(lo.x, hi.x, origin.x, count.0);
+        let (z0, z1) = range(lo.z, hi.z, origin.y, count.1);
         for z in z0..=z1 {
             for x in x0..=x1 {
                 tiles[(z * count.0 + x) as usize].push(i as u32);
@@ -338,10 +431,10 @@ pub(crate) fn build(colliders: &[avian3d::prelude::Collider], body: (f32, f32, f
         }
     }
     let e = |e: &dyn std::fmt::Debug| format!("{e:?}");
-    let one = |k: usize, triangles: &[u32]| -> Result<Option<bevy_rerecast::Navmesh>, String> {
-        let (x, z) = ((k as i32 % count.0) as f32, (k as i32 / count.0) as f32);
-        let min = Vec3::new(aabb.0.x + x * side, aabb.0.y, aabb.0.z + z * side);
-        let config = config(min - Vec3::new(border, 0.0, border), Vec3::new(min.x + side + border, aabb.1.y, min.z + side + border));
+    let one = |k: usize, triangles: &[u32]| -> Result<Option<(IVec2, bevy_rerecast::Navmesh)>, String> {
+        let key = first + IVec2::new(k as i32 % count.0, k as i32 / count.0);
+        let min = Vec3::new(key.x as f32 * side, aabb.0.y, key.y as f32 * side);
+        let config = config(body, min - Vec3::new(border, 0.0, border), Vec3::new(min.x + side + border, aabb.1.y, min.z + side + border));
         // (Its own triangles, and only their vertices.)
         let mut trimesh = rerecast::TriMesh::default();
         let mut index: HashMap<u32, u32> = HashMap::new();
@@ -371,14 +464,14 @@ pub(crate) fn build(colliders: &[avian3d::prelude::Collider], body: (f32, f32, f
         }
         let detail = rerecast::DetailNavmesh::new(&polygon, &compact, config.detail_sample_dist, config.detail_sample_max_error).map_err(|x| e(&x))?;
         let settings = bevy_rerecast::NavmeshSettings { walkable_climb: climb, walkable_slope_angle: slope.to_radians(), ..bevy_rerecast::NavmeshSettings::from_agent_3d(radius, height) };
-        Ok(Some(bevy_rerecast::Navmesh { polygon, detail, settings }))
+        Ok(Some((key, bevy_rerecast::Navmesh { polygon, detail, settings })))
     };
     // (Half the cores less one, each taking the next tile: the game's own
     // threads left the rest. On every core, the region's frames took 50 to
     // 250 ms while it was built, 6 s.)
     let next = std::sync::atomic::AtomicUsize::new(0);
     let workers = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).saturating_sub(1).max(1));
-    let built: Vec<Result<Vec<bevy_rerecast::Navmesh>, String>> = std::thread::scope(|scope| {
+    let built: Vec<Result<Vec<(IVec2, bevy_rerecast::Navmesh)>, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 scope.spawn(|| {
@@ -399,6 +492,17 @@ pub(crate) fn build(colliders: &[avian3d::prelude::Collider], body: (f32, f32, f
     });
     Ok(built.into_iter().collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect())
 }
+
+pub(crate) mod district;
+pub(crate) mod nodes;
+#[cfg(test)]
+mod zz_bench;
+#[cfg(test)]
+mod zz_nodes;
+#[cfg(test)]
+mod zz_plates;
+#[cfg(test)]
+mod zz_world;
 
 #[cfg(test)]
 mod tests {

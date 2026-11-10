@@ -17,7 +17,7 @@
 //! porticos of columns on some terraces. Every stair joins two platforms,
 //! so whatever grows can be walked.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{Quat, Vec2, Vec3};
 
@@ -136,7 +136,7 @@ enum Wall {
 const DEPTH: f32 = 2.4;
 
 struct Composer {
-    cells: HashMap<(i32, i32), Cell>,
+    cells: BTreeMap<(i32, i32), Cell>,
     rects: Vec<Rect>,
     /// The grid's half extent, in bays.
     nx: i32,
@@ -155,7 +155,7 @@ struct Composer {
     blocked: Option<(Vec2, Vec2)>,
     /// Faces of platforms (cell, direction) left without a parapet: a
     /// stair from outside arrives there.
-    openings: HashSet<((i32, i32), (i32, i32))>,
+    openings: BTreeSet<((i32, i32), (i32, i32))>,
 }
 
 /// The frame of a direction: along it, and across it.
@@ -415,8 +415,8 @@ impl Composer {
     /// parapets, porticos.
     /// Covered passages: cells with an arched way through them at the
     /// bottom, along an axis, and the passage's floor.
-    fn passages(&self) -> HashMap<(i32, i32), ((i32, i32), f32)> {
-        let mut out = HashMap::new();
+    fn passages(&self) -> BTreeMap<(i32, i32), ((i32, i32), f32)> {
+        let mut out = BTreeMap::new();
         for (i, r) in self.rects.iter().enumerate() {
             if r.raised || r.tower || r.void > 0 || hash01(i as i32, 5, 0x9a5, self.seed) > 0.45 {
                 continue;
@@ -448,7 +448,7 @@ impl Composer {
         out
     }
 
-    fn draw(&self, porticos: &HashSet<usize>) -> Vec<Solid> {
+    fn draw(&self, porticos: &BTreeSet<usize>) -> Vec<Solid> {
         let mut out = self.extra.clone();
         let passages = self.passages();
         let tone = self.tone;
@@ -456,7 +456,7 @@ impl Composer {
             Kind::Stair { .. } => (c.level + 1) as f32 * level_m(),
             _ => c.level as f32 * level_m(),
         };
-        let mut pillars: HashSet<(i32, i32)> = HashSet::new();
+        let mut pillars: BTreeSet<(i32, i32)> = BTreeSet::new();
         for (&(x, z), cell) in &self.cells {
             let top = cell.level as f32 * level_m();
             match cell.kind {
@@ -857,10 +857,10 @@ fn grow_complex(
     roots: &[(Vec2, Vec2, i32)],
     tone: f32,
     seed: u32,
-) -> Option<(Composer, HashSet<usize>)> {
+) -> Option<(Composer, BTreeSet<usize>)> {
     let r = |a: i32, b: i32| hash01(a, b, 0xc0b, seed);
     let mut c = Composer {
-        cells: HashMap::new(),
+        cells: BTreeMap::new(),
         rects: Vec::new(),
         nx: (half.x / bay_m()) as i32,
         nz: (half.y / bay_m()) as i32,
@@ -870,7 +870,7 @@ fn grow_complex(
         seed,
         focus: 1.0,
         blocked,
-        openings: HashSet::new(),
+        openings: BTreeSet::new(),
     };
     if c.nx < 3 || c.nz < 3 {
         return None;
@@ -979,7 +979,7 @@ fn grow_complex(
     if symmetric {
         let rects_before = c.rects.len() as i32;
         let cells: Vec<((i32, i32), Cell)> = c.cells.iter().map(|(&k, &v)| (k, v)).collect();
-        let mut mirrored: HashSet<(i32, i32)> = HashSet::new();
+        let mut mirrored: BTreeSet<(i32, i32)> = BTreeSet::new();
         for ((x, z), cell) in cells {
             let mx = -1 - x;
             if c.cells.contains_key(&(mx, z)) {
@@ -1007,7 +1007,7 @@ fn grow_complex(
             .collect();
         c.rects.extend(rects);
     }
-    let porticos: HashSet<usize> = (0..c.rects.len()).filter(|&i| r(i as i32 % (c.rects.len() / if symmetric { 2 } else { 1 }).max(1) as i32, 99) < 0.3).collect();
+    let porticos: BTreeSet<usize> = (0..c.rects.len()).filter(|&i| r(i as i32 % (c.rects.len() / if symmetric { 2 } else { 1 }).max(1) as i32, 99) < 0.3).collect();
     Some((c, porticos))
 }
 

@@ -324,7 +324,7 @@ fn shock(commands: &mut Commands, assets: &Assets3, player: &mut Player, right: 
 }
 
 /// How near two segments come.
-fn between(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
+pub(in crate::combat) fn between(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
     let (d1, d2, r) = (a1 - a0, b1 - b0, a0 - b0);
     let (a, e, f) = (d1.length_squared(), d2.length_squared(), d2.dot(r));
     let (s, t) = if a <= 1e-9 {

@@ -267,7 +267,7 @@ struct Built {
 pub struct Streamer {
     /// (lod, wrapped key) -> mesh (None when the column is empty).
     cache: HashMap<Key, Option<Built>>,
-    pending: HashMap<Key, Task<(ColumnMesh, Option<Collider>)>>,
+    pending: HashMap<Key, Task<(ColumnMesh, Option<Collider>, [f32; 2])>>,
     /// (lod, unwrapped key) -> instance.
     spawned: HashMap<Key, Entity>,
     /// Instances of a world that has since changed, kept until their
@@ -282,6 +282,11 @@ pub struct Streamer {
     /// generated now (`--opt startlog`).
     pub missing: [usize; LOD_LEVELS as usize],
     pub in_flight: usize,
+    /// What the columns cost the workers (`--opt flybench`), at each level:
+    /// how many were made, their meshing and their colliders (s of a
+    /// worker's time), and how many were made again (dropped, then wanted).
+    pub spent: [(u32, f32, f32, u32); LOD_LEVELS as usize],
+    made: HashSet<Key>,
 }
 
 impl Streamer {
@@ -504,9 +509,11 @@ fn stream_columns(
         }
         let world = world.clone();
         let task = pool.spawn(async move {
+            let start = std::time::Instant::now();
             let column = world.mesh(key.0, key.1.x, key.1.y);
+            let meshed = start.elapsed().as_secs_f32();
             let collider = (key.0 == 0).then(|| column_collider(&column)).flatten();
-            (column, collider)
+            (column, collider, [meshed, start.elapsed().as_secs_f32() - meshed])
         });
         streamer.pending.insert(key, task);
     }
@@ -570,13 +577,16 @@ fn stream_columns(
 fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh>>) {
     let mut done = Vec::new();
     for (key, task) in streamer.pending.iter_mut() {
-        if let Some((column, collider)) = check_ready(task) {
+        if let Some((column, collider, cost)) = check_ready(task) {
             let built = (!column.is_empty())
                 .then(|| Built { aabb: bounds(&column), mesh: meshes.add(to_bevy_mesh(column, key.0)), collider });
-            done.push((*key, built));
+            done.push((*key, built, cost));
         }
     }
-    for (key, built) in done {
+    for (key, built, cost) in done {
+        let again = !streamer.made.insert(key);
+        let spent = &mut streamer.spent[key.0 as usize];
+        *spent = (spent.0 + 1, spent.1 + cost[0], spent.2 + cost[1], spent.3 + again as u32);
         streamer.pending.remove(&key);
         streamer.cache.insert(key, built);
     }

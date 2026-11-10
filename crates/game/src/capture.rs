@@ -1,4 +1,5 @@
-//! Screenshots: F12 at any time, or `--shot path.png` to render a single frame
+//! Screenshots: F12 at any time (or `shot` at the console; with how to get
+//! back there, for the catalogue, see `manual_shot`), or `--shot path.png` to render a single frame
 //! once the terrain in view has loaded, save it and exit. `--opt bench`
 //! measures frame times once everything in view has loaded, and exits;
 //! `--opt flybench` flies and measures every frame, for stutter.
@@ -15,6 +16,7 @@ pub struct CapturePlugin;
 impl Plugin for CapturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AutoShot>()
+            .init_resource::<Hiding>()
             .init_resource::<Bench>()
             .init_resource::<Tour>()
             .init_resource::<Flight>()
@@ -52,6 +54,9 @@ struct Flight {
     /// Each frame: its time (ms), terrain columns put in the world, meshes
     /// added, structures finished, physics bodies added.
     frames: Vec<(f32, u32, u32, u32, u32)>,
+    /// What the columns had cost the workers as it set off (see
+    /// `Streamer::spent`).
+    before: [(u32, f32, f32, u32); worldgen::LOD_LEVELS as usize],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -78,6 +83,7 @@ fn fly_bench(
         if streamer.settled && building.is_empty() {
             let f = camera.forward();
             flight.since = Some((now, camera.translation, Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::X)));
+            flight.before = streamer.spent;
         }
         return;
     };
@@ -125,6 +131,19 @@ fn fly_bench(
     );
     let totals = frames.iter().fold((0, 0, 0, 0), |a, f| (a.0 + f.1, a.1 + f.2, a.2 + f.3, a.3 + f.4));
     info!("flybench: arrived in all: {} terrain columns, {} meshes, {} structures, {} bodies", totals.0, totals.1, totals.2, totals.3);
+    // (What the columns cost the workers over the flight: how many made at
+    // each level (and made again, after being dropped), their meshing and
+    // colliders in s of a worker's time, and as a share of all the
+    // workers' time.)
+    let workers = bevy::tasks::AsyncComputeTaskPool::get().thread_num() as f32;
+    for (lod, (now, before)) in streamer.spent.iter().zip(flight.before).enumerate() {
+        let (n, mesh, collide, again) = (now.0 - before.0, now.1 - before.1, now.2 - before.2, now.3 - before.3);
+        info!(
+            "flybench: columns at level {lod}: {n} made ({again} again), meshing {mesh:.1} s ({:.0} ms each), colliders {collide:.1} s; {:.0}% of {workers} workers",
+            mesh * 1000.0 / n.max(1) as f32,
+            (mesh + collide) / time / workers * 100.0
+        );
+    }
     let mut order: Vec<usize> = (0..frames.len()).collect();
     order.sort_by(|&a, &b| frames[b].0.total_cmp(&frames[a].0));
     for &k in order.iter().take(15) {
@@ -455,16 +474,113 @@ fn room_tour(
     *i += 1;
 }
 
-fn manual_shot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {
-    if keys.just_pressed(KeyCode::F12) {
-        let _ = std::fs::create_dir_all("screenshots");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        commands
-            .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(format!("screenshots/{stamp}.png")));
+/// While F12's shot is taken: nothing in your hands (see `combat::choose`).
+#[derive(Resource, Default)]
+pub struct Hiding(pub bool);
+
+/// F12: `screenshots/STAMP.png`, and beside it `STAMP.txt`, how to see it
+/// again (the user, 2026-11-07, for the catalogue): where you are kept as a
+/// place, `shot_STAMP` (see `places.rs`), and the command line that starts
+/// there as things were (see `relaunch`).
+fn manual_shot(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    args: Res<Args>,
+    sky: Res<crate::look::Sky>,
+    mut console: ResMut<crate::console::Console>,
+    camera: Single<(&Transform, &crate::camera::FlyCam)>,
+    world: Option<Res<crate::terrain::WorldGen>>,
+    mut ui: Query<(Entity, &mut Visibility), (With<Node>, Without<ChildOf>)>,
+    mut hiding: ResMut<Hiding>,
+    mut hidden: Local<(u32, Vec<(Entity, Visibility)>)>,
+) {
+    // (The image alone: what is on the screen, and the gun (see `Hiding`),
+    // hidden the frame it is asked for; shot the next, when all have
+    // heeded it; back three frames on.)
+    if hidden.0 > 0 {
+        hidden.0 += 1;
+        if hidden.0 == 5 {
+            for (e, was) in std::mem::take(&mut hidden.1) {
+                if let Ok((_, mut v)) = ui.get_mut(e) {
+                    *v = was;
+                }
+            }
+            *hidden = (0, Vec::new());
+            hiding.0 = false;
+        }
+        if hidden.0 != 2 {
+            return;
+        }
+    } else {
+        // (Or `shot` at the console, or `--do shot`.)
+        if keys.just_pressed(KeyCode::F12) || std::mem::take(&mut console.shoot) {
+            for (e, mut v) in &mut ui {
+                hidden.1.push((e, *v));
+                *v = Visibility::Hidden;
+            }
+            hidden.0 = 1;
+            hiding.0 = true;
+        }
+        return;
+    }
+    let _ = std::fs::create_dir_all("screenshots");
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("screenshots/{stamp}.png")));
+    let (t, fly) = *camera;
+    let p = t.translation;
+    let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
+    let name = format!("shot_{stamp}");
+    let place = crate::places::Place { name: name.clone(), at: [p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()], note: String::new() };
+    // (A shot whose way back is lost is said, never passed over.)
+    if let Err(e) = crate::places::save(&place) {
+        error!("F12: the shot's place {name} not kept: {e}");
+    }
+    let path = format!("screenshots/{stamp}.txt");
+    match std::fs::write(&path, relaunch(&name, &args, sky.time, &console.scene) + "\n") {
+        Ok(()) => info!("F12: screenshots/{stamp}.png, the way there in {path}"),
+        Err(e) => error!("F12: {path} not written: {e}"),
+    }
+}
+
+/// The command line that starts at the place `name` as things were: the
+/// seed, the time of day, every switch and setting as they stand (the
+/// console's changes in them), the scene's commands (see `Console::scene`).
+fn relaunch(name: &str, args: &Args, time: f32, scene: &[String]) -> String {
+    let mut words = vec![format!("--tp {name}")];
+    if args.seed != 1 {
+        words.push(format!("--seed {}", args.seed));
+    }
+    words.push(format!("--time {time:.0}"));
+    // (Not those that change nothing seen: `mute`, `console`.)
+    let mut opts: Vec<&String> = Vec::new();
+    for o in &args.opts {
+        if !opts.contains(&o) && o != "mute" && o != "console" {
+            opts.push(o);
+        }
+    }
+    words.extend(opts.iter().map(|o| format!("--opt {o}")));
+    // (Each setting once, as it stands: its last.)
+    let mut sets: Vec<(&str, f32)> = Vec::new();
+    for (k, v) in &args.sets {
+        match sets.iter_mut().find(|s| s.0 == k) {
+            Some(s) => s.1 = *v,
+            None => sets.push((k, *v)),
+        }
+    }
+    words.extend(sets.iter().map(|(k, v)| format!("--set {k}={v}")));
+    words.extend(scene.iter().map(|c| format!("--do \"{c}\"")));
+    words.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relaunches() {
+        let args = Args { opts: vec!["arena".into(), "mute".into(), "chasm".into(), "arena".into()], sets: vec![("ev".into(), 1.0), ("ev".into(), 2.5)], cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
+        let line = relaunch("shot_1", &args, 420.4, &["spawn gladiator still".into()]);
+        assert_eq!(line, "--tp shot_1 --time 420 --opt arena --opt chasm --set ev=2.5 --do \"spawn gladiator still\"");
     }
 }
 

@@ -1,20 +1,35 @@
 use glam::{FloatExt, Vec2, Vec3, Vec3Swizzles};
 
 /// (null) How far apart in height two islands' edges may be and still be
-/// joined (m): as Detour joins tiles, within a climb. A navmesh's tiles on a
-/// slope (a flight) meet a few centimetres apart in height at their shared
-/// edge, and were never joined (the chasm region's stairs).
-pub(crate) const LINK_RISE: f32 = 0.5;
+/// joined (m), as Detour joins its tiles (`overlapSlabs`): at either end of
+/// where they overlap, within twice a climb (`LINK_CLIMB`), or crossing;
+/// then only where their floors are within a climb by their height meshes
+/// (see `link_edges_between_islands`). A navmesh's polygons' heights are rough (a tile's
+/// edge along its border was 0.9 m over the floor its neighbour's met, the
+/// other's corner simplified away), and a stricter rule cut flights and
+/// plates where tiles met.
+pub(crate) const LINK_RISE: f32 = 2.0 * LINK_CLIMB;
+
+/// (null) The climb two islands' floors may differ by where they are
+/// joined, by their height meshes (m): the game's navmeshes' climb.
+pub(crate) const LINK_CLIMB: f32 = 0.6;
 
 pub(crate) fn edge_intersection(
   edge_1: (Vec3, Vec3),
   edge_2: (Vec3, Vec3),
   intersection_distance_squared: f32,
 ) -> Option<(Vec3, Vec3)> {
+  // (null: each edge's ends found along the other across, not in height:
+  // edges `LINK_RISE` apart in height were found a few millimetres off
+  // their corners, and a way's straightening through two such went back
+  // and forth for ever.)
+  let along = |dir: Vec3, from: Vec3, to: Vec3| {
+    dir.xy().dot(to.xy() - from.xy()) / dir.xy().length_squared()
+  };
   let edge_1_dir = edge_1.1 - edge_1.0;
   let edge_2_on_edge_1_t_ = (
-    edge_1_dir.dot(edge_2.0 - edge_1.0) / edge_1_dir.length_squared(),
-    edge_1_dir.dot(edge_2.1 - edge_1.0) / edge_1_dir.length_squared(),
+    along(edge_1_dir, edge_1.0, edge_2.0),
+    along(edge_1_dir, edge_1.0, edge_2.1),
   );
   let edge_2_on_edge_1_t = (
     edge_2_on_edge_1_t_.0.clamp(0.0, 1.0),
@@ -26,8 +41,8 @@ pub(crate) fn edge_intersection(
 
   let edge_2_dir = edge_2.1 - edge_2.0;
   let edge_1_on_edge_2_t_ = (
-    edge_2_dir.dot(edge_1.0 - edge_2.0) / edge_2_dir.length_squared(),
-    edge_2_dir.dot(edge_1.1 - edge_2.0) / edge_2_dir.length_squared(),
+    along(edge_2_dir, edge_2.0, edge_1.0),
+    along(edge_2_dir, edge_2.0, edge_1.1),
   );
   let edge_1_on_edge_2_t = (
     edge_1_on_edge_2_t_.0.clamp(0.0, 1.0),
@@ -46,13 +61,20 @@ pub(crate) fn edge_intersection(
     edge_1_on_edge_2_t.1 * edge_2_dir + edge_2.0,
   );
 
-  // (null: apart across as given, but in height by up to `LINK_RISE`.)
-  let apart = |a: Vec3, b: Vec3| {
+  // (null: apart across as given; in height, as Detour, see `LINK_RISE`.)
+  let across = |a: Vec3, b: Vec3| {
     a.xy().distance_squared(b.xy()) > intersection_distance_squared
-      || (a.z - b.z).abs() > LINK_RISE
   };
-  if apart(edge_2_on_edge_1.1, edge_1_on_edge_2.0)
-    || apart(edge_2_on_edge_1.0, edge_1_on_edge_2.1)
+  let rise = (
+    edge_1_on_edge_2.0.z - edge_2_on_edge_1.1.z,
+    edge_1_on_edge_2.1.z - edge_2_on_edge_1.0.z,
+  );
+  let joined = rise.0 * rise.1 < 0.0
+    || rise.0.abs() <= LINK_RISE
+    || rise.1.abs() <= LINK_RISE;
+  if across(edge_2_on_edge_1.1, edge_1_on_edge_2.0)
+    || across(edge_2_on_edge_1.0, edge_1_on_edge_2.1)
+    || !joined
   {
     None
   } else {

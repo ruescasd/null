@@ -3,8 +3,10 @@
 //! comet). Dragged behind it, its tip on the ground (weak, struggling with
 //! it, the user's idea), heaved up to fire, its other hand under the barrel
 //! (on a monopod, it did not work, the user), with a part that spins up as
-//! it charges, and a glass that glints as it points
-//! at you, the warning. Heavy-duty and worn from use, never makeshift
+//! it charges, and a glass at the back of its bore. (The glass glowed as
+//! it pointed at you, drawn at least 5 px across, the warning at range; at
+//! the middle of its searchlight, it read as a flashlight, the user,
+//! 2026-11-06.) Heavy-duty and worn from use, never makeshift
 //! (as the shotgun: dark metal, grease where it turns, soot at the muzzle,
 //! engineered parts). Built once (`build`), in its own frame: the grip at
 //! the origin, +Y up, -Z towards the muzzle; placed each frame from the
@@ -18,11 +20,6 @@ use bevy::prelude::*;
 use super::hunter::Hunter;
 use crate::rig::{GUN_BORE, GUN_FORE};
 
-/// The glass's glow aimed straight at you (sharper as it is aimed straight
-/// at you, see `place`), and how many pixels across it is drawn at least
-/// (far off, a speck too small to see; the stalker's warning at range).
-const LENS_GLOW: f32 = 6000.0;
-const LENS_PX: f32 = 5.0;
 /// The spinning part's spin at full charge (radians a second), and how fast
 /// it gathers speed.
 const SPIN: f32 = 14.0;
@@ -46,11 +43,6 @@ pub(super) struct Lance {
     cage: Entity,
     turn: f32,
     spin: f32,
-    /// Its glass (flaring as it points at you): its finish, its entity, and
-    /// its place on the gun.
-    lens: Handle<StandardMaterial>,
-    glass: Entity,
-    glass_at: Transform,
 }
 
 /// The finishes and shapes it is made of.
@@ -194,7 +186,7 @@ fn tines(s: &Shop, body: &mut Parts, cage: &mut Parts) -> Transform {
 pub(super) fn spawn(commands: &mut Commands, materials: &mut Assets<StandardMaterial>, kit: &Kit, hunter: Entity, at: Vec3) {
     let gun = commands.spawn((Transform::from_translation(at), Visibility::default())).id();
     let lens = materials.add(StandardMaterial { base_color: Color::srgb(0.8, 0.8, 0.8), perceptual_roughness: 0.4, fog_enabled: false, ..default() });
-    let glass = commands.spawn((Mesh3d(kit.lens.0.clone()), MeshMaterial3d(lens.clone()), kit.lens.1, ChildOf(gun))).id();
+    commands.spawn((Mesh3d(kit.lens.0.clone()), MeshMaterial3d(lens), kit.lens.1, ChildOf(gun)));
     for (mesh, material, t) in &kit.body {
         commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), *t, ChildOf(gun)));
     }
@@ -202,7 +194,7 @@ pub(super) fn spawn(commands: &mut Commands, materials: &mut Assets<StandardMate
     for (mesh, material, t) in &kit.cage {
         commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), *t, ChildOf(cage)));
     }
-    commands.entity(gun).insert(Lance { hunter, cage, turn: 0.0, spin: 0.0, lens, glass, glass_at: kit.lens.1 });
+    commands.entity(gun).insert(Lance { hunter, cage, turn: 0.0, spin: 0.0 });
 }
 
 /// Each gun where its stalker holds it, its spinning part turning as it is
@@ -211,12 +203,9 @@ pub(super) fn spawn(commands: &mut Commands, materials: &mut Assets<StandardMate
 pub(super) fn place(
     mut commands: Commands,
     time: Res<Time>,
-    stutter: Res<crate::look::Stutter>,
     hunters: Query<&Hunter>,
     mut lances: Query<(Entity, &mut Lance, &mut Transform)>,
     mut parts: Query<&mut Transform, (Without<Lance>, Without<crate::camera::FlyCam>)>,
-    camera: Single<&Transform, (With<crate::camera::FlyCam>, Without<Lance>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dt = time.delta_secs().min(0.05);
     for (entity, mut lance, mut transform) in &mut lances {
@@ -233,18 +222,6 @@ pub(super) fn place(
         let want = SPIN * hold.aim.clamp(0.0, 1.0);
         lance.spin += (want - lance.spin) * (1.0 - (-dt * SPIN_RATE).exp());
         lance.turn = (lance.turn + lance.spin * dt) % std::f32::consts::TAU;
-        // Its glass flaring as it points at you.
-        let facing = frame.axis.dot((camera.translation - frame.grip).normalize_or(Vec3::Y)).max(0.0).powi(8);
-        if let Some(mut m) = materials.get_mut(&lance.lens) {
-            m.emissive = LinearRgba::rgb(1.0, 1.0, 1.0) * LENS_GLOW * facing * stutter.0;
-        }
-        // (Far off, drawn larger, at least `LENS_PX` across: a pixel is
-        // about a thousandth of the distance.)
-        let far = camera.translation.distance(frame.grip) * 0.00107 * LENS_PX * 0.5;
-        let grow = (far / lance.glass_at.scale.x.max(1e-4)).max(1.0);
-        if let Ok(mut glass) = parts.get_mut(lance.glass) {
-            glass.scale = lance.glass_at.scale * Vec3::new(grow, 1.0, grow);
-        }
         if let Ok(mut cage) = parts.get_mut(lance.cage) {
             cage.rotation = Quat::from_rotation_z(lance.turn);
         }
