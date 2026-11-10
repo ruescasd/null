@@ -95,21 +95,13 @@ impl Args {
         let floats = |s: Option<String>| -> Vec<f32> {
             s.unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect()
         };
+        let (mut tp, mut seed_given) = (None, false);
         while let Some(flag) = it.next() {
             match flag.as_str() {
                 "--cam" => args.cam = floats(it.next()).try_into().ok(),
-                // (A place kept by name, see `places.rs`; one not there
-                // stops the game, said why.)
-                "--tp" => {
-                    let name = it.next().unwrap_or_default();
-                    match places::find(&name) {
-                        Ok(at) => args.cam = Some(at),
-                        Err(e) => {
-                            eprintln!("--tp {name}: {e}");
-                            std::process::exit(2);
-                        }
-                    }
-                }
+                // (A place kept by name, see `places.rs`: once all is
+                // read, below.)
+                "--tp" => tp = Some(it.next().unwrap_or_default()),
                 "--time" => args.time = it.next().and_then(|s| s.parse().ok()),
                 "--shot" => args.shot = it.next(),
                 "--focus" => args.focus = it.next(),
@@ -133,8 +125,34 @@ impl Args {
                         _ => eprintln!("--set {first}: expected name=value (or name value) with a number, or on or off"),
                     }
                 }
-                "--seed" => args.seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(1),
+                "--seed" => {
+                    args.seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+                    seed_given = true;
+                }
                 other => eprintln!("ignoring unknown argument {other}"),
+            }
+        }
+        // (`--tp NAME`: there, its world's flags brought along; one not
+        // there, or a world the flags given say otherwise of, stops the
+        // game, said why.)
+        if let Some(name) = tp {
+            match places::find(&name) {
+                Ok(place) => {
+                    place.world.bring(&mut args, seed_given);
+                    args.cam = Some(place.at);
+                    if args.opt("arena") && !args.opt("chasm") {
+                        args.opts.push("chasm".into());
+                    }
+                    let here = places::World::of(&args);
+                    if here != place.world {
+                        eprintln!("--tp {name}: it is in the world of `{}`, these flags make `{}`", place.world.flags(), here.flags());
+                        std::process::exit(2);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("--tp {name}: {e}");
+                    std::process::exit(2);
+                }
             }
         }
         // (The arena is one of the chasm's built places: it brings it.)

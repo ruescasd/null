@@ -263,8 +263,11 @@ fn type_in(
     mut cursor: Single<&mut CursorOptions>,
     camera: Single<(&Transform, &FlyCam)>,
     world: Option<Res<crate::terrain::WorldGen>>,
+    lab: Option<Res<crate::groundlab::LabGround>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let camfloor = args.opt("camfloor");
+    let ground = |x: f32, z: f32| crate::places::ground(world.as_deref(), lab.as_deref(), camfloor, x, z);
     for key in keys.read() {
         // (Ctrl held, from its own presses and releases: the keys held are
         // cleared each frame while the console is down (see `swallow`), so
@@ -293,7 +296,7 @@ fn type_in(
         let length = console.line.chars().count();
         let at = console.at.min(length);
         match &key.logical_key {
-            Key::Enter => enter(&mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit),
+            Key::Enter => enter(&mut console, &mut args, &mut spawns, *camera, &ground, &mut exit),
             Key::Backspace if ctrl => {
                 let from = word(&console.line, at, -1);
                 console.cut(from, at);
@@ -328,7 +331,7 @@ fn type_in(
                     console.at = console.at.min(console.line.chars().count());
                     console.insert(&part.chars().filter(|c| !c.is_control()).collect::<String>());
                     if parts.peek().is_some() {
-                        enter(&mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit);
+                        enter(&mut console, &mut args, &mut spawns, *camera, &ground, &mut exit);
                     }
                 }
             }
@@ -361,7 +364,7 @@ fn type_in(
 
 /// The line run, as Enter: said back, kept in the history (and for the next
 /// run), done.
-fn enter(console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), world: Option<&crate::terrain::WorldGen>, exit: &mut MessageWriter<AppExit>) {
+fn enter(console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), ground: &dyn Fn(f32, f32) -> f32, exit: &mut MessageWriter<AppExit>) {
     let line = std::mem::take(&mut console.line);
     console.at = 0;
     console.lines.push(format!("> {line}"));
@@ -370,7 +373,7 @@ fn enter(console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&
         remember(&line);
     }
     console.back = 0;
-    execute(&line, console, args, spawns, camera, world, exit);
+    execute(&line, console, args, spawns, camera, ground, exit);
 }
 
 /// Tab: the word at the cursor completed, from what can be said there: a
@@ -423,7 +426,7 @@ fn complete(console: &mut Console, args: &Args) {
 /// A command run: typed (Enter), or given on the command line (`--do`, see
 /// `given`).
 #[allow(clippy::too_many_arguments)]
-fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), world: Option<&crate::terrain::WorldGen>, exit: &mut MessageWriter<AppExit>) {
+fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spawns, camera: (&Transform, &FlyCam), ground: &dyn Fn(f32, f32) -> f32, exit: &mut MessageWriter<AppExit>) {
     if line.split_whitespace().next().is_some_and(|w| SCENE.contains(&w)) {
         console.scene.push(line.trim().to_string());
     }
@@ -453,10 +456,13 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
                 Err(e) => console.lines.push(e),
             },
             Some(name) => match crate::places::find(name) {
-                Ok(at) => {
-                    spawns.goto = Some(at);
+                // (In this world: there. In another: said, and how to
+                // start there.)
+                Ok(place) if place.world == crate::places::World::of(args) => {
+                    spawns.goto = Some(place.at);
                     console.lines.push(format!("to {name}"));
                 }
+                Ok(place) => console.lines.push(format!("{name} is in another world: start with --tp {name} (it brings {})", if place.world.flags().is_empty() { "outdoors, seed 1".to_string() } else { place.world.flags() })),
                 Err(e) => console.lines.push(e),
             },
         }
@@ -469,8 +475,8 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
             Some(name) => {
                 let (t, fly) = camera;
                 let p = t.translation;
-                let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
-                let place = crate::places::Place { name: name.to_string(), at: [p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()], note: words[2..].join(" ") };
+                let above = p.y - ground(p.x, p.z);
+                let place = crate::places::Place { name: name.to_string(), at: [p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()], world: crate::places::World::of(args), note: words[2..].join(" ") };
                 match crate::places::save(&place) {
                     Ok(None) => console.lines.push(format!("{name} kept in {}", crate::places::file().display())),
                     Ok(Some(old)) => {
@@ -581,7 +587,7 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
         // in the log, where it can be copied, the user.)
         let (t, fly) = camera;
         let p = t.translation;
-        let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
+        let above = p.y - ground(p.x, p.z);
         let cam = format!("--cam {:.2},{:.2},{:.2},{:.2},{:.2}", p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees());
         info!("where: {cam}");
         console.copy = Some(cam.clone());
@@ -596,27 +602,30 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
 /// fight can be set up the same way again, from the command line); what
 /// they say also in the log.
 #[allow(clippy::too_many_arguments)]
-fn given(mut done: Local<bool>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, mut exit: MessageWriter<AppExit>) {
+fn given(mut done: Local<bool>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, lab: Option<Res<crate::groundlab::LabGround>>, mut exit: MessageWriter<AppExit>) {
     if *done {
         return;
     }
     *done = true;
+    let camfloor = args.opt("camfloor");
+    let ground = |x: f32, z: f32| crate::places::ground(world.as_deref(), lab.as_deref(), camfloor, x, z);
     for line in args.run.clone() {
         let before = console.lines.len();
         console.lines.push(format!("> {line}"));
-        execute(&line, &mut console, &mut args, &mut spawns, *camera, world.as_deref(), &mut exit);
+        execute(&line, &mut console, &mut args, &mut spawns, *camera, &ground, &mut exit);
         for said in &console.lines[before..] {
             info!("console: {said}");
         }
     }
 }
 
-/// `cam` at the console: the camera moved there (its height above the
-/// ground, as `--cam` and `where`), at the end of the frame.
-fn goto(mut spawns: ResMut<Spawns>, world: Option<Res<crate::terrain::WorldGen>>, camera: Single<(&mut Transform, &mut FlyCam)>) {
+/// `cam` or `tp` at the console: the camera moved there (its height above
+/// the ground, as `--cam` and `where`, see `places::ground`), at the end of
+/// the frame.
+fn goto(mut spawns: ResMut<Spawns>, args: Res<Args>, world: Option<Res<crate::terrain::WorldGen>>, lab: Option<Res<crate::groundlab::LabGround>>, camera: Single<(&mut Transform, &mut FlyCam)>) {
     let Some([x, above, z, yaw, pitch]) = spawns.goto.take() else { return };
     let (mut t, mut fly) = camera.into_inner();
-    t.translation = Vec3::new(x, above + world.map_or(0.0, |w| w.ground_height(x, z)), z);
+    t.translation = Vec3::new(x, above + crate::places::ground(world.as_deref(), lab.as_deref(), args.opt("camfloor"), x, z), z);
     fly.yaw = yaw.to_radians();
     fly.pitch = pitch.to_radians();
     t.rotation = fly.rotation();

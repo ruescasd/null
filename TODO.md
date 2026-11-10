@@ -127,6 +127,9 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   back 0.45 s, the tell, whip out to where you were, 8 m reach, 20 a hit,
   shoved; out of reach, missed). It lands 3.5-8 m from you. Standing still
   through one landing cost 71 of 100: tune by feel.
+  Its lash cables could borrow the buds' leeching cables' look
+  (`combat/leech.rs`), your note; now plain black tubes, hard to see at
+  night.
 - **Agreed** Stage 3, dense places (a 3D search), only if wanted.
 - Open: a choice costs 0.2-3 ms of sweeps (one a frame across all brutes).
 

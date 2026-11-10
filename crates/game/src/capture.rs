@@ -490,6 +490,7 @@ fn manual_shot(
     mut console: ResMut<crate::console::Console>,
     camera: Single<(&Transform, &crate::camera::FlyCam)>,
     world: Option<Res<crate::terrain::WorldGen>>,
+    lab: Option<Res<crate::groundlab::LabGround>>,
     mut ui: Query<(Entity, &mut Visibility), (With<Node>, Without<ChildOf>)>,
     mut hiding: ResMut<Hiding>,
     mut hidden: Local<(u32, Vec<(Entity, Visibility)>)>,
@@ -528,9 +529,9 @@ fn manual_shot(
     commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("screenshots/{stamp}.png")));
     let (t, fly) = *camera;
     let p = t.translation;
-    let above = p.y - world.map_or(0.0, |w| w.ground_height(p.x, p.z));
+    let above = p.y - crate::places::ground(world.as_deref(), lab.as_deref(), args.opt("camfloor"), p.x, p.z);
     let name = format!("shot_{stamp}");
-    let place = crate::places::Place { name: name.clone(), at: [p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()], note: String::new() };
+    let place = crate::places::Place { name: name.clone(), at: [p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees()], world: crate::places::World::of(&args), note: String::new() };
     // (A shot whose way back is lost is said, never passed over.)
     if let Err(e) = crate::places::save(&place) {
         error!("F12: the shot's place {name} not kept: {e}");
@@ -543,12 +544,16 @@ fn manual_shot(
 }
 
 /// The command line that starts at the place `name` as things were: the
-/// seed, the time of day, every switch and setting as they stand (the
+/// seed, the ground lab, the time of day, every switch and setting as they
+/// stand (the
 /// console's changes in them), the scene's commands (see `Console::scene`).
 fn relaunch(name: &str, args: &Args, time: f32, scene: &[String]) -> String {
     let mut words = vec![format!("--tp {name}")];
     if args.seed != 1 {
         words.push(format!("--seed {}", args.seed));
+    }
+    if let Some(g) = &args.ground {
+        words.push(format!("--ground {g}"));
     }
     words.push(format!("--time {time:.0}"));
     // (Not those that change nothing seen: `mute`, `console`.)
@@ -581,6 +586,9 @@ mod tests {
         let args = Args { opts: vec!["arena".into(), "mute".into(), "chasm".into(), "arena".into()], sets: vec![("ev".into(), 1.0), ("ev".into(), 2.5)], cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
         let line = relaunch("shot_1", &args, 420.4, &["spawn gladiator still".into()]);
         assert_eq!(line, "--tp shot_1 --time 420 --opt arena --opt chasm --set ev=2.5 --do \"spawn gladiator still\"");
+        // (A ground lab's, named: without it, the place was not there.)
+        let args = Args { ground: Some("void_inlay".into()), seed: 4, opts: Vec::new(), sets: Vec::new(), ..args };
+        assert_eq!(relaunch("shot_2", &args, 60.0, &[]), "--tp shot_2 --seed 4 --ground void_inlay --time 60");
     }
 }
 
