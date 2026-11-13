@@ -1,0 +1,52 @@
+# The harrow's body from a generated mesh, cut into rigid pieces on its bones
+# and moved by the harrow's own walk, the haul (`spawn harrow mesh=1`; see
+# combat/pieces.rs; the user, 2026-11-12). Its build is the harrow's fitted
+# to these joints: its neck, head and hind legs as long as the mesh's, its
+# torso longer (`spine`);
+# its forelegs the harrow's long ones (as much longer than its hind legs as
+# the harrow's), the mesh's stretched to them and thickened (`thicken`).
+# Measured 2026-11-12 from the vertices about each joint (the mesh is posed
+# mid-stride, so the legs differ side to side).
+
+model = Meshy_AI_Planar_Guillotine_Sha_1109182106_generate.glb
+# The half of it kept, mirrored onto the other, its legs too (posed
+# mid-stride, its legs were unlike side to side; the user, 2026-11-13).
+# -x kept, its folded foreleg stretched to a bar jutting ahead; +x reads as
+# one creature.
+mirror = +x
+# How tall it stands (m), its lowest point to its highest.
+height = 2.0
+# Stretched pieces thicken by their stretch to this power (0 not at all; 0.5
+# by its square root: stretched only, the forelegs were needles).
+thicken = 0.5
+# Its torso, rump to chest, this many times the mesh's; its pieces stretched
+# to it, not thickened (the user, 2026-11-13: its body a bit short).
+spine = 1.3
+# How level its body stands: 0 its rump low, as the harrow's; 1 its hips as
+# high as its chest (the user, 2026-11-13: slanting, its hind part looked an
+# afterthought).
+level = 1
+# Its surface within this (m) of a joint marked in the creatures' pale:
+# shoulders, elbows, hips, knees, its neck's foot and top (the user,
+# 2026-11-13: its composition made visible); 0 none.
+marks = 0.15
+# Areas of its surface marked in the same pale: each its corners (m; flat,
+# convex, in order round it), laid on the faces under it, seen square on,
+# both sides. Along its blade, tapering to its tip (the user, 2026-11-13,
+# drew where: their two lines ran along it 3.5 cm apart; laid as stripes too
+# literal, filled out to the faces' creases the whole of one side).
+highlight = 0.487 0.933 1.487   0.045 1.718 0.924   0.105 1.672 0.844
+
+# Joints (m, x y z): the model scaled to that height, its lowest point at
+# y 0, x and z as the model has them (z forward, its blade).
+rump = 0.000 1.360 -0.850      # its body's hind end, over its thighs
+hips = 0.000 1.360 -0.618      # between its hip joints
+chest = 0.000 1.236 0.309    # between its shoulders: its neck's foot
+head = 0.000 1.468 0.742      # its neck's top: its head (the blade) from here
+tip = 0.000 1.468 1.468       # the way its head points (level ahead; the blade hangs below)
+# Each leg, hip knee foot, in the rig's order: the forelegs (-x first),
+# then the hind legs (-x first).
+leg = -0.386 0.989 0.201   -0.541 0.603 0.634   -0.680 0.000 0.525
+leg = 0.278 1.082 0.417   0.394 0.696 0.556   0.371 0.000 1.036
+leg = -0.232 1.360 -0.587   -0.402 0.711 -0.958   -0.587 0.000 -1.453
+leg = 0.232 1.360 -0.649   0.411 0.726 -0.757   0.696 0.000 -0.556

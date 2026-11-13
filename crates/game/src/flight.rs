@@ -47,7 +47,9 @@ pub struct Craft {
 
 impl Craft {
     /// The impaled brute: 600 kg, half as much thrust again as its weight,
-    /// slow to spool and slow to tilt.
+    /// slow to spool and slow to tilt (the user, 2026-11-11: back to this
+    /// after trying it far more agile, twice its weight, spooling in
+    /// 0.12 s, 54° and 24 m/s: perhaps somewhere between).
     pub const BRUTE: Craft = Craft { mass: 600.0, lift: 1.45, spool: 0.35, drag: 0.15, drag2: 0.01, turn: 4.0, spin_drag: 1.0, tilt: 0.35, climb: 2.5 };
 
     /// Its full thrust (N), climbing at `up` (m/s).
@@ -170,7 +172,8 @@ pub struct Pilot {
 }
 
 impl Pilot {
-    /// The brute's: slow, deliberate.
+    /// The brute's: slow, deliberate (the user, 2026-11-11: back to this
+    /// after trying it far more agile, 12 m/s², 24 m/s).
     pub const BRUTE: Pilot = Pilot { speed: 7.0, brake: 0.5, lag: 0.8, reach: 0.45, grip: 1.2, accel: 3.0, attitude: 2.5 };
 
     /// What to ask of `craft` to take `f` towards `goal`.
@@ -188,10 +191,11 @@ impl Pilot {
             let v = ab * ((self.lag * self.lag + 2.0 * d.abs() / ab).sqrt() - self.lag);
             d.signum() * v.min(self.speed).min(self.reach * d.abs())
         };
+        // (The goal's own speed added, all of it within its most.)
         let eh = Vec3::new(e.x, 0.0, e.z);
-        let vh = eh.normalize_or_zero() * toward(eh.length(), self.accel).abs();
+        let vh = (eh.normalize_or_zero() * toward(eh.length(), self.accel).abs() + Vec3::new(goal.vel.x, 0.0, goal.vel.z)).clamp_length_max(self.speed);
         let vy = toward(e.y, if e.y < 0.0 { spare } else { G });
-        let v = vh + Vec3::Y * vy + goal.vel;
+        let v = vh + Vec3::Y * (vy + goal.vel.y);
         let mut a = (v - f.vel) * self.grip;
         let side = Vec3::new(a.x, 0.0, a.z).clamp_length_max(self.accel);
         a = side + Vec3::Y * a.y.clamp(-G * 0.8, spare);
@@ -206,14 +210,17 @@ impl Pilot {
         }
         // Only what its up gives now: tilted wrong, it does not push harder.
         let thrust = need.dot(f.up()).max(0.0);
-        // Its body turned to `dir`, facing the goal's way.
-        let want = upright(dir, goal.facing);
-        let mut q = want * f.rot.inverse();
-        if q.w < 0.0 {
-            q = -q;
-        }
+        // Its body turned to `dir`, facing the goal's way: its up tilted
+        // straight there, and turned about its up to face (apart: the
+        // shortest turn between two ways, tilted and facing round, swings
+        // it through steeper tilts than either; at a 54° limit, 72°).
+        let up = f.up();
+        let tilt = up.cross(dir).normalize_or_zero() * up.angle_between(dir);
+        let front = f.rot * Vec3::Z;
+        let face = goal.facing - up * goal.facing.dot(up);
+        let yaw = if face.length_squared() < 1e-8 { 0.0 } else { front.cross(face.normalize()).dot(up).atan2(front.dot(face.normalize())) };
         let wa = self.attitude;
-        let turn = q.to_scaled_axis() * (wa * wa) - f.spin * (2.0 * wa) + f.spin * craft.spin_drag;
+        let turn = (tilt + up * yaw) * (wa * wa) - f.spin * (2.0 * wa) + f.spin * craft.spin_drag;
         Order { thrust, turn }
     }
 }

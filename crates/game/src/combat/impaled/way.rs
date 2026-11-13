@@ -17,9 +17,11 @@ use worldgen::noise::hash01;
 use super::{HEIGHT, feet};
 use crate::ground::Ground;
 
-/// How far from you it lands (m), and the distance it likes best: well
-/// within its grasp's range, not so near it must come again.
-const NEAR: (f32, f32, f32) = (5.0, 14.0, 10.0);
+/// How far from you it lands (m), and the distance it likes best: its
+/// crash's blow, struck its slide's length short of it, to reach you (the
+/// user, 2026-11-11: its landing a crash near you, its cables its reach;
+/// it was 5 to 14, 10 best).
+const NEAR: (f32, f32, f32) = (2.0, 6.0, 2.5);
 /// Its feet: how far out the ground under them is felt (m), and how much
 /// it may rise or fall within that (m).
 const FOOT: f32 = 1.0;
@@ -185,6 +187,22 @@ fn route(ground: &Ground, from: Vec3, spot: Vec3, hover: f32) -> Option<Vec<Vec3
         }
     }
     None
+}
+
+/// Whether it can slide in to `spot` (on the ground), coming from `from`
+/// (its middle, aloft) straight: the ground under its line, from `back` m
+/// short of the spot to `past` m beyond it, within `flat` m of the spot's
+/// height, and nothing built across it below its shoulders.
+pub(super) fn slide(ground: &Ground, from: Vec3, spot: Vec3, back: f32, past: f32, flat: f32) -> bool {
+    let dir = Vec3::new(spot.x - from.x, 0.0, spot.z - from.z);
+    let len = dir.length().min(back);
+    let dir = dir.normalize_or(Vec3::X);
+    let (start, end) = (spot - dir * len, spot + dir * past);
+    let steps = (start.distance(end) / 1.0).ceil().max(1.0) as usize;
+    let even = (0..=steps).all(|k| ground.under(start.lerp(end, k as f32 / steps as f32) + Vec3::Y * 2.0).is_some_and(|g| (g - spot.y).abs() < flat));
+    // (A ball its body's middle high, clear of the ground under it.)
+    let lift = Vec3::Y * (feet() + 0.4);
+    even && ground.passes(start + lift, end + lift, feet() - 0.3)
 }
 
 /// Whether its body gets from `a` to `b`: nothing built in the way, and the

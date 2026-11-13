@@ -67,7 +67,7 @@ pub struct Spawns {
 
 /// The kinds `spawn` knows, besides the creatures of `creatures/` (each by
 /// its name, see `options_kind`).
-pub const KINDS: [&str; 11] = ["harrow", "angler", "biped", "sprawl", "stalker", "porter", "chained", "bud", "grove", "bishop", "impaled"];
+pub const KINDS: [&str; 12] = ["harrow", "angler", "biped", "sprawl", "stalker", "porter", "chained", "bud", "grove", "bishop", "impaled", "tumbler"];
 
 /// Every kind `spawn` knows: `KINDS` and the creatures of `creatures/`.
 fn kinds() -> Vec<String> {

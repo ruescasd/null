@@ -1,13 +1,17 @@
 //! The impaled brute (the user, 2026-11-09): too heavy to walk, held up by
 //! thrust from under its feet (`field.rs`). It flies on `flight.rs`, its
-//! weight in the physics. Flight is its only way to move, but it lands, and
-//! it attacks landed (the user, 2026-11-10; step 4): it chooses a spot near
-//! you, flies its way there (`way.rs`), hangs over it a moment and crashes
-//! down onto it (letting go of its thrust), the ground struck round it;
-//! stays, its arms' cables flung at you, homing, taking hold (`attack.rs`),
-//! rises and chooses again; it takes off sooner if you get away or out of
-//! sight. `keep=N`: it hovers after you N m off
-//! instead (step 2's way, to judge its field by).
+//! weight in the physics. Flight is its only way to move, but it lands
+//! (the user, 2026-11-10; step 4): it chooses a spot near you, flies its way
+//! there (`way.rs`) and crashes down onto it (letting go of its thrust),
+//! the ground struck round it; stays while you are within its grasp's range
+//! and in its sight; its arms' cables flung at you again and again, flying
+//! or landed, from far off, homing, taking hold, slowing and hurting you
+//! (`attack.rs`; the user, 2026-11-11; not reeling you in, 2026-11-12); you away or out of
+//! sight, it rises and comes after you: far off, it gives chase in the
+//! open, keeping pace with you as it can (slow, `flight.rs`; the user,
+//! 2026-11-11: tried far more agile, then back to its first slowness, to
+//! find a middle from), and chooses a spot once it can stop near you. `keep=N`: it
+//! hovers after you N m off instead (step 2's way, to judge its field by).
 //!
 //! Shot (the agreed plan, 2026-11-09: its thrust stutters, its death a heavy
 //! fall): each shard stuck in it a moment and pushing it a little (it is
@@ -29,7 +33,10 @@ use bevy::prelude::*;
 pub(super) mod arms;
 pub(super) mod attack;
 pub(super) mod field;
+pub(super) mod haze;
 pub(super) mod plume;
+pub(super) mod tube;
+mod skin;
 mod way;
 
 use crate::camera::FlyCam;
@@ -47,35 +54,56 @@ const MESH_FEET: f32 = 0.952;
 const ARRIVE: f32 = 12.0;
 const COURSE_AHEAD: f32 = 24.0;
 const HOVER: f32 = 1.5;
-/// Landing: how long it stays down (s; where its attack will be); how far
-/// from where it stands you may get, and how long out of its sight, before
-/// it takes off sooner (m, s); how far it rises before it chooses again
+/// Landing: how long it stays down at least (s); how far from where it
+/// stands you may get, and how long out of its sight, before it takes off
+/// after you (m, s); how far it rises before it chooses again
 /// (m); how close it passes a point on its way before making for the next
 /// (m); how long it may fly to a spot before choosing again (s); how long
 /// before it tries again when it found no spot (s); how long beaten down
 /// onto the ground before it stays there, landed (s).
 const DOWN: f32 = 1.5;
-const LEAVE: (f32, f32) = (24.0, 1.0);
-/// How often, as one of its grasps ends, it goes elsewhere though you are
-/// still within its range (not to be foreseen; the user, 2026-11-10: it
-/// flies to catch you up, not by the clock).
-const RELOCATE: f32 = 0.25;
+const LEAVE: (f32, f32) = (24.0, 3.0);
+/// Landed, how far from where it stands you may get before it takes off
+/// after you (m: its cables reach far, but slowly; flung standing at you
+/// far off, they only reach you standing too).
+const STAY: f32 = 21.0;
+/// Now and then it goes elsewhere though you are still within its range,
+/// not to be foreseen, but almost never (the user, 2026-11-11: in range it
+/// attacks relentlessly; it flies to catch you up): after this long down
+/// (s), at this chance each second.
+const RELOCATE: (f32, f32) = (15.0, 0.02);
+/// Its chase (the user, 2026-11-11): farther than this from you it gives
+/// chase, if the air between is open (m); it makes for a point this far
+/// short of you (m), keeping pace with you; it chooses a spot once within
+/// this of you (m) and able to land short of it, falling and sliding, by
+/// this or more (m); how often it looks whether the air is still open (s).
+const CHASE: (f32, f32, f32, f32, f32) = (26.0, 12.0, 22.0, 8.0, 0.25);
+/// Choosing a spot with you on the move: near where you will be this long
+/// on (s; its fall and slide take about so long).
+const LEAD: f32 = 1.5;
 const RISE: f32 = 3.0;
 const PASS: f32 = 2.0;
 const FLY_FOR: f32 = 25.0;
 const AGAIN: f32 = 1.0;
 const BEATEN: f32 = 0.6;
 /// Its landing, a crash (the user, 2026-11-10: violently, not settling
-/// gently): how high its feet are over the spot when it lets go (m), how
-/// hard it shoves itself down then (m/s), how fast it rights itself as it
-/// falls (1/s: it falls level), and the blow: how far off it shakes your
-/// view (m); its body squashed down onto its feet, as much as this for
-/// each m/s it hit at (of its height; at most `SQUASH.1`), squashing in
-/// `SQUASH.2` s and back in about `SQUASH.3` s. (A rock of spin on impact
-/// looked goofy, not reeling, the user: gone.)
-const DROP: f32 = 4.0;
-const SLAM: f32 = 5.0;
-/// How long it hangs over its spot before it lets go (s: the crash's tell).
+/// gently): from its hover, how hard it shoves itself down as it lets go
+/// (m/s), how fast it rights itself as it falls (1/s: it falls level), and
+/// the blow: how far off it shakes your view (m); its body squashed down
+/// onto its feet, as much as this for each m/s it hit at (of its height; at
+/// most `SQUASH.1`), squashing in `SQUASH.2` s and back in about
+/// `SQUASH.3` s. (A rock of spin on impact looked goofy, not reeling, the
+/// user: gone. It climbed to 4 m over its spot to let go: coming in low
+/// from a chase it stopped, climbed and dropped, the user, 2026-11-11.)
+const SLAM: f32 = 6.5;
+/// Coming in on the move it lets go short of its spot and slides in on its
+/// feet (the user, 2026-11-11: its forward momentum not lost all at
+/// once): how hard the ground stops it (m/s²; at 6 and 10 it slid too far for its blow to reach you), how far back from the spot
+/// the ground must be flat for it (m), and past it (m), how far from the
+/// spot's its height may be (m). Where it can't slide, it brakes to a hover
+/// over its spot and hangs there `HANG` s before letting go (the crash's
+/// tell).
+const SLIDE: (f32, f32, f32, f32) = (16.0, 14.0, 1.0, 0.4);
 const HANG: f32 = 0.5;
 const LEVEL: f32 = 14.0;
 const JOLT: f32 = 30.0;
@@ -134,13 +162,16 @@ pub(in crate::combat) struct Impaled {
     down: Option<Down>,
     /// Crashed down: how long ago (s), and how deep its squash.
     crashed: Option<(f32, f32)>,
-    /// Its grasp, landed, what holding you does (`latch=N`, see
-    /// `attack::held`), whether it means to go elsewhere, and its body's
-    /// pose in its grasp (see `attack::pose`).
+    /// Its grasp, what holding you does (`latch=N`, see `attack::held`),
+    /// and its body's pose in its grasp (see `attack::pose`).
     grasp: attack::Grasp,
-    relocate: bool,
     latch: u8,
     pose: Vec2,
+    /// Its body's skin (`body=N`, see `skin.rs`), and whether the shards
+    /// it is impaled with show (`shards=0`: hidden, to compare; the user,
+    /// 2026-11-12).
+    body: u8,
+    shards: bool,
 }
 
 /// What it is doing.
@@ -149,13 +180,16 @@ enum Mind {
     Choose { wait: f32 },
     /// On its way to land: its way, the point it makes for, how long it has
     /// flown, how long it has hung over its spot, how long it has been
-    /// beaten down onto the ground.
-    Fly { way: way::Way, leg: usize, flown: f32, hung: f32, grounded: f32 },
+    /// beaten down onto the ground, whether it can slide in (once looked).
+    Fly { way: way::Way, leg: usize, flown: f32, hung: f32, grounded: f32, slide: Option<bool> },
     /// Down on its feet at `spot`, how long, how long you have been out of
     /// its sight.
     Landed { spot: Vec3, time: f32, unseen: f32 },
     /// Rising off the ground to `to` (its middle's height) before choosing.
     Rise { from: Vec3, to: f32 },
+    /// After you, far off, through open air (looking again whether it is
+    /// open in `check` s).
+    Chase { check: f32 },
 }
 
 impl Mind {
@@ -174,6 +208,7 @@ impl Mind {
             Mind::Fly { .. } => "flying",
             Mind::Landed { .. } => "landed",
             Mind::Rise { .. } => "rising",
+            Mind::Chase { .. } => "chasing",
         }
     }
 }
@@ -273,7 +308,7 @@ impl Course {
 /// `spawn impaled [N] [course] [log]`: each where you look, ahead, on the
 /// ground's height plus its hover.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, args: Res<crate::Args>, kit: Res<field::Kit>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut plumes: ResMut<Assets<plume::Plume>>, ground: crate::ground::Ground, camera: Single<&Transform, With<FlyCam>>, mut spawns: ResMut<crate::console::Spawns>) {
+pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, args: Res<crate::Args>, kit: Res<field::Kit>, mut tubes: tube::Kit, mut materials: ResMut<Assets<StandardMaterial>>, mut plumes: ResMut<Assets<plume::Plume>>, mut hazes: ResMut<Assets<haze::Haze>>, ground: crate::ground::Ground, camera: Single<&Transform, With<FlyCam>>, mut spawns: ResMut<crate::console::Spawns>) {
     let camera = *camera;
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
@@ -298,12 +333,12 @@ pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, args: Res
             let flight = Flight::hovering(&craft, at, -forward);
             let (pos, rot) = flight.drawn();
             let brute = commands
-                .spawn((Impaled { flight, craft, pilot, hover, keep, course, mind: Mind::Choose { wait: 0.0 }, log: traits.has("log"), logged: 0.0, logged_inside: 0.0, health: traits.value("health", HEALTH), stutter: 0.0, shot: Vec3::ZERO, down: None, crashed: None, grasp: default(), relocate: false, latch: traits.value("latch", 1.0) as u8, pose: Vec2::ZERO }, Transform::from_translation(pos).with_rotation(rot), Visibility::Visible))
+                .spawn((Impaled { flight, craft, pilot, hover, keep, course, mind: Mind::Choose { wait: 0.0 }, log: traits.has("log"), logged: 0.0, logged_inside: 0.0, health: traits.value("health", HEALTH), stutter: 0.0, shot: Vec3::ZERO, down: None, crashed: None, grasp: attack::Grasp::new(if traits.value("cables", 1.0) as u8 == 1 { attack::Throw::SLOW } else { attack::Throw::HARPOON }), latch: traits.value("latch", 2.0) as u8, pose: Vec2::ZERO, body: if traits.has("bodies") { n as u8 % 5 + 1 } else { traits.value("body", 1.0) as u8 }, shards: traits.value("shards", 1.0) != 0.0 }, Transform::from_translation(pos).with_rotation(rot), Visibility::Visible))
                 .with_child((WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(format!("creatures://{FILE}")))), Transform::from_scale(Vec3::splat(scale()))))
                 .id();
             let shards = traits.value("plume", 2.0) as u8 == 2;
-            field::make(&mut commands, &kit, &mut meshes, &mut materials, &mut plumes, brute, shards, args.shot.is_none());
-            arms::make(&mut commands, &mut meshes, &mut materials, brute, scale());
+            field::make(&mut commands, &kit, &mut hazes, &mut plumes, brute, shards, args.shot.is_none());
+            arms::make(&mut commands, &mut tubes, &mut materials, brute, scale());
             info!("an impaled brute hovers at {at:.1}{}", if traits.has("course") { ", to fly its course" } else { "" });
         }
     }
@@ -329,6 +364,7 @@ pub(super) fn fly(
     let dt = time.delta_secs().min(0.1);
     let (camera, mut player) = camera.into_inner();
     let you = camera.translation;
+    let your_vel = Vec3::new(player.velocity.x, 0.0, player.velocity.z);
     let right = *camera.right();
     pushes.0.clear();
     // (Where each lands, so that the others land apart.)
@@ -384,7 +420,7 @@ pub(super) fn fly(
             }
             None => {
                 let others: Vec<Vec3> = taken.iter().filter(|(e, _)| *e != entity).map(|(_, s)| *s).collect();
-                think(b, &ground, you, &others, entity.index_u32(), dt, &mut chose)
+                think(b, &ground, you, your_vel, &others, entity.index_u32(), dt, &mut chose)
             }
         };
         // (Its thrust cut while it stutters, and landed; dead, for good.)
@@ -403,9 +439,14 @@ pub(super) fn fly(
         b.flight.advance(&b.craft, &b.pilot, &goal, dt);
         let floor = ground.at(b.flight.pos) + feet();
         b.flight.rest_on(floor);
-        // (Landed, its feet hold it where it stands.)
+        // (Landed, its feet hold it where it stands, or grind it to a stop
+        // sliding in, upright, turning as it will.)
         if landed && b.alive() && b.flight.pos.y <= floor + 0.05 {
-            b.flight.vel = Vec3::ZERO;
+            let flat = Vec3::new(b.flight.vel.x, 0.0, b.flight.vel.z);
+            b.flight.vel = flat.normalize_or_zero() * (flat.length() - SLIDE.0 * dt).max(0.0);
+            let facing = b.flight.rot * Vec3::Z;
+            b.flight.rot = b.flight.rot.slerp(crate::flight::upright(Vec3::Y, facing), 1.0 - (-LEVEL * dt).exp());
+            b.flight.spin = Vec3::Y * b.flight.spin.y;
         }
         // (Its crash: the blow heard, felt in your view near it, rocking it.)
         if dropping && b.alive() && b.flight.pos.y <= floor + 1e-3 && falling < -1.0 {
@@ -420,9 +461,10 @@ pub(super) fn fly(
                     info!("impaled: its crash struck you ({harm:.0})");
                 }
             }
-            b.flight.vel = Vec3::ZERO;
+            // (Its way forward kept: it slides.)
+            b.flight.vel.y = 0.0;
             if b.log {
-                info!("impaled: crashed down at {:.1} m/s, {:.1}° off upright, squashed {:.0}%", speed, b.flight.up().angle_between(Vec3::Y).to_degrees(), (SQUASH.0 * speed).min(SQUASH.1) * 100.0);
+                info!("impaled: crashed down at {:.1} m/s, sliding at {:.1} m/s, {:.1}° off upright, squashed {:.0}%, you {:.1} m off", speed, b.flight.vel.length(), b.flight.up().angle_between(Vec3::Y).to_degrees(), (SQUASH.0 * speed).min(SQUASH.1) * 100.0, at.xz().distance(you.xz()));
             }
         }
         // (Dead, it lands: hard, the harder the faster it fell; then it
@@ -440,10 +482,10 @@ pub(super) fn fly(
         let (pos, rot) = b.flight.drawn();
         t.translation = pos;
         t.rotation = rot;
-        // (Landed, its grasp at you; else put away.)
-        if b.alive() {
-            let seen = ground.clear(pos + Vec3::Y * (HEIGHT - feet() - 0.3), you);
-            if let Some(grip) = attack::grasp(b, you, seen, landed, dt) {
+        // (Its grasp at you; dead, its cables dropped.)
+        let seen = b.alive() && ground.clear(pos + Vec3::Y * (HEIGHT - feet() - 0.3), you);
+        let armed = b.alive() && b.course.is_none() && b.keep.is_none();
+        if let Some(grip) = attack::grasp(b, you, your_vel, seen, armed, &|p| ground.at(p), dt) {
                 player.health -= grip.harm;
                 attack::held(b.latch, &grip, you, &mut player.velocity);
                 director.hurt = director.hurt.max(0.35);
@@ -454,14 +496,7 @@ pub(super) fn fly(
                     }
                 }
             }
-            // (Now and then, a grasp over, elsewhere though you are in range.)
-            if b.grasp.ended && worldgen::noise::hash01(entity.index_u32() as i32, (time.elapsed_secs() * 10.0) as i32, 0, 0x7e1) < RELOCATE {
-                b.relocate = true;
-            }
-        } else if b.grasp.phase != attack::Phase::Rest {
-            attack::stow(b);
-        }
-        b.pose = if landed && b.alive() { attack::pose(&b.grasp) } else { Vec2::ZERO };
+        b.pose = attack::pose(&b.grasp);
         // (Its crash's squash: down onto its feet, wider for it, quickly;
         // back slowly.)
         t.scale = Vec3::ONE;
@@ -494,13 +529,15 @@ pub(super) fn fly(
                 let f = &b.flight;
                 let leg = b.course.as_ref().map_or_else(|| format!(", {}", b.mind.name()), |c| format!(" leg {}", c.leg % 4));
                 info!(
-                    "impaled: at {:.1}, {:.1} m/s, tilt {:.0}°, feet {:.1} m up, thrust {:.2} of its weight, health {:.0}{leg}",
+                    "impaled: at {:.1}, {:.1} m/s, tilt {:.0}°, feet {:.1} m up, thrust {:.2} of its weight, health {:.0}, {} cables out, {} dropped{leg}",
                     f.pos,
                     f.vel.length(),
                     f.up().angle_between(Vec3::Y).to_degrees(),
                     f.pos.y - feet() - ground.at(f.pos),
                     f.thrust / (b.craft.mass * crate::flight::G),
-                    b.health
+                    b.health,
+                    b.grasp.heads.len(),
+                    b.grasp.litter.len()
                 );
             }
         }
@@ -510,14 +547,23 @@ pub(super) fn fly(
 /// What a brute that lands makes for this frame, its mind moved on: choose
 /// a spot, fly its way there, land, stay, rise, again (choosing only if no
 /// other has this frame, `chose`).
-fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Vec3], seed: u32, dt: f32, chose: &mut bool) -> Goal {
+fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, your_vel: Vec3, taken: &[Vec3], seed: u32, dt: f32, chose: &mut bool) -> Goal {
     let here = b.flight.pos;
     let facing = |at: Vec3| Vec3::new(you.x - at.x, 0.0, you.z - at.z).normalize_or(Vec3::Z);
     let floor = ground.at(here);
     let hover = b.hover;
     let log = b.log;
     let mut slam = false;
-    let relocate = b.relocate;
+    // (Where it chases you to: short of you, at its hover over the ground.)
+    let chase_to = |here: Vec3| {
+        let back = Vec3::new(here.x - you.x, 0.0, here.z - you.z).normalize_or(Vec3::Z);
+        let at = Vec3::new(you.x, here.y, you.z) + back * CHASE.1;
+        at.with_y(ground.at(at).max(floor) + feet() + hover)
+    };
+    let far = Vec2::new(here.x - you.x, here.z - you.z).length();
+    let (v, vy) = (Vec2::new(b.flight.vel.x, b.flight.vel.z).length(), b.flight.vel.y);
+    // (How far it would go letting go now, falling and sliding.)
+    let comes = v * falls(here.y - feet() - floor, vy) + v * v / (2.0 * SLIDE.0);
     // (Still falling: not landed till the crash has happened.)
     let falling = b.flight.vel.y < -0.5;
     let next = match &mut b.mind {
@@ -525,17 +571,26 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
             *wait -= dt;
             if *wait > 0.0 || *chose {
                 None
+            } else if far > CHASE.0 && ground.passes(here, chase_to(here), way::BODY) {
+                Some(Mind::Chase { check: CHASE.4 })
             } else {
                 *chose = true;
                 let started = std::time::Instant::now();
-                let chosen = way::choose(ground, here, you, hover.max(DROP), taken, seed.wrapping_add((here.x * 7.0) as u32));
+                // (Near where you will be, you on the move, as it lands
+                // after you; else where you are.)
+                let seed = seed.wrapping_add((here.x * 7.0) as u32);
+                let ahead = you + your_vel * LEAD;
+                let chosen = match way::choose(ground, here, ahead, hover, taken, seed) {
+                    Err(_) if ahead != you => way::choose(ground, here, you, hover, taken, seed),
+                    chosen => chosen,
+                };
                 let took = started.elapsed().as_secs_f32() * 1000.0;
                 match chosen {
                     Ok(way) => {
                         if log {
                             info!("impaled: to land at {:.1}, by {} points ({took:.2} ms)", way.spot, way.points.len());
                         }
-                        Some(Mind::Fly { way, leg: 0, flown: 0.0, hung: 0.0, grounded: 0.0 })
+                        Some(Mind::Fly { way, leg: 0, flown: 0.0, hung: 0.0, grounded: 0.0, slide: None })
                     }
                     Err(refused) => {
                         if log {
@@ -546,19 +601,36 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
                 }
             }
         }
-        Mind::Fly { way, leg, flown, hung, grounded } => {
+        Mind::Fly { way, leg, flown, hung, grounded, slide } => {
             *flown += dt;
             let last = way.points.len() - 1;
             let to = way.points[*leg];
             let speed = b.flight.vel.length();
-            // (Through its way's points, slowing only over the spot; there,
-            // it lets go and crashes down onto it.)
-            if *leg + 1 == last && here.distance(to) < 1.0 && speed < 1.5 {
-                *hung += dt;
+            let spot = way.spot;
+            let d = Vec2::new(spot.x - here.x, spot.z - here.z).length();
+            // (On its last leg: can it slide in? Looked at once.)
+            if *leg + 1 == last && slide.is_none() {
+                *slide = Some(way::slide(ground, here, spot, SLIDE.1, SLIDE.2, SLIDE.3));
+                if log {
+                    info!("impaled: {}", if *slide == Some(true) { "slides in" } else { "can't slide in: hangs over its spot" });
+                }
             }
-            if *leg + 1 < last && here.distance(to) < PASS || *leg + 1 == last && *hung > HANG {
-                *leg += 1;
-                slam |= *leg == last;
+            // (Through its way's points; sliding in, it lets go as far short
+            // of its spot as it will go; else slowing over the spot, it
+            // hangs there, lets go and crashes down onto it.)
+            if *leg + 1 == last && *slide == Some(true) {
+                if d <= SLIDE.1 && (comes >= d || d < 0.5) {
+                    *leg = last;
+                    slam = true;
+                }
+            } else {
+                if *leg + 1 == last && here.distance(to) < 1.0 && speed < 1.5 {
+                    *hung += dt;
+                }
+                if *leg + 1 < last && here.distance(to) < PASS || *leg + 1 == last && *hung > HANG {
+                    *leg += 1;
+                    slam |= *leg == last;
+                }
             }
             // (Beaten down onto the ground on its way: it stays there.)
             *grounded = if here.y - feet() - floor < 0.15 { *grounded + dt } else { 0.0 };
@@ -573,15 +645,37 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
             }
         }
         Mind::Landed { spot, time, unseen } => {
+            // (Where it stands: where it slid to.)
+            *spot = here.with_y(floor);
+            let second = *time as i32;
             *time += dt;
             *unseen = if ground.clear(*spot + Vec3::Y * (HEIGHT - 0.3), you) { 0.0 } else { *unseen + dt };
             // (Up to catch you again: you out of its grasp's range or its
-            // sight; or now and then, to go elsewhere. Its cables coming
-            // back hold it up none.)
-            let away = spot.xz().distance(you.xz()) > attack::RANGE * 0.85;
-            (*time > DOWN && (away || *unseen > LEAVE.1 || relocate)).then(|| Mind::Rise { from: *spot, to: here.y + RISE })
+            // sight; or, almost never, to go elsewhere, drawn once a second,
+            // differently each time it lands.)
+            let away = spot.xz().distance(you.xz()) > STAY;
+            let lost = *unseen > LEAVE.1;
+            let restless = *time > RELOCATE.0 && *time as i32 != second && worldgen::noise::hash01(seed as i32, *time as i32, (spot.x * 7.0) as i32 ^ (spot.z * 13.0) as i32, 0x7e1) < RELOCATE.1;
+            let rise = *time > DOWN && (away || lost || restless);
+            if rise && log {
+                let why = if away { "you got away" } else if lost { "it lost sight of you" } else { "to go elsewhere" };
+                info!("impaled: takes off: {why}");
+            }
+            rise.then(|| Mind::Rise { from: *spot, to: here.y + RISE })
         }
         Mind::Rise { to, .. } => (here.y > *to - 0.5).then_some(Mind::Choose { wait: 0.0 }),
+        Mind::Chase { check } => {
+            *check -= dt;
+            // (Near enough, and able to stop: a spot. The air shut: a way.)
+            if far < CHASE.2 && comes < far - CHASE.3 {
+                Some(Mind::Choose { wait: 0.0 })
+            } else if *check <= 0.0 {
+                *check = CHASE.4;
+                (!ground.passes(here, chase_to(here), way::BODY)).then_some(Mind::Choose { wait: 0.0 })
+            } else {
+                None
+            }
+        }
     };
     if slam {
         b.flight.vel.y -= SLAM;
@@ -590,23 +684,38 @@ fn think(b: &mut Impaled, ground: &crate::ground::Ground, you: Vec3, taken: &[Ve
         if log {
             info!("impaled: {} at {:.1}", mind.name(), here);
         }
-        if matches!(mind, Mind::Rise { .. }) {
-            b.relocate = false;
-        }
         b.mind = mind;
     }
     match &b.mind {
         Mind::Choose { .. } => Goal { at: here, vel: Vec3::ZERO, facing: facing(here) },
-        Mind::Fly { way, leg, .. } => {
+        Mind::Fly { way, leg, slide, .. } => {
             let to = way.points[*leg];
             // (Facing where it flies on a long way, you near the end.)
             let ahead = Vec3::new(to.x - here.x, 0.0, to.z - here.z);
             let face = if ahead.length() > 6.0 { ahead.normalize() } else { facing(here) };
-            Goal { at: to, vel: Vec3::ZERO, facing: face }
+            if *leg + 2 == way.points.len() && *slide == Some(true) {
+                // (Sliding in: at the speed whose fall and slide end on its
+                // spot, not braking for it.)
+                let d = ahead.length();
+                let t = falls(here.y - feet() - floor, b.flight.vel.y);
+                let want = SLIDE.0 * ((t * t + 2.0 * d / SLIDE.0).sqrt() - t);
+                Goal { at: Vec3::new(here.x, to.y, here.z), vel: ahead.normalize_or_zero() * want, facing: face }
+            } else {
+                Goal { at: to, vel: Vec3::ZERO, facing: face }
+            }
         }
         Mind::Landed { spot, .. } => Goal { at: spot.with_y(spot.y + feet()), vel: Vec3::ZERO, facing: facing(here) },
         Mind::Rise { from, to } => Goal { at: from.with_y(*to), vel: Vec3::ZERO, facing: facing(here) },
+        // (Keeping pace with you, closing as it can.)
+        Mind::Chase { .. } => Goal { at: chase_to(here), vel: your_vel, facing: facing(here) },
     }
+}
+
+/// How long it falls letting go `h` m over the ground (s), going up at `vy`
+/// (m/s), shoved down by `SLAM`.
+fn falls(h: f32, vy: f32) -> f32 {
+    let down = SLAM - vy;
+    ((down * down + 2.0 * crate::flight::G * h.max(0.0)).sqrt() - down) / crate::flight::G
 }
 
 /// A blow from a brute: you hurt, shoved, the view jolted from its side,

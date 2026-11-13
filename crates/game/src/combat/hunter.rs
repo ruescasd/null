@@ -495,10 +495,10 @@ pub(super) fn spawn(
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
     for (kind, count, traits, places) in std::mem::take(&mut spawns.creatures) {
-        // (Bishops are the bishops' to make, brutes the brutes': see
-        // `bishop::arrive`, `impaled::arrive`; left for them, whichever
+        // (Bishops are the bishops' to make, brutes the brutes', tumblers the
+        // tumblers': see `bishop::arrive`, `impaled::arrive`, `tumbler::arrive`; left for them, whichever
         // frame the console asked in.)
-        if kind == "bishop" || kind == "impaled" {
+        if kind == "bishop" || kind == "impaled" || kind == "tumbler" {
             spawns.creatures.push((kind, count, traits, places));
             continue;
         }
@@ -1004,13 +1004,25 @@ fn spawn_hunter(
         Some("sprawl") => Plan::sprawl(),
         // (Its body cut from a generated mesh, its build fitted to it: see
         // `pieces.rs`.)
-        Some("stalker") if traits.value("mesh", 2.0) == 1.0 => super::pieces::joints().plan(),
+        Some("stalker") if traits.value("mesh", 2.0) == 1.0 => super::pieces::joints(super::pieces::Kind::Stalker).plan(),
         Some("stalker") if traits.value("mesh", 2.0) == 2.0 => {
-            super::pieces::joints();
+            super::pieces::joints(super::pieces::Kind::Stalker);
             Plan::stalker()
         }
         Some("stalker") => Plan::stalker(),
         Some("porter") => Plan::porter(),
+        // (The harrow's from a generated mesh, the haul on it, its forelegs
+        // the harrow's long ones: the user, 2026-11-12.)
+        // Its forelegs in turn or (`fore=0`) together as the harrow's; its
+        // motion varied (`vary_time`, `vary_length`): the user, 2026-11-13.
+        Some("harrow") if traits.value("mesh", 0.0) == 1.0 => {
+            let mut plan = super::pieces::joints(super::pieces::Kind::Harrow).plan();
+            if traits.value("fore", 1.0) == 0.0 {
+                plan.gaits = plan.gaits.iter().zip(&Plan::beast().gaits).map(|(g, b)| crate::rig::Gait { offsets: b.offsets.clone(), ..g.clone() }).collect();
+            }
+            plan.wander = (traits.value("vary_time", 0.6), traits.value("vary_length", 0.6));
+            plan
+        }
         _ => plan,
     };
     // Bones: three of torso, the neck, the head, then two per leg and per
@@ -1072,7 +1084,12 @@ fn spawn_hunter(
             stalker_head(commands, heads, hunter, &bones);
         }
         super::halo::spawn(commands, materials, &heads.halo, hunter, bones[4].a, || Part { hunter, bone: 4, along: 0.0, offset: Vec3::ZERO, rotation: Quat::IDENTITY, velocity: Vec3::ZERO, stiffness: RIGID });
-        commands.entity(hunter).insert(super::pieces::Wants { head: !cage, own: traits.value("mesh", 2.0) == 2.0 });
+        commands.entity(hunter).insert(super::pieces::Wants { kind: super::pieces::Kind::Stalker, head: !cage, own: traits.value("mesh", 2.0) == 2.0, look: None, marks: None });
+        return hunter;
+    }
+    // (The harrow's body cut from a generated mesh, once it is in.)
+    if want == Some("harrow") && traits.value("mesh", 0.0) == 1.0 {
+        commands.entity(hunter).insert(super::pieces::Wants { kind: super::pieces::Kind::Harrow, head: true, own: false, look: Some(assets.dark.clone()), marks: Some(assets.pale.clone()) });
         return hunter;
     }
 

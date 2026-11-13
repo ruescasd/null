@@ -19,6 +19,12 @@
 //! they taught: thrust for something this heavy must be thick (thin lines
 //! read as no force at all), simple, moving, and stand out from its black
 //! body.
+//!
+//! Nothing of it is made or changed again each frame (the user,
+//! 2026-11-12: a brute cost a fifth of the frame, most of it the renderer
+//! taking in meshes and materials changed each frame): its beams and air are
+//! meshes made once, placed by their transforms, what changes in them
+//! carried in their `MeshTag`s to their shaders (`plume.wgsl`, `haze.wgsl`).
 
 use bevy::audio::{PlaybackMode, SpatialAudioSink, Volume};
 use bevy::math::primitives::Annulus;
@@ -47,6 +53,9 @@ const FLARE: (f32, f32) = (0.6, 2.8);
 const FLOW_SPEED: (f32, f32) = (6.0, 6.0);
 const WHITE: f32 = 1.0;
 const BEAM_PIECES: usize = 64;
+/// Where how far its streaks have run wraps (m: its tag holds 20 bits of
+/// millimetres).
+const RAN_WRAP: f32 = 1048.575;
 /// How far below its soles its beams start (m); how far down
 /// they grow from narrow to their full width (m); how wide the bent air
 /// round them, from the sole to the ground, across at its foot (m; the
@@ -58,28 +67,21 @@ const AIR_GAP: f32 = 0.35;
 const BEAM_GROW: f32 = 0.3;
 const AIR_WIDE: f32 = 1.8;
 
-/// Something of a brute's field: whose, and what.
+/// Something of a brute's field: whose, what, and how far what runs down
+/// it has run (a beam's streaks, m; its air's lumps, of their tile).
 #[derive(Component)]
 pub(in crate::combat) struct Part {
     pub brute: Entity,
     kind: Kind,
+    ran: f32,
 }
 
+/// A beam or its air, under which sole; its hum.
 #[derive(Clone, Copy)]
 pub(in crate::combat) enum Kind {
-    Beams,
+    Beam(usize),
     Air(usize),
     Hum,
-}
-
-/// The beams, as they are: their mesh (made again each frame) and their
-/// look.
-#[derive(Component)]
-pub(in crate::combat) struct Beams {
-    /// Drawn in shards (else in curves).
-    shards: bool,
-    mesh: Handle<Mesh>,
-    plume: Handle<super::plume::Plume>,
 }
 
 /// The meshes, noise and sounds its field and its crash share, made once.
@@ -88,6 +90,8 @@ pub(in crate::combat) struct Kit {
     /// The bent air's cone, without its ends (seen from inside, a
     /// frustum's ends cut a band across the beams).
     open: Handle<Mesh>,
+    /// A beam, one metre down its local -y, to be shaped in `plume.wgsl`.
+    beam: Handle<Mesh>,
     /// A ring one metre across, lying flat (its crash's, `attack.rs`).
     pub(in crate::combat) ring: Handle<Mesh>,
     shimmer: Handle<Image>,
@@ -100,21 +104,12 @@ pub(in crate::combat) fn setup(mut commands: Commands, server: Res<AssetServer>,
     let ring = Mesh::from(Annulus::new(0.42, 0.5)).rotated_by(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
     commands.insert_resource(Kit {
         open: meshes.add(open_cone(0.55, 1.1)),
+        beam: meshes.add(beam()),
         ring: meshes.add(ring),
         shimmer: images.add(shimmer()),
         hum: server.load("embedded://game/sounds/impaled_hum.wav"),
         thud: server.load("embedded://game/sounds/stalker_impact.wav"),
     });
-}
-
-/// A mesh to be made again each frame, as it starts: one triangle, all at
-/// one point (a mesh with nothing in it troubled the renderer's allocator,
-/// "use-after-free"). With the attributes the beams and cables write.
-pub(in crate::combat) fn placeholder() -> Mesh {
-    Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3])
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; 3])
-        .with_inserted_indices(bevy::mesh::Indices::U32(vec![0, 1, 2]))
 }
 
 /// A cone's side one metre high, `top` and `bottom` its radii, its middle
@@ -144,6 +139,29 @@ fn open_cone(top: f32, bottom: f32) -> Mesh {
         .with_inserted_indices(bevy::mesh::Indices::U32(idx))
         .with_generated_tangents()
         .expect("a cone has uvs and normals")
+}
+
+/// A beam's centreline, (0, -t, 0) for t from its source (0) to the ground
+/// (1), in `BEAM_PIECES` pieces, each across both its sides (uv: side, t).
+fn beam() -> Mesh {
+    let (mut pos, mut normal, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for j in 0..=BEAM_PIECES {
+        let t = j as f32 / BEAM_PIECES as f32;
+        let i = pos.len() as u32;
+        for side in [-1.0, 1.0] {
+            pos.push([0.0, -t, 0.0]);
+            normal.push([0.0, -1.0, 0.0]);
+            uv.push([side, t]);
+        }
+        if j < BEAM_PIECES {
+            idx.extend([i, i + 1, i + 3, i, i + 3, i + 2]);
+        }
+    }
+    Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normal)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+        .with_inserted_indices(bevy::mesh::Indices::U32(idx))
 }
 
 /// A tiling normal map of soft lumps, to bend what is seen through the air.
@@ -181,40 +199,25 @@ fn shimmer() -> Image {
 /// round them, and the hum. (Not parented: they keep to the ground, and the
 /// brute's tilt must not tilt them.)
 #[allow(clippy::too_many_arguments)]
-pub(in crate::combat) fn make(commands: &mut Commands, kit: &Kit, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, plumes: &mut Assets<super::plume::Plume>, brute: Entity, shards: bool, sound: bool) {
-    let mesh = meshes.add(placeholder());
-    let plume = plumes.add(super::plume::Plume::new(if shards { super::plume::Look::Shards } else { super::plume::Look::Curves }, FLARE.0));
-    commands.spawn((
-        Part { brute, kind: Kind::Beams },
-        Beams { shards, mesh: mesh.clone(), plume: plume.clone() },
-        Mesh3d(mesh),
-        MeshMaterial3d(plume),
-        bevy::light::NotShadowCaster,
-        bevy::light::NotShadowReceiver,
-        bevy::camera::visibility::NoFrustumCulling,
-        Transform::default(),
-        Visibility::Inherited,
-    ));
-    // (Bent air: see-through, its shimmer bending what is behind it; only
-    // its far side: its near side, written into depth, hid the beam's start
-    // inside it.)
-    let air = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        specular_transmission: 1.0,
-        thickness: 0.8,
-        ior: 1.08,
-        perceptual_roughness: 0.12,
-        reflectance: 0.0,
-        normal_map_texture: Some(kit.shimmer.clone()),
-        double_sided: true,
-        cull_mode: Some(bevy::render::render_resource::Face::Front),
-        ..default()
-    });
+pub(in crate::combat) fn make(commands: &mut Commands, kit: &Kit, hazes: &mut Assets<super::haze::Haze>, plumes: &mut Assets<super::plume::Plume>, brute: Entity, shards: bool, sound: bool) {
+    let plume = plumes.add(super::plume::Plume::new(if shards { super::plume::Look::Shards } else { super::plume::Look::Curves }, WHITE, BEAM_WIDE, FLARE, BEAM_GROW));
+    let air = hazes.add(super::haze::Haze { lumps: kit.shimmer.clone() });
     for k in 0..SOLES.len() {
-        commands.spawn((Part { brute, kind: Kind::Air(k) }, Mesh3d(kit.open.clone()), MeshMaterial3d(air.clone()), bevy::light::NotShadowCaster, Transform::default(), Visibility::Hidden));
+        commands.spawn((
+            Part { brute, kind: Kind::Beam(k), ran: k as f32 * 3.7 },
+            Mesh3d(kit.beam.clone()),
+            MeshMaterial3d(plume.clone()),
+            bevy::mesh::MeshTag(0),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
+            bevy::camera::visibility::NoFrustumCulling,
+            Transform::default(),
+            Visibility::Hidden,
+        ));
+        commands.spawn((Part { brute, kind: Kind::Air(k), ran: 0.0 }, Mesh3d(kit.open.clone()), MeshMaterial3d(air.clone()), bevy::mesh::MeshTag(0), bevy::light::NotShadowCaster, Transform::default(), Visibility::Hidden));
     }
     if sound {
-        commands.spawn((Part { brute, kind: Kind::Hum }, AudioPlayer::new(kit.hum.clone()), PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(0.0), spatial: true, ..default() }, Transform::default()));
+        commands.spawn((Part { brute, kind: Kind::Hum, ran: 0.0 }, AudioPlayer::new(kit.hum.clone()), PlaybackSettings { mode: PlaybackMode::Loop, volume: Volume::Linear(0.0), spatial: true, ..default() }, Transform::default()));
     }
 }
 
@@ -237,11 +240,10 @@ pub(in crate::combat) fn show(
     time: Res<Time>,
     global: Res<bevy::audio::GlobalVolume>,
     pushes: Res<Pushes>,
-    mut parts: Query<(Entity, &Part, &mut Transform, &mut Visibility, Option<&MeshMaterial3d<StandardMaterial>>, Option<&mut SpatialAudioSink>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut parts: Query<(Entity, &mut Part, &mut Transform, &mut Visibility, Option<&mut bevy::mesh::MeshTag>, Option<&mut SpatialAudioSink>)>,
 ) {
-    let now = time.elapsed_secs();
-    for (entity, part, mut t, mut visible, material, sink) in &mut parts {
+    let dt = time.delta_secs();
+    for (entity, mut part, mut t, mut visible, tag, sink) in &mut parts {
         let Some(&(ref push, ground)) = pushes.0.get(&part.brute) else {
             commands.entity(entity).despawn();
             continue;
@@ -260,12 +262,13 @@ pub(in crate::combat) fn show(
                 let long = fall / (-down.y).max(0.3);
                 *t = Transform { translation: from + down * (long * 0.5), rotation: push.rot, scale: Vec3::new(wide, long, wide) };
                 *visible = if on > 0.02 { Visibility::Inherited } else { Visibility::Hidden };
-                if let Some(mut m) = material.and_then(|m| materials.get_mut(&m.0)) {
-                    m.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(now * 0.05, now * (0.5 + 0.6 * s)));
-                    m.thickness = 0.4 + 0.8 * s;
+                // (Its lumps running down, faster as it strains.)
+                part.ran = (part.ran + dt * (0.5 + 0.6 * s)).rem_euclid(1.0);
+                if let Some(mut tag) = tag {
+                    tag.0 = super::haze::tag(part.ran, s);
                 }
             }
-            Kind::Beams => {}
+            Kind::Beam(_) => {}
             Kind::Hum => {
                 t.translation = push.feet;
                 if let Some(mut sink) = sink {
@@ -286,18 +289,13 @@ pub(in crate::combat) struct Pushes(pub bevy::platform::collections::HashMap<Ent
 /// thrust pushes; tilted as it tilts) to the ground, flaring where they hit
 /// it; thicker and more as it strains, thinning and fading as its thrust
 /// fails, never quite steady; streaks running down them, faster as it
-/// strains. Each a centreline in pieces, made a ribbon facing the eye in
-/// `plume.wgsl`.
-pub(in crate::combat) fn beams(
-    time: Res<Time>,
-    pushes: Res<Pushes>,
-    ground: crate::ground::Ground,
-    parts: Query<(&Part, &Beams)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut plumes: ResMut<Assets<super::plume::Plume>>,
-) {
-    let now = time.elapsed_secs();
-    for (part, b) in &parts {
+/// strains. Each placed by its transform (its source, along its down, as
+/// long as the way to the ground), what changes in it in its tag, shaped and
+/// made a ribbon facing the eye in `plume.wgsl`.
+pub(in crate::combat) fn beams(time: Res<Time>, pushes: Res<Pushes>, ground: crate::ground::Ground, mut parts: Query<(&mut Part, &mut Transform, &mut bevy::mesh::MeshTag, &mut Visibility)>) {
+    let dt = time.delta_secs();
+    for (mut part, mut t, mut tag, mut visible) in &mut parts {
+        let Kind::Beam(k) = part.kind else { continue };
         let Some((push, _)) = pushes.0.get(&part.brute) else { continue };
         let s = push.strain.clamp(0.0, 1.6);
         // (How much there is: none below a third of its weight, all of it at
@@ -305,58 +303,17 @@ pub(in crate::combat) fn beams(
         let on = ((s - 0.35) / 0.6).clamp(0.0, 1.0);
         let hard = ((s - 1.0).max(0.0) / 0.45).min(1.0);
         let down = push.rot * Vec3::NEG_Y;
-        let (mut pos, mut along, mut uv, mut flow, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        for (k, sole) in SOLES.iter().enumerate() {
-            let from = push.at + push.rot * *sole + down * AIR_GAP;
-            // (To the ground along its down: as far as that falls, the
-            // ground under its foot found again where it lands.)
-            let fall = (from.y - ground.at(from)).max(0.05);
-            let length = fall / (-down.y).max(0.3);
-            let flicker = 1.0 + 0.08 * (now * 31.0 + k as f32 * 2.1).sin() * (now * 13.0 + k as f32).sin();
-            let wide = (0.35 + 0.65 * on) * (1.0 + 0.3 * hard) * flicker;
-            // (How far the streaks have run: faster as it strains.)
-            let ran = now * (FLOW_SPEED.0 + FLOW_SPEED.1 * (s - 1.0).max(0.0)) + k as f32 * 3.7;
-            let width = |t: f32| {
-                let flare = ((t - FLARE.0) / (1.0 - FLARE.0)).clamp(0.0, 1.0);
-                // (Born narrow where it starts below its soles.)
-                let born = 1.0 - (1.0 - (length * t / BEAM_GROW).min(1.0)).powi(2);
-                (BEAM_WIDE.0 + (BEAM_WIDE.1 - BEAM_WIDE.0) * t.sqrt()) * wide * (1.0 + (FLARE.1 - 1.0) * flare * flare) * (0.45 + 0.55 * born)
-            };
-            // (Its outline, in shards, in straight runs between a few kinks:
-            // its birth, the middle, where it flares, near the ground, the
-            // ground.)
-            let mut kinks = [0.0, (BEAM_GROW / length).min(0.5), 0.35, FLARE.0, 0.82, 1.0];
-            kinks.sort_by(f32::total_cmp);
-            for j in 0..=BEAM_PIECES {
-                let t = j as f32 / BEAM_PIECES as f32;
-                let w = if b.shards {
-                    let k = kinks.windows(2).find(|k| t <= k[1]).unwrap_or(&kinks[4..]);
-                    let f = if k[1] > k[0] { (t - k[0]) / (k[1] - k[0]) } else { 1.0 };
-                    width(k[0]) + (width(k[1]) - width(k[0])) * f
-                } else {
-                    width(t)
-                };
-                let i = pos.len() as u32;
-                for side in [-1.0, 1.0] {
-                    pos.push((from + down * (length * t)).to_array());
-                    along.push(down.to_array());
-                    uv.push([side, w]);
-                    flow.push([length * t - ran, t]);
-                }
-                if j < BEAM_PIECES {
-                    idx.extend([i, i + 1, i + 3, i, i + 3, i + 2]);
-                }
-            }
-        }
-        if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, along);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, flow);
-            mesh.insert_indices(bevy::mesh::Indices::U32(idx));
-        }
-        if let Some(mut plume) = plumes.get_mut(&b.plume) {
-            plume.set(on, WHITE * on);
-        }
+        let from = push.at + push.rot * SOLES[k] + down * AIR_GAP;
+        // (To the ground along its down: as far as that falls, the ground
+        // under its foot found again where it lands.)
+        let fall = (from.y - ground.at(from)).max(0.05);
+        let length = fall / (-down.y).max(0.3);
+        *t = Transform { translation: from, rotation: Quat::from_rotation_arc(Vec3::NEG_Y, down), scale: Vec3::new(1.0, length, 1.0) };
+        *visible = if on > 0.01 { Visibility::Inherited } else { Visibility::Hidden };
+        // (How far its streaks have run: faster as it strains; wrapping where
+        // its tag does.)
+        part.ran = (part.ran + dt * (FLOW_SPEED.0 + FLOW_SPEED.1 * (s - 1.0).max(0.0))).rem_euclid(RAN_WRAP);
+        let ran = (part.ran * 1000.0) as u32 & 0xfffff;
+        tag.0 = ran | (((on * 63.0).round() as u32) << 20) | (((hard * 31.0).round() as u32) << 26) | ((k as u32 & 1) << 31);
     }
 }

@@ -154,6 +154,12 @@ pub struct Plan {
     /// Its legs about its body, each set out from it the way it stands
     /// from the body's middle (a tripod's), not to the left or the right.
     pub radial: bool,
+    /// More than the little every gait has: each foot early or late by up
+    /// to this much of a cycle either way, each stride (and its tempo as
+    /// much quicker or slower); and each step as much longer or shorter
+    /// (a fraction of its reach). (The harrow on its mesh's: the user,
+    /// 2026-11-13, variance in its motion; else none.)
+    pub wander: (f32, f32),
 }
 
 /// On stilts, its body sways on its hips (a creature's motion, neither a
@@ -300,6 +306,7 @@ impl Plan {
             style: Style::Stilt,
             turn: 1.2,
             radial: false,
+            wander: (0.0, 0.0),
         }
     }
 
@@ -339,6 +346,7 @@ impl Plan {
             style: Style::Gallop,
             turn: 3.0,
             radial: false,
+            wander: (0.0, 0.0),
         }
     }
 
@@ -419,6 +427,7 @@ impl Plan {
             style: Style::Hauler,
             turn: 3.0,
             radial: false,
+            wander: (0.0, 0.0),
         }
     }
 
@@ -456,6 +465,7 @@ impl Plan {
             style: Style::Sprawl,
             turn: 0.0,
             radial: true,
+            wander: (0.0, 0.0),
             ..beast
         }
     }
@@ -910,16 +920,20 @@ fn dragged(hand: Vec3, tip: Vec3, fallback: Vec3) -> (Vec3, Vec3) {
     (axis, hand + up * 0.1)
 }
 
+/// How near its root a limb of lengths `l1`, `l2` reaches, folded no tighter
+/// than `FOLD`. (Closer than its bones' difference, the joint was put past
+/// the end, the lower bone flipped end for end; the shard beast's forelegs,
+/// their upper twice their lower, whipped round in a frame at each swing,
+/// the user.)
+fn folded(l1: f32, l2: f32) -> f32 {
+    (l1 * l1 + l2 * l2 - 2.0 * l1 * l2 * FOLD.cos()).sqrt()
+}
+
 /// Two-bone IK: where the middle joint goes so that a limb from `a` of
 /// lengths `l1`, `l2` reaches `target`, bending towards `pole`.
 fn ik(a: Vec3, target: Vec3, l1: f32, l2: f32, pole: Vec3) -> (Vec3, Vec3) {
     let to = target - a;
-    // (Folded no tighter than `FOLD`: closer than its bones' difference, the
-    // joint was put past the end, the lower bone flipped end for end; the
-    // shard beast's forelegs, their upper twice their lower, whipped round
-    // in a frame at each swing, the user.)
-    let folded = (l1 * l1 + l2 * l2 - 2.0 * l1 * l2 * FOLD.cos()).sqrt();
-    let d = to.length().clamp(folded.max(0.01), (l1 + l2) * 0.999);
+    let d = to.length().clamp(folded(l1, l2).max(0.01), (l1 + l2) * 0.999);
     let dir = to.normalize_or(Vec3::NEG_Y);
     let end = a + dir * d;
     // Law of cosines: distance along the line to the joint's foot, and how
@@ -1075,7 +1089,7 @@ impl Rig {
         let pitch = (self.airborne.unwrap_or(0.0) * 0.04).clamp(-0.25, 0.25) * if root == Root::Chest { 1.0 } else { -1.0 };
         // Hauling, the chest gathers low as the arms reach and heaves up as
         // they haul (the rump less).
-        let heave = if self.plan.style == Style::Hauler { 0.15 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos() * if root == Root::Chest { 1.0 } else { 0.4 } } else { 0.0 };
+        let heave = if self.plan.style == Style::Hauler { 0.15 * moving * (std::f32::consts::TAU * self.hauls() * (self.phase - 0.7)).cos() * if root == Root::Chest { 1.0 } else { 0.4 } } else { 0.0 };
         // (On stilts, as high as the stilts it stands on hold it.)
         let h = if self.plan.style == Style::Stilt { self.stilt + if root == Root::Chest { self.plan.chest.1 - self.plan.hips.1 } else { 0.0 } } else { h };
         let height = h * (1.0 - low) + bob + rock + pitch + heave + if root == Root::Chest { breath } else { 0.0 };
@@ -1188,6 +1202,8 @@ impl Rig {
         } else {
             ahead
         };
+        // Each step its own length (`wander`; capped below, at its reach).
+        let ahead = ahead * (1.0 + self.plan.wander.1 * (2.0 * hash01(self.seed as i32 + i as i32 * 101, self.steps.get(i).copied().unwrap_or(0) as i32, 2, 0x61b) - 1.0));
         // (Never set down beyond its leg's reach from its hip's height, with
         // room to bear it: the shard beast's hind feet landed out of reach
         // ahead, its legs straight, its feet in the air. A stilt's own: the
@@ -1445,7 +1461,7 @@ impl Rig {
         // Each foot a little early or late, differently each stride: the
         // footfalls never quite the same twice.
         for (i, o) in offsets.iter_mut().enumerate() {
-            *o += (self.vary(10 + i as i32) - 0.5) * 0.1;
+            *o += (self.vary(10 + i as i32) - 0.5) * (0.1 + 2.0 * self.plan.wander.0);
         }
         (self.offsets, self.swing, self.stride) = (offsets, swing, stride);
         self.gallop += (gallop - self.gallop) * (1.0 - (-dt * 4.0).exp());
@@ -1456,7 +1472,7 @@ impl Rig {
             let drift = 1.0 + 0.09 * ((self.time * 0.9 + self.seed as f32).sin() * 0.6 + (self.time * 2.3).sin() * 0.4);
             // (Each stride a little quicker or slower, by up to 15%; the
             // stalker's by up to 10%, less erratic, the user.)
-            let spread = if self.plan.style == Style::Stilt { 0.2 } else { 0.3 };
+            let spread = (if self.plan.style == Style::Stilt { 0.2 } else { 0.3 }) + 2.0 * self.plan.wander.0;
             let tempo = 1.0 - spread * 0.5 + spread * self.vary(0);
             let rate = if walks { 1.0 / self.walk_cycle(speed) } else { speed.max(1.0) / self.stride };
             let next = self.phase + rate * drift * tempo * dt;
@@ -1580,9 +1596,15 @@ impl Rig {
             // turn never coming: one stilt stepping in place, the body
             // creeping off from the other, sinking to the ground, the user.)
             let reach = self.plan.legs[i].upper + self.plan.legs[i].lower;
+            // (Or the body come so far over it that its leg cannot fold so
+            // short (`folded`): the harrow on its mesh's forelegs, 0.9 m and
+            // 1.8 m, their timing and length varied, the body surging over a
+            // forefoot, dragged it up to 11 cm, 2026-11-13.)
+            let fold = folded(self.plan.legs[i].upper, self.plan.legs[i].lower) / REACHED;
             if !self.feet[i].swinging {
                 self.early[i] = None;
-                if local >= self.swing && speed > 0.3 && !held && self.feet[i].planted.distance(self.hip(i)) > reach * REACHED {
+                let held_at = self.feet[i].planted.distance(self.hip(i));
+                if local >= self.swing && speed > 0.3 && !held && (held_at > reach * REACHED || held_at < fold) {
                     self.early[i] = Some((local, 1.0 - local + self.swing, 0.0));
                 }
             }
@@ -2371,7 +2393,18 @@ impl Rig {
             return 1.0;
         }
         let moving = (Vec2::new(self.velocity.x, self.velocity.z).length() / 3.0).min(1.0);
-        1.0 + 0.85 * moving * (std::f32::consts::TAU * (self.phase - 0.7)).cos()
+        1.0 + 0.85 * moving * (std::f32::consts::TAU * self.hauls() * (self.phase - 0.7)).cos()
+    }
+
+    /// How many times a cycle the haul heaves and surges: once, its
+    /// forelegs reaching together (the harrow's); twice, after each in
+    /// turn, if its fastest gait has them alternate (the harrow on its
+    /// mesh, the user, 2026-11-13).
+    pub(crate) fn hauls(&self) -> f32 {
+        let Some(fast) = self.plan.gaits.last() else { return 1.0 };
+        let fore: Vec<f32> = self.plan.legs.iter().zip(&fast.offsets).filter(|(l, _)| l.root == Root::Chest).map(|(_, o)| *o).collect();
+        let apart = fore.windows(2).map(|w| { let d = (w[1] - w[0]).rem_euclid(1.0); d.min(1.0 - d) }).fold(0.0, f32::max);
+        if apart > 0.25 { 2.0 } else { 1.0 }
     }
 
     /// The gait's clock for the body's rise and fall: galloping, shifted so

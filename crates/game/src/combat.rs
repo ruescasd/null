@@ -46,6 +46,7 @@ mod chain;
 pub(crate) use hunter::Hunter as HunterMarker;
 mod bishop;
 mod impaled;
+mod tumbler;
 mod forms;
 mod grove;
 mod hair;
@@ -102,8 +103,12 @@ impl Plugin for CombatPlugin {
         // something 10 m away is heard at about two thirds, 25 m at a tenth.
         embedded_asset!(app, "combat/beam.wgsl");
         embedded_asset!(app, "combat/impaled/plume.wgsl");
+        embedded_asset!(app, "combat/impaled/haze.wgsl");
+        embedded_asset!(app, "combat/impaled/tube.wgsl");
+        embedded_asset!(app, "combat/tumbler/fold.wgsl");
+        embedded_asset!(app, "combat/tumbler/vortex.wgsl");
         embedded_asset!(app, "combat/envelop.wgsl");
-        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default(), MaterialPlugin::<impaled::plume::Plume>::default()));
+        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default(), MaterialPlugin::<impaled::plume::Plume>::default(), MaterialPlugin::<impaled::haze::Haze>::default(), MaterialPlugin::<impaled::tube::TubeMaterial>::default(), MaterialPlugin::<tumbler::FoldMaterial>::default(), MaterialPlugin::<tumbler::Vortex>::default()));
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
         app.init_resource::<Gun>()
             .init_resource::<Director>()
@@ -129,7 +134,9 @@ impl Plugin for CombatPlugin {
             .add_systems(Update, footsteps.after(crate::player::walk).run_if(crate::loading::playing)).add_systems(Update, hunter::bodies.before(crate::player::walk).run_if(crate::loading::playing))
             .init_resource::<impaled::field::Pushes>()
             .add_systems(Startup, impaled::field::setup)
-            .add_systems(Update, (impaled::arrive, impaled::fly, impaled::arms::adopt, impaled::arms::bend, impaled::arms::draw, impaled::attack::rings, impaled::field::show, impaled::field::beams).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
+            .add_systems(Update, (impaled::arrive, impaled::fly, impaled::arms::adopt, impaled::arms::bend, impaled::arms::draw,impaled::attack::rings, impaled::field::show, impaled::field::beams).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
+            .init_resource::<tumbler::Parts>()
+            .add_systems(Update, (tumbler::arrive, tumbler::cut, tumbler::tumble, tumbler::bolts, tumbler::crack::cracks).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
             .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, cape::cloaks.after(hunter::flesh), slab::pulse, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
@@ -253,6 +260,8 @@ struct Assets3 {
     dark: Handle<StandardMaterial>,
     /// Pale and matte: the markings on creatures that do not glow.
     pale: Handle<StandardMaterial>,
+    /// Black, unlit: a shadow (a tumbler travelling as its shadow).
+    shade: Handle<StandardMaterial>,
     /// The shot, and the reload as the pump racks.
     gun: Handle<AudioSource>,
     reload: Handle<AudioSource>,
@@ -425,6 +434,7 @@ fn setup(
         bright: bright.clone(),
         dark: dark.clone(),
         pale: materials.add(StandardMaterial { base_color: Color::srgb(0.72, 0.72, 0.72), perceptual_roughness: 0.7, ..default() }),
+        shade: materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() }),
         // (A blast rolling away; a pistol's first, then a dry blast: see
         // docs/removed.md.)
         gun: load("gun_shot_rolling"),

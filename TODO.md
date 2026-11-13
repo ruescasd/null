@@ -31,6 +31,148 @@ navigation, so the three are now one line of work.
 
 - **You** Stalker: the latest hover. Darts and holds, legs walking the air,
   landing to fire, strike shown as a black ray on a miss. (stalker notes)
+- **You** Harrow on the new mesh (2026-11-12): `spawn harrow mesh=1` (add
+  `tame` to see it walk). The Planar Guillotine mesh, cut into rigid pieces
+  on the harrow's bones and moved by its haul walk and haul attack,
+  unchanged. Its forelegs stretched to the harrow's long ones (about 2.1
+  times the mesh's) and thickened by the square root of that; its torso
+  1.3 times the mesh's (`spine`, 2026-11-13: the body was short), all of it
+  in the waist so the hind legs stay at the hind end, only longer; made
+  symmetric by mirroring the mesh's +x half (`mirror`; its sides differed,
+  posed mid-stride: -x's folded foreleg became a bar jutting ahead), its
+  head (the blade, off to one side) kept whole, one; its forelegs in turn
+  at every pace, the haul's heave and surge after each (twice a cycle;
+  the harrow's own unchanged, both together, once; `fore=0` for together,
+  to compare); its motion varied, each foot's timing (`vary_time`, 0.6 of
+  a cycle, the user's) and each step's length (`vary_length`, 0.6; first 0.8); its
+  joints marked in the creatures' pale (`marks = 0.15` m in harrow.pieces:
+  shoulders, elbows, hips, knees, neck); a pale highlight along the blade where you drew,
+  tapering to its tip, on both sides (`highlight` line: its corners, laid
+  on every face under it; filled out to the faces' creases it was the
+  whole of one side; not yet seen in a capture: the head turns to face
+  the camera); its body level, hips as
+  high as its chest (`level = 1`; slanting, its hind part looked an
+  afterthought); its hind
+  knees folded back as the mesh has them (the harrow's point forward and
+  out, which stood them under the body; the feet and timing still the
+  haul's); its hind legs, neck and blade the mesh's lengths; 2 m tall; in the
+  creatures' black (the model has no material). Joints in
+  `creatures/harrow.pieces` (the mesh is posed mid-stride, so they are
+  estimates). To judge: the look and the walk; whether the stretched
+  forelegs belong to it; whether the elbows should stand higher. Tuning
+  lives in that file (`height`, `thicken`, joints).
+- **You** Tumbler (2026-11-13), the X-shaped Compact Core mesh, cut into
+  its two diagonals (rigid blades turning where they cross) and its core
+  (a diamond body, its point a head). Four ways to move, to compare
+  (`spawn tumbler move=N`; it goes to and fro across before you, face on;
+  `chase` at you):
+  1 cartwheeling (your thought): a rimless wheel under its weight,
+  lurching tall and low (`push`, `hub` keeps the core upright);
+  2 striding like dividers: one diagonal planted, the other windmilling
+  over the top to plant its far tip ahead (swung under, it would scrape
+  and cut through the planted one), the X opening and shutting, its core
+  upright (`speed`; 4.4 m/s, twice the hybrid's, you 2026-11-13: an
+  ingredient for move=6; turning as far per metre at any pace: per second,
+  quick, it stepped to and fro past a goal off to its side for ever,
+  tested to 30 m/s);
+  3 both (you, 2026-11-13): its short steps (squat up onto its close
+  tips) cartwheeled, its long ones (standing tall down across its far
+  gap) placed as it strides, the other diagonal reaching ahead, the X
+  opening and shutting; it lands squatting so the next is short again
+  (striding on, every step would be long); core upright (`speed`);
+  4 spinning flat like a thrown star at a hover, swinging upright onto
+  its feet as its spin runs down (`speed`);
+  5 shutting into a spear, rising onto its point, leaping point first,
+  sticking, swinging up over the stuck point and opening (was 3).
+  6 as its shadow (your idea, 2026-11-13; storyboard first, which you
+  approved): it turns its face to where it goes, a light (unseen) sinks
+  from overhead to low behind it and its body collapses along the rays
+  into its shadow, stretched up to 10 m ahead; there, the mirror, rising
+  out of it. On uneven ground (you, 2026-11-13: "let's go"): each hop
+  samples the ground along its way (128 heights) and finds the light whose
+  shadow of its top reaches the far end; `fold.wgsl` moves each vertex
+  along the light's ray to where it first meets that ground: it pours
+  over ledges, climbs steps up to 1.9 m (taller: the hop stops a metre
+  short); cast back at a wall too high, its light stops where the shadow
+  reaches the wall's face. Seen on the broken district: a 3 m drop.
+  Curved shadow (you, 2026-11-13: its ends not joined by a straight
+  line, by stretching, not swimming; the swim still turned on its own
+  axis, as any straight shadow following a curve must): its shadow sets
+  off from its face (whichever side is nearer, no turning) and bends
+  along a circle's arc to where it goes, the light's rays bending with
+  it, each point laid along the arc as on a ribbon (`fold.wgsl`); it
+  rises at the arc's end, facing back along it. How far: its light sinks
+  no lower than `light=` degrees (13.5): its shadow at most its height over
+  that angle's tangent, along the arc (10 m at `size=2.4`; twice as tall,
+  twice as far; you, 2026-11-13). Far goals: 60% to all of that by
+  chance, aimed a little aside; the far end no more than 75
+  degrees round from its face (so the arc turns at most 150). Swim
+  removed. In-game captures from above failed (the camera stays at
+  standing height); Python top view at scratchpad core/curved_top.png.
+  Tried and reverted (you, 2026-11-13): its body left standing where it
+  was until it had risen where it went, only its shadow leaving, to
+  avoid the falling-down look; it lost much of its character.
+  Instead a quick collapse (you, 2026-11-13: the slow one gave the
+  falling look): its body collapses in the first 30% of leaving (about
+  0.5 s; 87% before), the light sinking on over the rest, its shadow
+  stretching; arriving, the shadow draws in and it rises in the last
+  30% (`collapse=`). `speed=` quickens all of it (times: 2 twice as
+  quick; you, 2026-11-13, alongside the stride's, as ingredients).
+  You prefer 1 or 2 so far. Its core's body (the rhombus under the head)
+  made 1.4 times as tall, upwards, the head lifted with it (`body=`; 1 as
+  modelled).
+  Attack (your design), now a menace (you, 2026-11-13: never standing
+  still doing nothing; it moves to fire, never twice running): it goes to
+  a spot 8 to 16 m off you, swung 30 to 80 degrees round either way, from
+  which it sees you and (as a shadow) one shadow reaches; there it winds
+  up (its body glowing 0.45 s) and fires a burst of 1 to `shots=` (4)
+  rhombuses, `gap=` (1 s) apart, fixed; then at once on to the next.
+  The rhombus (you, 2026-11-13): a vortex on it (`vortex.wgsl`, from your
+  tunnel picture, grayscale; inverted by default, dark streaks out of a
+  white core, `vortex=1` the first), gathering speed (4 m/s, +24 m/s², to
+  34), spinning slowly (1.5 rad/s), its trails the stalker's dark ray
+  (`beam.rs` Ray::dark, 10 cm, darkening 0.85; they were never drawn at
+  first: their points ran against the ray's facing, every face culled).
+  The inverted vortex first looked plain white (you): it was at the light
+  one's brightness, all but its darkest streaks past white; now a field
+  just under white (over it, its bloom washed the streaks out), its
+  streaks dark, thicker and reaching nearer the core (you: more
+  prominent, same character). Its trails gone when it hits you,
+  and never drawn within 1.5 m of your eye (left, they crossed your view
+  as a dark wedge).
+  Each shot its own wind-up glow (0.45 s, the last of its gap). `aside=`
+  aims its shots that far to your side, to see them pass.
+  Arriving where it cannot see you, it goes on (always logged, with why:
+  out of range or something between). A shadow hop cut short (a step too
+  high before its spot) counted as no move, and it hopped again without
+  firing (you, 2026-11-13: it kept moving); now one hop is one move,
+  wherever it lands, and standing unable to set off it fires after
+  0.5 s (test one_move_then_there). Only from a steady
+  stance. Each rhombus its body's size, spinning about its flight, a
+  trail from each corner, 20 harm. `line`: its spots the
+  ends of a line before you instead (to judge motion; `chase` gone, the
+  hunt does it). (Cadence tried before: random waits, passes, lingers.)
+  Black lightning through the ground (you, 2026-11-13: the rhombi weak;
+  an experiment after its theme; `spawn tumbler move=6 attack=2`,
+  `crack.rs`): a jagged black crack grows from its feet along the ground
+  toward you, all one width (you, 2026-11-13: growing, not travelling;
+  no head and tail), its tip 6 m/s, +30 m/s², to 18, bending after you at
+  0.5 rad/s (`seek=`); 1.6 s after it set off all of it is gone at once
+  (`lasts=`: in effect its range, about 26 m). Its tip crossing under
+  your feet (1.2 m, and you no more than 0.7 m over it) hurts, 20, stops
+  it, and flings forks round you.
+  Tested: standing or walking across its line it strikes you; running
+  across it, or over it, you get away. Climbs steps up to 1.9 m, stops at
+  a wall or the void. Drawn multiplying the ground (black middle, a
+  crisp soft edge: wider and softer, it read as a shadow's puddle), its
+  zigzag and forks laid as it grows and kept (you, 2026-11-13: what it
+  has grown must not change; flickering all along, it vibrated; a test
+  holds it). Three thin strands (you, 2026-11-13: several thin, not one
+  wide; `strands=`, 1 the wide one), 14 cm across, spread over 0.8 m,
+  sharing the line's zigzag and each zigzagging its own way about its
+  place, so they cross; all from one point under its feet. To judge: whether it beats the
+  rhombi; its width, speed, seek and how long it lasts.
+  Not yet: shot, navigation, sounds.
 - **You** Stalker: searchlight pale or black, never judged.
   `spawn stalker searchlight=1`.
 - **You** Teleporting walkers: feel test (`--opt blink`). (blink notes)
@@ -87,22 +229,15 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   judge it; its weight's numbers are options (`lift=`, `spool=`, `tilt=`,
   `climb=`, `speed=`, `hover=`). Your feel test. It flies through
   structures (step 4) and takes no shots yet.
-- **You** Step 3 built, the field (b), low and labouring (your picks): five
-  variants to judge, `spawn impaled 5 fields` (one of each) or `field=N`:
-  1 haze (bent air under it), 2 glow and grit drawn up off the ground,
-  3 rings pressed into the ground, 4 two thick dark beams from its soles
-  to the ground, white streaks running down them, flaring at the ground,
-  5 the same beams white-hot fading to black (your gradient picture),
-  born white-hot 0.35 m below its soles, bent all along (bent air round
-  it, the beam itself rippling), in hard straight-edged shards: a white
-  crystal core in a faceted black body; `spawn impaled 5 fields` for all five (your calls, after
-  tendrils, dark lightning, a dark cage, fuzzy soft beams and tyre-like
-  pulses didn't work). All follow its thrust; a
-  placeholder hum (pitch and loudness its thrust's).
+- **You** Step 3 built, the field (b), low and labouring (your picks):
+  two beams from its soles to the ground, white-hot fading to black (your
+  gradient picture), born 0.35 m below its soles, bent all along, in hard
+  straight-edged shards (the other four fields removed, your say
+  2026-11-10). They follow its thrust; a placeholder hum (pitch and
+  loudness its thrust's).
 - **You** Feet: soles made four-pointed stars (an X, prongs splayed),
   flat-shaded, in `tools/impaled_mesh.py` (in place of the paw's toes).
-- Its plume: `plume=1` curves, `plume=2` shards (default); fields 1 to 4
-  removed (your say, 2026-11-10).
+- Its plume: `plume=1` curves, `plume=2` shards (default).
 - **You** Taking hits built: shards stick in it a moment, push and rock it,
   each hit cuts its thrust 0.12 s (it dips); health 80 (about six blasts at
   7 m; `health=`); dead it falls, lands hard (placeholder: the stalker's
@@ -110,32 +245,109 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   steady fire it is beaten down to the ground and drags (it can't climb
   back between blasts); keep that, or let it recover?
 - **You** Step 4, stage 1 built (your call 2026-11-10: it lands to attack,
-  flight its only way to move): it chooses a spot 6-11 m from you (flat,
+  flight its only way to move): it chooses a spot 5-14 m from you (flat,
   in your sight, apart from others), flies there straight or up over what
   is in the way (ways out first when it is shut in, as in the arena's
-  pens), crashes down (thrust cut 4 m over the spot, shoved down, ~8 m/s:
-  falling level; impact, your view jolted near it, its body squashed
-  down onto its feet ~14% and back in about 0.3 s), stays 5 s (where your attack will be), rises and chooses
-  again; takes off sooner if you get 16 m away or out of its sight;
+  pens), crashes down (your call 2026-11-11: no climbing to 4 m and
+  stopping first; coming in on the move it lets go short of its spot,
+  shoved down, ~7 m/s, and slides in on its feet, grinding to a stop on
+  it; where the ground there isn't flat and clear, it brakes, hangs over
+  the spot and drops as before; falling level; impact, your view jolted
+  near it, its body squashed
+  down onto its feet ~14% and back in about 0.3 s), and stays down while
+  you are within its grasp's range and in its sight (see its attacks);
   beaten down on its way, it stays landed. Checked: floor, stacks, spire,
   city and an arena round, every way clear (a warning if it is ever
   inside something). `keep=N` keeps the old hovering after you.
-- **You** Its attacks: the crash (it hangs 0.5 s over its spot, the tell;
-  a ring sweeps out; within 6 m on the ground you are hurt, up to 25, and
+- **You** Its attacks: the crash (sliding in, its letting go the tell;
+  where it can't slide, it hangs 0.5 s over its spot first; sliding, it
+  digs in at 16 m/s², about 2.5 m from 9 m/s; a ring sweeps
+  out where it hits; within 6 m on the ground you are hurt, up to 25, and
   thrown; a jump spares you) and its grasp (your call 2026-11-10, in place
-  of the lash: too slow to reposition, it needs reach): its shoulders draw
-  back (the tell), a cable from each arm is flung out, homing on you
-  slowly (7 m/s, you run 10; turning gradually; range 25 m), its way sagging
-  behind it, fed from its waist band; touching you it takes hold (8, then 6
-  a second); missed or let go, it may grasp again 1.5 s on, its cables
-  still coming back. It stays down while you are in range and in sight,
-  flies to catch you up otherwise (and now and then anyway, 1 in 4 as a
-  grasp ends); its cables coming back hold up nothing. Open (yours): what holding does besides hurting, `latch=1`
-  nothing, `2` slows you, `3` holds you, `4` reels you in; and escape (for
-  now: hurt it by 20 and it lets go; or 6 s; or get 33 m away). It lands
-  5-14 m from you. Its arms and band are cables, not mesh
+  of the lash: too slow to reposition, it needs reach; 2026-11-11:
+  relentless; 2026-11-11 again: trivially escaped; harpoons tried,
+  `cables=2`, no personality; so its own slow cables and an agile flight,
+  and flung flying too, reaching far): flying or landed, each arm on its
+  own, again and again (0.6-1.4 s apart, a 0.5 s tell of its shoulder
+  drawn back), up to six cables out per arm, homing on you slowly (7 m/s
+  of their own, you run 10; range 60 m), a cable flung on the move
+  carrying its body's speed (losing it slowly, 0.1 a second), the cable
+  behind dragged along by its body, the nearer the more (over ~10 m);
+  their way sagging behind them, fed from its waist band; touching you one
+  takes hold (8 each, then 6 a second) and slows you (to 4 m/s; your
+  call 2026-11-12: for now it only slows and hurts, no reeling in;
+  `latch=4` still reels, 4 m/s to 5 m from it); an arm holding you
+  flings no more. Missed or let go, a cable
+  is dropped: it falls, lies 6 s, thins away. Landed it stays down while
+  you are within 21 m and in sight (2% a second after 15 s it leaves
+  anyway); else it rises 3 m and comes after you, far off (over 26 m)
+  giving chase in the open, as fast as it can: its first slow flight
+  again (your call 2026-11-11, after trying it far more agile: twice its
+  weight in thrust, 54° tilt, 12 m/s², 24 m/s, catching a runner from 40 m
+  in under 5 s; a middle between to be found; its tilt and facing are
+  now steered apart, which the agile one needed), choosing a spot
+  near where you will be (1.5 s on) once it can land short of you,
+  falling and sliding. Seen in a run with the agile flight (a runner from
+  20 m behind, 20 s): held 9 times, the first in flight 5 s in, reeled
+  back, then the crash; free after each 4 s hold, caught again. Slow, on
+  a still player: 8 cables out on its way in, all taking hold within a
+  moment (8 each: a burst of ~60). Open (yours): your feel test
+  (flight, cables in flight; how the dragged cables look I could not
+  capture); escape (hurt it by 20 and it lets go; or 4 s); `latch=1..3`
+  to compare with the reel; weight for its slide (dust, a
+  scrape). It lands 2-6 m from you (2.5 best), but coming in fast it
+  slides at 13-15 m/s, its crash struck 8+ m from you (out of reach). Its arms and band are cables, not mesh
   (tools/impaled_mesh.py, creatures/impaled.cables); its cables could
   borrow the buds' leeching-cable look (combat/leech.rs), your note.
+- **You** Its cables' heads, and its body's skin (2026-11-12: the heads
+  lost among the parts lagging behind; its black body hides its cables as
+  its anatomy). Built: each flung cable's head a small pale barbed shard
+  (its shards' material) clamped in the loop's bend, pointing the way it
+  goes, lying with a dropped cable (dripping ichor was tried and
+  removed, your call: it added nothing). Cables stay black (your
+  call: grey and pale collars tried, removed). Body skins to compare,
+  `body=1..5` (`spawn impaled 5 bodies`: one of each): 1 black (default
+  for now), 2 grey, 3 pale ash, 4 pale crests along its fused cabling, 5
+  pale bands, mirrored. Seen: 2 and 3 make the black band and arm cables
+  read as its anatomy, but show Meshy's sculpt plainly (muscled legs) and
+  3 swallows the pale shards; 4 mottled, a worn look; 5 zebra-like,
+  competing with the band's coils. `shards=0` hides the shards it is
+  impaled with (their own mesh; no remesh): black then nearly vanishes
+  against the sky; grey a smooth hunched figure with small dark dimples
+  where the spikes were cut and capped (to dome in tools/impaled_mesh.py
+  if they go for good). Open (yours): a verdict on body and shards; then
+  the losers and `bodies` go.
+- **You** Its cost (2026-11-12, your call: 1.25 ms of a 6.9 ms frame for
+  one attacking brute is really bad). Traced: almost all of it is meshes
+  and materials changed every frame, which Bevy then re-uploads and
+  re-prepares (shadows included). Agreed order: 1 shaders animate the
+  beams and the shimmer instead of edits each frame; 2 the body bent on
+  the GPU by a skeleton; 3 cables made into tubes on the GPU from their
+  points; 4 trim the grasp's logic. Step 1 done: beams and shimmer are
+  meshes made once, what changes carried per object (`MeshTag`); the
+  shimmer is its own material bending the screen behind it, fading to
+  nothing at its outline and ends (your borders). Measured: no frame-time
+  change (hovering +0.2-0.3 ms is drawing it: GPU; attacking +1.0-1.3 ms
+  as before); the cost is in steps 2 and 3. Step 2 done: the body and
+  its shards skinned to three joints (middle, left and right shoulder,
+  weighted as the old bend), only the shoulder joints moved; checked
+  exaggerated 5x. Idle machine: attacking +0.62-0.74 ms (was +1.0-1.3).
+  Step 3 done: its cables (arms, and those dropped) are tubes laid on the
+  GPU from a buffer of points, the mesh made once; only the points are
+  written, the arms while they move, the dropped ones only while one falls
+  or thins (they were rebuilt every frame); the heads are entities moved,
+  not a mesh rebuilt. Ends are now closed. Attacking now +0.55-0.65 ms
+  over an empty scene; of that about 0.2 is the brute being there
+  (hovering), about 0.35 the attack: GPU drawing the cables close up
+  (+0.15 ms main pass), the cables' points (`arms::draw` 0.09), the grasp
+  (`impaled::fly` 0.07), and the renderer re-specializing things entering
+  shadow views (~0.1-0.15: heads, its landing; the drips, now removed,
+  were part of it). Next (yours to
+  pick): step 4, the grasp and the cables' points (e.g. cables at rest
+  skinned to the shoulders like the body, only flung ones written); or
+  stop here. Open (yours): the shimmer's
+  look (`BEND` in haze.wgsl, 0.12 m; stronger inside than before, where
+  the old one showed mostly at its edges).
 - **Agreed** Stage 3, dense places (a 3D search), only if wanted.
 - Open: a choice costs 0.2-3 ms of sweeps (one a frame across all brutes).
 

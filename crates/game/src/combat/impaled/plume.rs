@@ -8,13 +8,16 @@ use bevy::{prelude::*, render::render_resource::AsBindGroup, shader::ShaderRef};
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub(in crate::combat) struct Plume {
-    /// x: how much of it there is (0..1), y: how bright its streaks, z:
-    /// its `Look`, w: from how far down it
-    /// fades over the ground (of the way).
+    /// x: how bright its streaks, z: its `Look`, w: from how far down it
+    /// flares and fades over the ground (of the way). How much of it there
+    /// is, each beam's own, comes in its `MeshTag` (see `plume.wgsl`).
     #[uniform(0)]
     look: Vec4,
+    /// How wide at its source and at the ground (m), how much wider it
+    /// flares, how far down it grows to its width (m).
+    #[uniform(1)]
+    shape: Vec4,
 }
-
 impl Material for Plume {
     fn vertex_shader() -> ShaderRef {
         "embedded://game/combat/impaled/plume.wgsl".into()
@@ -47,14 +50,10 @@ pub(in crate::combat) enum Look {
 }
 
 impl Plume {
-    /// In `look`, fading over the ground from `flare` of the way down.
-    pub(in crate::combat) fn new(look: Look, flare: f32) -> Self {
-        Self { look: Vec4::new(0.0, 0.0, look as u8 as f32, flare) }
-    }
-
-    /// How much of it there is now (0..1), and how bright its streaks.
-    pub(in crate::combat) fn set(&mut self, on: f32, white: f32) {
-        self.look.x = on;
-        self.look.y = white;
+    /// In `look`: streaks `white` bright; `wide` at its source and at the
+    /// ground (m), flaring `flare.1` times wider from `flare.0` of the way
+    /// down, fading there; grown to its width over `grow` m.
+    pub(in crate::combat) fn new(look: Look, white: f32, wide: (f32, f32), flare: (f32, f32), grow: f32) -> Self {
+        Self { look: Vec4::new(white, 0.0, look as u8 as f32, flare.0), shape: Vec4::new(wide.0, wide.1, flare.1, grow) }
     }
 }
