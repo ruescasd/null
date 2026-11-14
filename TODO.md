@@ -194,8 +194,21 @@ navigation, so the three are now one line of work.
   free on the hinge swung for ever; its hinge points stuck out as feet.
   `--opt aim` (captures): `fight`'s shots at the nearest tumbler.
   To judge: the throw and the shove (`shove=`); the stagger.
-  Not yet: navigation, sounds; your damage ideas (breaking geometry,
-  damage indicators: cracks in its glow).
+  Damage shown (your idea, 2026-11-14; `scars.rs`, `scars.wgsl`): struck
+  cracks, as in glass (jagged rays from where each shard struck, branching
+  further out; cell edges tried first read as a mesh of rings), in each
+  part's own units so they stay put; a shard within a crack's reach makes
+  it reach further, else a new one (16 a part). The light inside it shows
+  through its blades' cracks, faint at rest, bright winding up and when
+  struck; on its glowing body they split the glow, dark (you had not seen
+  them: shards at its body counted as striking its blades, whose hit
+  shapes wrap round it about the crossing, so its body was never
+  cracked; now its core is struck before its blades where both are; and
+  its cracks' faint light at rest, left on as it glowed, was white on
+  white). Struck, the light inside flares a moment (the flinch a rigid X
+  cannot make). Dead, all dark. You: the light cracks read clearly, good
+  as they are (their shape could be tuned). To judge: the dark ones.
+  Not yet: navigation, sounds; breaking geometry (your idea).
 - **You** Stalker: searchlight pale or black, never judged.
   `spawn stalker searchlight=1`.
 - **You** Teleporting walkers: feel test (`--opt blink`). (blink notes)
@@ -394,6 +407,15 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 - **Agreed** Buds visibly becoming the hunter's solid parts (chest, hips,
   head), bound by the weave's cables.
 - **Idea** The hair; looking drains health; a hound pack that flanks you.
+
+**All creatures**
+- **Agreed** Damage indicators for the others (you, 2026-11-14: they apply
+  in general): the tumbler's techniques (marks fixed to a part, struck
+  cracks accumulating where hit, light through them, a flare as the
+  flinch; damage-ideas notes) wherever they suit a creature; and motion
+  impaired by damage, e.g. a flyer's propulsion cutting out now and then,
+  or flying lower. Breaking geometry (your idea) still open.
+- Many passes on creatures to come (you, 2026-11-14): the tumbler too, later.
 
 **Others**
 - **Agreed** Hounds and harrows: real blocking. They only push one way now.

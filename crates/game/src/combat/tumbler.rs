@@ -62,6 +62,7 @@ use crate::camera::FlyCam;
 
 pub(super) mod crack;
 pub(super) mod fall;
+pub(super) mod scars;
 
 /// Its mesh, in `creatures/` (the user's, generated; untouched).
 const FILE: &str = "Meshy_AI_Remeshed_Compact_Core_1113024223_generate.glb";
@@ -932,11 +933,17 @@ pub(super) struct Tumbler {
     leg: usize,
     parts: [Entity; 4],
     scale: f32,
-    /// Its body's height made (see `BODY`), its own glowing material; what
-    /// it is doing; how many shots a burst at most (0 none), how long
-    /// between them (s); its chances, drawn from its own seed.
+    /// Its body's height made (see `BODY`); its parts' looks, each its own
+    /// (its body's glowing), their cracks (its blades', its core's: its
+    /// body and head as one, see `scars.rs`), how much the light inside it
+    /// flares, struck (0..1), and as last shown; what it is doing; how
+    /// many shots a burst at most (0 none), how long between them (s); its
+    /// chances, drawn from its own seed.
     body: f32,
-    glow: Handle<StandardMaterial>,
+    skins: [Handle<scars::ScarMaterial>; 4],
+    scars: [scars::Cracks; 3],
+    flare: f32,
+    lit: f32,
     act: Act,
     going: Going,
     shots: u32,
@@ -1061,10 +1068,16 @@ impl Tumbler {
                 }
             }
         }
+        // (Its core before its blades where both are struck: its blades'
+        // shapes are thickest about where they cross and wrap round it, so
+        // a shard at its body struck a blade, never its body.)
         if let Ok(g) = parts.get(self.parts[2]) {
             let (low, top) = MESH_BODY;
             let head = MESH_HEAD.0 + (top - low) * (self.body - 1.0);
-            test(2, g.transform_point(Vec3::Y * low), g.transform_point(Vec3::Y * head), MESH_BODY_SIZE.0 / 2.0 * g.scale().x);
+            let wraps = BLADE_GIRTH[0].1 * 2.0 * g.scale().x;
+            if let Some(d) = super::capsule(eye, dir, g.transform_point(Vec3::Y * low), g.transform_point(Vec3::Y * head), MESH_BODY_SIZE.0 / 2.0 * g.scale().x).filter(|&d| d > 0.0 && d < best.map_or(limit, |(b, _)| b + wraps).min(limit)) {
+                best = Some((d, 2));
+            }
         }
         best
     }
@@ -1192,7 +1205,7 @@ pub(super) struct Parts {
 }
 
 /// `spawn tumbler`: before you, standing, its face to you.
-pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, assets: Res<super::Assets3>, mut materials: ResMut<Assets<StandardMaterial>>, mut parts: ResMut<Parts>, ground: crate::ground::Ground, camera: Single<&Transform, With<FlyCam>>, mut spawns: ResMut<crate::console::Spawns>) {
+pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, assets: Res<super::Assets3>, materials: Res<Assets<StandardMaterial>>, mut looks: ResMut<Assets<scars::ScarMaterial>>, mut parts: ResMut<Parts>, ground: crate::ground::Ground, camera: Single<&Transform, With<FlyCam>>, mut spawns: ResMut<crate::console::Spawns>) {
     let forward = Vec3::new(camera.forward().x, 0.0, camera.forward().z).normalize_or(Vec3::Z);
     let across = Vec3::new(-forward.z, 0.0, forward.x);
     let (asked, others): (Vec<_>, Vec<_>) = std::mem::take(&mut spawns.creatures).into_iter().partition(|(kind, ..)| kind == "tumbler");
@@ -1220,13 +1233,13 @@ pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, assets: R
             };
             let line = traits.has("line").then(|| [at - across * HALF, at + across * HALF]);
             let pose = gait.pose();
-            // (Its body its own, to glow.)
+            // (Each part its own look, to show its cracks; its body's to glow.)
             let dark = materials.get(&assets.dark).cloned().expect("the creatures' dark");
-            let glow = materials.add(dark);
-            let parts = [0, 1, 2, 3].map(|k| commands.spawn((Part(k, body), MeshMaterial3d(if k == 2 { glow.clone() } else { assets.dark.clone() }), Transform::default(), Visibility::Inherited)).id());
+            let skins = [0, 1, 2, 3].map(|k| looks.add(scars::material(dark.clone(), k == 2)));
+            let parts = [0, 1, 2, 3].map(|k| commands.spawn((Part(k, body), MeshMaterial3d(skins[k].clone()), Transform::default(), Visibility::Inherited)).id());
             commands
                 .spawn((
-                    Tumbler { gait, line, leg: 1, parts, scale, body, glow, act: Act::Go(None), going: Going::default(), shots: traits.value("shots", SHOTS as f32) as u32, gap: traits.value("gap", GAP).max(0.05), vortex: traits.value("vortex", 2.0) as u8, aside: traits.value("aside", 0.0), attack: traits.value("attack", 1.0) as u8, seek: traits.value("seek", crack::SEEK), lasts: traits.value("lasts", crack::LASTS), strands: traits.value("strands", crack::STRANDS as f32).max(1.0) as u32, seed: (at.x.to_bits() ^ at.z.to_bits().rotate_left(7) ^ n.wrapping_mul(40503)) | 1, fold: None, look: Look::Solid, health: traits.value("health", HEALTH), hits: Vec::new(), knock: [(0.0, 0.0); 2], rock: (Vec3::ZERO, Vec3::ZERO), slide: Vec3::ZERO, recoil: (Vec3::ZERO, Vec3::ZERO), shove: traits.value("shove", 1.0).max(0.0), stun: 0.0, death: fall::Death::from(traits.value("death", 2.0) as u8), fall: None, shown: None, log: traits.has("log"), logged: (0.0, at) },
+                    Tumbler { gait, line, leg: 1, parts, scale, body, skins, scars: Default::default(), flare: 0.0, lit: -1.0, act: Act::Go(None), going: Going::default(), shots: traits.value("shots", SHOTS as f32) as u32, gap: traits.value("gap", GAP).max(0.05), vortex: traits.value("vortex", 2.0) as u8, aside: traits.value("aside", 0.0), attack: traits.value("attack", 1.0) as u8, seek: traits.value("seek", crack::SEEK), lasts: traits.value("lasts", crack::LASTS), strands: traits.value("strands", crack::STRANDS as f32).max(1.0) as u32, seed: (at.x.to_bits() ^ at.z.to_bits().rotate_left(7) ^ n.wrapping_mul(40503)) | 1, fold: None, look: Look::Solid, health: traits.value("health", HEALTH), hits: Vec::new(), knock: [(0.0, 0.0); 2], rock: (Vec3::ZERO, Vec3::ZERO), slide: Vec3::ZERO, recoil: (Vec3::ZERO, Vec3::ZERO), shove: traits.value("shove", 1.0).max(0.0), stun: 0.0, death: fall::Death::from(traits.value("death", 2.0) as u8), fall: None, shown: None, log: traits.has("log"), logged: (0.0, at) },
                     Transform::from_translation(pose.centre),
                     Visibility::Visible,
                 ))
@@ -1254,11 +1267,11 @@ pub(super) fn cut(mut commands: Commands, mut parts: ResMut<Parts>, mut meshes: 
     }
 }
 
-/// Its parts drawn solid again (from folding into its shadow): its body
-/// its own glowing material, the rest the creatures' dark.
-fn solid(commands: &mut Commands, parts: &[Entity; 4], glow: &Handle<StandardMaterial>, dark: &Handle<StandardMaterial>) {
+/// Its parts drawn solid again (from folding into its shadow), each its
+/// own look (with its cracks; its body's glowing).
+fn solid(commands: &mut Commands, parts: &[Entity; 4], skins: &[Handle<scars::ScarMaterial>; 4]) {
     for (k, part) in parts.iter().enumerate() {
-        commands.entity(*part).remove::<(MeshMaterial3d<FoldMaterial>, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster)>().insert(MeshMaterial3d(if k == 2 { glow.clone() } else { dark.clone() }));
+        commands.entity(*part).remove::<(MeshMaterial3d<FoldMaterial>, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster)>().insert(MeshMaterial3d(skins[k].clone()));
     }
 }
 
@@ -1331,6 +1344,7 @@ pub(super) fn tumble(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut folds: ResMut<Assets<FoldMaterial>>,
+    mut looks: ResMut<Assets<scars::ScarMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     (mut vortices, mut rays): (ResMut<Assets<Vortex>>, ResMut<Assets<super::beam::Ray>>),
     camera: Single<&Transform, (With<FlyCam>, Without<Tumbler>, Without<Part>)>,
@@ -1364,8 +1378,10 @@ pub(super) fn tumble(
             let (now, then, gap) = t.shown.expect("drawn before it was shot");
             let middle = (now[0].translation + now[1].translation) / 2.0;
             commands.spawn((AudioPlayer::new(assets.death.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(bevy::audio::Volume::Linear(2.0)), Transform::from_translation(middle)));
-            if let Some(mut m) = materials.get_mut(&t.glow) {
-                m.emissive = LinearRgba::BLACK;
+            for (k, skin) in t.skins.iter().enumerate() {
+                if let Some(mut m) = looks.get_mut(skin) {
+                    scars::show(&mut m, 0.0, false, &t.scars[k.min(2)]);
+                }
             }
             info!("a tumbler is killed, {:.1} m off ({:?})", middle.distance(you), t.death);
             if t.death == fall::Death::Burst {
@@ -1424,7 +1440,7 @@ pub(super) fn tumble(
             }
             if t.look != Look::Solid {
                 t.look = Look::Solid;
-                solid(&mut commands, &t.parts, &t.glow, &assets.dark);
+                solid(&mut commands, &t.parts, &t.skins);
             }
             *transform = Transform::IDENTITY;
             let f = fall::Fall::new(now, then, gap, t.body, t.death, &hits, t.shove);
@@ -1459,6 +1475,14 @@ pub(super) fn tumble(
                 }
             }
             t.stun = (t.stun + STAGGER.0 * hits.len() as f32).min(STAGGER.1);
+            // (Cracked where each struck, in its part's own units, as it
+            // was drawn; the light inside it flaring.)
+            if let Some((now, ..)) = t.shown {
+                for &(k, at, _) in &hits {
+                    t.scars[k.min(2)].strike(now[k].compute_affine().inverse().transform_point3(at));
+                }
+            }
+            t.flare = 1.0;
             if t.log {
                 info!("tumbler: struck by {} shards, {:.0} health left, shoved {:.1} m/s, its core recoiling {:.2} rad/s, rocked {:.2} rad/s, its blades knocked {:+.2} and {:+.2} rad/s", hits.len(), t.health, t.slide.length(), t.recoil.1.length(), t.rock.1.length(), t.knock[0].1, t.knock[1].1);
             }
@@ -1546,8 +1570,18 @@ pub(super) fn tumble(
             Act::After(_) => 0.0,
             Act::Go(_) => 0.0,
         };
-        if let Some(mut m) = materials.get_mut(&t.glow) {
-            m.emissive = LinearRgba::rgb(1.0, 1.0, 1.0) * BRIGHT * glow;
+        // (Its looks: the light inside it, gathering or flared, struck;
+        // its cracks growing out. Changed only when they change.)
+        t.flare *= (1.0f32 / 3.0).powf(dt / scars::FLARE.1);
+        let inner = BRIGHT * glow.max(scars::FLARE.0 * t.flare);
+        let growing = t.scars.iter_mut().fold(false, |g, c| c.grow(dt) | g);
+        if growing || (inner - t.lit).abs() > 0.01 {
+            t.lit = inner;
+            for (k, skin) in t.skins.iter().enumerate() {
+                if let Some(mut m) = looks.get_mut(skin) {
+                    scars::show(&mut m, inner, true, &t.scars[k.min(2)]);
+                }
+            }
         }
         let frozen = !matches!(t.act, Act::Go(_));
         let goal = match t.act {
@@ -1598,11 +1632,11 @@ pub(super) fn tumble(
                 let mut part = commands.entity(*part);
                 match look {
                     Look::Solid => {
-                        part.remove::<(MeshMaterial3d<FoldMaterial>, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster)>().insert(MeshMaterial3d(if k == 2 { t.glow.clone() } else { assets.dark.clone() }));
+                        part.remove::<(MeshMaterial3d<FoldMaterial>, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster)>().insert(MeshMaterial3d(t.skins[k].clone()));
                     }
                     Look::Lit | Look::Shadow => {
                         let fold = if look == Look::Lit { lit.clone() } else { shadow.clone() }.expect("its fold, made as it set off");
-                        part.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(fold), bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
+                        part.remove::<MeshMaterial3d<scars::ScarMaterial>>().insert((MeshMaterial3d(fold), bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
                     }
                 }
             }

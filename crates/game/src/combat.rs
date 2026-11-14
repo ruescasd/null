@@ -107,8 +107,9 @@ impl Plugin for CombatPlugin {
         embedded_asset!(app, "combat/impaled/tube.wgsl");
         embedded_asset!(app, "combat/tumbler/fold.wgsl");
         embedded_asset!(app, "combat/tumbler/vortex.wgsl");
+        embedded_asset!(app, "combat/tumbler/scars.wgsl");
         embedded_asset!(app, "combat/envelop.wgsl");
-        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default(), MaterialPlugin::<impaled::plume::Plume>::default(), MaterialPlugin::<impaled::haze::Haze>::default(), MaterialPlugin::<impaled::tube::TubeMaterial>::default(), MaterialPlugin::<tumbler::FoldMaterial>::default(), MaterialPlugin::<tumbler::Vortex>::default()));
+        app.add_plugins((MaterialPlugin::<beam::Ray>::default(), MaterialPlugin::<envelop::Sky>::default(), MaterialPlugin::<envelop::World>::default(), MaterialPlugin::<impaled::plume::Plume>::default(), MaterialPlugin::<impaled::haze::Haze>::default(), MaterialPlugin::<impaled::tube::TubeMaterial>::default(), MaterialPlugin::<tumbler::FoldMaterial>::default(), MaterialPlugin::<tumbler::Vortex>::default(), MaterialPlugin::<tumbler::scars::ScarMaterial>::default()));
         app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(0.12)));
         app.init_resource::<Gun>()
             .init_resource::<Director>()
