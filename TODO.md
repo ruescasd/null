@@ -63,27 +63,16 @@ navigation, so the three are now one line of work.
   lives in that file (`height`, `thicken`, joints).
 - **You** Tumbler (2026-11-13), the X-shaped Compact Core mesh, cut into
   its two diagonals (rigid blades turning where they cross) and its core
-  (a diamond body, its point a head). Four ways to move, to compare
-  (`spawn tumbler move=N`; it goes to and fro across before you, face on;
-  `chase` at you):
-  1 cartwheeling (your thought): a rimless wheel under its weight,
-  lurching tall and low (`push`, `hub` keeps the core upright);
+  (a diamond body, its point a head). Two ways to move (you, 2026-11-13:
+  the rest removed, kept in db34738: 1 cartwheeling, 3 both, 4 a thrown
+  star, 5 a spear leaping); `spawn tumbler move=N`, 2 by default. Your
+  defaults (2026-11-13): 4 m tall, rhombi (`attack=1`), two strands.
   2 striding like dividers: one diagonal planted, the other windmilling
   over the top to plant its far tip ahead (swung under, it would scrape
   and cut through the planted one), the X opening and shutting, its core
-  upright (`speed`; 4.4 m/s, twice the hybrid's, you 2026-11-13: an
-  ingredient for move=6; turning as far per metre at any pace: per second,
-  quick, it stepped to and fro past a goal off to its side for ever,
-  tested to 30 m/s);
-  3 both (you, 2026-11-13): its short steps (squat up onto its close
-  tips) cartwheeled, its long ones (standing tall down across its far
-  gap) placed as it strides, the other diagonal reaching ahead, the X
-  opening and shutting; it lands squatting so the next is short again
-  (striding on, every step would be long); core upright (`speed`);
-  4 spinning flat like a thrown star at a hover, swinging upright onto
-  its feet as its spin runs down (`speed`);
-  5 shutting into a spear, rising onto its point, leaping point first,
-  sticking, swinging up over the stuck point and opening (was 3).
+  upright (`speed`, 20 m/s, you 2026-11-13: an ingredient for move=6;
+  turning as far per metre at any pace: per second, quick, it stepped to
+  and fro past a goal off to its side for ever, tested to 30 m/s);
   6 as its shadow (your idea, 2026-11-13; storyboard first, which you
   approved): it turns its face to where it goes, a light (unseen) sinks
   from overhead to low behind it and its body collapses along the rays
@@ -170,9 +159,43 @@ navigation, so the three are now one line of work.
   holds it). Three thin strands (you, 2026-11-13: several thin, not one
   wide; `strands=`, 1 the wide one), 14 cm across, spread over 0.8 m,
   sharing the line's zigzag and each zigzagging its own way about its
-  place, so they cross; all from one point under its feet. To judge: whether it beats the
-  rhombi; its width, speed, seek and how long it lasts.
-  Not yet: shot, navigation, sounds.
+  place, so they cross; all from one point under its feet. Kept to
+  revisit (you, 2026-11-14: the rhombi the default for now).
+  Far off as its shadow (you: it bobbed, rising between hops): its shadow
+  goes on leg after leg, drawn into its end and stretched on, rising once
+  where it fires; a far spot it sees you from is one move however many
+  legs. It works (you, 2026-11-14).
+  Shot (you, 2026-11-13: physical by default; `fall.rs`): its blades
+  (stepped capsules tapering as the model does) and core are hit standing,
+  never as its shadow; 50 health (`health=`). A shard rocks it back on its
+  feet by its torque about them (face on), shoves it back sliding on its
+  feet (0.6 m/s a shard, `shove=` times) and knocks its blade about the
+  hinge (side on), springing back; it staggers 0.04 s a shard (0.4 at
+  most). Killed (`death=`): 1 its hinge limp, it falls as one, blades
+  swinging free, splaying open; 2 it comes apart, blades and core each
+  falling (default: reads better, you); 3 it bursts as the others do.
+  No burst on overkill, unlike the stalker (you, 2026-11-14: point blank
+  hurls it apart instead). The fall: points per piece
+  held rigid by shape matching, Verlet, Coulomb friction, sleeping when
+  still; moving on as it was, thrown by the killing blast as one body
+  (along the shots, spun about where they struck; the struck piece flung
+  harder; a little up): you saw it break down in place, 2026-11-13; then
+  too little point blank (the shards after the killing one passed through
+  it): now pieces land 20 to 25 m back point blank.
+  Ichor where it parts and where struck, and 40 splinters and flakes of it
+  (7 big blade pieces, up to 1.8 m) thrown with its pieces, lying a few
+  seconds (you: a few plain pieces read as a toy breaking; splinters, not
+  cut meshes, for their cost). A hit recoils its core back from the shot
+  (a flinch; turning it whole spun it like a toy, removed);
+  the rock and knock tilt one way and ease back, never swinging past (you:
+  rocking back and forth did not work).
+  Lessons (tests): a lift out of the ground must not become speed (it rose
+  into the air); a stiff friction held it up like a stepladder; its core
+  free on the hinge swung for ever; its hinge points stuck out as feet.
+  `--opt aim` (captures): `fight`'s shots at the nearest tumbler.
+  To judge: the throw and the shove (`shove=`); the stagger.
+  Not yet: navigation, sounds; your damage ideas (breaking geometry,
+  damage indicators: cracks in its glow).
 - **You** Stalker: searchlight pale or black, never judged.
   `spawn stalker searchlight=1`.
 - **You** Teleporting walkers: feel test (`--opt blink`). (blink notes)

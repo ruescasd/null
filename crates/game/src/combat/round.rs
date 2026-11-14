@@ -102,6 +102,7 @@ pub(super) fn track(
     swarm: Query<&Swarmer>,
     bishops: Query<&Bishop>,
     brutes: Query<&super::impaled::Impaled>,
+    tumblers: Query<&super::tumbler::Tumbler>,
     mut readout: Single<&mut Text, With<Readout>>,
 ) {
     let now = time.elapsed_secs();
@@ -109,7 +110,7 @@ pub(super) fn track(
         *round = Round { what: Some(what), began: now, shots: gun.shots, health: player.health, ..default() };
         *gates = Gates { open: true, from: now + BREATH };
     }
-    let alive = hunters.iter().filter(|h| h.health > 0.0).count() + swarm.iter().count() + bishops.iter().filter(|b| b.health > 0.0).count() + brutes.iter().filter(|b| b.alive()).count();
+    let alive = hunters.iter().filter(|h| h.health > 0.0).count() + swarm.iter().count() + bishops.iter().filter(|b| b.health > 0.0).count() + brutes.iter().filter(|b| b.alive()).count() + tumblers.iter().filter(|t| t.alive()).count();
     let Some(what) = round.what.clone() else {
         readout.0 = if now < round.until { round.said.clone() } else { String::new() };
         return;

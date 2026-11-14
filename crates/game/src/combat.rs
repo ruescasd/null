@@ -136,7 +136,7 @@ impl Plugin for CombatPlugin {
             .add_systems(Startup, impaled::field::setup)
             .add_systems(Update, (impaled::arrive, impaled::fly, impaled::arms::adopt, impaled::arms::bend, impaled::arms::draw,impaled::attack::rings, impaled::field::show, impaled::field::beams).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
             .init_resource::<tumbler::Parts>()
-            .add_systems(Update, (tumbler::arrive, tumbler::cut, tumbler::tumble, tumbler::bolts, tumbler::crack::cracks).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
+            .add_systems(Update, (tumbler::arrive, tumbler::cut, tumbler::tumble, tumbler::splinters, tumbler::bolts, tumbler::crack::cracks).chain().after(crate::player::walk).before(hunter::spawn).run_if(crate::loading::playing))
             .add_systems(Update, (hunter::skeleton.after(hunter::flesh), hunter::loads.after(hunter::flesh), lance::place.after(hunter::flesh), halo::animate, hunter::footfalls.after(hunter::hunt), hunter::later, beam::shots, envelop::envelop, strike::strikes, strike::scars, strike::hold, strike::floaters, cape::cloaks.after(hunter::flesh), slab::pulse, chain::chains.after(hunter::flesh), needles, (bishop::arrive, bishop::float, bishop::carry, bishop::gleam, bishop::ghosts, bishop::bolts, bishop::flashes).chain().before(hunter::spawn), hunter::spawn).run_if(crate::loading::playing))
             .add_systems(PostUpdate, (kick, weapon::animate, weapon::effects).before(TransformSystems::Propagate));
     }
@@ -524,8 +524,9 @@ fn fire(
     camera: Single<(&Transform, &FlyCam, &mut Player)>,
     mut swarm: Query<(Entity, &mut Transform, &mut Swarmer), Without<FlyCam>>,
     mut hunters: Query<(Entity, &mut hunter::Hunter)>,
-    // (Floaters: bishops and brutes, as one parameter.)
-    (mut bishops, mut brutes): (Query<(Entity, &mut bishop::Bishop)>, Query<(Entity, &mut impaled::Impaled)>),
+    // (Floaters: bishops and brutes, and tumblers and their parts, as one
+    // parameter.)
+    (mut bishops, mut brutes, mut tumblers, tumbler_parts): (Query<(Entity, &mut bishop::Bishop)>, Query<(Entity, &mut impaled::Impaled)>, Query<(Entity, &mut tumbler::Tumbler)>, Query<&GlobalTransform, With<tumbler::Part>>),
     ichor: Res<ichor::Ichor>,
     fx: Res<weapon::Fx>,
     viewmodel: Single<Entity, With<weapon::Viewmodel>>,
@@ -543,7 +544,7 @@ fn fire(
     light.intensity *= (-dt * 40.0).exp();
     let (transform, fly, mut player) = camera.into_inner();
     // (For captures: `--opt fight` fires by itself, `huntfire` only at a hunter.)
-    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|(_, b)| b.health > 0.0) || brutes.iter().any(|(_, b)| b.alive())));
+    let auto = (args.opt("fight") && !args.opt("holdfire")) || (args.opt("huntfire") && (!hunters.is_empty() || bishops.iter().any(|(_, b)| b.health > 0.0) || brutes.iter().any(|(_, b)| b.alive()) || tumblers.iter().any(|(_, t)| t.alive())));
     if fly.noclip || !(input.fire || auto) || gun.cooldown > 0.0 || gun.empty {
         return;
     }
@@ -558,7 +559,15 @@ fn fire(
     gun.reload_in = Some(gun.reload_at);
 
     let eye = transform.translation;
-    let (right, up, forward) = (transform.right(), transform.up(), transform.forward());
+    let (mut right, mut up, mut forward) = (transform.right(), transform.up(), transform.forward());
+    // (For captures: `--opt aim`, its shots at the nearest tumbler's body
+    // standing, wherever you look.)
+    if args.opt("aim")
+        && let Some(at) = tumblers.iter().filter_map(|(_, t)| t.aim(&tumbler_parts)).min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)))
+    {
+        let t = Transform::from_translation(eye).looking_at(at, Vec3::Y);
+        (right, up, forward) = (t.right(), t.up(), t.forward());
+    }
     // The gun pushes you back a little (in the air, it carries).
     player.velocity -= *forward * KICKBACK;
     let muzzle = eye + right * weapon::MUZZLE_VIEW.x + up * weapon::MUZZLE_VIEW.y - forward * weapon::MUZZLE_VIEW.z;
@@ -594,10 +603,19 @@ fn fire(
         let mut struck = None;
         // Or a brute's, nearer than any (taking the shot from them).
         let limit = body.map_or(end, |(b, ..)| b);
-        let brute = brutes.iter().filter_map(|(e, b)| b.ray(eye, dir, limit).map(|d| (d, e))).min_by(|a, b| a.0.total_cmp(&b.0));
+        let mut brute = brutes.iter().filter_map(|(e, b)| b.ray(eye, dir, limit).map(|d| (d, e))).min_by(|a, b| a.0.total_cmp(&b.0));
         if let Some((d, _)) = brute {
             body = None;
             best = None;
+            end = d;
+        }
+        // Or a tumbler's (standing: its shadow is not shot), nearer still.
+        let limit = body.map_or(end, |(b, ..)| b);
+        let tumbled = tumblers.iter().filter_map(|(e, t)| t.ray(&tumbler_parts, eye, dir, limit).map(|(d, k)| (d, e, k))).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((d, ..)) = tumbled {
+            body = None;
+            best = None;
+            brute = None;
             end = d;
         }
         // Or a bishop's, nearer than either.
@@ -608,6 +626,25 @@ fn fire(
             b.embed(&mut commands, &assets, owner, eye + dir * d, dir, d / SHARD_SPEED);
             end = d;
             struck = Some(eye + dir * d);
+        } else if let Some((d, entity, k)) = tumbled
+            && let Ok((_, mut t)) = tumblers.get_mut(entity)
+        {
+            let at = eye + dir * d;
+            t.hurt(k, at, dir, DAMAGE);
+            // Its needle, in the part it struck, carried with it.
+            let part = t.part(k);
+            if let Ok(g) = tumbler_parts.get(part) {
+                let base = eye + dir * (d - NEEDLE_OUT);
+                commands.spawn((
+                    Needle { delay: d / SHARD_SPEED, life: NEEDLE_LIFE, size: NEEDLE_SIZE / g.scale() },
+                    Mesh3d(assets.shard.clone()),
+                    MeshMaterial3d(assets.bright.clone()),
+                    Transform::from_translation(g.affine().inverse().transform_point3(base)).with_rotation(g.rotation().inverse() * Quat::from_rotation_arc(Vec3::Y, dir)).with_scale(Vec3::ZERO),
+                    ChildOf(part),
+                ));
+            }
+            end = d;
+            struck = Some(at);
         } else if let Some((d, entity)) = brute
             && let Ok((_, mut b)) = brutes.get_mut(entity)
         {
@@ -943,6 +980,7 @@ fn die(
     bishops: Query<Entity, With<bishop::OfBishop>>,
     bolts: Query<(Entity, &bishop::Bolt)>,
     brutes: Query<Entity, With<impaled::Impaled>>,
+    tumblers: Query<Entity, With<tumbler::Tumbler>>,
 ) {
     for (entity, transform, s) in &swarm {
         if s.health > 0.0 {
@@ -972,7 +1010,7 @@ fn die(
         for entity in &bishops {
             commands.entity(entity).try_despawn();
         }
-        for entity in &brutes {
+        for entity in brutes.iter().chain(&tumblers) {
             commands.entity(entity).try_despawn();
         }
         for (entity, bolt) in &bolts {
@@ -982,6 +1020,32 @@ fn die(
             }
         }
     }
+}
+
+/// Where a ray from `o` along `d` (unit) first meets a capsule from `a` to
+/// `b`, `r` wide.
+pub(super) fn capsule(o: Vec3, d: Vec3, a: Vec3, b: Vec3, r: f32) -> Option<f32> {
+    let ba = b - a;
+    let oa = o - a;
+    let (baba, bard, baoa) = (ba.dot(ba), ba.dot(d), ba.dot(oa));
+    let (rdoa, oaoa) = (d.dot(oa), oa.dot(oa));
+    let qa = baba - bard * bard;
+    let qb = baba * rdoa - baoa * bard;
+    let qc = baba * oaoa - baoa * baoa - r * r * baba;
+    let h = qb * qb - qa * qc;
+    if h < 0.0 {
+        return None;
+    }
+    let t = (-qb - h.sqrt()) / qa;
+    let y = baoa + t * bard;
+    if y > 0.0 && y < baba {
+        return Some(t);
+    }
+    // (Else one of its round ends.)
+    let oc = if y <= 0.0 { oa } else { o - b };
+    let (cb, cc) = (d.dot(oc), oc.dot(oc) - r * r);
+    let h = cb * cb - cc;
+    (h > 0.0).then(|| -cb - h.sqrt())
 }
 
 /// Bright splinters bursting back from where a shard struck a body.

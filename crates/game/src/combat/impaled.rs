@@ -234,7 +234,7 @@ impl Impaled {
         let (pos, rot) = self.flight.drawn();
         let up = rot * Vec3::Y;
         let (a, b) = (pos - up * (feet() - RADIUS), pos + up * (HEIGHT - feet() - RADIUS));
-        capsule(eye, dir, a, b, RADIUS).filter(|&d| d > 0.0 && d < limit)
+        super::capsule(eye, dir, a, b, RADIUS).filter(|&d| d > 0.0 && d < limit)
     }
 
     /// A shard struck it, along `dir`: hurt, pushed and rocked a little, its
@@ -257,32 +257,6 @@ impl Impaled {
     pub(super) fn alive(&self) -> bool {
         self.health > 0.0
     }
-}
-
-/// Where a ray from `o` along `d` (unit) first meets a capsule from `a` to
-/// `b`, `r` wide.
-fn capsule(o: Vec3, d: Vec3, a: Vec3, b: Vec3, r: f32) -> Option<f32> {
-    let ba = b - a;
-    let oa = o - a;
-    let (baba, bard, baoa) = (ba.dot(ba), ba.dot(d), ba.dot(oa));
-    let (rdoa, oaoa) = (d.dot(oa), oa.dot(oa));
-    let qa = baba - bard * bard;
-    let qb = baba * rdoa - baoa * bard;
-    let qc = baba * oaoa - baoa * baoa - r * r * baba;
-    let h = qb * qb - qa * qc;
-    if h < 0.0 {
-        return None;
-    }
-    let t = (-qb - h.sqrt()) / qa;
-    let y = baoa + t * bard;
-    if y > 0.0 && y < baba {
-        return Some(t);
-    }
-    // (Else one of its round ends.)
-    let oc = if y <= 0.0 { oa } else { o - b };
-    let (cb, cc) = (d.dot(oc), oc.dot(oc) - r * r);
-    let h = cb * cb - cc;
-    (h > 0.0).then(|| -cb - h.sqrt())
 }
 
 /// A set course: its middle (on the ground) and across, the corner it is

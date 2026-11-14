@@ -1,36 +1,16 @@
 //! The tumbler (the user, 2026-11-13): an X of four long blades about a
 //! small core (a diamond body, its point a head), flat. Its two diagonals
 //! are cut from the core, each a rigid blade turning about where they cross,
-//! so it can move six ways (`move=`), to compare:
+//! so it can move two ways (`move=`; four more, cartwheeling, both, a
+//! thrown star and a spear leaping, removed: the user, 2026-11-13, kept in
+//! db34738):
 //!
-//! 1. It cartwheels (the user's thought; it might not work): a rimless
-//!    wheel of four spokes rolling in its plane over one planted tip at a
-//!    time, under its weight. It slows vaulting over the tip, falls onto the
-//!    next and pushes off as that one lands (`push`). Its tips are unevenly
-//!    spaced (58° and 122°, alternately), so it lurches, standing tall on
-//!    two tips close together and squatting low on two far apart. `hub`: its
-//!    core kept upright while its blades roll round it.
 //! 2. It strides like dividers: one diagonal planted, the hinge vaulting
 //!    over its tip, while the other windmills over the top, its upper tip
 //!    coming down ahead as the next foot (swung under, it would scrape the
 //!    ground and cut through the planted one). Its diagonals turn by turns
 //!    about its core like a clock's hands; the X opens and shuts each step;
 //!    its core stays upright.
-//! 3. Both (the user, 2026-11-13): its short steps (from its squat across
-//!    its near gap, up onto its close tips) cartwheeled under its weight,
-//!    its long ones (from standing tall across its far gap, down into its
-//!    squat) placed as it strides: its planted diagonal turned about its
-//!    tip, the other reaching ahead to set its tip down, the X opening and
-//!    shutting again (it lands squatting, as cartwheeling, so that the
-//!    next step is short; striding on, it would stand tall, and every step
-//!    be long). Its core stays upright.
-//! 4. It spins flat like a thrown star: it rises, lies flat and spins,
-//!    flies at a hover, then swings upright, its spin running down onto its
-//!    feet.
-//! 5. It closes into a spear: its feet drawn together under it, it rises
-//!    onto one point, leans, leaps point first in an arc and sticks in the
-//!    ground; then it swings up over the stuck point, opening as it does,
-//!    and stands on the other end.
 //! 6. As its shadow (the user's idea, 2026-11-13): a light (not shown)
 //!    sinks behind it and its body collapses onto the ground along the
 //!    light's rays, into its own shadow, stretched the way its face looks,
@@ -64,7 +44,7 @@
 //!
 //! `spawn tumbler`: it hunts you, as above. `line`: its spots the ends of a
 //! line across before you instead, face on, to judge its motion by.
-//! `size=`, `push=`, `speed=`: to judge by feel; `log`: its pace each
+//! `size=`, `speed=`: to judge by feel; `log`: its pace each
 //! second.
 
 use bevy::{
@@ -81,19 +61,18 @@ use std::collections::VecDeque;
 use crate::camera::FlyCam;
 
 pub(super) mod crack;
+pub(super) mod fall;
 
 /// Its mesh, in `creatures/` (the user's, generated; untouched).
 const FILE: &str = "Meshy_AI_Remeshed_Compact_Core_1113024223_generate.glb";
 /// Measured from the file, upright as its node stands it (m, its units):
 /// its height; where its blades cross; its tips (anticlockwise, seen from
 /// its face: upper right, upper left, lower left, lower right; upper right
-/// and lower left one diagonal, the first); its radius of gyration about
-/// the crossing (its surface's, in its plane); its core: within this of the
+/// and lower left one diagonal, the first); its core: within this of the
 /// crossing, and its head (the core's point above it, so high, so wide).
 const MESH_HEIGHT: f32 = 1.901;
 const MESH_CENTRE: Vec2 = Vec2::new(0.008, 0.033);
 const MESH_TIPS: [Vec2; 4] = [Vec2::new(0.523, 0.946), Vec2::new(-0.493, 0.950), Vec2::new(-0.544, -0.946), Vec2::new(0.546, -0.951)];
-const MESH_GYRATION: f32 = 0.452;
 const MESH_CORE: f32 = 0.14;
 const MESH_HEAD: (f32, f32) = (0.34, 0.07);
 /// Its core's body (the rhombus under its head): from its bottom point to
@@ -143,47 +122,124 @@ const VORTEX: f32 = 6.0;
 const MESH_APART: f32 = 0.05;
 /// How tall it stands (m).
 const HEIGHT: f32 = 4.0;
-/// Cartwheeling: how much more than it needs to vault the next tip it
-/// pushes off with (of that spin), and its fastest spin (rad/s).
-const PUSH: f32 = 0.3;
-const MAX_SPIN: f32 = 7.0;
+/// Shot: how much it takes (two close blasts or so: a blast's 16 shards
+/// 1.8 each); its blades' thickness out from where they cross (its units,
+/// from the model: to each fraction of a blade's half length, how thick,
+/// half), and its core's (half across).
+const HEALTH: f32 = 50.0;
+const BLADE_GIRTH: [(f32, f32); 4] = [(0.37, 0.14), (0.56, 0.1), (0.75, 0.07), (1.0, 0.045)];
+/// A shard knocking a blade about where they cross (struck from its side):
+/// how fast it turns it struck square at its tip (rad/s, less nearer its
+/// crossing), how quickly it springs back (rad/s) and how damped. A shard
+/// rocking it on its feet (struck face on, most): how fast, struck square
+/// at its height (rad/s), how quickly it springs back and how damped, how
+/// far at most (rad). Both damped critically (1): knocked one way, back
+/// without swinging past (the user, 2026-11-13: rocking back and forth, it
+/// did not work). How long each shard staggers it (s), and at most.
+const KNOCK: f32 = 9.0;
+const KNOCK_SPRING: (f32, f32) = (12.0, 1.0);
+const ROCK: f32 = 1.0;
+const ROCK_SPRING: (f32, f32) = (6.0, 1.0);
+const ROCK_MOST: f32 = 0.45;
+const STAGGER: (f32, f32) = (0.04, 0.4);
+/// A shard shoving it back along the shot (the user, 2026-11-13: rocked in
+/// place, it did not take the shot's momentum): how fast (m/s, level, each
+/// shard; `shove=` times), how fast at most (m/s), how quickly its feet's
+/// friction stops it (m/s²); and it stops short of ground rising more than
+/// so far (m: a wall).
+const SHOVE: f32 = 0.6;
+const SHOVE_MOST: f32 = 5.0;
+const SHOVE_FRICTION: f32 = 6.0;
+const SHOVE_STEP: f32 = 0.5;
+/// A shard recoiling its core back from the shot, about where its blades
+/// cross (the user, 2026-11-13: a flinch, its torso thrown back; turning
+/// it whole, it spun like a toy, one rigid piece): how fast (rad/s), how
+/// quickly it comes back (rad/s; damped critically: one way, never past),
+/// how far at most (rad).
+const RECOIL: f32 = 2.0;
+const RECOIL_SPRING: f32 = 10.0;
+const RECOIL_MOST: f32 = 0.6;
+/// Killed, falling (not bursting): ichor where it parts, and where the
+/// shards struck (each so likely, so many at most). Splinters of it: how
+/// many, how many of them flakes (flat), how long (m, shortest and
+/// longest: most short), how fast they scatter besides its throw (m/s),
+/// how long they lie (s, about) and how long they take to go.
+const DEBRIS_STRUCK: f32 = 0.35;
+const DEBRIS_MOST: usize = 4;
+/// (The user, 2026-11-13: larger; pieces falling round it, the toy look
+/// not for this world.) Some of them big: pieces of its blades.
+const SPLINTERS: u32 = 40;
+const SPLINTER_FLAKES: f32 = 0.35;
+const SPLINTER_LONG: (f32, f32) = (0.25, 1.1);
+const SPLINTER_BIG: u32 = 7;
+const SPLINTER_BIG_LONG: (f32, f32) = (1.0, 1.8);
+const SPLINTER_SPREAD: f32 = 5.0;
+const SPLINTER_LIES: f32 = 6.0;
+const SPLINTER_GOES: f32 = 0.6;
+
+/// A splinter of a tumbler killed: flying (how fast, how it spins), how
+/// long it has left, its size; lying on the ground (still, uncounted).
+#[derive(Component)]
+pub(super) struct Splinter {
+    velocity: Vec3,
+    spin: Vec3,
+    life: f32,
+    size: Vec3,
+    lying: bool,
+}
+
+/// Splinters flying, falling, lying flat where they land, and going (cheap:
+/// a point each against the ground, none lying).
+pub(super) fn splinters(mut commands: Commands, time: Res<Time>, ground: crate::ground::Ground, mut splinters: Query<(Entity, &mut Splinter, &mut Transform)>) {
+    let dt = time.delta_secs().min(0.05);
+    for (entity, mut s, mut transform) in &mut splinters {
+        s.life -= dt;
+        if s.life <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if s.life < SPLINTER_GOES {
+            transform.scale = s.size * (s.life / SPLINTER_GOES);
+        }
+        if s.lying {
+            continue;
+        }
+        s.velocity.y -= 18.0 * dt;
+        let mut p = transform.translation + s.velocity * dt;
+        // (Lying on its thinnest side.)
+        let floor = ground.at(p) + 0.025 * s.size.x.min(s.size.z);
+        if p.y < floor {
+            p.y = floor;
+            // (Landing: bouncing a little, sliding, then lying flat.)
+            s.velocity = Vec3::new(s.velocity.x * 0.45, -s.velocity.y * 0.25, s.velocity.z * 0.45);
+            s.spin *= 0.4;
+            if s.velocity.length() < 1.2 {
+                let along = transform.rotation * Vec3::Y;
+                transform.rotation = Quat::from_rotation_arc(along, along.with_y(0.0).normalize_or(Vec3::X)) * transform.rotation;
+                s.lying = true;
+            }
+        }
+        transform.translation = p;
+        let spin = s.spin * dt;
+        transform.rotate(Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z));
+    }
+}
 /// How fast it turns its plane, about the tip it is on (rad/s).
 const TURN: f32 = 1.2;
 /// It stops at the first landing within this of where it is going (m, in
 /// its plane), and sets off when that is further than this (m).
 const THERE: f32 = 0.8;
 const OFF: f32 = 2.0;
-/// Striding: its pace (m/s; the hybrid's, and the stride's: the user,
-/// 2026-11-13, an ingredient for its shadow, 20), and its quickest step
-/// (s, at the hybrid's pace: quicker at a quicker pace).
-const STRIDE_PACE: f32 = 2.2;
-const STRIDE_FAST: f32 = 20.0;
+/// Striding: its pace (m/s; the user, 2026-11-13, an ingredient for its
+/// shadow, 20), and its quickest step (s) at `STRIDE_SLOW` (its first
+/// pace, m/s): quicker at a quicker pace.
+const STRIDE_PACE: f32 = 20.0;
+const STRIDE_SLOW: f32 = 2.2;
 const STRIDE_QUICKEST: f32 = 0.45;
-/// The spear: how long it takes to shut (s), to lean (s), how far it leans
-/// (rad, from upright: its leap's angle from level is the rest), its
-/// shortest and longest leap (m), how deep it sticks (m), how long it stays
-/// stuck (s), how long it takes to swing up over its point and open (s).
-const SHUT: f32 = 0.5;
-const LEAN: (f32, f32) = (0.35, 0.785);
-const LEAP: (f32, f32) = (4.0, 12.0);
-const STICK: f32 = 0.3;
-const STUCK: f32 = 0.6;
-const RISE: f32 = 0.8;
-/// The star: how long it takes to rise and lie flat (s), how high it flies
-/// (m, its centre over the ground), how fast (m/s), how fast it spins
-/// (rad/s), how hard it brakes (m/s²), how long it takes to swing upright
-/// (s).
-const LIFT: f32 = 0.6;
-const HOVER: f32 = 1.4;
-const STAR_PACE: f32 = 7.0;
-const STAR_SPIN: f32 = 18.0;
-const BRAKE: f32 = 9.0;
-const UPRIGHT: f32 = 0.7;
 /// Its line across before you (`line`): how far ahead (m), how far either
 /// side (m).
 const AHEAD: f32 = 14.0;
 const HALF: f32 = 9.0;
-const G: f32 = 9.81;
 /// As its shadow (ranges its chance is drawn from): how long leaving and
 /// arriving each take (s,
 /// give or take a fifth; `stretch=`: the user, 2026-11-13, slower, to see;
@@ -282,111 +338,7 @@ impl Frame {
     }
 }
 
-/// Its rolling: a rimless wheel in its plane, on one tip (`on`, planted at
-/// `pivot`), or resting on two.
-#[derive(Clone, Debug)]
-pub(super) struct Roll {
-    frame: Frame,
-    /// Its radius of gyration, squared (m²).
-    k2: f32,
-    on: usize,
-    pivot: Vec3,
-    /// Its turn in its plane (rad, anticlockwise seen from its face), how
-    /// fast (rad/s); its plane's heading (rad, about up: 0 its right along
-    /// +x); which way along its plane it rolls (+1 its right, -1 its left).
-    angle: f32,
-    spin: f32,
-    yaw: f32,
-    way: f32,
-    /// At rest: the other tip it stands on.
-    rest: Option<usize>,
-    /// Its core kept upright.
-    hub: bool,
-}
-
-impl Roll {
-    /// Standing on its two lower tips over `at` (its ground), its face
-    /// square to `yaw`'s.
-    pub(super) fn new(scale: f32, at: Vec3, yaw: f32, hub: bool) -> Roll {
-        let frame = Frame::new(scale);
-        let mut roll = Roll { angle: frame.level(), frame, k2: (MESH_GYRATION * scale).powi(2), on: 3, pivot: Vec3::ZERO, spin: 0.0, yaw, way: 1.0, rest: Some(2), hub };
-        // (Its centre over `at`, its lower tips on it.)
-        roll.pivot = at + Frame::across(yaw) * roll.arm(3).x;
-        roll
-    }
-
-    fn arm(&self, j: usize) -> Vec2 {
-        self.frame.arm(j, [self.angle; 2])
-    }
-
-    pub(super) fn centre(&self) -> Vec3 {
-        self.pivot - Frame::place(self.yaw, self.arm(self.on))
-    }
-
-    pub(super) fn tip(&self, j: usize) -> Vec3 {
-        self.centre() + Frame::place(self.yaw, self.arm(j))
-    }
-
-    fn pose(&self) -> Pose {
-        let heading = Quat::from_rotation_y(self.yaw);
-        Pose { centre: self.centre(), body: heading * Quat::from_rotation_z(self.angle), turns: [0.0; 2], core: self.hub.then_some(heading), flat: None }
-    }
-
-    /// The spin it needs to vault the tip it is on: to lift its centre over
-    /// it (rad/s).
-    fn clear(&self) -> f32 {
-        let d = -self.arm(self.on);
-        (2.0 * G * (d.length() - d.y).max(0.0) / (self.k2 + d.length_squared())).sqrt()
-    }
-
-    /// A frame (`dt` s) towards `goal` (none: it stays): setting off from
-    /// rest, rolling, landing on the next tip (pushing off again, or
-    /// stopping there if it is there). How hard a tip landed (m/s), if one
-    /// did.
-    pub(super) fn step(&mut self, dt: f32, goal: Option<Vec3>, push: f32, ground: &dyn Fn(Vec3) -> f32) -> Option<f32> {
-        if let Some(other) = self.rest {
-            self.way = setting_off(goal?, self.centre(), self.yaw)?;
-            // (Over the tip ahead.)
-            let ahead = if self.arm(other).x * self.way > self.arm(self.on).x * self.way { other } else { self.on };
-            self.pivot = self.tip(ahead);
-            self.on = ahead;
-            self.rest = None;
-            self.spin = -self.way * self.clear() * (1.0 + push);
-            return None;
-        }
-        self.yaw = turned(self.yaw, self.way, self.pivot, goal, dt);
-        // Its weight about its tip.
-        let d = -self.arm(self.on);
-        self.spin += -G * d.x / (d.length_squared() + self.k2) * dt;
-        self.angle += self.spin * dt;
-        // Another tip down.
-        let centre = self.centre();
-        let (j, t) = (0..4).filter(|&j| j != self.on).map(|j| (j, self.tip(j))).find(|&(_, t)| t.y < ground(t))?;
-        let across = Frame::across(self.yaw);
-        let flat = |v: Vec3| Vec2::new(v.dot(across), v.y);
-        let was = flat(centre - self.pivot);
-        let moving = Vec2::new(-was.y, was.x) * self.spin;
-        let pivot = t.with_y(ground(t));
-        let from = flat(centre - pivot);
-        // (Its turn about the new tip as it lands: what it had about it,
-        // kept.)
-        let after = (self.k2 * self.spin + from.perp_dot(moving)) / (self.k2 + from.length_squared());
-        let before = self.on;
-        // (Its landed tip on the ground; its centre lifted out by as much
-        // as it had sunk, a few millimetres.)
-        self.on = j;
-        self.pivot = pivot;
-        if goal.is_none_or(|g| there(g, self.centre(), self.yaw, self.way)) {
-            self.rest = Some(before);
-            self.spin = 0.0;
-        } else {
-            self.spin = -self.way * (self.clear() * (1.0 + push)).max(-self.way * after).min(MAX_SPIN);
-        }
-        Some(moving.length())
-    }
-}
-
-/// Whether `goal` is reached from `centre`, rolling `way` along a plane
+/// Whether `goal` is reached from `centre`, striding `way` along a plane
 /// headed `yaw`: within `THERE` ahead, or behind.
 fn there(goal: Vec3, centre: Vec3, yaw: f32, way: f32) -> bool {
     (goal - centre).with_y(0.0).dot(Frame::across(yaw) * way) < THERE
@@ -475,7 +427,7 @@ impl Stride {
         self.by[swung] = swing;
         self.through = 0.0;
         // (Its hinge goes twice its lean's reach forward.)
-        self.period = (2.0 * hip.x.abs() / self.pace).max(STRIDE_QUICKEST * STRIDE_PACE / self.pace);
+        self.period = (2.0 * hip.x.abs() / self.pace).max(STRIDE_QUICKEST * STRIDE_SLOW / self.pace);
     }
 
     fn step(&mut self, dt: f32, goal: Option<Vec3>, ground: &dyn Fn(Vec3) -> f32) {
@@ -496,7 +448,7 @@ impl Stride {
         // (Turning as far for each metre at any pace: at its pace for each
         // second, quicker, it went past a goal off to its side before it
         // turned to it, stepping back and forth for ever.)
-        self.yaw = turned(self.yaw, self.way, self.pivot, goal, dt * self.pace / STRIDE_PACE);
+        self.yaw = turned(self.yaw, self.way, self.pivot, goal, dt * self.pace / STRIDE_SLOW);
         self.through = (self.through + dt / self.period).min(1.0);
         let s = self.through;
         // (Its planted diagonal evenly; the swung one gathering, then
@@ -520,427 +472,6 @@ impl Stride {
             self.rest = true;
         } else {
             self.plan();
-        }
-    }
-}
-
-/// The spear's doings (see the module's account), each with how far through
-/// it is (s).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Throw {
-    Stand,
-    Shut(f32),
-    Lean(f32),
-    Fly,
-    Stuck(f32),
-    Rise(f32),
-}
-
-/// Shutting into a spear and leaping.
-#[derive(Clone, Debug)]
-struct Spear {
-    frame: Frame,
-    centre: Vec3,
-    yaw: f32,
-    way: f32,
-    /// Its body's turn in its plane (rad), and how shut (0 open, 1 a
-    /// spear).
-    turn: f32,
-    shut: f32,
-    doing: Throw,
-    /// Flying: its velocity, and the tip it leads with. Leaning and stuck:
-    /// the point it is on (its tip `lead` when stuck), and the turn it began
-    /// from; rising, the turn it ends on.
-    velocity: Vec3,
-    lead: usize,
-    point: Vec3,
-    began: f32,
-    ends_on: f32,
-    /// How far its leap is to go (m).
-    reach: f32,
-}
-
-impl Spear {
-    fn new(scale: f32, at: Vec3, yaw: f32) -> Spear {
-        let frame = Frame::new(scale);
-        let turn = frame.level();
-        let mut spear = Spear { frame, centre: at, yaw, way: 1.0, turn, shut: 0.0, doing: Throw::Stand, velocity: Vec3::ZERO, lead: 0, point: at, began: turn, ends_on: turn, reach: 0.0 };
-        spear.centre = at + Vec3::Y * spear.standing();
-        spear
-    }
-
-    /// Each diagonal's turn, shut by `shut`: both turned to lie along the
-    /// line through its upper and lower tips' middles.
-    fn turns(&self) -> [f32; 2] {
-        let t = self.frame.tips;
-        let along = |a: usize, b: usize| wrapped(angle(t[a] - t[b]) - std::f32::consts::FRAC_PI_2);
-        [self.turn - along(0, 2) * self.shut, self.turn - along(1, 3) * self.shut]
-    }
-
-    fn arm(&self, j: usize) -> Vec2 {
-        self.frame.arm(j, self.turns())
-    }
-
-    /// How high its centre stands over the ground on its lowest tips.
-    fn standing(&self) -> f32 {
-        (0..4).map(|j| -self.arm(j).y).fold(f32::MIN, f32::max)
-    }
-
-    /// Its lowest tip, and its highest.
-    fn ends(&self) -> (usize, usize) {
-        let by = |a: &usize, b: &usize| self.arm(*a).y.total_cmp(&self.arm(*b).y);
-        ((0..4).min_by(by).expect("four"), (0..4).max_by(by).expect("four"))
-    }
-
-    fn pose(&self) -> Pose {
-        let heading = Quat::from_rotation_y(self.yaw);
-        let turns = self.turns();
-        Pose { centre: self.centre, body: heading, turns, core: Some(heading * Quat::from_rotation_z((turns[0] + turns[1]) / 2.0)), flat: None }
-    }
-
-    fn step(&mut self, dt: f32, goal: Option<Vec3>, ground: &dyn Fn(Vec3) -> f32) {
-        let ease = |s: f32| s * s * (3.0 - 2.0 * s);
-        match self.doing {
-            Throw::Stand => {
-                let Some(goal) = goal else { return };
-                let Some(way) = setting_off(goal, self.centre, self.yaw) else { return };
-                self.way = way;
-                self.reach = ((goal - self.centre).with_y(0.0).length() - THERE * 0.5).clamp(LEAP.0, LEAP.1);
-                self.doing = Throw::Shut(0.0);
-            }
-            Throw::Shut(t) => {
-                let t = t + dt;
-                // (Its feet drawn together under it, its centre rising.)
-                self.shut = ease((t / SHUT).min(1.0));
-                self.yaw = turned(self.yaw, self.way, self.centre, goal, dt);
-                self.centre.y = ground(self.centre) + self.standing();
-                self.doing = if t < SHUT { Throw::Shut(t) } else { Throw::Lean(0.0) };
-                if t >= SHUT {
-                    let low = self.ends().0;
-                    self.point = self.centre + Frame::place(self.yaw, self.arm(low));
-                    self.began = self.turn;
-                }
-            }
-            Throw::Lean(t) => {
-                let t = t + dt;
-                // (Over its point, its top leaning ahead.)
-                self.turn = self.began - self.way * LEAN.1 * ease((t / LEAN.0).min(1.0));
-                let low = self.ends().0;
-                self.centre = self.point - Frame::place(self.yaw, self.arm(low));
-                if t >= LEAN.0 {
-                    // (Leaping along itself, its far end first: so fast as
-                    // to land `reach` off.)
-                    let rise = std::f32::consts::FRAC_PI_2 - LEAN.1;
-                    let speed = (G * self.reach / (2.0 * rise).sin()).sqrt();
-                    self.velocity = Frame::place(self.yaw, Vec2::new(self.way * rise.cos(), rise.sin())) * speed;
-                    self.lead = self.ends().1;
-                    self.doing = Throw::Fly;
-                } else {
-                    self.doing = Throw::Lean(t);
-                }
-            }
-            Throw::Fly => {
-                self.velocity.y -= G * dt;
-                self.centre += self.velocity * dt;
-                // (Along its flight, its leading end first.)
-                let flight = Vec2::new(self.velocity.dot(Frame::across(self.yaw)), self.velocity.y);
-                self.turn += wrapped(angle(flight) - angle(self.arm(self.lead)));
-                let tip = self.centre + Frame::place(self.yaw, self.arm(self.lead));
-                if tip.y < ground(tip) - STICK {
-                    self.point = tip;
-                    self.began = self.turn;
-                    // (To stand on its stuck end: the level turn with its
-                    // stuck tip below, nearest to that tip straight down.)
-                    let down = self.turn + wrapped(-std::f32::consts::FRAC_PI_2 - angle(self.arm(self.lead)));
-                    let level = self.frame.level();
-                    let mut end = level + ((down - level) / std::f32::consts::PI).round() * std::f32::consts::PI;
-                    if self.frame.arm(self.lead, [end; 2]).y > 0.0 {
-                        end += std::f32::consts::PI * (down - end).signum();
-                    }
-                    self.ends_on = end;
-                    self.doing = Throw::Stuck(0.0);
-                }
-            }
-            Throw::Stuck(t) => {
-                let t = t + dt;
-                self.doing = if t < STUCK { Throw::Stuck(t) } else { Throw::Rise(0.0) };
-            }
-            Throw::Rise(t) => {
-                let t = t + dt;
-                let s = ease((t / RISE).min(1.0));
-                // (Swinging up over its stuck point onto that end, opening,
-                // pulling it out.)
-                self.turn = self.began + (self.ends_on - self.began) * s;
-                self.shut = 1.0 - s;
-                let pulled = self.point.with_y(self.point.y + (ground(self.point) - self.point.y) * s);
-                self.centre = pulled - Frame::place(self.yaw, self.arm(self.lead));
-                self.doing = if t < RISE { Throw::Rise(t) } else { Throw::Stand };
-            }
-        }
-    }
-}
-
-/// The star's doings, each with how far through it is (s).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Spin {
-    Stand,
-    Lift(f32),
-    Fly,
-    Down(f32),
-}
-
-/// Spinning flat like a thrown star.
-#[derive(Clone, Debug)]
-struct Star {
-    frame: Frame,
-    centre: Vec3,
-    yaw: f32,
-    /// Its turn in its plane (rad), how fast (rad/s); how flat (0 upright,
-    /// 1 flat); how fast it flies (m/s, along `heading`).
-    turn: f32,
-    spin: f32,
-    flat: f32,
-    speed: f32,
-    heading: Vec3,
-    pace: f32,
-    /// Its centre's height flying (m: `HOVER` at 2.4 m tall, as tall).
-    hover: f32,
-    doing: Spin,
-    /// Coming down: where from (its centre, its turn) and where to.
-    from: (Vec3, f32),
-    to: (Vec3, f32),
-}
-
-impl Star {
-    fn new(scale: f32, at: Vec3, yaw: f32, pace: f32) -> Star {
-        let frame = Frame::new(scale);
-        let turn = frame.level();
-        let mut star = Star { frame, centre: at, yaw, turn, spin: 0.0, flat: 0.0, speed: 0.0, heading: Vec3::X, pace, hover: HOVER * scale * MESH_HEIGHT / 2.4, doing: Spin::Stand, from: (at, turn), to: (at, turn) };
-        star.centre = at + Vec3::Y * star.standing(turn);
-        star
-    }
-
-    fn standing(&self, turn: f32) -> f32 {
-        (0..4).map(|j| -self.frame.arm(j, [turn; 2]).y).fold(f32::MIN, f32::max)
-    }
-
-    fn pose(&self) -> Pose {
-        let body = Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2 * self.flat) * Quat::from_rotation_z(self.turn);
-        Pose { centre: self.centre, body, turns: [0.0; 2], core: None, flat: None }
-    }
-
-    fn step(&mut self, dt: f32, goal: Option<Vec3>, ground: &dyn Fn(Vec3) -> f32) {
-        let ease = |s: f32| s * s * (3.0 - 2.0 * s);
-        match self.doing {
-            Spin::Stand => {
-                if goal.and_then(|g| setting_off(g, self.centre, self.yaw)).is_some() {
-                    self.from = (self.centre, self.turn);
-                    self.doing = Spin::Lift(0.0);
-                }
-            }
-            Spin::Lift(t) => {
-                let t = t + dt;
-                let s = ease((t / LIFT).min(1.0));
-                self.flat = s;
-                self.spin = STAR_SPIN * s;
-                self.turn += self.spin * dt;
-                self.centre.y = self.from.0.y.lerp(ground(self.centre) + self.hover, s);
-                self.doing = if t < LIFT { Spin::Lift(t) } else { Spin::Fly };
-            }
-            Spin::Fly => {
-                self.turn += self.spin * dt;
-                // (Nowhere to go: down where it is.)
-                let goal = goal.unwrap_or(self.centre);
-                let to = (goal - self.centre).with_y(0.0);
-                let left = to.length();
-                self.heading = to.normalize_or(self.heading);
-                // (Braking so as to stop over it.)
-                let most = (2.0 * BRAKE * left).sqrt();
-                self.speed = (self.speed + BRAKE * dt).min(self.pace).min(most);
-                self.centre += self.heading * self.speed * dt;
-                self.centre.y = ground(self.centre) + self.hover;
-                if left < THERE {
-                    // (Its spin run down onto its feet: the turn at which it
-                    // stands level that it reaches, slowing evenly.)
-                    let level = self.frame.level();
-                    let coast = self.turn + self.spin * UPRIGHT / 2.0;
-                    let k = ((coast - level) / std::f32::consts::PI).ceil();
-                    let end = level + k * std::f32::consts::PI;
-                    self.from = (self.centre, self.turn);
-                    self.to = (self.centre.with_y(ground(self.centre) + self.standing(end)), end);
-                    self.doing = Spin::Down(0.0);
-                }
-            }
-            Spin::Down(t) => {
-                let t = t + dt;
-                let s = (t / UPRIGHT).min(1.0);
-                // (Slowing evenly to a stop, upright as it does.)
-                let run = 1.0 - (1.0 - s) * (1.0 - s);
-                self.turn = self.from.1 + (self.to.1 - self.from.1) * run;
-                self.flat = 1.0 - ease(s);
-                self.centre = self.from.0.lerp(self.to.0, ease(s));
-                // (No tip into the ground as it swings upright.)
-                let body = self.pose().body;
-                let lowest = (0..4).map(|j| (body * self.frame.tips[j].extend(0.0)).y).fold(f32::MAX, f32::min);
-                self.centre.y = self.centre.y.max(ground(self.centre) - lowest);
-                self.spin = 0.0;
-                self.doing = if t < UPRIGHT { Spin::Down(t) } else { Spin::Stand };
-            }
-        }
-    }
-}
-
-/// A step of its hybrid (`move=3`): at rest; a long step (from its tall
-/// stance across its far gap), placed as it strides: its planted diagonal
-/// turned evenly about its tip, the other reaching ahead (quickest at
-/// first) to set down the tip `to`, both turned by `by` in the end (its X
-/// as it was, squatting); a short step (from its squat across its near
-/// gap), rolled as it cartwheels, under its weight.
-#[derive(Clone, Debug)]
-enum Phase {
-    Rest,
-    Long { through: f32, period: f32, from: [f32; 2], by: f32, to: usize },
-    Short { spin: f32 },
-}
-
-/// Cartwheeling its short steps and striding its long ones (the user,
-/// 2026-11-13; see the module's account).
-#[derive(Clone, Debug)]
-struct Hybrid {
-    frame: Frame,
-    k2: f32,
-    on: usize,
-    pivot: Vec3,
-    yaw: f32,
-    way: f32,
-    turns: [f32; 2],
-    phase: Phase,
-    pace: f32,
-}
-
-impl Hybrid {
-    fn new(scale: f32, at: Vec3, yaw: f32, pace: f32) -> Hybrid {
-        let frame = Frame::new(scale);
-        let level = frame.level();
-        let mut h = Hybrid { frame, k2: (MESH_GYRATION * scale).powi(2), on: 3, pivot: Vec3::ZERO, yaw, way: 1.0, turns: [level; 2], phase: Phase::Rest, pace };
-        h.pivot = at + Frame::across(yaw) * h.arm(3).x;
-        h
-    }
-
-    fn arm(&self, j: usize) -> Vec2 {
-        self.frame.arm(j, self.turns)
-    }
-
-    fn centre(&self) -> Vec3 {
-        self.pivot - Frame::place(self.yaw, self.arm(self.on))
-    }
-
-    fn pose(&self) -> Pose {
-        let heading = Quat::from_rotation_y(self.yaw);
-        Pose { centre: self.centre(), body: heading, turns: self.turns, core: Some(heading), flat: None }
-    }
-
-    /// The tip it next lands on, rolling `way` whole over the tip it is
-    /// on: how far round from it (rad), and how far it turns to land it
-    /// (rad, none if it never would).
-    fn next(&self) -> (usize, f32, Option<f32>) {
-        let from = angle(self.arm(self.on));
-        let (to, gap) = (0..4).filter(|&j| j != self.on).map(|j| (j, ((angle(self.arm(j)) - from) * self.way).rem_euclid(std::f32::consts::TAU))).min_by(|a, b| a.1.total_cmp(&b.1)).expect("three");
-        // (Turned whole by `t`, the height of `to` over the tip it is on.)
-        let over = |t: f32| Vec2::from_angle(t).rotate(self.arm(to)).y - Vec2::from_angle(t).rotate(self.arm(self.on)).y;
-        let end = -self.way * std::f32::consts::PI;
-        let samples = 90;
-        let mut turn = None;
-        for k in 1..=samples {
-            let (a, b) = (end * (k - 1) as f32 / samples as f32, end * k as f32 / samples as f32);
-            if over(a) > 0.0 && over(b) <= 0.0 {
-                let (mut lo, mut hi) = (a, b);
-                for _ in 0..30 {
-                    let mid = (lo + hi) / 2.0;
-                    if over(mid) > 0.0 { lo = mid } else { hi = mid }
-                }
-                turn = Some(hi);
-                break;
-            }
-        }
-        (to, gap, turn)
-    }
-
-    /// The spin it needs to vault the tip it is on (rad/s).
-    fn clear(&self) -> f32 {
-        let d = -self.arm(self.on);
-        (2.0 * G * (d.length() - d.y).max(0.0) / (self.k2 + d.length_squared())).sqrt()
-    }
-
-    /// Its next step begun from where it stands on `on`: long across a far
-    /// gap, short across a near one.
-    fn begin(&mut self, push: f32) {
-        let (to, gap, turn) = self.next();
-        self.phase = match turn {
-            Some(by) if gap > std::f32::consts::FRAC_PI_2 => {
-                // (Its centre goes as far as its landing tip is from its
-                // planted one.)
-                let span = (self.arm(to) - self.arm(self.on)).length();
-                Phase::Long { through: 0.0, period: (span / self.pace).max(STRIDE_QUICKEST), from: self.turns, by, to }
-            }
-            _ => Phase::Short { spin: -self.way * self.clear() * (1.0 + push) },
-        };
-    }
-
-    /// Landed on `j`: on it, on the ground; there, at rest, else the next
-    /// step.
-    fn land(&mut self, j: usize, goal: Option<Vec3>, push: f32, ground: &dyn Fn(Vec3) -> f32) {
-        let tip = self.centre() + Frame::place(self.yaw, self.arm(j));
-        self.on = j;
-        self.pivot = tip.with_y(ground(tip));
-        if goal.is_none_or(|g| there(g, self.centre(), self.yaw, self.way)) {
-            self.phase = Phase::Rest;
-        } else {
-            self.begin(push);
-        }
-    }
-
-    fn step(&mut self, dt: f32, goal: Option<Vec3>, push: f32, ground: &dyn Fn(Vec3) -> f32) {
-        match self.phase.clone() {
-            Phase::Rest => {
-                let Some(way) = goal.and_then(|g| setting_off(g, self.centre(), self.yaw)) else { return };
-                self.way = way;
-                // (On the tip ahead of the two it stands on, its lowest two.)
-                let mut low: Vec<usize> = (0..4).collect();
-                low.sort_by(|&a, &b| self.arm(a).y.total_cmp(&self.arm(b).y));
-                let ahead = low[..2].iter().copied().max_by(|&a, &b| (self.arm(a).x * way).total_cmp(&(self.arm(b).x * way))).expect("two");
-                let centre = self.centre();
-                self.on = ahead;
-                self.pivot = centre + Frame::place(self.yaw, self.arm(ahead));
-                self.begin(push);
-            }
-            Phase::Long { through, period, from, by, to } => {
-                self.yaw = turned(self.yaw, self.way, self.pivot, goal, dt);
-                let through = (through + dt / period).min(1.0);
-                let reach = 1.0 - (1.0 - through) * (1.0 - through);
-                let planted = diagonal(self.on);
-                self.turns[planted] = from[planted] + by * through;
-                self.turns[1 - planted] = from[1 - planted] + by * reach;
-                if through >= 1.0 {
-                    self.land(to, goal, push, ground);
-                } else {
-                    self.phase = Phase::Long { through, period, from, by, to };
-                }
-            }
-            Phase::Short { mut spin } => {
-                self.yaw = turned(self.yaw, self.way, self.pivot, goal, dt);
-                let d = -self.arm(self.on);
-                spin += -G * d.x / (d.length_squared() + self.k2) * dt;
-                self.turns = self.turns.map(|t| t + spin * dt);
-                self.phase = Phase::Short { spin };
-                let centre = self.centre();
-                if let Some(j) = (0..4).filter(|&j| j != self.on).find(|&j| {
-                    let t = centre + Frame::place(self.yaw, self.arm(j));
-                    t.y < ground(t)
-                }) {
-                    self.land(j, goal, push, ground);
-                }
-            }
         }
     }
 }
@@ -1141,6 +672,11 @@ struct Shade {
     /// How much of leaving (and arriving) its body takes to collapse (rise).
     collapse: f32,
     doing: Shadow,
+    /// Its shadow going on from where it ends, another way, it not rising
+    /// between (the user, 2026-11-13: far off, risen and collapsed again
+    /// at each, it bobbed up and down): this arriving and the leaving after
+    /// it all shadow.
+    chained: bool,
     /// What it last began, said once (`log`).
     said: Option<String>,
 }
@@ -1148,7 +684,7 @@ struct Shade {
 impl Shade {
     fn new(scale: f32, at: Vec3, yaw: f32, seed: u32, low: f32, stretch: f32) -> Shade {
         let way = Arc { from: at.xz(), out: Vec2::Y, radius: 0.0, length: 0.0 };
-        Shade { frame: Frame::new(scale), at, yaw, way, to: at, to_yaw: yaw, profile: None, light: std::f32::consts::FRAC_PI_2, lowest: std::f32::consts::FRAC_PI_2, time: 1.0, seed: seed | 1, low, stretch, collapse: SHADE_COLLAPSE, doing: Shadow::Stand, said: None }
+        Shade { frame: Frame::new(scale), at, yaw, way, to: at, to_yaw: yaw, profile: None, light: std::f32::consts::FRAC_PI_2, lowest: std::f32::consts::FRAC_PI_2, time: 1.0, seed: seed | 1, low, stretch, collapse: SHADE_COLLAPSE, doing: Shadow::Stand, chained: false, said: None }
     }
 
     /// A number in 0..1 from its seed, its seed moved on.
@@ -1184,7 +720,7 @@ impl Shade {
         // (Its body a little ahead of the light, into its shadow and out.)
         let flat = match self.doing {
             // (Arriving, `s` runs from 1 down: it rises in the last of it.)
-            Shadow::Leave(s) | Shadow::Arrive(s) => Some(Flat { k: ease((s / self.collapse).min(1.0)), light: self.light }),
+            Shadow::Leave(s) | Shadow::Arrive(s) => Some(Flat { k: if self.chained { 1.0 } else { ease((s / self.collapse).min(1.0)) }, light: self.light }),
             Shadow::Stand => None,
         };
         Pose { centre, body: heading, turns: [level; 2], core: Some(heading), flat }
@@ -1206,63 +742,71 @@ impl Shade {
         off <= SHADE_OFF && arc <= self.heights().1 / self.low.tan() * 0.95
     }
 
+    /// Its shadow set off toward `g` along a way (its leaving's): whether it
+    /// set off (not if there, or barred).
+    fn plan(&mut self, g: Vec3, ground: &dyn Fn(Vec3) -> f32) -> bool {
+        let toward = (g - self.at).with_y(0.0);
+        if toward.length() < OFF {
+            return false;
+        }
+        // Its shadow sets off the way its face looks, whichever side
+        // is nearer where it goes, and curves there (far off, toward
+        // it, a little aside, by chance).
+        if toward.dot(Shade::facing(self.yaw)) < 0.0 {
+            self.yaw = wrapped(self.yaw + std::f32::consts::PI);
+        }
+        let out = Shade::facing(self.yaw).xz();
+        // (As far as its lowest light casts its shadow, along its
+        // way: further, it goes part of the way, more or less by
+        // chance, aimed a little aside.)
+        let reach = self.heights().1 / self.low.tan();
+        let far = toward.length() > reach;
+        let most = if far { reach * self.between((0.6, 1.0)) } else { reach };
+        let aim = if far { self.between((-SHADE_AIM, SHADE_AIM)) } else { 0.0 };
+        // (Its far end no further round from its face than so far:
+        // a sharper bend is too long a way round; the next goes on.)
+        let to = Vec2::from_angle(aim).rotate(toward.xz().normalize());
+        let off = out.angle_to(to).clamp(-SHADE_OFF, SHADE_OFF);
+        let mut way = Arc::new(self.at.xz(), out, self.at.xz() + Vec2::from_angle(off).rotate(out) * toward.length());
+        way.length = way.length.min(most);
+        let path = |s: f32| way.at(s);
+        let mut leave = Profile::along(self.at, Shade::facing(self.yaw), way.length, &path, ground);
+        // (Short of a step up too high for its shadow to climb, a
+        // metre before it.)
+        let mut s = 0.0;
+        while s < way.length {
+            if leave.height(s) - self.at.y > CLIMB * 0.95 {
+                way.length = (s - 1.0).max(0.0);
+                let path = |s: f32| way.at(s);
+                leave = Profile::along(self.at, Shade::facing(self.yaw), way.length, &path, ground);
+                break;
+            }
+            s += leave.spacing;
+        }
+        if way.length < 1.0 {
+            return false;
+        }
+        let (there, heading) = way.at(way.length);
+        self.to = Vec3::new(there.x, 0.0, there.y);
+        self.to.y = leave.height(way.length);
+        self.to_yaw = f32::atan2(-heading.x, -heading.y);
+        self.way = way;
+        self.lowest = leave.light_for(self.heights().1, way.length);
+        self.light = std::f32::consts::FRAC_PI_2;
+        self.profile = Some(leave);
+        self.time = self.stretch * self.between((0.8, 1.2));
+        self.said = Some(format!("leaves along a curve of {:.1} m, turning {:+.0} degrees", way.length, way.turns().to_degrees()));
+        self.doing = Shadow::Leave(0.0);
+        true
+    }
+
     fn step(&mut self, dt: f32, goal: Option<Vec3>, ground: &dyn Fn(Vec3) -> f32) {
         let ease = |s: f32| s * s * (3.0 - 2.0 * s);
         match self.doing {
             Shadow::Stand => {
-                let Some(g) = goal else { return };
-                let toward = (g - self.at).with_y(0.0);
-                if toward.length() < OFF {
-                    return;
+                if let Some(g) = goal {
+                    self.plan(g, ground);
                 }
-                // Its shadow sets off the way its face looks, whichever side
-                // is nearer where it goes, and curves there (far off, toward
-                // it, a little aside, by chance).
-                if toward.dot(Shade::facing(self.yaw)) < 0.0 {
-                    self.yaw = wrapped(self.yaw + std::f32::consts::PI);
-                }
-                let out = Shade::facing(self.yaw).xz();
-                // (As far as its lowest light casts its shadow, along its
-                // way: further, it goes part of the way, more or less by
-                // chance, aimed a little aside.)
-                let reach = self.heights().1 / self.low.tan();
-                let far = toward.length() > reach;
-                let most = if far { reach * self.between((0.6, 1.0)) } else { reach };
-                let aim = if far { self.between((-SHADE_AIM, SHADE_AIM)) } else { 0.0 };
-                // (Its far end no further round from its face than so far:
-                // a sharper bend is too long a way round; the next goes on.)
-                let to = Vec2::from_angle(aim).rotate(toward.xz().normalize());
-                let off = out.angle_to(to).clamp(-SHADE_OFF, SHADE_OFF);
-                let mut way = Arc::new(self.at.xz(), out, self.at.xz() + Vec2::from_angle(off).rotate(out) * toward.length());
-                way.length = way.length.min(most);
-                let path = |s: f32| way.at(s);
-                let mut leave = Profile::along(self.at, Shade::facing(self.yaw), way.length, &path, ground);
-                // (Short of a step up too high for its shadow to climb, a
-                // metre before it.)
-                let mut s = 0.0;
-                while s < way.length {
-                    if leave.height(s) - self.at.y > CLIMB * 0.95 {
-                        way.length = (s - 1.0).max(0.0);
-                        let path = |s: f32| way.at(s);
-                        leave = Profile::along(self.at, Shade::facing(self.yaw), way.length, &path, ground);
-                        break;
-                    }
-                    s += leave.spacing;
-                }
-                if way.length < 1.0 {
-                    return;
-                }
-                let (there, heading) = way.at(way.length);
-                self.to = Vec3::new(there.x, 0.0, there.y);
-                self.to.y = leave.height(way.length);
-                self.to_yaw = f32::atan2(-heading.x, -heading.y);
-                self.way = way;
-                self.lowest = leave.light_for(self.heights().1, way.length);
-                self.light = std::f32::consts::FRAC_PI_2;
-                self.profile = Some(leave);
-                self.time = self.stretch * self.between((0.8, 1.2));
-                self.said = Some(format!("leaves along a curve of {:.1} m, turning {:+.0} degrees", way.length, way.turns().to_degrees()));
-                self.doing = Shadow::Leave(0.0);
             }
             Shadow::Leave(s) => {
                 let s = (s + dt / self.time).min(1.0);
@@ -1286,12 +830,25 @@ impl Shade {
                 self.profile = Some(arrive);
                 self.time = self.stretch * self.between((0.8, 1.2));
                 self.doing = Shadow::Arrive(1.0);
+                // (Short of where it goes, and a way on from here: its
+                // shadow goes on, it not rising.)
+                self.chained = goal.is_some_and(|g| self.clone().plan(g, ground));
+                if self.chained {
+                    self.said = Some("goes on as its shadow".to_string());
+                }
             }
             Shadow::Arrive(s) => {
                 let s = s - dt / self.time;
                 self.light = std::f32::consts::FRAC_PI_2 + (self.lowest - std::f32::consts::FRAC_PI_2) * ease(s.max(0.0));
                 self.doing = if s <= 0.0 { Shadow::Stand } else { Shadow::Arrive(s) };
-                if s <= 0.0 {
+                if s <= 0.0 && self.chained {
+                    // (Drawn into where it ends: on, along the next; barred
+                    // after all (where it goes moved), it rises.)
+                    if !goal.is_some_and(|g| self.plan(g, ground)) {
+                        self.chained = false;
+                        self.doing = Shadow::Arrive(self.collapse);
+                    }
+                } else if s <= 0.0 {
                     self.said = Some("stands".to_string());
                 }
             }
@@ -1302,28 +859,20 @@ impl Shade {
 /// How it moves (`move=`).
 #[derive(Clone, Debug)]
 enum Gait {
-    Wheel(Roll),
     Stride(Stride),
-    Hybrid(Hybrid),
     Shade(Shade),
-    Spear(Spear),
-    Star(Star),
 }
 
 impl Gait {
     fn pose(&self) -> Pose {
         match self {
-            Gait::Wheel(r) => r.pose(),
             Gait::Stride(s) => s.pose(),
-            Gait::Hybrid(h) => h.pose(),
             Gait::Shade(s) => s.pose(),
-            Gait::Spear(s) => s.pose(),
-            Gait::Star(s) => s.pose(),
         }
     }
 
     /// Whether it gets to `to` in one move (as its shadow, one shadow; any
-    /// other way, walking or rolling, it always does).
+    /// other way, striding, it always does).
     fn reaches(&self, to: Vec3) -> bool {
         match self {
             Gait::Shade(s) => s.reaches(to),
@@ -1341,37 +890,44 @@ impl Gait {
 
     fn resting(&self) -> bool {
         match self {
-            Gait::Wheel(r) => r.rest.is_some(),
             Gait::Stride(s) => s.rest,
-            Gait::Hybrid(h) => matches!(h.phase, Phase::Rest),
             Gait::Shade(s) => s.doing == Shadow::Stand,
-            Gait::Spear(s) => s.doing == Throw::Stand,
-            Gait::Star(s) => s.doing == Spin::Stand,
         }
     }
 
-    fn step(&mut self, dt: f32, goal: Option<Vec3>, push: f32, ground: &dyn Fn(Vec3) -> f32) {
+    fn step(&mut self, dt: f32, goal: Option<Vec3>, ground: &dyn Fn(Vec3) -> f32) {
         match self {
-            Gait::Wheel(r) => {
-                r.step(dt, goal, push, ground);
-            }
             Gait::Stride(s) => s.step(dt, goal, ground),
-            Gait::Hybrid(h) => h.step(dt, goal, push, ground),
             Gait::Shade(s) => s.step(dt, goal, ground),
-            Gait::Spear(s) => s.step(dt, goal, ground),
-            Gait::Star(s) => s.step(dt, goal, ground),
         }
+    }
+
+    /// Shoved `by` (level), its feet on the ground where they slide to;
+    /// whether it went (not against ground rising too high, a wall; not
+    /// travelling as its shadow).
+    fn shift(&mut self, by: Vec3, ground: &dyn Fn(Vec3) -> f32) -> bool {
+        let feet = match self {
+            Gait::Stride(s) => &mut s.pivot,
+            Gait::Shade(s) if s.doing == Shadow::Stand => &mut s.at,
+            Gait::Shade(_) => return false,
+        };
+        let to = *feet + by;
+        let height = ground(to);
+        if height - feet.y > SHOVE_STEP {
+            return false;
+        }
+        *feet = to.with_y(height);
+        true
     }
 }
 
-/// A tumbler: how it moves, how hard it pushes off cartwheeling, its line
+/// A tumbler: how it moves, its line
 /// across before you (if not chasing you) and which end it makes for, how
 /// long it has rested; its parts (its two diagonals, its core); logging its
 /// pace.
 #[derive(Component)]
 pub(super) struct Tumbler {
     gait: Gait,
-    push: f32,
     line: Option<[Vec3; 2]>,
     leg: usize,
     parts: [Entity; 4],
@@ -1403,6 +959,25 @@ pub(super) struct Tumbler {
     /// drawn now.
     fold: Option<(Handle<ShaderBuffer>, Handle<FoldMaterial>, Handle<FoldMaterial>)>,
     look: Look,
+    /// Its health; the shards that struck it since it was last moved
+    /// (which part, where, which way); its diagonals knocked off their turn
+    /// (rad) and how fast (rad/s), springing back; how long it stands
+    /// staggered (s); how it dies, and its fall, dead.
+    health: f32,
+    hits: Vec<(usize, Vec3, Vec3)>,
+    knock: [(f32, f32); 2],
+    rock: (Vec3, Vec3),
+    /// Shoved back along the shots (m/s, level), sliding to a stop; how
+    /// hard (`shove=`: alive, and thrown dead).
+    slide: Vec3,
+    recoil: (Vec3, Vec3),
+    shove: f32,
+    stun: f32,
+    death: fall::Death,
+    fall: Option<fall::Fall>,
+    /// Its parts as last drawn and the frame before (in the world), and how
+    /// long between: to fall moving as it was.
+    shown: Option<([Transform; 4], [Transform; 4], f32)>,
     log: bool,
     logged: (f32, Vec3),
 }
@@ -1453,13 +1028,72 @@ enum Act {
 }
 
 impl Tumbler {
+    pub(super) fn alive(&self) -> bool {
+        self.health > 0.0
+    }
+
+    /// Where a shot along `dir` from `eye` strikes it, if before `limit`,
+    /// and which of its parts (0, 1 its blades, 2 its core), as it was drawn
+    /// (`parts`: its parts' places); none fallen, or travelling as its shadow
+    /// (the user, 2026-11-13: its shadow is not shot). (Killed by a shard,
+    /// it is still struck by the rest of its blast, to throw it: skipped
+    /// once dead, a blast point blank threw it with the few shards that
+    /// killed it, the user, 2026-11-13.)
+    pub(super) fn ray(&self, parts: &Query<&GlobalTransform, With<Part>>, eye: Vec3, dir: Vec3, limit: f32) -> Option<(f32, usize)> {
+        if self.fall.is_some() || self.look != Look::Solid {
+            return None;
+        }
+        let mut best: Option<(f32, usize)> = None;
+        let mut test = |k: usize, a: Vec3, b: Vec3, r: f32| {
+            if let Some(d) = super::capsule(eye, dir, a, b, r).filter(|&d| d > 0.0 && d < best.map_or(limit, |(b, _)| b)) {
+                best = Some((d, k));
+            }
+        };
+        for k in 0..2 {
+            let Ok(g) = parts.get(self.parts[k]) else { continue };
+            let s = g.scale().x;
+            for end in [k, k + 2] {
+                let tip = (MESH_TIPS[end] - MESH_CENTRE).extend(0.0);
+                let mut from = 0.0;
+                for (to, r) in BLADE_GIRTH {
+                    test(k, g.transform_point(tip * from), g.transform_point(tip * to), r * s);
+                    from = to;
+                }
+            }
+        }
+        if let Ok(g) = parts.get(self.parts[2]) {
+            let (low, top) = MESH_BODY;
+            let head = MESH_HEAD.0 + (top - low) * (self.body - 1.0);
+            test(2, g.transform_point(Vec3::Y * low), g.transform_point(Vec3::Y * head), MESH_BODY_SIZE.0 / 2.0 * g.scale().x);
+        }
+        best
+    }
+
+    /// Its body's middle as drawn, if it can be shot (`--opt aim`).
+    pub(super) fn aim(&self, parts: &Query<&GlobalTransform, With<Part>>) -> Option<Vec3> {
+        (self.alive() && self.look == Look::Solid).then(|| parts.get(self.parts[2]).ok()).flatten().map(|g| g.transform_point(body_middle(self.body, 1.0)))
+    }
+
+    /// A shard struck its part `part` at `at`, going `dir`.
+    pub(super) fn hurt(&mut self, part: usize, at: Vec3, dir: Vec3, damage: f32) {
+        self.health -= damage;
+        self.hits.push((part, at, dir));
+    }
+
+    /// Its part `k`'s entity (to stick a shard in).
+    pub(super) fn part(&self, k: usize) -> Entity {
+        self.parts[k]
+    }
+
     /// Its next spot to fire from: on its line, the other end; hunting,
     /// one 8 to 16 m off you, swung round to one side or the other of
     /// where it is, from which it sees you, that it gets to in one move
     /// (the user: it moves to fire, never twice running); none such (you
     /// far off), one it gets to in one move on toward you, from which it
     /// sees you (it fires from there: within its range); none of those
-    /// either, the last tried.
+    /// either, the first of the first kind it sees you from, however far
+    /// (its shadow goes on there leg by leg, never rising between: one
+    /// move); none, the last tried.
     fn spot(&mut self, from: Vec3, you: Vec3, ground: &crate::ground::Ground) -> Vec3 {
         if let Some(ends) = self.line {
             self.leg = 1 - self.leg;
@@ -1467,13 +1101,17 @@ impl Tumbler {
         }
         let bearing = f32::atan2((from - you).x, (from - you).z);
         let mut spot = from;
+        let mut seen = None;
         for _ in 0..24 {
             let swing = self.between(SPOT_SWING) * if self.chance() < 0.5 { -1.0 } else { 1.0 };
             let off = self.between(SPOT_OFF);
             let p = you + Vec3::new((bearing + swing).sin(), 0.0, (bearing + swing).cos()) * off;
             spot = p.with_y(ground.at(p.with_y(you.y)));
-            if ground.sight(spot + Vec3::Y * 1.5, you) && (spot - from).with_y(0.0).length() > ARRIVED * 1.5 && self.gait.reaches(spot) {
-                return spot;
+            if ground.sight(spot + Vec3::Y * 1.5, you) && (spot - from).with_y(0.0).length() > ARRIVED * 1.5 {
+                if self.gait.reaches(spot) {
+                    return spot;
+                }
+                seen.get_or_insert(spot);
             }
         }
         let toward = (you - from).with_y(0.0).normalize_or(Vec3::Z);
@@ -1485,7 +1123,9 @@ impl Tumbler {
                 return near;
             }
         }
-        spot
+        // (Out of reach in one: one it sees you from, its shadow going on
+        // there leg by leg, one move.)
+        seen.unwrap_or(spot)
     }
 
     /// A number in 0..1 from its seed, its seed moved on.
@@ -1560,7 +1200,7 @@ pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, assets: R
     for (_, count, traits, places) in asked {
         parts.model.get_or_insert_with(|| server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset(format!("creatures://{FILE}"))));
         let scale = traits.value("size", HEIGHT) / MESH_HEIGHT;
-        let how = traits.value("move", 1.0) as u8;
+        let how = traits.value("move", 2.0) as u8;
         let body = traits.value("body", BODY);
         for n in 0..count {
             let middle = match places.len() {
@@ -1571,16 +1211,12 @@ pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, assets: R
             // (Its right along `across`: its face to you.)
             let yaw = f32::atan2(-across.z, across.x);
             let gait = match how {
-                2 => Gait::Stride(Stride::new(scale, at, yaw, traits.value("speed", STRIDE_FAST))),
-                3 => Gait::Hybrid(Hybrid::new(scale, at, yaw, traits.value("speed", STRIDE_PACE))),
-                4 => Gait::Star(Star::new(scale, at, yaw, traits.value("speed", STAR_PACE))),
-                5 => Gait::Spear(Spear::new(scale, at, yaw)),
                 6 => {
                     let mut shade = Shade::new(scale, at, yaw, at.x.to_bits() ^ at.z.to_bits().rotate_left(11) ^ n.wrapping_mul(2654435761), traits.value("light", SHADE_LOW).clamp(3.0, 80.0).to_radians(), traits.value("stretch", SHADE_TIME).max(0.2) / traits.value("speed", SHADE_SPEED).max(0.05));
                     shade.collapse = traits.value("collapse", SHADE_COLLAPSE).clamp(0.05, 1.0);
                     Gait::Shade(shade)
                 }
-                _ => Gait::Wheel(Roll::new(scale, at, yaw, traits.has("hub"))),
+                _ => Gait::Stride(Stride::new(scale, at, yaw, traits.value("speed", STRIDE_PACE))),
             };
             let line = traits.has("line").then(|| [at - across * HALF, at + across * HALF]);
             let pose = gait.pose();
@@ -1590,12 +1226,12 @@ pub(super) fn arrive(mut commands: Commands, server: Res<AssetServer>, assets: R
             let parts = [0, 1, 2, 3].map(|k| commands.spawn((Part(k, body), MeshMaterial3d(if k == 2 { glow.clone() } else { assets.dark.clone() }), Transform::default(), Visibility::Inherited)).id());
             commands
                 .spawn((
-                    Tumbler { gait, push: traits.value("push", PUSH), line, leg: 1, parts, scale, body, glow, act: Act::Go(None), going: Going::default(), shots: traits.value("shots", SHOTS as f32) as u32, gap: traits.value("gap", GAP).max(0.05), vortex: traits.value("vortex", 2.0) as u8, aside: traits.value("aside", 0.0), attack: traits.value("attack", 1.0) as u8, seek: traits.value("seek", crack::SEEK), lasts: traits.value("lasts", crack::LASTS), strands: traits.value("strands", crack::STRANDS as f32).max(1.0) as u32, seed: (at.x.to_bits() ^ at.z.to_bits().rotate_left(7) ^ n.wrapping_mul(40503)) | 1, fold: None, look: Look::Solid, log: traits.has("log"), logged: (0.0, at) },
+                    Tumbler { gait, line, leg: 1, parts, scale, body, glow, act: Act::Go(None), going: Going::default(), shots: traits.value("shots", SHOTS as f32) as u32, gap: traits.value("gap", GAP).max(0.05), vortex: traits.value("vortex", 2.0) as u8, aside: traits.value("aside", 0.0), attack: traits.value("attack", 1.0) as u8, seek: traits.value("seek", crack::SEEK), lasts: traits.value("lasts", crack::LASTS), strands: traits.value("strands", crack::STRANDS as f32).max(1.0) as u32, seed: (at.x.to_bits() ^ at.z.to_bits().rotate_left(7) ^ n.wrapping_mul(40503)) | 1, fold: None, look: Look::Solid, health: traits.value("health", HEALTH), hits: Vec::new(), knock: [(0.0, 0.0); 2], rock: (Vec3::ZERO, Vec3::ZERO), slide: Vec3::ZERO, recoil: (Vec3::ZERO, Vec3::ZERO), shove: traits.value("shove", 1.0).max(0.0), stun: 0.0, death: fall::Death::from(traits.value("death", 2.0) as u8), fall: None, shown: None, log: traits.has("log"), logged: (0.0, at) },
                     Transform::from_translation(pose.centre),
                     Visibility::Visible,
                 ))
                 .add_children(&parts);
-            info!("a tumbler stands at {at:.1}, moving by {}{}", ["cartwheeling", "striding", "cartwheeling its short steps and striding its long ones", "spinning as a star", "leaping as a spear", "as its shadow"][how.clamp(1, 6) as usize - 1], if line.is_some() { ", to and fro across before you" } else { ", hunting you" });
+            info!("a tumbler stands at {at:.1}, moving by {}{}", if how == 6 { "as its shadow" } else { "striding" }, if line.is_some() { ", to and fro across before you" } else { ", hunting you" });
         }
     }
 }
@@ -1615,6 +1251,14 @@ pub(super) fn cut(mut commands: Commands, mut parts: ResMut<Parts>, mut meshes: 
         }
         let (_, cut) = parts.cut.iter().find(|(k, _)| *k == key).expect("cut");
         commands.entity(entity).insert(Mesh3d(cut[part.0].clone()));
+    }
+}
+
+/// Its parts drawn solid again (from folding into its shadow): its body
+/// its own glowing material, the rest the creatures' dark.
+fn solid(commands: &mut Commands, parts: &[Entity; 4], glow: &Handle<StandardMaterial>, dark: &Handle<StandardMaterial>) {
+    for (k, part) in parts.iter().enumerate() {
+        commands.entity(*part).remove::<(MeshMaterial3d<FoldMaterial>, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster)>().insert(MeshMaterial3d(if k == 2 { glow.clone() } else { dark.clone() }));
     }
 }
 
@@ -1690,22 +1334,143 @@ pub(super) fn tumble(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     (mut vortices, mut rays): (ResMut<Assets<Vortex>>, ResMut<Assets<super::beam::Ray>>),
     camera: Single<&Transform, (With<FlyCam>, Without<Tumbler>, Without<Part>)>,
-    mut tumblers: Query<(&mut Tumbler, &mut Transform), Without<Part>>,
+    ichor: Res<super::ichor::Ichor>,
+    mut tumblers: Query<(Entity, &mut Tumbler, &mut Transform), Without<Part>>,
     mut parts: Query<&mut Transform, (With<Part>, Without<Tumbler>)>,
 ) {
     let dt = time.delta_secs().min(0.05);
     let you = camera.translation;
-    for (mut t, mut transform) in &mut tumblers {
+    for (entity, mut t, mut transform) in &mut tumblers {
         let t = &mut *t;
+        // Dead: fallen (`fall.rs`), its parts where its fall has them,
+        // lying there once still.
+        if let Some(f) = t.fall.as_mut() {
+            if !f.asleep() {
+                f.step(dt, &|p| ground.at(p));
+                for (k, w) in f.parts().into_iter().enumerate() {
+                    if let Ok(mut p) = parts.get_mut(t.parts[k]) {
+                        *p = w;
+                    }
+                }
+            }
+            continue;
+        }
+        let hits = std::mem::take(&mut t.hits);
+        // Killed (the user, 2026-11-13: physical by default): its hinge
+        // gone limp, it falls as one, or it comes apart and falls in
+        // pieces, each moving on as it was, pushed where the shards struck;
+        // or (`death=3`) it bursts, as the others do.
+        if !t.alive() {
+            let (now, then, gap) = t.shown.expect("drawn before it was shot");
+            let middle = (now[0].translation + now[1].translation) / 2.0;
+            commands.spawn((AudioPlayer::new(assets.death.clone()), PlaybackSettings::DESPAWN.with_spatial(true).with_volume(bevy::audio::Volume::Linear(2.0)), Transform::from_translation(middle)));
+            if let Some(mut m) = materials.get_mut(&t.glow) {
+                m.emissive = LinearRgba::BLACK;
+            }
+            info!("a tumbler is killed, {:.1} m off ({:?})", middle.distance(you), t.death);
+            if t.death == fall::Death::Burst {
+                let shove = hits.iter().map(|h| h.2).sum::<Vec3>() * 0.5;
+                for (k, w) in now.iter().enumerate().take(3) {
+                    let points: Vec<Vec3> = if k < 2 { [k, k + 2].iter().flat_map(|&e| [0.35, 0.75].map(|f| w.transform_point(((MESH_TIPS[e] - MESH_CENTRE) * f).extend(0.0)))).collect() } else { vec![w.translation] };
+                    for (j, p) in points.into_iter().enumerate() {
+                        let out = (p - middle).normalize_or(Vec3::Y) * 9.0 + shove;
+                        let seed = t.parts[k].index_u32().wrapping_mul(7) + j as u32;
+                        super::shatter_quiet(&mut commands, &assets, p, out, seed);
+                        super::ichor::spray(&mut commands, &ichor, p, out.normalize_or(Vec3::Y), 3.0, seed);
+                    }
+                }
+                commands.entity(entity).despawn();
+                continue;
+            }
+            // (Breaking: ichor where it parts and where the shards struck,
+            // and splinters of it, thrown along them; the user, 2026-11-13:
+            // in a few plain pieces, it broke as a toy does, not a creature;
+            // splinters, not cut from it, for their cost.)
+            let way = hits.iter().map(|h| h.2).sum::<Vec3>().normalize_or(Vec3::Y);
+            let seed = t.parts[0].index_u32().wrapping_mul(7);
+            let r = |j: u32, k: u32| worldgen::noise::hash01(seed as i32, j as i32, k as i32, 0x5d4);
+            let mut spots: Vec<(Vec3, Vec3)> = vec![(middle, way)];
+            spots.extend(hits.iter().enumerate().filter(|(j, _)| r(*j as u32, 0) < DEBRIS_STRUCK).take(DEBRIS_MOST).map(|(_, h)| (h.1, h.2)));
+            for (j, (at, dir)) in spots.iter().enumerate() {
+                super::ichor::spray(&mut commands, &ichor, *at, (*dir + Vec3::Y * 0.3).normalize_or(Vec3::Y), 3.0, seed + j as u32);
+            }
+            let thrown = fall::thrown(&hits, t.shove);
+            for j in 0..SPLINTERS {
+                let q = |k: u32| r(j + 100, k) - 0.5;
+                // (Along its blades, from its crossing out, or where struck.)
+                let at = if j % 3 == 0 && !hits.is_empty() {
+                    hits[(r(j + 100, 9) * hits.len() as f32) as usize % hits.len()].1
+                } else {
+                    let k = (j % 2) as usize;
+                    let end = if q(8) < 0.0 { k } else { k + 2 };
+                    now[k].transform_point(((MESH_TIPS[end] - MESH_CENTRE) * (r(j + 100, 7) * 0.9)).extend(0.0))
+                };
+                let big = j < SPLINTER_BIG;
+                let flake = !big && r(j + 100, 6) < SPLINTER_FLAKES;
+                let (shortest, longest) = if big { SPLINTER_BIG_LONG } else { SPLINTER_LONG };
+                let long = shortest + (longest - shortest) * r(j + 100, 5).powf(1.5);
+                // (The shard: 0.75 long, 0.05 across; its blades' girth at
+                // most 0.3 m across, a big piece's about so.)
+                let size = if flake {
+                    Vec3::new(long / 0.05 * 0.4, long / 0.75 * 0.6, 0.6)
+                } else if big {
+                    Vec3::new(3.5 + 2.5 * r(j + 100, 4), long / 0.75, 2.0 + 1.5 * r(j + 100, 3))
+                } else {
+                    Vec3::new(1.5 + 2.5 * r(j + 100, 4), long / 0.75, 1.5 + 2.5 * r(j + 100, 3))
+                };
+                let velocity = thrown * (0.5 + 0.7 * r(j + 100, 10)) + Vec3::new(q(0), q(1) + 0.6, q(2)) * SPLINTER_SPREAD;
+                let turn = Quat::from_euler(EulerRot::XYZ, q(11) * 6.0, q(12) * 6.0, q(13) * 6.0);
+                commands.spawn((Splinter { velocity, spin: Vec3::new(q(14), q(15), q(16)) * 18.0 / (0.5 + long), life: SPLINTER_LIES * (0.7 + 0.6 * r(j + 100, 17)), size, lying: false }, Mesh3d(assets.shard.clone()), MeshMaterial3d(assets.dark.clone()), Transform::from_translation(at).with_rotation(turn).with_scale(size)));
+            }
+            if t.look != Look::Solid {
+                t.look = Look::Solid;
+                solid(&mut commands, &t.parts, &t.glow, &assets.dark);
+            }
+            *transform = Transform::IDENTITY;
+            let f = fall::Fall::new(now, then, gap, t.body, t.death, &hits, t.shove);
+            for (k, w) in f.parts().into_iter().enumerate() {
+                if let Ok(mut p) = parts.get_mut(t.parts[k]) {
+                    *p = w;
+                }
+            }
+            t.fall = Some(f);
+            continue;
+        }
         // Going to a spot; there, standing steady, winding up and firing
         // its burst (one every `gap`, as many as chance has it), its glow
         // fading; then on to the next. Never idle (the user, 2026-11-13).
         let before = t.gait.pose();
+        // Struck: each shard shoving it back along the shot, rocking it back
+        // on its feet and knocking its blade about where they cross, by how
+        // far out and how square it struck (face on, it rocks; from its
+        // side, its blade turns); staggered a moment, the more shards the
+        // longer.
+        if !hits.is_empty() {
+            let normal = before.body * Vec3::Z;
+            let feet = before.centre.with_y(ground.at(before.centre));
+            let tall = MESH_HEIGHT * t.scale;
+            for &(k, at, dir) in &hits {
+                t.slide += dir.with_y(0.0) * SHOVE * t.shove;
+                t.recoil.1 += Vec3::Y.cross(dir.with_y(0.0)) * RECOIL * t.shove;
+                t.rock.1 += ROCK * (at - feet).cross(dir).with_y(0.0) / tall;
+                if k < 2 {
+                    let half = (MESH_TIPS[k] - MESH_CENTRE).length() * t.scale;
+                    t.knock[k].1 += KNOCK * (at - before.centre).cross(dir).dot(normal) / half;
+                }
+            }
+            t.stun = (t.stun + STAGGER.0 * hits.len() as f32).min(STAGGER.1);
+            if t.log {
+                info!("tumbler: struck by {} shards, {:.0} health left, shoved {:.1} m/s, its core recoiling {:.2} rad/s, rocked {:.2} rad/s, its blades knocked {:+.2} and {:+.2} rad/s", hits.len(), t.health, t.slide.length(), t.recoil.1.length(), t.rock.1.length(), t.knock[0].1, t.knock[1].1);
+            }
+        }
+        let staggered = t.stun > 0.0;
+        t.stun = (t.stun - dt).max(0.0);
         let core = before.core.unwrap_or(before.body);
         let body_at = before.centre + core * body_middle(t.body, t.scale);
         let sees = body_at.distance(you) < RANGE && ground.sight(body_at, you);
         let mut shoot = false;
         match t.act {
+            _ if staggered => {}
             Act::Go(None) => t.act = Act::Go(Some(t.spot(before.centre, you, &ground))),
             Act::Go(Some(to)) => {
                 let single = matches!(t.gait, Gait::Shade(_));
@@ -1790,9 +1555,18 @@ pub(super) fn tumble(
             _ => None,
         };
         // (Small steps: its tips land within a few millimetres.)
-        let steps = if frozen { 0 } else { (dt / (1.0 / 240.0)).ceil().max(1.0) as usize };
+        let steps = if frozen || staggered { 0 } else { (dt / (1.0 / 240.0)).ceil().max(1.0) as usize };
         for _ in 0..steps {
-            t.gait.step(dt / steps as f32, goal, t.push, &|p| ground.at(p));
+            t.gait.step(dt / steps as f32, goal, &|p| ground.at(p));
+        }
+        // (Shoved, sliding back on its feet to a stop.)
+        t.slide = t.slide.clamp_length_max(SHOVE_MOST);
+        let speed = t.slide.length();
+        if speed > 0.0 {
+            if !t.gait.shift(t.slide * dt, &|p| ground.at(p)) {
+                t.slide = Vec3::ZERO;
+            }
+            t.slide *= (speed - SHOVE_FRICTION * dt).max(0.0) / speed;
         }
         let pose = t.gait.pose();
         transform.translation = pose.centre;
@@ -1833,15 +1607,44 @@ pub(super) fn tumble(
                 }
             }
         }
-        let apart = MESH_APART * t.scale;
-        for (k, part) in t.parts.iter().enumerate() {
-            let Ok(mut p) = parts.get_mut(*part) else { continue };
-            p.scale = Vec3::splat(t.scale);
-            (p.translation, p.rotation) = match k {
-                2 | 3 => (Vec3::ZERO, pose.core.map_or(Quat::IDENTITY, |c| pose.body.inverse() * c)),
-                _ => (Vec3::Z * if k == 0 { apart } else { -apart }, Quat::from_rotation_z(pose.turns[k])),
-            };
+        // (Its blades knocked off their turn springing back.)
+        let (w, z) = KNOCK_SPRING;
+        let sub = (dt / (1.0 / 240.0)).ceil().max(1.0) as usize;
+        let h = dt / sub as f32;
+        let (rw, rz) = ROCK_SPRING;
+        for _ in 0..sub {
+            for (x, v) in &mut t.knock {
+                *v += (-w * w * *x - 2.0 * z * w * *v) * h;
+                *x = (*x + *v * h).clamp(-0.6, 0.6);
+            }
+            let (x, v) = &mut t.rock;
+            *v += (-rw * rw * *x - 2.0 * rz * rw * *v) * h;
+            *x = (*x + *v * h).clamp_length_max(ROCK_MOST);
+            let (x, v) = &mut t.recoil;
+            *v += (-RECOIL_SPRING * RECOIL_SPRING * *x - 2.0 * RECOIL_SPRING * *v) * h;
+            *x = (*x + *v * h).clamp_length_max(RECOIL_MOST);
         }
+        let apart = MESH_APART * t.scale;
+        let local: [Transform; 4] = std::array::from_fn(|k| {
+            let (translation, rotation) = match k {
+                // (Its core recoiled, in the world, about where they cross.)
+                2 | 3 => (Vec3::ZERO, pose.body.inverse() * Quat::from_scaled_axis(t.recoil.0) * pose.core.unwrap_or(pose.body)),
+                _ => (Vec3::Z * if k == 0 { apart } else { -apart }, Quat::from_rotation_z(pose.turns[k] + t.knock[k].0)),
+            };
+            Transform { translation, rotation, scale: Vec3::splat(t.scale) }
+        });
+        for (k, part) in t.parts.iter().enumerate() {
+            if let Ok(mut p) = parts.get_mut(*part) {
+                *p = local[k];
+            }
+        }
+        // (Rocked on its feet; kept, to fall from moving as it was.)
+        let feet = pose.centre.with_y(ground.at(pose.centre));
+        let rocked = Quat::from_scaled_axis(t.rock.0);
+        let whole = Transform::from_translation(feet + rocked * (pose.centre - feet)).with_rotation(rocked * pose.body);
+        (transform.translation, transform.rotation) = (whole.translation, whole.rotation);
+        let world = local.map(|l| whole.mul_transform(l));
+        t.shown = Some((world, t.shown.map_or(world, |s| s.0), dt));
         if t.log
             && let Gait::Shade(sh) = &mut t.gait
             && let Some(said) = sh.said.take()
@@ -2083,25 +1886,21 @@ mod tests {
     }
 
     /// Each way it moves, on flat ground, it gets where it is sent, either
-    /// way, and stands there; its tips never sinking (but the spear's,
-    /// stuck), and, striding, cartwheeling or both, always one down.
+    /// way, and stands there; its tips never sinking, and, striding, always
+    /// one down.
     #[test]
     fn gets_there_and_stands() {
         let scale = HEIGHT / MESH_HEIGHT;
         let floor = |_: Vec3| 0.0;
-        for how in 1..=6 {
+        for how in [2, 6] {
             for goal in [Vec3::new(20.0, 0.0, 0.0), Vec3::new(-20.0, 0.0, 0.0)] {
                 let mut gait = match how {
-                    1 => Gait::Wheel(Roll::new(scale, Vec3::ZERO, 0.0, false)),
-                    2 => Gait::Stride(Stride::new(scale, Vec3::ZERO, 0.0, STRIDE_FAST)),
-                    3 => Gait::Hybrid(Hybrid::new(scale, Vec3::ZERO, 0.0, STRIDE_PACE)),
-                    4 => Gait::Star(Star::new(scale, Vec3::ZERO, 0.0, STAR_PACE)),
-                    5 => Gait::Spear(Spear::new(scale, Vec3::ZERO, 0.0)),
+                    2 => Gait::Stride(Stride::new(scale, Vec3::ZERO, 0.0, STRIDE_PACE)),
                     _ => Gait::Shade(Shade::new(scale, Vec3::ZERO, 0.0, 7, SHADE_LOW.to_radians(), SHADE_TIME)),
                 };
                 let (mut low, mut high, mut when) = (f32::MAX, f32::MIN, None);
                 for frame in 0..240 * 30 {
-                    gait.step(1.0 / 240.0, Some(goal), PUSH, &floor);
+                    gait.step(1.0 / 240.0, Some(goal), &floor);
                     let pose = gait.pose();
                     let tips: Vec<Vec3> = (0..4)
                         .map(|j| {
@@ -2110,9 +1909,8 @@ mod tests {
                         })
                         .collect();
                     let deepest = tips.iter().map(|t| t.y).fold(f32::MAX, f32::min);
-                    let stuck = matches!(&gait, Gait::Spear(s) if matches!(s.doing, Throw::Stuck(_) | Throw::Rise(_) | Throw::Fly));
-                    assert!(stuck || deepest > -sized(0.03), "move={how}: a tip {deepest:.3} m into the ground at frame {frame}");
-                    if how <= 3 {
+                    assert!(deepest > -sized(0.03), "move={how}: a tip {deepest:.3} m into the ground at frame {frame}");
+                    if how == 2 {
                         assert!(deepest < sized(0.05), "move={how}: no tip down at frame {frame} (lowest {deepest:.3})");
                     }
                     (low, high) = (low.min(pose.centre.y), high.max(pose.centre.y));
@@ -2128,6 +1926,42 @@ mod tests {
         }
     }
 
+    /// As its shadow, sent far (several of its shadows' reach), it gets
+    /// there, rising out of its shadow once, at the end, never between (the
+    /// user, 2026-11-13: rising and collapsing at each, far off, it bobbed).
+    #[test]
+    fn far_as_one_shadow() {
+        let scale = HEIGHT / MESH_HEIGHT;
+        let floor = |_: Vec3| 0.0;
+        let shade = Shade::new(scale, Vec3::ZERO, 0.0, 7, SHADE_LOW.to_radians(), SHADE_TIME / SHADE_SPEED);
+        let reach = shade.heights().1 / shade.low.tan();
+        for goal in [Vec3::new(reach * 3.5, 0.0, 0.0), Vec3::new(-reach * 2.2, 0.0, reach * 2.0)] {
+            let mut gait = Gait::Shade(shade.clone());
+            let (mut rises, mut was, mut legs, mut leaving) = (0, 0.0f32, 0, false);
+            for _ in 0..240 * 60 {
+                gait.step(1.0 / 240.0, Some(goal), &floor);
+                let Gait::Shade(s) = &gait else { unreachable!() };
+                let k = gait.pose().flat.map_or(0.0, |f| f.k);
+                if k < was - 1e-4 && was >= 1.0 - 1e-4 {
+                    rises += 1;
+                }
+                was = k;
+                let now = matches!(s.doing, Shadow::Leave(_));
+                legs += (now && !leaving) as u32;
+                leaving = now;
+                if gait.resting() && legs > 0 {
+                    break;
+                }
+            }
+            let at = gait.pose().centre;
+            println!("{:.1} m off ({reach:.1} m a shadow): {legs} legs, risen {rises} times, stopped {:.2} m off it", goal.length(), (at - goal).with_y(0.0).length());
+            assert!(gait.resting(), "still going");
+            assert!(legs >= 3, "in {legs} legs: not far enough to test");
+            assert_eq!(rises, 1, "rose between its legs");
+            assert!((at - goal).with_y(0.0).length() < 3.0, "stopped at {at}, not near {goal}");
+        }
+    }
+
     /// Striding, at any pace, to a goal any way round it (most of it off to
     /// its side), it gets there and stands; never stepping to and fro (the
     /// user, 2026-11-13: at a high `speed`, a step one way, a step back,
@@ -2137,7 +1971,7 @@ mod tests {
         let scale = HEIGHT / MESH_HEIGHT;
         let floor = |_: Vec3| 0.0;
         let mut worst = 0usize;
-        for pace in [STRIDE_PACE, STRIDE_FAST, 8.0, 15.0, 30.0] {
+        for pace in [STRIDE_SLOW, 4.4, 8.0, STRIDE_PACE, 30.0] {
             for k in 0..48 {
                 for far in [2.0, 2.5, 3.0, 4.0, 6.0, 9.0, 12.0, 20.0] {
                     let a = k as f32 / 48.0 * std::f32::consts::TAU;
@@ -2187,7 +2021,7 @@ mod tests {
             if going.there(dt, resting, true, near) {
                 return true;
             }
-            gait.step(dt, Some(goal), PUSH, &wall);
+            gait.step(dt, Some(goal), &wall);
             false
         });
         assert!(frames.is_some(), "never there");
@@ -2199,7 +2033,7 @@ mod tests {
             let resting = gait.resting();
             let near = (goal - gait.pose().centre).with_y(0.0).length() < ARRIVED;
             let there = going.there(dt, resting, true, near);
-            gait.step(dt, Some(goal), PUSH, &wall);
+            gait.step(dt, Some(goal), &wall);
             there
         });
         assert!(stuck.is_some_and(|f| f as f32 * dt <= IDLE + 0.05), "stood for ever: {stuck:?}");
@@ -2221,36 +2055,31 @@ mod tests {
     }
 
     /// Stopped on its way (to fire), each way it moves comes to rest soon,
-    /// cartwheeling, striding or both, on two tips down (steady, not
-    /// mid-turn).
+    /// striding, on two tips down (steady, not mid-turn).
     #[test]
     fn halts_on_its_feet() {
         let scale = HEIGHT / MESH_HEIGHT;
         let floor = |_: Vec3| 0.0;
-        for how in 1..=6 {
+        for how in [2, 6] {
             for go in [0.4, 0.9, 1.3, 2.1] {
                 let mut gait = match how {
-                    1 => Gait::Wheel(Roll::new(scale, Vec3::ZERO, 0.0, false)),
-                    2 => Gait::Stride(Stride::new(scale, Vec3::ZERO, 0.0, STRIDE_FAST)),
-                    3 => Gait::Hybrid(Hybrid::new(scale, Vec3::ZERO, 0.0, STRIDE_PACE)),
-                    4 => Gait::Star(Star::new(scale, Vec3::ZERO, 0.0, STAR_PACE)),
-                    5 => Gait::Spear(Spear::new(scale, Vec3::ZERO, 0.0)),
+                    2 => Gait::Stride(Stride::new(scale, Vec3::ZERO, 0.0, STRIDE_PACE)),
                     _ => Gait::Shade(Shade::new(scale, Vec3::ZERO, 0.0, 7, SHADE_LOW.to_radians(), SHADE_TIME)),
                 };
                 let goal = Vec3::new(30.0, 0.0, 0.0);
                 for _ in 0..(go * 240.0) as usize {
-                    gait.step(1.0 / 240.0, Some(goal), PUSH, &floor);
+                    gait.step(1.0 / 240.0, Some(goal), &floor);
                 }
                 let mut took = None;
                 for frame in 0..240 * 4 {
-                    gait.step(1.0 / 240.0, None, PUSH, &floor);
+                    gait.step(1.0 / 240.0, None, &floor);
                     if gait.resting() {
                         took = Some(frame as f32 / 240.0);
                         break;
                     }
                 }
                 assert!(took.is_some(), "move={how}, stopped after {go} s: never came to rest");
-                if how <= 3 {
+                if how == 2 {
                     let pose = gait.pose();
                     let down = (0..4)
                         .filter(|&j| {
@@ -2263,28 +2092,6 @@ mod tests {
                 println!("move={how}, stopped after {go} s: at rest {took:?} s later");
             }
         }
-    }
-
-    /// Both ways at once: its long steps placed and its short ones rolled,
-    /// by turns.
-    #[test]
-    fn steps_long_and_short_by_turns() {
-        let mut h = Hybrid::new(HEIGHT / MESH_HEIGHT, Vec3::ZERO, 0.0, STRIDE_PACE);
-        let mut kinds = Vec::new();
-        for _ in 0..240 * 8 {
-            h.step(1.0 / 240.0, Some(Vec3::new(30.0, 0.0, 0.0)), PUSH, &|_| 0.0);
-            let kind = match h.phase {
-                Phase::Long { .. } => 'L',
-                Phase::Short { .. } => 'S',
-                Phase::Rest => 'R',
-            };
-            if kinds.last() != Some(&kind) {
-                kinds.push(kind);
-            }
-        }
-        let seen: String = kinds.iter().collect();
-        println!("its steps: {seen}");
-        assert!(seen.starts_with("LSLSLS"), "not long and short by turns: {seen}");
     }
 
     /// Its shadow falls where the light's rays meet the ground: on flat
