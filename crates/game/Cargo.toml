@@ -30,3 +30,7 @@ spade = "2.15"
 # --features profile`), it recompiles Bevy.
 profile = ["bevy/trace_chrome"]
 
+# (The navigation nodes' build threads set below the game's: see
+# navmesh/nodes.rs, `background`. Already in the build, through Bevy.)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_Threading"] }

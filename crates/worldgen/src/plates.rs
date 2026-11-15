@@ -1007,6 +1007,15 @@ impl PlateWorld {
         self.surface(&mut Cache::default(), x as f64, z as f64, 2) as f32
     }
 
+    /// The ground walked on at a point: as `height_at`, but on a pillar's
+    /// plate, where its pillar is grown (narrower than its plate), its
+    /// base, the ground you see there (`solid`). (By the pillar's top, a
+    /// creature beside a pillar in the stacks stood in the air, the user,
+    /// 2026-11-15.)
+    pub fn walk_height_at(&self, x: f32, z: f32) -> f32 {
+        self.solid(&mut Cache::default(), x as f64, z as f64, 2) as f32
+    }
+
     /// Clips `poly` to the side of the bisector nearer `site` than `other`.
     fn clip(poly: &[DVec2], site: DVec2, other: DVec2) -> Vec<DVec2> {
         let mid = (site + other) * 0.5;

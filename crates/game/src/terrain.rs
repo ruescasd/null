@@ -147,6 +147,11 @@ impl WorldGen {
         self.0.height_at(x, z)
     }
 
+    /// The ground walked on (see `PlateWorld::walk_height_at`).
+    pub fn walk_height(&self, x: f32, z: f32) -> f32 {
+        self.0.walk_height_at(x, z)
+    }
+
     /// The canal flow at a point, if it is inside a canal's pipe.
     pub fn canal_at(&self, x: f32, z: f32) -> Option<CanalFlow> {
         self.0.canal_at(x, z)

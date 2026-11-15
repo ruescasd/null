@@ -36,7 +36,7 @@ impl Ground<'_, '_> {
         // (In the chasm, and on the ground lab's, what is built is the
         // ground.)
         if !self.args.opt("chasm") && self.args.ground.is_none() {
-            return Some(self.world.ground_height(p.x, p.z));
+            return Some(self.world.walk_height(p.x, p.z));
         }
         // By rays, exact: one under it, and four `PROBE` about it. Where the
         // one falls further than that below the highest of the four, it is

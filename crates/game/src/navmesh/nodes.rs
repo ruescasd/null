@@ -30,6 +30,28 @@ impl Fit {
     pub(crate) const WALKER: Fit = Fit { radius: 0.35, climb: 0.6, height: 2.6 };
 }
 
+/// The threads building the nodes take (in the background, in play): half
+/// the cores, each set below the game's (`background`). (Taking them all,
+/// the frame fell under 10 fps for the seconds a district's nodes took,
+/// the user, 2026-11-15; half, still frames of 100 ms to 1.3 s, till they
+/// were set below; one, none, but 19.5 s to build the stacks'.)
+pub(crate) fn build_threads() -> usize {
+    std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1))
+}
+
+/// This thread set below the game's own (each of the nodes' build threads
+/// first): with as many busy as half the cores, the game's threads were
+/// held up behind them for whole time slices, frames of 100 ms to 1.3 s.
+pub(crate) fn background() {
+    #[cfg(windows)]
+    // SAFETY: setting the calling thread's own priority, by its pseudo
+    // handle; nothing is freed or shared.
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+    }
+}
+
 /// How near two edges must lie to be one border (m).
 pub(crate) const ON: f64 = 1e-4;
 /// The grid edges and pieces are found by (m).
@@ -293,7 +315,7 @@ impl Space {
         }
         // The pillars' prisms within a body's height of their ground, each
         // with the radius round it: obstacles, to whatever ground they reach.
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let threads = build_threads();
         let pillars: Vec<&Piece> = pieces.iter().filter(|p| p.pillar).collect();
         let made: Vec<MultiPolygon<f64>> = std::thread::scope(|scope| {
             let chunk = pillars.len().div_ceil(threads * 8).max(1);
@@ -301,6 +323,7 @@ impl Space {
                 .chunks(chunk)
                 .map(|c| {
                     scope.spawn(move || {
+                        background();
                         c.iter()
                             .filter_map(|p| {
                                 let floor = p.plate.height;
@@ -347,7 +370,10 @@ impl Space {
         };
         let chunk = space.pieces.len().div_ceil(threads * 8).max(1);
         let walking: Vec<Vec<Polygon<f64>>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = space.pieces.chunks(chunk).map(|c| scope.spawn(|| c.iter().map(one).collect::<Vec<_>>())).collect();
+            let handles: Vec<_> = space.pieces.chunks(chunk).map(|c| scope.spawn(|| {
+                background();
+                c.iter().map(one).collect::<Vec<_>>()
+            })).collect();
             handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
         });
         space.space = walking;
@@ -431,6 +457,27 @@ impl Space {
         self.joins = joins;
     }
 
+    /// Nodes under `least` m² left out of the walking space, the rest
+    /// numbered anew.
+    pub(crate) fn prune(&mut self, least: f64) {
+        let mut number: Vec<Option<u32>> = vec![None; self.node_area.len()];
+        let mut area = Vec::new();
+        for (n, &a) in self.node_area.iter().enumerate() {
+            if a >= least {
+                number[n] = Some(area.len() as u32);
+                area.push(a);
+            }
+        }
+        for (frags, of) in self.space.iter_mut().zip(self.node_of.iter_mut()) {
+            let kept: Vec<(Polygon<f64>, u32)> = frags.drain(..).zip(of.drain(..)).filter_map(|(f, n)| number[n as usize].map(|m| (f, m))).collect();
+            for (f, m) in kept {
+                frags.push(f);
+                of.push(m);
+            }
+        }
+        self.node_area = area;
+    }
+
     /// The closed stretches near `poly` (within the radius of its bounds).
     pub(crate) fn closed_near(&self, poly: &[DVec2]) -> MultiLineString<f64> {
         let (a, b) = bounds(poly);
@@ -495,7 +542,7 @@ impl Space {
             cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(k);
         }
         let keys: Vec<(i32, i32)> = cell.keys().copied().collect();
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let threads = build_threads();
         type Best = HashMap<((u32, u32), (i32, i32)), Hop>;
         let keep = |out: &mut Best, key: ((u32, u32), (i32, i32)), hop: Hop| {
             let e = out.entry(key).or_insert(hop);
@@ -510,6 +557,7 @@ impl Space {
                 .chunks(chunk)
                 .map(|c| {
                     scope.spawn(move || {
+                        background();
                         let mut out: Best = HashMap::new();
                         for &(cx, cz) in c {
                             for &a in &cell[&(cx, cz)] {
@@ -586,7 +634,7 @@ impl Space {
             cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(k);
         }
         let keys: Vec<(i32, i32)> = cell.keys().copied().collect();
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let threads = build_threads();
         type Best = HashMap<((u32, u32), (i32, i32)), Link>;
         let keep = |out: &mut Best, pair: (u32, u32), l: Link| {
             let at = spread.map_or((0, 0), |c| ((l.a.x / c).floor() as i32, (l.a.y / c).floor() as i32));
@@ -602,6 +650,7 @@ impl Space {
                 .chunks(chunk)
                 .map(|c| {
                     scope.spawn(move || {
+                        background();
                         let mut out: Best = HashMap::new();
                         for &(cx, cz) in c {
                             for &a in &cell[&(cx, cz)] {

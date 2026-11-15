@@ -127,7 +127,7 @@ fn fall_clear(space: &Space, world: &PlateWorld, a: DVec2, ay: f64, q: DVec2, by
             }
             // (Down on ground: where it lands, on `onto`. Rising into it, a
             // hop not clearing its ledge: no.)
-            if y <= world.height_at(p.x as f32, p.y as f32) as f64 {
+            if y <= world.walk_height_at(p.x as f32, p.y as f32) as f64 {
                 return vy < 0.0 && space.node_at_preferring(p, Some(onto)).is_some_and(|f| f.0 == onto);
             }
             // (Fallen past where it lands: missed it. From below, a hop
@@ -167,13 +167,14 @@ fn drops(space: &Space, world: &PlateWorld) -> Vec<(u32, u32, Hop)> {
     });
     let on = |n: u32, q: DVec2| space.node_at_preferring(q, Some(n)).is_some_and(|f| f.0 == n);
     let candidates: Vec<(u32, u32, nodes::Link)> = links.iter().filter(|((_, b), _)| space.node_area[*b as usize] >= LAND_LEAST).flat_map(|(&(a, b), list)| list.iter().filter(|l| l.short <= 0.0).map(move |l| (a, b, *l))).collect();
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let threads = nodes::build_threads();
     std::thread::scope(|scope| {
         let chunk = candidates.len().div_ceil(threads * 4).max(1);
         let handles: Vec<_> = candidates
             .chunks(chunk)
             .map(|c| {
                 scope.spawn(|| {
+                    nodes::background();
                     c.iter()
                         .filter_map(|&(a, b, l)| {
                             let gap = l.a.distance(l.b);
@@ -435,7 +436,13 @@ impl Nodes {
         let t = Instant::now();
         let column = worldgen::column_size(0) as f64;
         let (lo, hi) = (((centre - side / 2.0) / column).floor() * column, ((centre + side / 2.0) / column).ceil() * column);
-        let space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
+        let mut space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
+        // (Nodes too small to land on left out: ground walled in by steps,
+        // got onto by no one; in the stacks a third of its nodes, slivers
+        // at its pillars' feet, under 1% of its ground, each with its
+        // portals to every node 20 m round. One stood on, by a shove, is off
+        // the nodes: it walks as on open ground, onto them.)
+        space.prune(LAND_LEAST);
         let built = t.elapsed().as_secs_f32();
         let hops = space.hops(&world, FARTHEST);
         let mut adjacent: Vec<Vec<(u32, f32)>> = vec![Vec::new(); space.nodes()];
@@ -470,10 +477,13 @@ impl Nodes {
         let mut archipelagos = Vec::new();
         // (Each node's on its own: on every core, in chunks.)
         type Made = Vec<Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)>>;
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let threads = nodes::build_threads();
         let made: Vec<Made> = std::thread::scope(|scope| {
             let chunk = of.len().div_ceil(threads * 8).max(1);
-            let handles: Vec<_> = of.chunks(chunk).map(|c| scope.spawn(move || c.iter().map(|list| outline(list).0.iter().map(triangles).collect::<Made>()).collect::<Vec<_>>())).collect();
+            let handles: Vec<_> = of.chunks(chunk).map(|c| scope.spawn(move || {
+                nodes::background();
+                c.iter().map(|list| outline(list).0.iter().map(triangles).collect::<Made>()).collect::<Vec<_>>()
+            })).collect();
             handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
         });
         for (n, outline) in made.into_iter().enumerate() {
@@ -646,12 +656,19 @@ impl Nodes {
     /// than `range` (landing on nodes of `LAND_LEAST` or more, but for
     /// `to`), drops, and hops of no more than `climb`.
     pub(crate) fn reaches(&self, from: u32, to: u32, range: f32, climb: f32) -> bool {
+        self.reach_from(from, range, climb, Some(to))[to as usize]
+    }
+
+    /// The nodes reached from `from` (as `reaches`), all of them; or till
+    /// `stop` is.
+    fn reach_from(&self, from: u32, range: f32, climb: f32, stop: Option<u32>) -> Vec<bool> {
+        let to = stop.unwrap_or(u32::MAX);
         let mut seen = vec![false; self.adjacent.len()];
         seen[from as usize] = true;
         let mut stack = vec![from];
         while let Some(n) = stack.pop() {
             if n == to {
-                return true;
+                return seen;
             }
             let teleports = self.adjacent[n as usize].iter().filter(|&&(m, d)| d <= range && (m == to || self.space.node_area[m as usize] >= LAND_LEAST)).map(|&(m, _)| m);
             let leaps = self.leaps_to[n as usize].iter().filter(|&&(_, rise)| rise <= climb).map(|&(m, _)| m);
@@ -662,7 +679,64 @@ impl Nodes {
                 }
             }
         }
-        false
+        seen
+    }
+
+    /// For a walker on node `me` (at `mine`) with no way to `you`, going as
+    /// it goes: where it keeps watch, the ground it reaches nearest you
+    /// (its node, the point); and where it goes if it leaves, ground it
+    /// reaches about `AWAY` m from you, further than it is (see
+    /// `Stranded`).
+    pub(crate) fn stranded(&self, me: u32, mine: Vec2, you: Vec2, range: f32, climb: f32) -> Option<Spots> {
+        let reach = self.reach_from(me, range, climb, None);
+        let ok = |n: u32| reach[n as usize] && self.space.node_area[n as usize] >= LAND_LEAST;
+        let y = DVec2::new(you.x as f64, you.y as f64);
+        let pt = Point::new(y.x, y.y);
+        let mut watch: Option<(f64, u32, DVec2)> = None;
+        for r in [24.0, 48.0, 96.0, 192.0] {
+            for i in self.space.pieces_near(y, r) {
+                for (k, f) in self.space.space[i].iter().enumerate() {
+                    let n = self.space.node_of[i][k];
+                    if !ok(n) {
+                        continue;
+                    }
+                    let c = match f.closest_point(&pt) {
+                        geo::Closest::Intersection(c) | geo::Closest::SinglePoint(c) => DVec2::new(c.x(), c.y()),
+                        geo::Closest::Indeterminate => continue,
+                    };
+                    let d = c.distance(y);
+                    if d <= r && watch.is_none_or(|w| d < w.0) {
+                        watch = Some((d, n, c));
+                    }
+                }
+            }
+            if watch.is_some() {
+                break;
+            }
+        }
+        let (_, n, c) = watch?;
+        let here = mine.distance(you) as f64;
+        let mut away: Option<(f64, u32, DVec2)> = None;
+        for i in self.space.pieces_near(y, AWAY + 40.0) {
+            for (k, f) in self.space.space[i].iter().enumerate() {
+                let m = self.space.node_of[i][k];
+                if !ok(m) {
+                    continue;
+                }
+                use geo::InteriorPoint;
+                let Some(q) = f.interior_point() else { continue };
+                let q = DVec2::new(q.x(), q.y());
+                let d = q.distance(y);
+                if d < AWAY * 0.7 || d <= here + 10.0 {
+                    continue;
+                }
+                let score = (d - AWAY).abs();
+                if away.is_none_or(|a| score < a.0) {
+                    away = Some((score, m, q));
+                }
+            }
+        }
+        Some(Spots { watch: (n, c.as_vec2()), away: away.map(|(_, m, q)| (m, q.as_vec2())) })
     }
 
     /// The fewest teleports of no more than `range` from node `from` to
@@ -1104,7 +1178,11 @@ pub(crate) fn ready(mut commands: Commands, districts: Option<ResMut<Districts>>
             blink.forget();
         }
     }
-    districts.nodes = Some(Arc::new(nodes));
+    // (The old ones let go on another core: in the stacks they are some
+    // hundreds of thousands of portals, and freeing them held up a frame.)
+    if let Some(old) = districts.nodes.replace(Arc::new(nodes)) {
+        AsyncComputeTaskPool::get().spawn(async move { drop(old) }).detach();
+    }
 }
 
 /// Across: `p`'s x and z.
@@ -1149,6 +1227,39 @@ struct SoonerAsk {
     range: f32,
 }
 
+/// A walker with no way to you (the user, 2026-11-15: never just stand
+/// there): it keeps watch, wandering near the ground it reaches nearest
+/// you, looking now and then whether it has a way now; hurt meanwhile, it
+/// leaves, off to ground far from you, and is gone (see `gone`).
+#[derive(Clone, Copy, Debug, Default)]
+enum Stranded {
+    #[default]
+    Chasing,
+    /// Its spots being found (and, hurt meanwhile, to leave once they are).
+    Asking(bool),
+    Watch(Watch),
+    Leave((u32, Vec2)),
+}
+
+/// Keeping watch: where you were when it was found, where it keeps watch
+/// and where it would leave to (see `Nodes::stranded`); when it looks
+/// again; the spot it wanders to, and how long yet it keeps to it.
+#[derive(Clone, Copy, Debug)]
+struct Watch {
+    you: Vec2,
+    spots: Spots,
+    retry: f32,
+    wander: Vec2,
+    linger: f32,
+}
+
+/// See `Nodes::stranded`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Spots {
+    watch: (u32, Vec2),
+    away: Option<(u32, Vec2)>,
+}
+
 /// What a blinking walker does now.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Steer {
@@ -1188,6 +1299,15 @@ const MOVED: f32 = 1.0;
 const REPLAN: f32 = 8.0;
 /// How long a walker with no way to you waits before looking again (s).
 const NO_WAY: f32 = 1.0;
+/// A walker stranded (see `Stranded`): how often it looks whether it has a
+/// way to you now (s), how far you go before its spots are found anew (m),
+/// how far it wanders from where it keeps watch (m) and how long it keeps
+/// to each spot (s), how far off it goes, leaving (m).
+const RETRY: f32 = 2.0;
+const REFRESH: f32 = 10.0;
+const WANDER: f32 = 6.0;
+const LINGER: (f32, f32) = (3.0, 6.0);
+const AWAY: f64 = 110.0;
 /// How far on along its way a walker heads for (m).
 const LOOK: f32 = 0.6;
 /// How near where a teleport (or a drop) leaves from it must be to go (m).
@@ -1252,18 +1372,91 @@ pub(crate) struct Blink {
     sooner_ask: Option<SoonerAsk>,
     sooner_task: Option<Task<(SoonerKey, Option<Hop>)>>,
     sooner_answer: Option<(SoonerKey, Option<Hop>)>,
+    /// With no way to you (see `Stranded`): what it does; its spots asked
+    /// for (its node, where, you), being found; the health it last had (a
+    /// blow, felt); whether it has left.
+    stranded: Stranded,
+    strand_ask: Option<(u32, Vec2, Vec2)>,
+    strand_task: Option<Task<(Vec2, Option<Spots>)>>,
+    felt: f32,
+    gone: bool,
     /// How high it hops up onto a ledge (m; 0, it doesn't): see `drops`.
     pub(crate) hop: f32,
 }
 
 impl Blink {
     pub(crate) fn new(range: f32, tell: f32, rest: f32, cost: f32, speed: f32) -> Blink {
-        Blink { range: range.min(FARTHEST as f32), tell, rest, speed: speed.max(1.0), shaded: false, cost, phase: Phase::Walk, resting: 0.0, node: None, way: Vec::new(), way_at: 0, way_to: Vec2::splat(f32::MAX), chosen: None, sooner: 0.0, made: None, teleports: 0, drops: 0, no_way: None, ask: None, task: None, answer: None, way_ask: None, way_task: None, way_answer: None, way_failed: None, sooner_ask: None, sooner_task: None, sooner_answer: None, hop: 0.0 }
+        Blink { range: range.min(FARTHEST as f32), tell, rest, speed: speed.max(1.0), shaded: false, cost, phase: Phase::Walk, resting: 0.0, node: None, way: Vec::new(), way_at: 0, way_to: Vec2::splat(f32::MAX), chosen: None, sooner: 0.0, made: None, teleports: 0, drops: 0, no_way: None, ask: None, task: None, answer: None, way_ask: None, way_task: None, way_answer: None, way_failed: None, sooner_ask: None, sooner_task: None, sooner_answer: None, stranded: Stranded::Chasing, strand_ask: None, strand_task: None, felt: f32::MAX, gone: false, hop: 0.0 }
     }
 
     /// Hopping up onto ledges this high (m; see `drops`).
     pub(crate) fn with_hop(self, hop: f32) -> Blink {
         Blink { hop, ..self }
+    }
+
+    /// Its health now: a blow felt, with no way to you, it leaves (see
+    /// `Stranded`).
+    pub(crate) fn felt(&mut self, health: f32) {
+        if health < self.felt {
+            self.stranded = match self.stranded {
+                Stranded::Asking(_) => Stranded::Asking(true),
+                Stranded::Watch(w) => w.spots.away.map_or(Stranded::Watch(w), Stranded::Leave),
+                s => s,
+            };
+        }
+        self.felt = health;
+    }
+
+    /// Whether it has no way to you (see `Stranded`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn stranded(&self) -> bool {
+        !matches!(self.stranded, Stranded::Chasing)
+    }
+
+    /// Whether it has left (see `Stranded`): gone where it went.
+    pub(crate) fn gone(&self) -> bool {
+        self.gone
+    }
+
+    /// Where it goes, stranded (see `Stranded`): keeping watch, a spot near
+    /// where it does, now and then another; leaving, where it leaves to;
+    /// else where it was going (`there`, `spot`). Keeping watch, it looks
+    /// every `RETRY` s whether it has a way to you now (by the nodes: a
+    /// fraction of a millisecond), and has its spots found anew if you
+    /// have gone `REFRESH` m.
+    fn stranded_goal(&mut self, nodes: &Nodes, me: u32, mine: Vec2, at: Vec3, there: u32, spot: Vec2, dt: f32) -> (u32, Vec2) {
+        let (range, hop) = (self.range, self.hop);
+        match &mut self.stranded {
+            Stranded::Watch(w) => {
+                w.retry -= dt;
+                if w.retry <= 0.0 {
+                    w.retry = RETRY;
+                    if nodes.reaches(me, there, range, hop) {
+                        self.stranded = Stranded::Chasing;
+                        self.no_way = None;
+                        return (there, spot);
+                    }
+                    if w.you.distance(spot) > REFRESH && self.strand_task.is_none() {
+                        self.strand_ask = Some((me, mine, spot));
+                    }
+                }
+                w.linger -= dt;
+                if w.linger <= 0.0 {
+                    let r = |k: i32| worldgen::noise::hash01((at.x * 7.0) as i32, (at.z * 7.0) as i32, k, 0x7a3);
+                    w.linger = LINGER.0 + (LINGER.1 - LINGER.0) * r(0);
+                    let a = r(1) * std::f32::consts::TAU;
+                    let q = w.spots.watch.1 + Vec2::new(a.cos(), a.sin()) * WANDER * r(2).sqrt();
+                    let y = nodes.world.walk_height_at(q.x, q.y);
+                    w.wander = match nodes.locate(Vec3::new(q.x, y, q.y), 0.0, Some(w.spots.watch.0)) {
+                        Some((n, q)) if n == w.spots.watch.0 => q,
+                        _ => w.spots.watch.1,
+                    };
+                }
+                (w.spots.watch.0, w.wander)
+            }
+            Stranded::Leave(away) => *away,
+            _ => (there, spot),
+        }
     }
 
     /// Its plan asked for (`steer`), made on another core; one made,
@@ -1305,6 +1498,33 @@ impl Blink {
             let nodes = nodes.clone();
             self.sooner_task = Some(AsyncComputeTaskPool::get().spawn(async move { (a.key, nodes.sooner(a.planned, a.onto, a.aim, a.at, a.range)) }));
         }
+        if let Some(task) = self.strand_task.as_mut()
+            && let Some((you, spots)) = block_on(poll_once(task))
+        {
+            self.strand_task = None;
+            self.found_spots(you, spots);
+        }
+        if self.strand_task.is_none()
+            && let Some((me, mine, you)) = self.strand_ask.take()
+        {
+            let (nodes, range, hop) = (nodes.clone(), self.range, self.hop);
+            self.strand_task = Some(AsyncComputeTaskPool::get().spawn(async move { (you, nodes.stranded(me, mine, you, range, hop)) }));
+        }
+    }
+
+    /// Its spots, found (see `Stranded`): it keeps watch (or leaves, if hurt
+    /// meanwhile); none, it stands, as it did.
+    fn found_spots(&mut self, you: Vec2, spots: Option<Spots>) {
+        let Some(spots) = spots else {
+            self.stranded = Stranded::Chasing;
+            return;
+        };
+        self.stranded = match self.stranded {
+            Stranded::Asking(true) => spots.away.map_or(Stranded::Watch(Watch { you, spots, retry: RETRY, wander: spots.watch.1, linger: 0.0 }), Stranded::Leave),
+            Stranded::Watch(w) => Stranded::Watch(Watch { you, spots, ..w }),
+            Stranded::Leave(a) => Stranded::Leave(a),
+            _ => Stranded::Watch(Watch { you, spots, retry: RETRY, wander: spots.watch.1, linger: 0.0 }),
+        };
     }
 
     /// As `plan_in_background`, at once (for the tests, frame by frame).
@@ -1318,6 +1538,10 @@ impl Blink {
         }
         if let Some(a) = self.sooner_ask.take() {
             self.sooner_answer = Some((a.key, nodes.sooner(a.planned, a.onto, a.aim, a.at, a.range)));
+        }
+        if let Some((me, mine, you)) = self.strand_ask.take() {
+            let spots = nodes.stranded(me, mine, you, self.range, self.hop);
+            self.found_spots(you, spots);
         }
     }
 
@@ -1464,9 +1688,18 @@ impl Blink {
         self.node = Some(me);
         // (Where it is going: its node, or the nearest one to it.)
         let Some((there, spot)) = nodes.locate(goal, above, None) else { return Steer::Stand };
+        if self.gone {
+            return Steer::Stand;
+        }
+        let (there, spot) = self.stranded_goal(nodes, me, mine, at, there, spot, dt);
         if there == me {
             self.chosen = None;
-            return self.follow(me, at, mine, spot);
+            let s = self.follow(me, at, mine, spot);
+            // (Leaving, there: gone.)
+            if s == Steer::There && matches!(self.stranded, Stranded::Leave(_)) {
+                self.gone = true;
+            }
+            return s;
         }
         // Another node: the first teleport of the best way there, kept till
         // it is made, unless its goal moves to another node or `REPLAN` m
@@ -1500,6 +1733,11 @@ impl Blink {
                 };
                 let Some((hop, onto, _, aim)) = found else {
                     self.no_way = Some((me, there, NO_WAY));
+                    // (No way to you: its spots found, to keep watch.)
+                    if matches!(self.stranded, Stranded::Chasing) && self.strand_task.is_none() {
+                        self.stranded = Stranded::Asking(false);
+                        self.strand_ask = Some((me, mine, spot));
+                    }
                     return Steer::Stand;
                 };
                 self.no_way = None;
@@ -1654,6 +1892,8 @@ mod tests {
         // (Chases to small nodes: how many, how many reached.)
         let (mut to_small, mut reached_small) = (0, 0);
         let (mut teleports, mut fewest, mut extra) = (0u32, 0usize, Vec::new());
+        // (Not reached, how many kept watch, and how far from the goal.)
+        let (mut watched, mut kept_watch) = (0usize, Vec::<f32>::new());
         // (Drops made, and the deepest.)
         let (mut drops, mut deepest, mut hops, mut highest) = (0u32, 0.0f32, 0u32, 0.0f32);
         let mut cost: Vec<f32> = Vec::new();
@@ -1735,6 +1975,8 @@ mod tests {
                         }
                         at = Vec3::new(to.x, y, to.z);
                     }
+                    // (Stranded, there is where it keeps watch, not the goal.)
+                    Steer::There if blink.stranded() => {}
                     Steer::There => {
                         done = true;
                         break;
@@ -1749,7 +1991,7 @@ mod tests {
                             p += Vec2::new(v.x, v.z) * dt;
                             y += vy * dt;
                             let q = DVec2::new(p.x as f64, p.y as f64);
-                            let floor = world.height_at(q.x as f32, q.y as f32);
+                            let floor = world.walk_height_at(q.x as f32, q.y as f32);
                             if y <= floor && vy < 0.0 {
                                 break Some(Vec3::new(p.x, floor, p.y));
                             }
@@ -1785,6 +2027,10 @@ mod tests {
                     done = true;
                     break;
                 }
+            }
+            if !done && blink.stranded() {
+                watched += matches!(blink.stranded, Stranded::Watch(_)) as usize;
+                kept_watch.push(at.distance(Vec3::new(b.x, at.y, b.y)));
             }
             if done {
                 reached += 1;
@@ -1822,6 +2068,8 @@ mod tests {
         let lengths = &lengths[..(lengths.len() - 1).max(1)];
         println!("teleports: length median {:.1} m, tenth {:.1} m, ninetieth {:.1} m; {inset} of {} landed {INSET} m or more inside the walking space", lengths[lengths.len() / 2], lengths[lengths.len() / 10], lengths[lengths.len() * 9 / 10], lengths.len());
         println!("chases to small nodes: {reached_small} of {to_small} reached");
+        kept_watch.sort_by(f32::total_cmp);
+        println!("not reached: {} stranded, {watched} keeping watch, from the goal median {:.0} m, most {:.0} m", kept_watch.len(), kept_watch.get(kept_watch.len() / 2).copied().unwrap_or(f32::NAN), kept_watch.last().copied().unwrap_or(f32::NAN));
         for f in &failed {
             println!("  not reached: {f}");
         }

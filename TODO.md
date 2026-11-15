@@ -556,6 +556,30 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   dropped: one search from your node shared by all walkers: the same ways,
   but 10 to 50 times slower (no heading: it searched all round, 387 000
   portals in stacks).
+  `keep N KIND...` at the console (2026-11-15, combat/hunter/keep.rs):
+  creatures kept round you, dropped from the sky onto the walking space;
+  left far behind, or gone after leaving, let go. Stranded walkers (no way
+  to you) keep watch, wandering near the ground they reach nearest you,
+  looking every 2 s for a way; hurt, they leave (~110 m off) and are gone
+  (`district::Stranded`; stacks without teleports: 236 of 236 stranded
+  keep watch). Your frame drops on moving away were the node build: its
+  threads (half the cores) held the game's up for whole time slices
+  (frames of 100 ms to 1.3 s; not the allocator, mimalloc tried, nor the
+  tables' lock); now set below the game's priority: none past start-up,
+  stacks' nodes in ~11 s. Slow frames logged ("hitch"): over 20 ms
+  (you: 100 fps the floor, not the goal), `--set hitch=MS`, the first 10 s
+  of play in one line. Your
+  harrow in the air: creatures stood on a pillar's top over its whole
+  plate, beside its narrow grown form; they stand now on the ground walked
+  on (`walk_height_at`: the pillar's base).
+  Nodes under 10 m² left out (2026-11-15, `Space::prune`): in the stacks
+  a third of its nodes were slivers at its pillars' feet (1 148 of its 1 447
+  small ones, under 1% of its ground; pillars' tops were never in), each
+  with portals to every node 20 m round. Stacks: 3 738 nodes to 2 291,
+  portals 398 000 to 250 000, links 2.9 M to 1.6 M; built in 5.7 s (7.1)
+  headless, 7.8 s in play at the start (11.2); plans median 0.9 ms (1.2),
+  99th 4.4 (5.3). Every chase reached as before. Next for the build: step
+  3 (in tiles, as the world streams).
 - **Agreed** Structures: move from the patched Rust crates to C++ Detour
   (through bindings, staying on Bevy); the crates fail the worst-case frame
   cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).

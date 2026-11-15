@@ -3005,6 +3005,7 @@ dependencies = [
  "landmass_rerecast",
  "manifold-csg",
  "spade",
+ "windows-sys 0.60.2",
  "worldgen",
 ]
 

@@ -26,6 +26,7 @@ use crate::{
 
 pub(super) mod cables;
 pub(super) mod clip;
+pub(super) mod keep;
 pub(super) mod mace;
 pub(super) use cables::run as cables;
 
@@ -1855,6 +1856,9 @@ pub(super) fn hunt(
             && nodes.covers(root)
             && h.rig.airborne.is_none()
         {
+            // (A blow felt: with no way to you, it leaves; see
+            // `district::Stranded`.)
+            b.felt(h.health);
             let steer = b.steer(nodes, root, goal, crate::player::EYE, dt);
             // (Its plan, if it asked for one, made on another core.)
             if let Some(built) = districts.as_deref().and_then(|d| d.nodes.as_ref()) {

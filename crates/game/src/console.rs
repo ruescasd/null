@@ -13,7 +13,9 @@
 //! `NAME VALUE`, `NAME default` (a number), `NAME` alone its value. And
 //! `help`; `list` (what acts at once, then all else on or set); `where`
 //! (the camera, as `--cam`; and copies it); `tp NAME` and `savetp NAME`
-//! (places kept by name, see `places.rs`); `clear`. Up brings back the
+//! (places kept by name, see `places.rs`); `keep N KIND...` (creatures
+//! kept round you, dropped from the sky: `combat/hunter/keep.rs`);
+//! `clear`. Up brings back the
 //! last command (kept between runs); Left, Right, Home, End, Delete and
 //! Ctrl with Left, Right or Backspace edit the line; Tab completes a word;
 //! Ctrl+V pastes (a line at a time run), Ctrl+C copies the line and clears it.
@@ -63,6 +65,27 @@ pub struct Spawns {
     /// those shown go.
     pub shows: Vec<crate::show::Asked>,
     pub unshow: bool,
+    /// `keep` asked: what to keep round you (none: `keep off`).
+    pub keep: Option<Option<Keeping>>,
+}
+
+/// What `keep` keeps round you (see `combat/hunter/keep.rs`): which kinds,
+/// in turn, each with its options; how many; between how near and how far
+/// from you (m), dropped from how high (m), one every how many seconds.
+#[derive(Clone, Debug)]
+pub struct Keeping {
+    pub kinds: Vec<(String, crate::traits::Traits)>,
+    pub count: u32,
+    pub near: f32,
+    pub far: f32,
+    pub height: f32,
+    pub every: f32,
+}
+
+/// The kinds `keep` keeps: those that walk the ground as the hunters do
+/// (not those that come their own ways, a grove, a chained pair).
+fn walkers() -> Vec<String> {
+    kinds().into_iter().filter(|k| !matches!(k.as_str(), "chained" | "bud" | "grove" | "bishop" | "impaled" | "tumbler")).collect()
 }
 
 /// The kinds `spawn` knows, besides the creatures of `creatures/` (each by
@@ -532,6 +555,56 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
         // you saw.)
         crate::combat::trace("rigtrace: MARK");
         console.lines.push(format!("marked in {}", crate::combat::trace_file()));
+    } else if line.trim().starts_with("keep") {
+        // `keep N KIND[,KIND...] [near=M] [far=M] [height=M] [every=S]
+        // [option ...]`: N of them kept round you, dropped from the sky as
+        // they go (see `combat/hunter/keep.rs`); `keep off`.
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let usage = format!("keep N KIND[,KIND...] [near=M] [far=M] [height=M] [every=S] [option ...]  (keep off: no more); kinds: {}", walkers().join(", "));
+        match (words.get(1).copied(), words.get(2)) {
+            (Some("off"), _) => {
+                spawns.keep = Some(None);
+                console.lines.push("keeping none: no more dropped, those here stay".into());
+            }
+            (Some(n), Some(list)) if n.parse::<u32>().is_ok() => {
+                let count = n.parse::<u32>().expect("checked").clamp(1, 40);
+                let mut keeping = Keeping { kinds: Vec::new(), count, near: 40.0, far: 80.0, height: 40.0, every: 1.0 };
+                let (mut options, mut wrong) = (Vec::new(), None);
+                for w in &words[3..] {
+                    let number = |v: &str| v.parse::<f32>().ok().filter(|x| *x >= 0.0);
+                    match w.split_once('=') {
+                        Some(("near", v)) if number(v).is_some() => keeping.near = number(v).expect("checked"),
+                        Some(("far", v)) if number(v).is_some() => keeping.far = number(v).expect("checked"),
+                        Some(("height", v)) if number(v).is_some() => keeping.height = number(v).expect("checked"),
+                        Some(("every", v)) if number(v).is_some() => keeping.every = number(v).expect("checked"),
+                        Some(("near" | "far" | "height" | "every", _)) => wrong = Some(format!("{w}: a number, 0 or more")),
+                        _ => options.push(*w),
+                    }
+                }
+                keeping.far = keeping.far.max(keeping.near + 1.0);
+                for kind in list.split(',') {
+                    if !walkers().iter().any(|k| k == kind) {
+                        wrong = Some(format!("{kind}: not one kept; {usage}"));
+                        break;
+                    }
+                    match crate::traits::Traits::parse(options_kind(kind), &options) {
+                        Ok(traits) => keeping.kinds.push((kind.to_string(), traits)),
+                        Err(e) => {
+                            wrong = Some(named(kind, e));
+                            break;
+                        }
+                    }
+                }
+                match wrong {
+                    Some(w) => console.lines.push(w),
+                    None => {
+                        console.lines.push(format!("keeping {} round you ({}), {:.0} to {:.0} m off, dropped from {:.0} m, one every {} s", keeping.count, list, keeping.near, keeping.far, keeping.height, keeping.every));
+                        spawns.keep = Some(Some(keeping));
+                    }
+                }
+            }
+            _ => console.lines.push(usage),
+        }
     } else if line.trim() == "reset" {
         spawns.reset = true;
         console.lines.push("every creature gone, your health back".into());

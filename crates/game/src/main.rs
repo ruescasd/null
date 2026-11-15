@@ -310,9 +310,41 @@ fn main() {
             loading::LoadingPlugin,
             navmesh::NavmeshPlugin,
         ))
-        .add_systems(Update, startlog)
+        .add_systems(Update, (startlog, hitches))
         .run();
 }
+
+/// A frame longer than `--set hitch=MS` (20 unless given) said in the
+/// log, with how long and when (the user, 2026-11-15: frames at 3 fps,
+/// keeping creatures round you; and the target is 100 fps and more, no
+/// slop: two frames' worth is a stutter). The first `SETTLE` s of play,
+/// terrain still coming in, told as one line, how many and the worst.
+/// Always on: one comparison a frame; a line only for a slow one.
+fn hitches(time: Res<Time<Real>>, playing: Res<loading::Playing>, args: Res<Args>, mut settle: Local<(Option<f32>, u32, f32, bool)>) {
+    if !playing.0 {
+        return;
+    }
+    let (dt, now) = (time.delta_secs(), time.elapsed_secs());
+    let begun = *settle.0.get_or_insert(now);
+    let slow = dt * 1000.0 > args.num("hitch", 20.0);
+    if now - begun < SETTLE {
+        if slow {
+            settle.1 += 1;
+            settle.2 = settle.2.max(dt);
+        }
+        return;
+    }
+    if !settle.3 {
+        settle.3 = true;
+        info!("hitch: settling, the first {SETTLE:.0} s of play: {} slow frames, the worst {:.0} ms", settle.1, settle.2 * 1000.0);
+    }
+    if slow {
+        warn!("hitch: a frame of {:.0} ms at {now:.1} s", dt * 1000.0);
+    }
+}
+
+/// See `hitches` (s).
+const SETTLE: f32 = 10.0;
 
 /// Draws prepared on the CPU in every view: with Bevy's GPU instance
 /// building off (see `PbrPlugin`), the views must be told too, or each
