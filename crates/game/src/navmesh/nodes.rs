@@ -11,10 +11,10 @@
 //! Walkers walk within a node and teleport between nodes (`district.rs`);
 //! the hops a teleport may take are the nodes' nearest edge points.
 
-use std::collections::HashMap;
+use bevy::platform::collections::HashMap;
 
 use bevy::math::DVec2;
-use geo::{Area, BooleanOps, BoundingRect, Buffer, Contains, ConvexHull, Coord, Distance, Intersects, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
+use geo::{Area, BooleanOps, BoundingRect, ConvexHull, Distance, Intersects, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
 use worldgen::plates::{Plate, PlateWorld};
 
 /// A body's fit (m): its radius, the highest step it climbs, its height.
@@ -36,8 +36,45 @@ impl Fit {
 /// the user, 2026-11-15; half, still frames of 100 ms to 1.3 s, till they
 /// were set below; one, none, but 19.5 s to build the stacks'.)
 pub(crate) fn build_threads() -> usize {
-    std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1))
+    match THREADS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1)),
+        n => n,
+    }
 }
+
+/// `f` over `items` in chunks, on `build_threads` threads (at the
+/// background's priority), the chunks' answers in order. (A thread for every
+/// chunk, eight for each build thread, all at once: every core, not half,
+/// and a build "on one thread" on eight.)
+pub(crate) fn par_chunks<T: Sync, R: Send>(items: &[T], f: impl Fn(&[T]) -> R + Sync) -> Vec<R> {
+    let threads = build_threads();
+    let chunk = items.len().div_ceil(threads * 8).max(1);
+    let chunks: Vec<&[T]> = items.chunks(chunk).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads.min(chunks.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    background();
+                    let mut mine = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(c) = chunks.get(k) else { break };
+                        mine.push((k, f(c)));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    out.sort_by_key(|x| x.0);
+    out.into_iter().map(|x| x.1).collect()
+}
+
+/// The build's threads, if set (0: as `build_threads` says): a test's,
+/// one, to measure each stage's work.
+pub(crate) static THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// This thread set below the game's own (each of the nodes' build threads
 /// first): with as many busy as half the cores, the game's threads were
@@ -97,6 +134,246 @@ pub(crate) struct Stretch {
     pub(crate) open: bool,
 }
 
+/// The parts of segment `a`-`b` further than `r` from every line of
+/// `walls`: by each wall's capsule's interval along it (the line through
+/// its rectangle, Liang-Barsky, and its two end circles), merged, and what
+/// is left. Exact, as geo's band round them clipped to it was, at a
+/// fraction of the cost (0.2 ms an open stretch, the join's 1.4 s in the
+/// stacks).
+fn clear_of(a: DVec2, b: DVec2, walls: &MultiLineString<f64>, r: f64) -> Vec<(DVec2, DVec2)> {
+    let d = b - a;
+    let len2 = d.length_squared();
+    if len2 < 1e-18 {
+        return Vec::new();
+    }
+    let mut cover: Vec<(f64, f64)> = Vec::new();
+    for w in &walls.0 {
+        let (c, e) = (DVec2::new(w.0[0].x, w.0[0].y), DVec2::new(w.0[1].x, w.0[1].y));
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        // The end circles: |a + t d - c|² = r².
+        for q in [c, e] {
+            let f = a - q;
+            let (qa, qb, qc) = (len2, 2.0 * f.dot(d), f.length_squared() - r * r);
+            let disc = qb * qb - 4.0 * qa * qc;
+            if disc >= 0.0 {
+                let s = disc.sqrt();
+                lo = lo.min((-qb - s) / (2.0 * qa));
+                hi = hi.max((-qb + s) / (2.0 * qa));
+            }
+        }
+        // The rectangle: along the wall within its length, across within r.
+        let u = e - c;
+        let ul = u.length();
+        if ul > 1e-12 {
+            let (ux, n) = (u / ul, (u / ul).perp());
+            let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+            let mut inside = true;
+            for (axis, min, max) in [(ux, 0.0, ul), (n, -r, r)] {
+                let (p, v) = ((a - c).dot(axis), d.dot(axis));
+                if v.abs() < 1e-15 {
+                    if p < min || p > max {
+                        inside = false;
+                    }
+                } else {
+                    let (s0, s1) = ((min - p) / v, (max - p) / v);
+                    t0 = t0.max(s0.min(s1));
+                    t1 = t1.min(s0.max(s1));
+                }
+            }
+            if inside && t0 <= t1 {
+                lo = lo.min(t0);
+                hi = hi.max(t1);
+            }
+        }
+        if lo < hi && hi > 0.0 && lo < 1.0 {
+            cover.push((lo.max(0.0), hi.min(1.0)));
+        }
+    }
+    cover.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out = Vec::new();
+    let mut at = 0.0;
+    for (lo, hi) in cover {
+        if lo > at {
+            out.push((a + d * at, a + d * lo));
+        }
+        at = at.max(hi);
+    }
+    if at < 1.0 {
+        out.push((a + d * at, b));
+    }
+    out
+}
+
+/// `poly` counter-clockwise, its last point not its first.
+pub(crate) fn ccw(mut poly: Vec<DVec2>) -> Vec<DVec2> {
+    if poly.len() > 1 && poly[0].distance(poly[poly.len() - 1]) < 1e-12 {
+        poly.pop();
+    }
+    let twice: f64 = (0..poly.len()).map(|i| poly[i].perp_dot(poly[(i + 1) % poly.len()])).sum();
+    if twice < 0.0 {
+        poly.reverse();
+    }
+    poly
+}
+
+/// The part of the path `a` + `span` u (u in 0..1, and beyond) within
+/// convex `hull` (counter-clockwise) grown by `grow` (each edge moved out
+/// by it: a little more at its corners): from and to which u, if any.
+pub(crate) fn along(hull: &[DVec2], a: DVec2, span: DVec2, grow: f64) -> Option<(f64, f64)> {
+    let (mut u0, mut u1) = (f64::NEG_INFINITY, f64::INFINITY);
+    for i in 0..hull.len() {
+        let (p, q) = (hull[i], hull[(i + 1) % hull.len()]);
+        let Some(out) = (-(q - p).perp()).try_normalize() else { continue };
+        let (num, den) = (grow - (a - p).dot(out), span.dot(out));
+        if den.abs() < 1e-15 {
+            if num < 0.0 {
+                return None;
+            }
+        } else if den > 0.0 {
+            u1 = u1.min(num / den);
+        } else {
+            u0 = u0.max(num / den);
+        }
+    }
+    (u0 <= u1).then_some((u0, u1))
+}
+
+
+/// How far two fragments either side of an open stretch must meet along it
+/// to be one node (m): a gap a body's centre passes (its radius already
+/// taken off), five times what a node's outline is made simpler by (2 mm,
+/// `district::outline`), so it is kept in its navmesh. (Found every 10 cm
+/// before, a meeting shorter than that joined or not by where the points
+/// fell: 134 in the tiers did not.)
+const MEET: f64 = 0.01;
+
+/// The parts of the line `a` + `dir` s (`dir` of length 1), s from `s0` to
+/// `s1`, inside `f`, each grown by `pad` at its ends: where it crosses `f`'s
+/// rings, inside between each pair; pushed onto `spans` (`cross` a buffer).
+pub(crate) fn spans_in(f: &Polygon<f64>, a: DVec2, dir: DVec2, s0: f64, s1: f64, pad: f64, cross: &mut Vec<f64>, spans: &mut Vec<(f64, f64)>) {
+    cross.clear();
+    for ring in std::iter::once(f.exterior()).chain(f.interiors()) {
+        for e in ring.lines() {
+            let (p, q) = (DVec2::new(e.start.x, e.start.y), DVec2::new(e.end.x, e.end.y));
+            let (sp, sq) = (dir.perp_dot(p - a), dir.perp_dot(q - a));
+            if (sp > 0.0) != (sq > 0.0) {
+                cross.push((p + (q - p) * (sp / (sp - sq)) - a).dot(dir));
+            }
+        }
+    }
+    cross.sort_by(f64::total_cmp);
+    for w in cross.chunks_exact(2) {
+        let (u0, u1) = ((w[0] - pad).max(s0), (w[1] + pad).min(s1));
+        if u0 <= u1 {
+            spans.push((u0, u1));
+        }
+    }
+}
+
+
+/// Convex `hulls` (counter-clockwise) less those within another (of two
+/// alike, the first kept): what they cover together, the same. (A pillar's
+/// stacked slabs, many of one footprint, each a hull to take out: 16 a
+/// pillar's piece, most of its walking space's work.)
+fn outermost(hulls: Vec<Polygon<f64>>) -> Vec<Polygon<f64>> {
+    let pts: Vec<Vec<DVec2>> = hulls.iter().map(|h| ccw(h.exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
+    let within = |a: &[DVec2], b: &[DVec2]| a.iter().all(|&x| (0..b.len()).all(|k| (b[(k + 1) % b.len()] - b[k]).perp_dot(x - b[k]) >= -1e-9));
+    let keep: Vec<bool> = (0..pts.len()).map(|i| !(0..pts.len()).any(|j| j != i && within(&pts[i], &pts[j]) && (j < i || !within(&pts[j], &pts[i])))).collect();
+    hulls.into_iter().zip(keep).filter_map(|(h, k)| k.then_some(h)).collect()
+}
+
+/// Whether convex `a` (a closed ring, either way round) and convex `b`
+/// (counter-clockwise) meet or touch: no edge of either with the other all
+/// beyond it. (geo's `intersects`, a pillar's every hull against a piece,
+/// was a sixth of the walking space's work in the stacks.)
+fn convex_meet(a: &[geo::Coord<f64>], b: &[DVec2]) -> bool {
+    let a: Vec<DVec2> = ccw(a.iter().map(|c| DVec2::new(c.x, c.y)).collect());
+    let apart = |p: &[DVec2], q: &[DVec2]| (0..p.len()).any(|k| {
+        let (u, v) = (p[k], p[(k + 1) % p.len()]);
+        q.iter().all(|&x| (v - u).perp_dot(x - u) < 0.0)
+    });
+    !apart(&a, b) && !apart(b, &a)
+}
+
+/// Convex `poly` (counter-clockwise) on the left of line `a`-`b` moved `r`
+/// to its left: the part of it further than `r` inside the line.
+fn keep_left(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
+    let Some(dir) = (b - a).try_normalize() else { return poly.to_vec() };
+    let side = |q: DVec2| dir.perp_dot(q - a) - r;
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    for k in 0..poly.len() {
+        let (p, q) = (poly[k], poly[(k + 1) % poly.len()]);
+        let (sp, sq) = (side(p), side(q));
+        if sp >= 0.0 {
+            out.push(p);
+        }
+        if (sp >= 0.0) != (sq >= 0.0) {
+            out.push(p + (q - p) * (sp / (sp - sq)));
+        }
+    }
+    out
+}
+
+/// Whether segment `a`-`b` comes within `r` of convex `poly` (counter-
+/// clockwise): its band reaches into it.
+fn within(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> bool {
+    let inside = |q: DVec2| (0..poly.len()).all(|k| (poly[(k + 1) % poly.len()] - poly[k]).perp_dot(q - poly[k]) >= 0.0);
+    if inside(a) || inside(b) {
+        return true;
+    }
+    let to = |q: DVec2, p0: DVec2, p1: DVec2| {
+        let d = p1 - p0;
+        let t = if d.length_squared() > 0.0 { ((q - p0).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        q.distance(p0 + d * t)
+    };
+    (0..poly.len()).any(|k| {
+        let (p0, p1) = (poly[k], poly[(k + 1) % poly.len()]);
+        // (Crossing, or the nearest of the four ends to the other segment.)
+        let (d1, d2) = ((b - a).perp_dot(p0 - a), (b - a).perp_dot(p1 - a));
+        let (d3, d4) = ((p1 - p0).perp_dot(a - p0), (p1 - p0).perp_dot(b - p0));
+        (d1 * d2 < 0.0 && d3 * d4 < 0.0) || to(a, p0, p1) < r || to(b, p0, p1) < r || to(p0, a, b) < r || to(p1, a, b) < r
+    })
+}
+
+/// Steps in each half circle of a capsule's ends (`capsule`).
+const CAP_STEPS: usize = 6;
+
+/// Segment `a`-`b` grown by `r` (counter-clockwise): its sides, each end a
+/// half circle in `CAP_STEPS`, its corners just outside the circle (the
+/// polygon round it, not in it: never less than `r`).
+fn capsule(a: DVec2, b: DVec2, r: f64) -> Polygon<f64> {
+    let k = r / (std::f64::consts::PI / (2.0 * CAP_STEPS as f64)).cos();
+    let d = (b - a).normalize_or(DVec2::X);
+    let n = d.perp();
+    let half = |c: DVec2, from: DVec2, to: DVec2| {
+        (0..=CAP_STEPS).map(move |j| {
+            let t = std::f64::consts::PI * j as f64 / CAP_STEPS as f64;
+            let q = c + (from * t.cos() + to * t.sin()) * if j == 0 || j == CAP_STEPS { r } else { k };
+            (q.x, q.y)
+        })
+    };
+    let mut pts: Vec<(f64, f64)> = half(b, -n, d).chain(half(a, n, -d)).collect();
+    pts.push(pts[0]);
+    let mut poly = Polygon::new(LineString::from(pts), Vec::new());
+    if poly.signed_area() < 0.0 {
+        poly.exterior_mut(|e| e.0.reverse());
+    }
+    poly
+}
+
+/// `hull` (convex) grown by `r`, counter-clockwise: the hull of its corners
+/// moved eight ways, a little more than `r` (round the circle, not in it).
+fn grow(hull: &Polygon<f64>, r: f64) -> Polygon<f64> {
+    let k = r / (std::f64::consts::PI / 8.0).cos();
+    let points: Vec<Point<f64>> = hull.exterior().0.iter().flat_map(|c| (0..8).map(move |j| { let a = (j as f64 + 0.5) * std::f64::consts::FRAC_PI_4; Point::new(c.x + k * a.cos(), c.y + k * a.sin()) })).collect();
+    let mut poly = MultiPoint::new(points).convex_hull();
+    if poly.signed_area() < 0.0 {
+        poly.exterior_mut(|e| e.0.reverse());
+    }
+    poly
+}
+
 pub(crate) fn cells(a: DVec2, b: DVec2, pad: f64) -> impl Iterator<Item = (i32, i32)> {
     let (lo, hi) = (a.min(b) - pad, a.max(b) + pad);
     let (x0, z0, x1, z1) = ((lo.x / BIN).floor() as i32, (lo.y / BIN).floor() as i32, (hi.x / BIN).floor() as i32, (hi.y / BIN).floor() as i32);
@@ -123,8 +400,20 @@ fn bounds(poly: &[DVec2]) -> (DVec2, DVec2) {
 /// prisms grown, its plate taken at its base.
 pub(crate) fn pieces(world: &PlateWorld, lo: DVec2, hi: DVec2) -> Vec<Piece> {
     let grows = world.grows_pillars_at_full_detail();
-    world
-        .plate_pieces(lo, hi)
+    // (In strips, on the build's threads: each big plate is its site's
+    // strip's, so the same pieces, in the same order. On one thread, a
+    // third of the build's time in play.)
+    const STRIPS: usize = 16;
+    let strips: Vec<(DVec2, DVec2)> = (0..STRIPS)
+        .map(|k| {
+            let x = |k: usize| if k == STRIPS { hi.x } else { lo.x + (hi.x - lo.x) * k as f64 / STRIPS as f64 };
+            (DVec2::new(x(k), lo.y), DVec2::new(x(k + 1), hi.y))
+        })
+        .collect();
+    par_chunks(&strips, |c| c.iter().flat_map(|&(a, b)| world.plate_pieces(a, b)).collect::<Vec<_>>())
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
         .into_iter()
         .map(|(poly, plate, kept)| {
             let pillar = grows && plate.pillar > 0.0;
@@ -162,7 +451,7 @@ pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64) -> Vec
             let dir = d / len;
             // Who lies across it, and along which part (0..1).
             let mut across: Vec<(f64, f64, usize)> = Vec::new();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = bevy::platform::collections::HashSet::new();
             for c in cells(a, b, ON) {
                 for &(j, m) in grid.get(&c).into_iter().flatten() {
                     if j == i || !seen.insert((j, m)) {
@@ -292,12 +581,25 @@ pub(crate) struct Space {
     closed: HashMap<(i32, i32), Vec<usize>>,
     /// The pieces by cell.
     grid: HashMap<(i32, i32), Vec<usize>>,
+    /// Each piece as a polygon, made once (found where a point is, every
+    /// lookup: made anew each time, most of a lookup's cost).
+    shapes: Vec<Polygon<f64>>,
+    /// How long each stage of its building took (s), in order.
+    pub(crate) times: Vec<(&'static str, f32)>,
+    /// Each piece's convex hull, counter-clockwise (itself, convex as most
+    /// are; one a canal cuts, round it): what a fall's path crosses (see
+    /// `district::fall_clear`).
+    pub(crate) hulls: Vec<Vec<DVec2>>,
 }
 
 impl Space {
     /// Over `pieces`, for a body of `fit`, on every core.
     pub(crate) fn build(world: &PlateWorld, pieces: Vec<Piece>, fit: Fit) -> Space {
+        let mut times = Vec::new();
+        let clock = std::time::Instant::now();
+        let lap = |name: &'static str, times: &mut Vec<(&'static str, f32)>| times.push((name, clock.elapsed().as_secs_f32() - times.iter().map(|t: &(&str, f32)| t.1).sum::<f32>()));
         let edges = stretches(world, &pieces, fit.climb);
+        lap("edges", &mut times);
         let mut closed: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (k, e) in edges.iter().enumerate() {
             if !e.open {
@@ -315,15 +617,8 @@ impl Space {
         }
         // The pillars' prisms within a body's height of their ground, each
         // with the radius round it: obstacles, to whatever ground they reach.
-        let threads = build_threads();
         let pillars: Vec<&Piece> = pieces.iter().filter(|p| p.pillar).collect();
-        let made: Vec<MultiPolygon<f64>> = std::thread::scope(|scope| {
-            let chunk = pillars.len().div_ceil(threads * 8).max(1);
-            let handles: Vec<_> = pillars
-                .chunks(chunk)
-                .map(|c| {
-                    scope.spawn(move || {
-                        background();
+        let made: Vec<MultiPolygon<f64>> = par_chunks(&pillars, |c| {
                         c.iter()
                             .filter_map(|p| {
                                 let floor = p.plate.height;
@@ -332,14 +627,17 @@ impl Space {
                                 // obstacle. Taken for one, Detour walked over
                                 // ground the plates said was blocked.)
                                 let hulls: Vec<Polygon<f64>> = p.prisms.iter().filter(|q| q.3 - floor > fit.climb).filter_map(|q| section(q, floor, floor + fit.height)).collect();
-                                (!hulls.is_empty()).then(|| MultiPolygon::new(hulls).buffer(fit.radius))
+                                // (Each hull grown by the radius by hand, its
+                                // own convex hull: geo's growing, 0.5 ms a
+                                // pillar. Overlapping, as they may: they are
+                                // taken out at once, see `walking`.)
+                                (!hulls.is_empty()).then(|| MultiPolygon::new(outermost(hulls.iter().map(|h| grow(h, fit.radius)).collect())))
                             })
                             .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-        });
+        })
+        .into_iter()
+        .flatten()
+        .collect();
         let mut blocks: Vec<MultiPolygon<f64>> = Vec::new();
         let mut blocked: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for block in made {
@@ -350,34 +648,19 @@ impl Space {
                 blocks.push(block);
             }
         }
-        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, closed, grid };
+        let shapes: Vec<Polygon<f64>> = pieces.iter().map(|p| polygon(&p.poly)).collect();
+        let hulls = shapes.iter().map(|s| ccw(s.convex_hull().exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
+        lap("obstacles", &mut times);
+        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, closed, grid, shapes, times: Vec::new(), hulls };
         // Each piece's walking space: itself, less the radius round every
         // closed stretch near it, less the pillars' obstacles.
-        let one = |p: &Piece| -> Vec<Polygon<f64>> {
-            if p.hole {
-                return Vec::new();
-            }
-            let band: MultiPolygon<f64> = space.closed_near(&p.poly).buffer(fit.radius);
-            let mut left = polygon(&p.poly).difference(&band);
-            let (a, b) = bounds(&p.poly);
-            let mut ks: Vec<usize> = cells(a, b, 0.0).flat_map(|c| space.blocked.get(&c).into_iter().flatten().copied()).collect();
-            ks.sort();
-            ks.dedup();
-            for k in ks {
-                left = left.difference(&space.blocks[k]);
-            }
-            left.0
-        };
-        let chunk = space.pieces.len().div_ceil(threads * 8).max(1);
-        let walking: Vec<Vec<Polygon<f64>>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = space.pieces.chunks(chunk).map(|c| scope.spawn(|| {
-                background();
-                c.iter().map(one).collect::<Vec<_>>()
-            })).collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-        });
+        let all: Vec<usize> = (0..space.pieces.len()).collect();
+        let walking: Vec<Vec<Polygon<f64>>> = par_chunks(&all, |c| c.iter().map(|&i| if space.pieces[i].hole { Vec::new() } else { space.walking(i) }).collect::<Vec<_>>()).into_iter().flatten().collect();
         space.space = walking;
+        lap("walking", &mut times);
         space.join();
+        lap("join", &mut times);
+        space.times = times;
         space
     }
 
@@ -398,39 +681,44 @@ impl Space {
             }
             i
         }
-        let inside = |i: usize, q: DVec2| self.space[i].iter().position(|f| f.contains(&Point::new(q.x, q.y)));
         let mut joins = 0;
+        let (mut cross, mut sides): (Vec<f64>, Vec<Vec<(f64, f64)>>) = (Vec::new(), Vec::new());
         for e in self.edges.iter().filter(|e| e.open && e.other.is_some_and(|j| j > e.piece)) {
             let j = e.other.unwrap();
-            let line = MultiLineString::new(vec![LineString::from(vec![(e.a.x, e.a.y), (e.b.x, e.b.y)])]);
-            let band = self.closed_near(&[e.a, e.b]).buffer(self.fit.radius);
-            let left = band.clip(&line, true);
             let dir = (e.b - e.a).normalize();
-            for part in left.0 {
-                let pts: Vec<Coord<f64>> = part.0;
-                if pts.len() < 2 {
-                    continue;
-                }
-                let (p0, p1) = (DVec2::new(pts[0].x, pts[0].y), DVec2::new(pts[pts.len() - 1].x, pts[pts.len() - 1].y));
+            for (p0, p1) in clear_of(e.a, e.b, &self.closed_near(&[e.a, e.b]), self.fit.radius) {
                 if p0.distance(p1) < 1e-3 {
                     continue;
                 }
-                // (All along it, every 10 cm: either side's walking space may
-                // be in several fragments along one stretch, and each joins
-                // the one across. At its midpoint only, fragments were left
-                // apart that a way crossed, found against Detour.) (Into the
-                // piece: its outline runs one way round, so both sides are
-                // tried, and whichever lands in it kept.)
+                // (All along it: either side's walking space may be in
+                // several fragments along one stretch, and each joins each
+                // one across that it meets for `MEET` or more. At its
+                // midpoint only, fragments were left apart that a way
+                // crossed, found against Detour; every 10 cm, each point
+                // looked up in every fragment, it was the join's work.)
+                // (Just off it either way: a piece's own side, whichever.)
                 let n = dir.perp() * 1e-3;
-                let steps = (p0.distance(p1) / 0.1).ceil().max(1.0) as usize;
-                for k in 0..steps {
-                    let m = p0.lerp(p1, (k as f64 + 0.5) / steps as f64);
-                    let (fi, fj) = (inside(e.piece, m + n).or(inside(e.piece, m - n)), inside(j, m - n).or(inside(j, m + n)));
-                    if let (Some(fi), Some(fj)) = (fi, fj) {
-                        let (x, y) = (find(&mut parent, id[e.piece][fi]), find(&mut parent, id[j][fj]));
-                        if x != y {
-                            parent[x] = y;
-                            joins += 1;
+                let (s0, s1) = ((p0 - e.a).dot(dir), (p1 - e.a).dot(dir));
+                let mut side = |i: usize, sides: &mut Vec<Vec<(f64, f64)>>| {
+                    sides.clear();
+                    for f in &self.space[i] {
+                        let mut spans = Vec::new();
+                        spans_in(f, e.a + n, dir, s0, s1, 0.0, &mut cross, &mut spans);
+                        spans_in(f, e.a - n, dir, s0, s1, 0.0, &mut cross, &mut spans);
+                        sides.push(spans);
+                    }
+                };
+                side(e.piece, &mut sides);
+                let mine = std::mem::take(&mut sides);
+                side(j, &mut sides);
+                for (fi, a) in mine.iter().enumerate() {
+                    for (fj, b) in sides.iter().enumerate() {
+                        if a.iter().any(|x| b.iter().any(|y| x.1.min(y.1) - x.0.max(y.0) >= MEET)) {
+                            let (x, y) = (find(&mut parent, id[e.piece][fi]), find(&mut parent, id[j][fj]));
+                            if x != y {
+                                parent[x] = y;
+                                joins += 1;
+                            }
                         }
                     }
                 }
@@ -478,6 +766,121 @@ impl Space {
         self.node_area = area;
     }
 
+    /// Piece `i`'s walking space: itself less a band the radius wide round
+    /// each closed stretch near it and the pillars' obstacles near it. A
+    /// convex piece (most) is first cut by a straight line along each of its
+    /// own edges closed all along (the band along such an edge, its round
+    /// ends too, is all on that line's side within a convex piece): no
+    /// boolean. What is left, the stretches whose band reaches into it and
+    /// the pillars' hulls that meet it, made by hand (a capsule each) and
+    /// taken out in one boolean, as one shape (the non-zero rule: their
+    /// overlaps are not holes in it). (geo's buffer round the stretches cost
+    /// 0.2 ms a piece, 3.8 s in the stacks; every stretch and hull near a
+    /// piece a boolean, 1.3 s.)
+    fn walking(&self, i: usize) -> Vec<Polygon<f64>> {
+        let p = &self.pieces[i];
+        let r = self.fit.radius;
+        let (lo, hi) = bounds(&p.poly);
+        let (lo, hi) = (lo - r, hi + r);
+        let mut near: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.closed.get(&c).into_iter().flatten().copied()).collect();
+        near.sort();
+        near.dedup();
+        near.retain(|&k| {
+            let e = &self.edges[k];
+            e.a.min(e.b).cmple(hi).all() && e.a.max(e.b).cmpge(lo).all()
+        });
+        let poly = ccw(p.poly.clone());
+        let n = poly.len();
+        let convex = n >= 3 && (0..n).all(|k| (poly[(k + 1) % n] - poly[k]).perp_dot(poly[(k + 2) % n] - poly[(k + 1) % n]) >= -1e-9);
+        let mut shape = poly.clone();
+        if convex {
+            // Its own edges closed all along: their stretches, merged.
+            let mut whole = vec![false; n];
+            for k in 0..n {
+                let (a, b) = (poly[k], poly[(k + 1) % n]);
+                let len = a.distance(b);
+                if len < 1e-9 {
+                    continue;
+                }
+                let dir = (b - a) / len;
+                let on = |x: DVec2| (x - a).perp_dot(dir).abs() <= ON;
+                let mut parts: Vec<(f64, f64)> = near
+                    .iter()
+                    .map(|&s| &self.edges[s])
+                    .filter(|e| e.piece == i && on(e.a) && on(e.b))
+                    .map(|e| {
+                        let (t0, t1) = ((e.a - a).dot(dir), (e.b - a).dot(dir));
+                        (t0.min(t1), t0.max(t1))
+                    })
+                    .collect();
+                parts.sort_by(|x, y| x.0.total_cmp(&y.0));
+                let mut t = 0.0;
+                for (t0, t1) in parts {
+                    if t0 > t + ON {
+                        break;
+                    }
+                    t = t.max(t1);
+                }
+                whole[k] = t >= len - ON;
+            }
+            // Cut by its line those whose band, cut by the line, takes no
+            // more: past each end, at a corner wider than square, the line's
+            // band reaches beyond the edge's (further than the radius from
+            // its end) unless the edge on from it is closed all along too,
+            // long enough to take that much in its own band.
+            let at = |k: usize| poly[k % n];
+            let end_ok = |k: usize, here: DVec2, there: DVec2, next: Option<usize>, beyond: DVec2| {
+                let len = here.distance(there);
+                (beyond - here).dot(there - here) >= 0.0 || next.is_some_and(|m| whole[m] && (beyond - here).perp_dot(there - here).abs() / len >= r) && whole[k]
+            };
+            let lines: Vec<bool> = (0..n).map(|k| whole[k] && end_ok(k, at(k), at(k + 1), Some((k + n - 1) % n), at(k + n - 1)) && end_ok(k, at(k + 1), at(k), Some((k + 1) % n), at(k + 2))).collect();
+            let edge_of = |e: &Stretch| {
+                (0..n).find(|&k| {
+                    let (a, b) = (at(k), at(k + 1));
+                    let len = a.distance(b);
+                    len >= 1e-9 && {
+                        let dir = (b - a) / len;
+                        let on = |x: DVec2| (x - a).perp_dot(dir).abs() <= ON && (-ON..=len + ON).contains(&(x - a).dot(dir));
+                        on(e.a) && on(e.b)
+                    }
+                })
+            };
+            for k in (0..n).filter(|&k| lines[k]) {
+                shape = keep_left(&shape, at(k), at(k + 1), r);
+                if shape.len() < 3 {
+                    return Vec::new();
+                }
+            }
+            // (A stretch along an edge cut by its line: its band within the
+            // piece already gone; along an edge closed all along, another's
+            // within its own.)
+            near.retain(|&s| {
+                let e = &self.edges[s];
+                match edge_of(e) {
+                    Some(k) if lines[k] => false,
+                    Some(k) if whole[k] => e.piece == i,
+                    _ => true,
+                }
+            });
+            // (Only bands that reach into what is left.)
+            near.retain(|&s| within(&shape, self.edges[s].a, self.edges[s].b, r));
+        }
+        let mut cut: Vec<Polygon<f64>> = near.iter().map(|&s| capsule(self.edges[s].a, self.edges[s].b, r)).collect();
+        let mut ks: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.blocked.get(&c).into_iter().flatten().copied()).collect();
+        ks.sort();
+        ks.dedup();
+        // (Only the pillars' hulls that meet it: a pillar's every hull came
+        // with any cell it shares, 60 cutters a piece in the stacks.)
+        let piece = polygon(&shape);
+        cut.extend(ks.into_iter().flat_map(|k| self.blocks[k].0.iter()).filter(|b| {
+            b.bounding_rect().is_some_and(|q| q.min().x <= hi.x && q.min().y <= hi.y && q.max().x >= lo.x && q.max().y >= lo.y) && (!convex || convex_meet(&b.exterior().0, &shape))
+        }).cloned());
+        if cut.is_empty() {
+            return vec![piece];
+        }
+        piece.boolean_op_with_fill_rule(&MultiPolygon::new(cut), geo::algorithm::bool_ops::OpType::Difference, geo::algorithm::bool_ops::FillRule::NonZero).0
+    }
+
     /// The closed stretches near `poly` (within the radius of its bounds).
     pub(crate) fn closed_near(&self, poly: &[DVec2]) -> MultiLineString<f64> {
         let (a, b) = bounds(poly);
@@ -496,7 +899,7 @@ impl Space {
     pub(crate) fn under(&self, q: DVec2) -> Option<usize> {
         let pt = Point::new(q.x, q.y);
         let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
-        self.grid.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32))?.iter().copied().find(|&i| near(&polygon(&self.pieces[i].poly)))
+        self.grid.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32))?.iter().copied().find(|&i| near(&self.shapes[i]))
     }
 
     /// The pieces whose bounds lie within `pad` of `q`.
@@ -523,12 +926,44 @@ impl Space {
         let pt = Point::new(q.x, q.y);
         let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
         let pieces = self.grid.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32))?;
-        let mut found = pieces.iter().copied().filter(|&i| near(&polygon(&self.pieces[i].poly))).flat_map(|i| self.space[i].iter().enumerate().filter(|(_, f)| near(f)).map(move |(k, _)| (self.node_of[i][k], i, k)));
+        let mut found = pieces.iter().copied().filter(|&i| near(&self.shapes[i])).flat_map(|i| self.space[i].iter().enumerate().filter(|(_, f)| near(f)).map(move |(k, _)| (self.node_of[i][k], i, k)));
         let first = found.next()?;
         if prefer.is_none_or(|n| n == first.0) {
             return Some(first);
         }
         Some(found.find(|f| Some(f.0) == prefer).unwrap_or(first))
+    }
+
+    /// Where along `a` + `dir` s (`dir` of length 1), s from `s0` to `s1`,
+    /// node `n`'s walking space is (within `ROUNDING` of it, as
+    /// `node_at_preferring` finds): its spans, merged, in order. The path's
+    /// line crossing each of the node's fragments' rings, the inside
+    /// between each pair. (Found point by point, nine about each of a
+    /// drop's landing spots, the stacks' landings were 0.9 s of work.)
+    pub(crate) fn node_along(&self, n: u32, a: DVec2, dir: DVec2, s0: f64, s1: f64) -> Vec<(f64, f64)> {
+        let (p0, p1) = (a + dir * s0, a + dir * s1);
+        let mut ks: Vec<usize> = cells(p0, p1, ROUNDING).flat_map(|c| self.grid.get(&c).into_iter().flatten().copied()).collect();
+        ks.sort();
+        ks.dedup();
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        let mut cross: Vec<f64> = Vec::new();
+        for i in ks {
+            for (k, f) in self.space[i].iter().enumerate() {
+                if self.node_of[i][k] != n {
+                    continue;
+                }
+                spans_in(f, a, dir, s0, s1, ROUNDING, &mut cross, &mut spans);
+            }
+        }
+        spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for (u0, u1) in spans {
+            match out.last_mut() {
+                Some(last) if u0 <= last.1 => last.1 = last.1.max(u1),
+                _ => out.push((u0, u1)),
+            }
+        }
+        out
     }
 
     /// The hops between nodes no more than `far` apart (3D): points every
@@ -537,61 +972,71 @@ impl Space {
     /// the lower first, each hop from it.
     pub(crate) fn hops(&self, world: &PlateWorld, far: f64) -> HashMap<(u32, u32), Vec<Hop>> {
         let points = self.edge_points(world);
-        let mut cell: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-        for (k, p) in points.iter().enumerate() {
-            cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(k);
+        // (Each cell's points in it, side by side, and its neighbours found
+        // once a cell, not once a point: 3 million lookups in the stacks.)
+        let mut cell: HashMap<(i32, i32), Vec<(DVec2, f64, u32)>> = HashMap::new();
+        for p in &points {
+            cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(*p);
         }
         let keys: Vec<(i32, i32)> = cell.keys().copied().collect();
-        let threads = build_threads();
         type Best = HashMap<((u32, u32), (i32, i32)), Hop>;
         let keep = |out: &mut Best, key: ((u32, u32), (i32, i32)), hop: Hop| {
+            // (Ties by where: the same whatever the threads, as chunked.)
             let e = out.entry(key).or_insert(hop);
-            if hop.d < e.d {
+            if (hop.d, hop.a.x, hop.a.y, hop.b.x, hop.b.y) < (e.d, e.a.x, e.a.y, e.b.x, e.b.y) {
                 *e = hop;
             }
         };
-        let best: Best = std::thread::scope(|scope| {
-            let chunk = keys.len().div_ceil(threads * 4).max(1);
-            let (cell, points) = (&cell, &points);
-            let handles: Vec<_> = keys
-                .chunks(chunk)
-                .map(|c| {
-                    scope.spawn(move || {
-                        background();
+        let best: Best = {
+            let cell = &cell;
+            let handles = par_chunks(&keys, |c| {
                         let mut out: Best = HashMap::new();
                         for &(cx, cz) in c {
-                            for &a in &cell[&(cx, cz)] {
-                                let pa = points[a];
-                                for dz in -1..=1 {
-                                    for dx in -1..=1 {
-                                        let Some(others) = cell.get(&(cx + dx, cz + dz)) else { continue };
-                                        for &b in others {
-                                            let pb = points[b];
-                                            if pb.2 <= pa.2 {
-                                                continue;
-                                            }
-                                            let d = (pa.0.distance_squared(pb.0) + (pa.1 - pb.1).powi(2)).sqrt();
-                                            if d <= far {
-                                                let at = ((pa.0.x / HOP_CELL).floor() as i32, (pa.0.y / HOP_CELL).floor() as i32);
-                                                keep(&mut out, ((pa.2, pb.2), at), Hop { a: pa.0, ay: pa.1 as f32, b: pb.0, by: pb.1 as f32, d: d as f32, leap: None });
+                            let near: Vec<&Vec<(DVec2, f64, u32)>> = (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (cx + dx, cz + dz))).filter_map(|k| cell.get(&k)).collect();
+                            let mut best: Vec<Hop> = Vec::new();
+                            let mut to: Vec<u32> = Vec::new();
+                            for &pa in &cell[&(cx, cz)] {
+                                // (The nearest of each node from this point,
+                                // then kept: kept pair by pair, most of it.)
+                                best.clear();
+                                to.clear();
+                                for &pb in near.iter().flat_map(|o| o.iter()) {
+                                    if pb.2 <= pa.2 {
+                                        continue;
+                                    }
+                                    let d = (pa.0.distance_squared(pb.0) + (pa.1 - pb.1).powi(2)).sqrt();
+                                    if d > far {
+                                        continue;
+                                    }
+                                    let hop = Hop { a: pa.0, ay: pa.1 as f32, b: pb.0, by: pb.1 as f32, d: d as f32, leap: None };
+                                    match to.iter().position(|&n| n == pb.2) {
+                                        Some(k) => {
+                                            if (hop.d, hop.b.x, hop.b.y) < (best[k].d, best[k].b.x, best[k].b.y) {
+                                                best[k] = hop;
                                             }
                                         }
+                                        None => {
+                                            to.push(pb.2);
+                                            best.push(hop);
+                                        }
                                     }
+                                }
+                                let at = ((pa.0.x / HOP_CELL).floor() as i32, (pa.0.y / HOP_CELL).floor() as i32);
+                                for (&n, &hop) in to.iter().zip(&best) {
+                                    keep(&mut out, ((pa.2, n), at), hop);
                                 }
                             }
                         }
                         out
-                    })
-                })
-                .collect();
+            });
             let mut all: Best = HashMap::new();
             for h in handles {
-                for (k, hop) in h.join().unwrap() {
+                for (k, hop) in h {
                     keep(&mut all, k, hop);
                 }
             }
             all
-        });
+        };
         let mut out: HashMap<(u32, u32), Vec<Hop>> = HashMap::new();
         for ((pair, _), hop) in best {
             out.entry(pair).or_default().push(hop);
@@ -629,56 +1074,71 @@ impl Space {
     /// leaves from, else one. Directed: a drop down is no climb up.
     pub(crate) fn links(&self, world: &PlateWorld, far: f64, spread: Option<f64>, short: impl Fn(f64, f64) -> f64 + Sync) -> HashMap<(u32, u32), Vec<Link>> {
         let points = self.edge_points(world);
-        let mut cell: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-        for (k, p) in points.iter().enumerate() {
-            cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(k);
+        // (Each cell's points in it, side by side, and its neighbours found
+        // once a cell, not once a point: 3 million lookups in the stacks.)
+        let mut cell: HashMap<(i32, i32), Vec<(DVec2, f64, u32)>> = HashMap::new();
+        for p in &points {
+            cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(*p);
         }
         let keys: Vec<(i32, i32)> = cell.keys().copied().collect();
-        let threads = build_threads();
         type Best = HashMap<((u32, u32), (i32, i32)), Link>;
         let keep = |out: &mut Best, pair: (u32, u32), l: Link| {
             let at = spread.map_or((0, 0), |c| ((l.a.x / c).floor() as i32, (l.a.y / c).floor() as i32));
+            // (Ties by where: the same whatever the threads, as chunked.)
             let e = out.entry((pair, at)).or_insert(l);
-            if l.short < e.short {
+            if (l.short, l.a.x, l.a.y, l.b.x, l.b.y) < (e.short, e.a.x, e.a.y, e.b.x, e.b.y) {
                 *e = l;
             }
         };
-        std::thread::scope(|scope| {
-            let chunk = keys.len().div_ceil(threads * 4).max(1);
-            let (cell, points, short) = (&cell, &points, &short);
-            let handles: Vec<_> = keys
-                .chunks(chunk)
-                .map(|c| {
-                    scope.spawn(move || {
-                        background();
+        {
+            let (cell, short) = (&cell, &short);
+            let handles = par_chunks(&keys, |c| {
                         let mut out: Best = HashMap::new();
                         for &(cx, cz) in c {
-                            for &a in &cell[&(cx, cz)] {
-                                let pa = points[a];
-                                for dz in -1..=1 {
-                                    for dx in -1..=1 {
-                                        let Some(others) = cell.get(&(cx + dx, cz + dz)) else { continue };
-                                        for &b in others {
-                                            let pb = points[b];
-                                            if pb.2 == pa.2 {
-                                                continue;
-                                            }
-                                            let gap = pa.0.distance(pb.0);
-                                            if gap <= far {
-                                                keep(&mut out, (pa.2, pb.2), Link { short: short(gap, pb.1 - pa.1), a: pa.0, ay: pa.1, b: pb.0, by: pb.1 });
+                            let near: Vec<&Vec<(DVec2, f64, u32)>> = (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (cx + dx, cz + dz))).filter_map(|k| cell.get(&k)).collect();
+                            let mut best: Vec<Link> = Vec::new();
+                            let mut to: Vec<u32> = Vec::new();
+                            for &pa in &cell[&(cx, cz)] {
+                                // (The least of each node from this point,
+                                // then kept: kept pair by pair, most of it.)
+                                best.clear();
+                                to.clear();
+                                for &pb in near.iter().flat_map(|o| o.iter()) {
+                                    if pb.2 == pa.2 {
+                                        continue;
+                                    }
+                                    let gap = pa.0.distance(pb.0);
+                                    if gap > far {
+                                        continue;
+                                    }
+                                    // (No move, none kept: most pairs.)
+                                    let s = short(gap, pb.1 - pa.1);
+                                    if !s.is_finite() {
+                                        continue;
+                                    }
+                                    let l = Link { short: s, a: pa.0, ay: pa.1, b: pb.0, by: pb.1 };
+                                    match to.iter().position(|&n| n == pb.2) {
+                                        Some(k) => {
+                                            if (l.short, l.b.x, l.b.y) < (best[k].short, best[k].b.x, best[k].b.y) {
+                                                best[k] = l;
                                             }
                                         }
+                                        None => {
+                                            to.push(pb.2);
+                                            best.push(l);
+                                        }
                                     }
+                                }
+                                for (&n, &l) in to.iter().zip(&best) {
+                                    keep(&mut out, (pa.2, n), l);
                                 }
                             }
                         }
                         out
-                    })
-                })
-                .collect();
+            });
             let mut all: Best = HashMap::new();
             for h in handles {
-                for ((pair, _), l) in h.join().unwrap() {
+                for ((pair, _), l) in h {
                     keep(&mut all, pair, l);
                 }
             }
@@ -687,6 +1147,6 @@ impl Space {
                 out.entry(pair).or_default().push(l);
             }
             out
-        })
+        }
     }
 }

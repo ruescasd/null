@@ -580,6 +580,62 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   headless, 7.8 s in play at the start (11.2); plans median 0.9 ms (1.2),
   99th 4.4 (5.3). Every chase reached as before. Next for the build: step
   3 (in tiles, as the world streams).
+  The build against its essential cost (you, 2026-11-15: no complacency;
+  memory/essential-cost), stacks' square, one thread, CPU: 7.7 s (more:
+  see below) to 2.4 s (tiers 1.5, broken 0.6). Its stages "on one thread" had run on eight
+  (a thread for every chunk, eight for each build thread, all at once: the
+  game's build used every core, not half): now `nodes::par_chunks`, the
+  build's threads exactly; and its ties broken by place, the same nodes
+  whatever the cores. Teleports' hops and portals made only when a
+  teleporting walker first plans (a third of the build, for the gladiator
+  alone). Drops: falls exact by their curve, no stepping (5.0 s to 0.2),
+  landing spots by where nine paths cross the node (0.9 s to 0.17), links'
+  best per point before kept. Portals: a node's parts joined by Kruskal
+  over its portals' Delaunay edges, and a node's portals weighed all at
+  once where few (the nearest search ran its 64 rings to the end for every
+  portal of a node with fewer than 7): 748 ms to 20; plans in play too,
+  stacks without teleports median 465 to 43 µs, 99th 22 to 0.9 ms.
+  Walking space: a convex piece cut by a straight line along each own edge
+  closed all along where that is exact (a square corner or less at each
+  end, or the next edge closed and long enough), the rest one boolean of
+  what reaches into it: 1.3 s to 0.68. Hashing: Bevy's (foldhash), not
+  std's SipHash. Triangulation's edge splitting by 1 m cells. Left, by gap
+  (stacks; now, against the essential estimate): walking 680 ms (25-60),
+  drops 520 (50-250), outlines 360 (100-150: geo's 2 mm buffer and union
+  per fragment, then the triangulation), pieces 400 (50-100, not looked
+  at), join 120 (a few), obstacles 94, edges 51. In play (12 cores, at
+  the start): stacks' nodes in 1.1 s (7.8), no slow frame past the first
+  10 s; pieces (460 ms) and join (140) run on one thread, now most of it.
+  Then (same day): pieces 400 to 210 ms, two thirds of it the wells rule
+  (worldgen): whether a site splits now kept per call (`Cache::splits`;
+  asked again for every sample round a plate, its slope four landform
+  samples), a parent's plates kept from its first pass. Join 120 to 31:
+  each fragment's spans along an open stretch, pairs meeting 1 cm or more
+  (`MEET`) one node (sampled every 10 cm before, a shorter meeting joined
+  or not by where the points fell). Triangulation's corners snapped within
+  1 mm (`TRIANGLE_SNAP`, 0.1 before): four nodes in the broken had a
+  navmesh in two parts (corners half a millimetre apart either side of a
+  narrow neck); `node_reach` now asserts none in all six districts, and
+  judges triangles against outlines by the snapping's own bound. Stacks,
+  one thread: 2.0 s (tiers 1.2, broken 0.5); in play 0.7 s, pieces (235
+  ms, one thread) a third of it. Left (stacks, against essential):
+  walking 670 (25-60), drops 520 (50-250), outlines 370 (100-150),
+  pieces 210 (50-100; wells 86 of it), obstacles 89.
+  Then: walking 670 to 510 ms (a pillar's hulls within another left out,
+  `outermost`: 32 000 to 23 000 in the stacks; convex hulls tested against
+  a piece by their edges, not geo's `intersects`). Pieces made in strips on
+  the build's threads (the same pieces, whatever the threads). Tried and
+  removed: half capsules and a neighbour's stretch along an edge dropped
+  (no gain: geo's boolean costs by the shape, not the corner; in the tiers
+  three capsules in four are neighbours' walls ending at a corner);
+  triangulating a node's fragments together without geo's 2 mm growing and
+  union (100 ms less, but nodes in two: each side of a stretch cuts its
+  own walking space, their arcs ending mm apart, which the union glued).
+  Both left gaps need one change: the walking space cut the same on both
+  sides of a stretch (and a difference of our own for a convex piece and
+  the capsules at its corners), not more trimming. Stacks, one thread:
+  1.9 s; in play 0.7 s (pieces 137 ms of it, sharing the start with the
+  terrain's loading).
 - **Agreed** Structures: move from the patched Rust crates to C++ Detour
   (through bindings, staying on Bevy); the crates fail the worst-case frame
   cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).

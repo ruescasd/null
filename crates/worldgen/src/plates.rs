@@ -172,9 +172,13 @@ pub struct SitePlate {
 }
 
 /// Per-call memo of landform heights at sites; they are the expensive part.
+/// And whether a site splits (`splits`: its slope four landform samples):
+/// asked again for every point a chain is found for (`chain`), the wells'
+/// sampling round a plate 0.1 ms.
 #[derive(Default)]
 pub struct Cache {
     landform: HashMap<(usize, i32, i32), f64>,
+    splits: HashMap<(usize, i32, i32), bool>,
 }
 
 /// The plate `sites` to `level` (1 or 2) is split from.
@@ -773,17 +777,18 @@ impl PlateWorld {
 
     /// As `plate_at`, but for any stair.
     fn plate_plain(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> Plate {
-        let (sites, level) = self.chain(x, z, max_level);
+        let (sites, level) = self.chain(cache, x, z, max_level);
         self.plate(cache, sites, level)
     }
 
     /// The site chain of the plate at a point, and its level.
-    fn chain(&self, x: f64, z: f64, max_level: usize) -> ([(i32, i32); 3], usize) {
+    fn chain(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> ([(i32, i32); 3], usize) {
         let p = DVec2::new(x, z);
         let mut sites = [(0, 0); 3];
         let mut level = 0;
         sites[0] = self.nearest_site(0, p);
-        while (level < max_level || self.site_detail(level, sites[level])) && self.splits(level, sites[level]) {
+        let mut splits = |level: usize, g: (i32, i32)| *cache.splits.entry((level, g.0, g.1)).or_insert_with(|| self.splits(level, g));
+        while (level < max_level || self.site_detail(level, sites[level])) && splits(level, sites[level]) {
             level += 1;
             sites[level] = self.nearest_site(level, p);
         }
@@ -826,7 +831,10 @@ impl PlateWorld {
         // `WELL_REACH` below those beside it, so a plate with a sibling
         // within a grid's spacing that is not, is none, and is not sampled
         // round, the costly part: 2 to 3 ms a parent, sampling them all.)
+        // (Each kept, its piece and plate, for the second pass: made anew
+        // there, a third of the wells' work.)
         let mut tops: Vec<(DVec2, f64)> = Vec::new();
+        let mut kids: Vec<((i32, i32), Vec<DVec2>, Plate)> = Vec::new();
         for iz in (min.y / grid).floor() as i32 - 1..=(max.y / grid).ceil() as i32 + 1 {
             for ix in (min.x / grid).floor() as i32 - 1..=(max.x / grid).ceil() as i32 + 1 {
                 let piece = self.cell(next, (ix, iz), &poly);
@@ -836,20 +844,16 @@ impl PlateWorld {
                 sites[next] = (ix, iz);
                 let plate = self.plate_raw(&mut cache, sites, next);
                 tops.push((self.site(next, (ix, iz)), plate.height - plate.pillar));
+                kids.push(((ix, iz), piece, plate));
             }
         }
-        for iz in (min.y / grid).floor() as i32 - 1..=(max.y / grid).ceil() as i32 + 1 {
-            for ix in (min.x / grid).floor() as i32 - 1..=(max.x / grid).ceil() as i32 + 1 {
-                let piece = self.cell(next, (ix, iz), &poly);
-                if piece.len() < 3 || area(&piece) < LEAST_PIECE {
-                    continue;
-                }
+        {
+            for ((ix, iz), piece, plate) in kids {
                 sites[next] = (ix, iz);
                 // (One that splits on is not a plate but its parts.)
                 if next < 2 && self.splits(next, sites[next]) {
                     continue;
                 }
-                let plate = self.plate_raw(&mut cache, sites, next);
                 if plate.sloped || plate.tilt != DVec2::ZERO {
                     continue;
                 }
@@ -879,7 +883,7 @@ impl PlateWorld {
                             canal = true;
                             continue;
                         }
-                        let (mut chain, at) = self.chain(q.x, q.y, 2);
+                        let (mut chain, at) = self.chain(&mut cache, q.x, q.y, 2);
                         for c in chain.iter_mut().skip(at + 1) {
                             *c = (0, 0);
                         }
@@ -1202,6 +1206,7 @@ impl PlateWorld {
         }
         out
     }
+
 
     /// A plate's top at `p` (x, z): flat, tilted, or on an earthwork.
     pub fn plate_top(&self, plate: &Plate, p: DVec2) -> f64 {

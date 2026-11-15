@@ -22,7 +22,8 @@
 //! may drop down anywhere): one way, any depth, no tell; the rig's leap,
 //! its pose and landing.
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use bevy::platform::collections::HashMap;
+use std::{sync::Arc, time::Instant};
 
 use bevy::{
     math::DVec2,
@@ -88,55 +89,108 @@ fn fall_time(up: f64, h: f64) -> f64 {
 }
 
 /// Whether a leap of `up` m/s from `a` (its feet `ay` high), aimed by its
-/// fall time at `q` (`by` high), comes down on node `onto`: stepped as the
-/// rig steps it (its gravity, its velocity then its root, `rig.rs`), at a
-/// frame of 1/30 s and of 1/240 s (a longer frame loses height, so every
-/// frame between does as well); its root landing on the rig's own ground
-/// (`PlateWorld::height_at`, as `ground.rs` gives it outdoors: by the
-/// plates' tops, its first leap off a lip in play came down on it), on
-/// `onto`'s walking space; its body (`FALL_RADIUS` round it) never through
-/// the plates' tops more than `FALL_LIFT`, nor a pillar. (Outdoors nothing
-/// stops it sideways: that for the look of it.) (On the exact curve alone,
-/// at 30 frames a second its hop came down a fifth sooner, on its lip.)
-/// (`frames`: the frames it is stepped at.)
+/// fall time at `q` (`by` high), comes down on node `onto` at every frame
+/// up to the longest of `frames` (s), its body (`FALL_RADIUS` round it, a
+/// drop's, `body`) never through the plates' tops more than `FALL_LIFT`,
+/// nor a pillar. Exact, by its curve, no stepping: a frame of `dt` steps it
+/// `g dt t / 2` below its exact curve at time `t` (the rig's: its velocity,
+/// then its root), so the longest frame's curve is the lowest; along its
+/// path across, the pieces under it (clipped, convex, `Space::hulls`), each
+/// a flat or tilted top, so the curve less a top is concave, judged at its
+/// ends. Its root above every top it passes till the lowest curve comes
+/// down to `by` (a hop rising into its ledge, no), there on `onto`; its
+/// body likewise, against the tops grown by its radius; no gap under it (a
+/// canal: no). (Stepped at 1/30 and 1/240 s, with a ground lookup a step
+/// and eight about the body, 170 000 falls in the stacks took 5 s of work;
+/// the work the problem needs, tens of milliseconds, memory/essential-cost.)
 #[allow(clippy::too_many_arguments)]
 fn fall_clear(space: &Space, world: &PlateWorld, a: DVec2, ay: f64, q: DVec2, by: f64, up: f64, onto: u32, frames: &[f64], body: bool) -> bool {
     // (A hop up a ledge stands at its foot, the ledge within its body's
-    // reach: the body's sweep is for a drop's look alone; and in play,
-    // made from where it stands, its root alone, the body's checked from
-    // its lip as the drop was found: the whole checked then, a leap took
-    // up to 8 ms in the frame.)
+    // reach: the body's for a drop's look alone.)
     let ring = body && by < ay;
-    let top = |q: DVec2| -> f64 {
-        let pt = Point::new(q.x, q.y);
-        if space.blocked.get(&((q.x / nodes::BIN).floor() as i32, (q.y / nodes::BIN).floor() as i32)).is_some_and(|ks| ks.iter().any(|k| geo::Intersects::intersects(&space.blocks[*k], &pt))) {
-            return f64::INFINITY;
-        }
-        space.under(q).map_or(f64::NEG_INFINITY, |i| world.plate_top(&space.pieces[i].plate, q))
-    };
     let g = crate::rig::leap_gravity() as f64;
-    let v = (q - a) / fall_time(up, ay - by);
-    frames.iter().all(|&dt| {
-        let (mut p, mut y, mut vy) = (a, ay, up);
-        loop {
-            vy -= g * dt;
-            p += v * dt;
-            y += vy * dt;
-            if ring && (0..8).any(|j| top(p + DVec2::from_angle(j as f64 * std::f64::consts::FRAC_PI_4) * FALL_RADIUS) > y + FALL_LIFT) {
-                return false;
+    let dt = frames.iter().copied().fold(0.0, f64::max);
+    let whole = fall_time(up, ay - by);
+    if whole.is_nan() || whole <= 0.0 {
+        return false;
+    }
+    // The lowest curve: `ay + w t - g t² / 2`, down to `by` at `low`.
+    let w = up - g * dt / 2.0;
+    let disc = w * w + 2.0 * g * (ay - by);
+    if disc < 0.0 {
+        return false;
+    }
+    let low = (w + disc.sqrt()) / g;
+    let end = (low / whole).min(1.0);
+    let y = |u: f64| {
+        let t = u * whole;
+        ay + w * t - g * t * t / 2.0
+    };
+    let span = q - a;
+    // (Clear above `top` all along `u0`..`u1`, but for touching it at the
+    // end, coming down there, no higher than where it lands.)
+    let clear = |u0: f64, u1: f64, top: &dyn Fn(f64) -> f64, lift: f64| -> bool {
+        let first = if u0 <= 1e-9 { 1e-4f64.min(u1) } else { u0 };
+        let ok = |u: f64| if u >= end - 1e-9 { y(u) + lift >= top(u) - 1e-6 } else { y(u) + lift > top(u) };
+        ok(first) && ok(u1)
+    };
+    let pad = span.length() * 0.5 + FALL_RADIUS + 1.0;
+    let mut under: Vec<(f64, f64)> = Vec::new();
+    for i in space.pieces_near(a + span * 0.5, pad) {
+        let piece = &space.pieces[i];
+        if piece.hole {
+            continue;
+        }
+        let top = |u: f64| world.plate_top(&piece.plate, a + span * u);
+        if let Some((u0, u1)) = nodes::along(&space.hulls[i], a, span, 0.0) {
+            let (u0, u1) = (u0.max(0.0), u1.min(end));
+            if u0 < u1 {
+                under.push((u0, u1));
+                if !clear(u0, u1, &top, 0.0) {
+                    return false;
+                }
             }
-            // (Down on ground: where it lands, on `onto`. Rising into it, a
-            // hop not clearing its ledge: no.)
-            if y <= world.walk_height_at(p.x as f32, p.y as f32) as f64 {
-                return vy < 0.0 && space.node_at_preferring(p, Some(onto)).is_some_and(|f| f.0 == onto);
-            }
-            // (Fallen past where it lands: missed it. From below, a hop
-            // begins a metre and more under it.)
-            if y < by.min(ay) - 1.0 {
+        }
+        if ring
+            && let Some((u0, u1)) = nodes::along(&space.hulls[i], a, span, FALL_RADIUS)
+        {
+            let (u0, u1) = (u0.max(0.0), u1.min(end));
+            if u0 < u1 && !clear(u0, u1, &top, FALL_LIFT) {
                 return false;
             }
         }
-    })
+    }
+    // (A pillar's obstacle, already grown by a walker's radius, by the rest
+    // of the body's: none in reach.)
+    if ring {
+        let (lo, hi) = (a.min(q) - pad, a.max(q) + pad);
+        let mut ks: Vec<usize> = nodes::cells(lo, hi, 0.0).flat_map(|c| space.blocked.get(&c).into_iter().flatten().copied()).collect();
+        ks.sort();
+        ks.dedup();
+        let more = (FALL_RADIUS - space.fit.radius).max(0.0);
+        for k in ks {
+            for block in &space.blocks[k].0 {
+                let hull: Vec<DVec2> = block.exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect();
+                if nodes::along(&nodes::ccw(hull), a, span, more).is_some_and(|(u0, u1)| u0.max(0.0) < u1.min(end)) {
+                    return false;
+                }
+            }
+        }
+    }
+    // No gap under its path (a canal's cut, a hole).
+    under.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut at = 0.0;
+    for (u0, u1) in under {
+        if u0 > at + 1e-3 {
+            return false;
+        }
+        at = at.max(u1);
+    }
+    if at < end - 1e-3 {
+        return false;
+    }
+    // Down, at the longest frame (soonest), on `onto`; at the shortest, `q`.
+    space.node_at_preferring(a + span * end, Some(onto)).is_some_and(|f| f.0 == onto)
 }
 
 /// The frames a fall is checked at (s): a long one loses height, so every
@@ -167,14 +221,7 @@ fn drops(space: &Space, world: &PlateWorld) -> Vec<(u32, u32, Hop)> {
     });
     let on = |n: u32, q: DVec2| space.node_at_preferring(q, Some(n)).is_some_and(|f| f.0 == n);
     let candidates: Vec<(u32, u32, nodes::Link)> = links.iter().filter(|((_, b), _)| space.node_area[*b as usize] >= LAND_LEAST).flat_map(|(&(a, b), list)| list.iter().filter(|l| l.short <= 0.0).map(move |l| (a, b, *l))).collect();
-    let threads = nodes::build_threads();
-    std::thread::scope(|scope| {
-        let chunk = candidates.len().div_ceil(threads * 4).max(1);
-        let handles: Vec<_> = candidates
-            .chunks(chunk)
-            .map(|c| {
-                scope.spawn(|| {
-                    nodes::background();
+    nodes::par_chunks(&candidates, |c| {
                     c.iter()
                         .filter_map(|&(a, b, l)| {
                             let gap = l.a.distance(l.b);
@@ -188,35 +235,56 @@ fn drops(space: &Space, world: &PlateWorld) -> Vec<(u32, u32, Hop)> {
                             // that cleared it sprang twice its height.)
                             let hop = backs.len() > 1;
                             let ups: Vec<f64> = if hop { (0..9).map(|k| (2.0 * crate::rig::leap_gravity() as f64 * HOP_CLEAR).sqrt() + kick(0.5) * k as f64).collect() } else { DROP_UP.map(kick).to_vec() };
+                            // (Where it may land, found once, nearest first:
+                            // on its node, and `INSET` all round it, by where
+                            // nine paths along it cross the node, its own and
+                            // eight about it.)
+                            let (s0, s1) = (gap, gap + DROP_ON);
+                            let main = space.node_along(b, l.a, dir, s0, s1);
+                            let rays: Vec<Vec<(f64, f64)>> = if main.is_empty() {
+                                Vec::new()
+                            } else {
+                                std::iter::once(main).chain((0..8).map(|k| space.node_along(b, l.a + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET, dir, s0, s1))).collect()
+                            };
+                            let inside = |spans: &[(f64, f64)], s: f64| spans.iter().any(|&(u0, u1)| u0 <= s && s <= u1);
+                            let spots: Vec<(DVec2, f64)> = (0..)
+                                .map(|k| gap + k as f64 * LAND_STEP)
+                                .take_while(|s| *s <= gap + DROP_ON)
+                                .filter(|&s| !rays.is_empty() && rays.iter().all(|r| inside(r, s)))
+                                .map(|s| l.a + dir * s)
+                                .filter_map(|q| space.under(q).map(|i| (q, world.plate_top(&space.pieces[i].plate, q))))
+                                .collect();
+                            let froms: Vec<DVec2> = backs.iter().map(|&back| l.a - dir * back).filter(|&from| from == l.a || on(a, from)).collect();
                             for up0 in ups {
-                                for &back in backs {
-                                    let from = l.a - dir * back;
-                                    if back > 0.0 && !on(a, from) {
-                                        continue;
-                                    }
-                                    let mut s = gap;
-                                    while s <= gap + DROP_ON {
-                                        let q = l.a + dir * s;
-                                        if on(b, q) && (0..8).all(|k| on(b, q + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET)) {
-                                            let by = space.under(q).map(|i| world.plate_top(&space.pieces[i].plate, q))?;
-                                            let up = if hop { (up0 * up0 + 2.0 * crate::rig::leap_gravity() as f64 * (by - l.ay)).sqrt() } else { up0 };
-                                            if fall_clear(space, world, from, l.ay, q, by, up, b, &FRAMES, true) {
-                                                let d = (q.distance_squared(from) + (l.ay - by).powi(2)).sqrt();
-                                                return Some((a, b, Hop { a: from, ay: l.ay as f32, b: q, by: by as f32, d: d as f32, leap: Some(up as f32) }));
-                                            }
+                                for &from in &froms {
+                                    for &(q, by) in &spots {
+                                        let up = if hop { (up0 * up0 + 2.0 * crate::rig::leap_gravity() as f64 * (by - l.ay)).sqrt() } else { up0 };
+                                        if fall_clear(space, world, from, l.ay, q, by, up, b, &FRAMES, true) {
+                                            let d = (q.distance_squared(from) + (l.ay - by).powi(2)).sqrt();
+                                            return Some((a, b, Hop { a: from, ay: l.ay as f32, b: q, by: by as f32, d: d as f32, leap: Some(up as f32) }));
                                         }
-                                        s += LAND_STEP;
                                     }
                                 }
                             }
                             None
                         })
                         .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     })
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The teleports between nodes (the user, 2026-11-15: teleporting a
+/// creature's own, case by case), made only once one is wanted: their hops
+/// (`Space::hops`, nodes' edges `FARTHEST` m apart), each node's neighbours
+/// by them and the nearest a teleport between them goes (for `route`,
+/// `reaches`), and the portals of them and the drops and hops together, to
+/// plan by. (Made for every square, they were a third of its building, 1.4
+/// s of work in the stacks, used by none but the gladiator.)
+struct Teleports {
+    adjacent: Vec<Vec<(u32, f32)>>,
+    portals: Portals,
 }
 
 /// A district's nodes, ready to walk: the walking space, the hops between
@@ -225,14 +293,21 @@ fn drops(space: &Space, world: &PlateWorld) -> Vec<(u32, u32, Hop)> {
 pub(crate) struct Nodes {
     world: Arc<PlateWorld>,
     pub(crate) space: Space,
-    /// Each node's neighbours, and the nearest a teleport between them goes
-    /// (for `route`, `reaches`).
-    adjacent: Vec<Vec<(u32, f32)>>,
+    /// Nodes whose navmesh, its triangles as kept, is in parts (a way
+    /// across it not found): none, `node_reach` checks.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) cut: usize,
+    /// The teleports: made the first time a walker that teleports plans (a
+    /// gladiator's; see `Teleports`).
+    teleports: std::sync::OnceLock<Teleports>,
+    /// The drops and hops, kept for the teleports' portals.
+    leaps: Vec<(u32, u32, Hop)>,
     /// Each node's drops and hops (one way): onto which nodes, and the
     /// least rise of those (below 0, a drop).
     leaps_to: Vec<Vec<(u32, f32)>>,
-    /// Where teleports leave from and land, to plan by.
-    portals: Portals,
+    /// Where drops and hops leave from and land, to plan by, for walkers
+    /// that do not teleport (most).
+    walks: Portals,
     /// Each node's navmesh, its own (one for all, a way begun on the edge
     /// of a node was begun on the one beside it, a few millimetres off, and
     /// not found).
@@ -266,9 +341,9 @@ pub(crate) struct Nodes {
 /// no area, left out, and the triangles either side of it no longer met:
 /// nodes cut in two, ways in them not found, in the tiers.)
 fn triangles(poly: &Polygon<f64>) -> Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)> {
+    const SNAP: f64 = TRIANGLE_SNAP;
     use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation, handles::FixedVertexHandle};
-    const SNAP: f64 = 1e-4;
-    const CELL: f64 = 0.25;
+    const CELL: f64 = 1.0;
     let key = |p: DVec2| ((p.x / CELL).floor() as i64, (p.y / CELL).floor() as i64);
     let mut points: Vec<DVec2> = Vec::new();
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -304,6 +379,7 @@ fn triangles(poly: &Polygon<f64>) -> Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)
     // over (where two rings meet along it) is no edge: in and out on either
     // side alike.
     let mut count: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut cells: Vec<(i64, i64)> = Vec::new();
     for ids in &rings {
         for k in 0..ids.len() {
             let (a, b) = (ids[k], ids[(k + 1) % ids.len()]);
@@ -311,17 +387,23 @@ fn triangles(poly: &Polygon<f64>) -> Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)
             let d = pb - pa;
             let len2 = d.length_squared();
             let mut on: Vec<(f64, usize)> = Vec::new();
+            // (The cells along it, each once: a step's nine looked up again
+            // at the next, most of a triangulation's work.)
             let steps = (d.length() / CELL).ceil() as usize + 1;
+            cells.clear();
             for s in 0..=steps {
                 let (kx, kz) = key(pa + d * (s as f64 / steps as f64));
-                for i in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (kx + dx, kz + dz))).flat_map(|k| grid.get(&k).into_iter().flatten().copied()) {
-                    if i == a || i == b || len2 == 0.0 {
-                        continue;
-                    }
-                    let t = (points[i] - pa).dot(d) / len2;
-                    if t > 0.0 && t < 1.0 && (pa + d * t).distance(points[i]) < SNAP {
-                        on.push((t, i));
-                    }
+                cells.extend((-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (kx + dx, kz + dz))));
+            }
+            cells.sort_unstable();
+            cells.dedup();
+            for i in cells.iter().flat_map(|k| grid.get(k).into_iter().flatten().copied()) {
+                if i == a || i == b || len2 == 0.0 {
+                    continue;
+                }
+                let t = (points[i] - pa).dot(d) / len2;
+                if t > 0.0 && t < 1.0 && (pa + d * t).distance(points[i]) < SNAP {
+                    on.push((t, i));
                 }
             }
             on.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -390,6 +472,14 @@ fn triangles(poly: &Polygon<f64>) -> Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)
     Some((corners, out, flat))
 }
 
+/// How near two corners of an outline are taken for one, and an edge split
+/// at a corner, in `triangles` (m). (1 mm, half what an outline is made
+/// simpler by: at 0.1 mm, two corners half a millimetre apart either side of
+/// a neck a few centimetres wide were kept apart, and the triangles either
+/// side met at a corner, not an edge, the node cut in two: four in the
+/// broken.)
+const TRIANGLE_SNAP: f64 = 1e-3;
+
 /// A node's outline: its fragments as one (they meet along the stretches
 /// they were joined across). (Each grown 2 mm first: on the grid of 1/1024
 /// m, two fragments' edges along one stretch are off each other by up to
@@ -436,7 +526,17 @@ impl Nodes {
         let t = Instant::now();
         let column = worldgen::column_size(0) as f64;
         let (lo, hi) = (((centre - side / 2.0) / column).floor() * column, ((centre + side / 2.0) / column).ceil() * column);
-        let mut space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
+        // (Each stage's time, for the report: what the work costs, stage by
+        // stage, against what it should; see memory/essential-cost.)
+        let made_pieces = nodes::pieces(&world, lo, hi);
+        let mut times: Vec<(&'static str, f32)> = vec![("pieces", t.elapsed().as_secs_f32())];
+        let mut space = Space::build(&world, made_pieces, Fit::WALKER);
+        times.extend(space.times.iter().copied());
+        let mut stage = Instant::now();
+        let mut lap = |name: &'static str, times: &mut Vec<(&'static str, f32)>| {
+            times.push((name, stage.elapsed().as_secs_f32()));
+            stage = Instant::now();
+        };
         // (Nodes too small to land on left out: ground walled in by steps,
         // got onto by no one; in the stacks a third of its nodes, slivers
         // at its pillars' feet, under 1% of its ground, each with its
@@ -444,13 +544,7 @@ impl Nodes {
         // the nodes: it walks as on open ground, onto them.)
         space.prune(LAND_LEAST);
         let built = t.elapsed().as_secs_f32();
-        let hops = space.hops(&world, FARTHEST);
-        let mut adjacent: Vec<Vec<(u32, f32)>> = vec![Vec::new(); space.nodes()];
-        for (&(a, b), list) in &hops {
-            let d = list.iter().map(|h| h.d).fold(f32::INFINITY, f32::min);
-            adjacent[a as usize].push((b, d));
-            adjacent[b as usize].push((a, d));
-        }
+        lap("prune", &mut times);
         let t_drops = Instant::now();
         let drops = drops(&space, &world);
         let mut leaps_to: Vec<Vec<(u32, f32)>> = vec![Vec::new(); space.nodes()];
@@ -462,6 +556,7 @@ impl Nodes {
             d.dedup_by_key(|x| x.0);
         }
         let dropped = (drops.len(), leaps_to.iter().map(|d| d.iter().filter(|l| l.1 < 0.0).count()).sum::<usize>(), t_drops.elapsed().as_secs_f32());
+        lap("drops", &mut times);
         let hops_up: Vec<f32> = drops.iter().filter(|d| d.2.by > d.2.ay).map(|d| d.2.by - d.2.ay).collect();
         let high = hops_up.iter().filter(|r| **r >= 1.5).count();
         // Each node's outline: its fragments as one (they meet along the
@@ -477,15 +572,8 @@ impl Nodes {
         let mut archipelagos = Vec::new();
         // (Each node's on its own: on every core, in chunks.)
         type Made = Vec<Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)>>;
-        let threads = nodes::build_threads();
-        let made: Vec<Made> = std::thread::scope(|scope| {
-            let chunk = of.len().div_ceil(threads * 8).max(1);
-            let handles: Vec<_> = of.chunks(chunk).map(|c| scope.spawn(move || {
-                nodes::background();
-                c.iter().map(|list| outline(list).0.iter().map(triangles).collect::<Made>()).collect::<Vec<_>>()
-            })).collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-        });
+        let made: Vec<Made> = nodes::par_chunks(&of, |c| c.iter().map(|list| outline(list).0.iter().map(triangles).collect::<Made>()).collect::<Vec<_>>()).into_iter().flatten().collect();
+        lap("outlines", &mut times);
         for (n, outline) in made.into_iter().enumerate() {
             let (mut vertices, mut polygons): (Vec<Vec2>, Vec<Vec<usize>>) = (Vec::new(), Vec::new());
             if outline.len() > 1 {
@@ -537,6 +625,7 @@ impl Nodes {
             archipelago.update(0.0);
             archipelagos.push(Some(archipelago));
         }
+        lap("navmeshes", &mut times);
         let drawn = draw.then(|| {
             let (mut corners, mut colours) = (Vec::new(), Vec::new());
             for (i, s) in space.space.iter().enumerate() {
@@ -562,9 +651,10 @@ impl Nodes {
             (corners, colours)
         });
         let t_portals = Instant::now();
-        let portals = Portals::new(&hops, &drops, space.nodes());
+        let walks = Portals::new(&HashMap::new(), &drops, space.nodes());
+        lap("portals", &mut times);
         let report = format!(
-            "district nodes over {:.0} by {:.0} m round {:.0}, {:.0}: {} pieces, {} nodes ({} of {LAND_LEAST} m² or more), {} node pairs within {FARTHEST} m; {} drops, between {} node pairs, and {} hops up ({} of 1.5 m or more) ({:.1} s); {} portals, {} walking links between them ({:.1} s); navmesh {} triangles ({} of no area left out, {} outlines not triangulated, {} cut in parts by those left out), {} nodes not one outline; built in {:.1} s ({built:.1} s the walking space)",
+            "district nodes over {:.0} by {:.0} m round {:.0}, {:.0}: {} pieces, {} nodes ({} of {LAND_LEAST} m² or more), {} drops, between {} node pairs, and {} hops up ({} of 1.5 m or more) ({:.1} s); {} portals, {} walking links between them ({:.1} s); navmesh {} triangles ({} of no area left out, {} outlines not triangulated, {} cut in parts by those left out), {} nodes not one outline; built in {:.1} s ({built:.1} s the walking space); stages {}",
             hi.x - lo.x,
             hi.y - lo.y,
             centre.x,
@@ -572,23 +662,37 @@ impl Nodes {
             space.pieces.len(),
             space.nodes(),
             space.node_area.iter().filter(|a| **a >= LAND_LEAST).count(),
-            hops.len(),
             dropped.0 - hops_up.len(),
             dropped.1,
             hops_up.len(),
             high,
             dropped.2,
-            portals.at.len(),
-            portals.links.iter().map(|l| l.len()).sum::<usize>() / 2,
+            walks.at.len(),
+            walks.links.iter().map(|l| l.len()).sum::<usize>() / 2,
             t_portals.elapsed().as_secs_f32(),
             triangles_n,
             flat,
             untriangulated,
             cut,
             split,
-            t.elapsed().as_secs_f32()
+            t.elapsed().as_secs_f32(),
+            times.iter().map(|(n, t)| format!("{n} {:.0} ms", t * 1000.0)).collect::<Vec<_>>().join(", ")
         );
-        Ok(Nodes { world, space, adjacent, leaps_to, portals, archipelagos, origin, lo, hi, report, drawn })
+        Ok(Nodes { world, space, cut, teleports: Default::default(), leaps: drops, leaps_to, walks, archipelagos, origin, lo, hi, report, drawn })
+    }
+
+    /// The teleports (see `Teleports`): made now, the first time asked.
+    fn teleports(&self) -> &Teleports {
+        self.teleports.get_or_init(|| {
+            let hops = self.space.hops(&self.world, FARTHEST);
+            let mut adjacent: Vec<Vec<(u32, f32)>> = vec![Vec::new(); self.space.nodes()];
+            for (&(a, b), list) in &hops {
+                let d = list.iter().map(|h| h.d).fold(f32::INFINITY, f32::min);
+                adjacent[a as usize].push((b, d));
+                adjacent[b as usize].push((a, d));
+            }
+            Teleports { adjacent, portals: Portals::new(&hops, &self.leaps, self.space.nodes()) }
+        })
     }
 
     /// The node a body at `p` is on, and the point on its walking space
@@ -641,7 +745,7 @@ impl Nodes {
         let reach = 0.5f32;
         let a = archipelago.sample_point(local(from), &reach).map_err(|e| format!("from {from:.2} off the mesh: {e:?}"))?;
         let b = archipelago.sample_point(local(to), &reach).map_err(|e| format!("to {to:.2} off the mesh: {e:?}"))?;
-        let steps = archipelago.find_path(&a, &b, &HashMap::new(), PermittedAnimationLinks::All).map_err(|e| format!("no way: {e:?}"))?;
+        let steps = archipelago.find_path(&a, &b, &std::collections::HashMap::new(), PermittedAnimationLinks::All).map_err(|e| format!("no way: {e:?}"))?;
         let back = |p: Vec2| (DVec2::new(p.x as f64, p.y as f64) + self.origin).as_vec2();
         Ok(steps
             .into_iter()
@@ -656,21 +760,31 @@ impl Nodes {
     /// than `range` (landing on nodes of `LAND_LEAST` or more, but for
     /// `to`), drops, and hops of no more than `climb`.
     pub(crate) fn reaches(&self, from: u32, to: u32, range: f32, climb: f32) -> bool {
-        self.reach_from(from, range, climb, Some(to))[to as usize]
+        self.reach_from(from, range, climb, Some(to), false)[to as usize]
+    }
+
+    /// As `reaches`, in the frame: never making the teleports (see
+    /// `reach_from`).
+    fn reaches_now(&self, from: u32, to: u32, range: f32, climb: f32) -> bool {
+        self.reach_from(from, range, climb, Some(to), true)[to as usize]
     }
 
     /// The nodes reached from `from` (as `reaches`), all of them; or till
     /// `stop` is.
-    fn reach_from(&self, from: u32, range: f32, climb: f32, stop: Option<u32>) -> Vec<bool> {
+    fn reach_from(&self, from: u32, range: f32, climb: f32, stop: Option<u32>, now: bool) -> Vec<bool> {
         let to = stop.unwrap_or(u32::MAX);
-        let mut seen = vec![false; self.adjacent.len()];
+        let n = self.space.nodes();
+        let mut seen = vec![false; n];
+        // (In the frame, `now`: by the teleports only if made already;
+        // made here, a second's work in the frame.)
+        let adjacent = if range <= 0.0 { None } else if now { self.teleports.get().map(|t| &t.adjacent) } else { Some(&self.teleports().adjacent) };
         seen[from as usize] = true;
         let mut stack = vec![from];
         while let Some(n) = stack.pop() {
             if n == to {
                 return seen;
             }
-            let teleports = self.adjacent[n as usize].iter().filter(|&&(m, d)| d <= range && (m == to || self.space.node_area[m as usize] >= LAND_LEAST)).map(|&(m, _)| m);
+            let teleports = adjacent.into_iter().flat_map(|a| a[n as usize].iter()).filter(|&&(m, d)| d <= range && (m == to || self.space.node_area[m as usize] >= LAND_LEAST)).map(|&(m, _)| m);
             let leaps = self.leaps_to[n as usize].iter().filter(|&&(_, rise)| rise <= climb).map(|&(m, _)| m);
             for m in teleports.chain(leaps) {
                 if !seen[m as usize] {
@@ -688,7 +802,7 @@ impl Nodes {
     /// reaches about `AWAY` m from you, further than it is (see
     /// `Stranded`).
     pub(crate) fn stranded(&self, me: u32, mine: Vec2, you: Vec2, range: f32, climb: f32) -> Option<Spots> {
-        let reach = self.reach_from(me, range, climb, None);
+        let reach = self.reach_from(me, range, climb, None, false);
         let ok = |n: u32| reach[n as usize] && self.space.node_area[n as usize] >= LAND_LEAST;
         let y = DVec2::new(you.x as f64, you.y as f64);
         let pt = Point::new(y.x, y.y);
@@ -744,7 +858,8 @@ impl Nodes {
     /// nodes of `LAND_LEAST` or more, but for `to`).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn route(&self, from: u32, to: u32, range: f32) -> Option<Vec<u32>> {
-        let mut came = vec![u32::MAX; self.adjacent.len()];
+        let adjacent = &self.teleports().adjacent;
+        let mut came = vec![u32::MAX; adjacent.len()];
         came[from as usize] = from;
         let mut queue = std::collections::VecDeque::from([from]);
         while let Some(n) = queue.pop_front() {
@@ -756,7 +871,7 @@ impl Nodes {
                 way.reverse();
                 return Some(way);
             }
-            for &(m, d) in &self.adjacent[n as usize] {
+            for &(m, d) in &adjacent[n as usize] {
                 if d <= range && came[m as usize] == u32::MAX && (m == to || self.space.node_area[m as usize] >= LAND_LEAST) {
                     came[m as usize] = n;
                     queue.push_back(m);
@@ -779,7 +894,8 @@ impl Nodes {
         if !self.reaches(a, b, range, climb) {
             return None;
         }
-        let (hop, onto, goal, onward) = self.portals.plan(&self.space.node_area, a, DVec2::new(from.x as f64, from.y as f64), b, DVec2::new(to.x as f64, to.y as f64), range, cost, climb)?;
+        let portals = if range > 0.0 { &self.teleports().portals } else { &self.walks };
+        let (hop, onto, goal, onward) = portals.plan(&self.space.node_area, a, DVec2::new(from.x as f64, from.y as f64), b, DVec2::new(to.x as f64, to.y as f64), range, cost, climb)?;
         let aim = Aim { onward, short: if onto == b { LAND_SHORT } else { 0.0 } };
         // (A drop lands where it was found clear, not moved.)
         let hop = if hop.leap.is_some() { hop } else { self.land(hop.a, hop.ay, onto, aim, range, aim.left(hop.b)).map_or(hop, |(b, by, d)| Hop { b, by, d, ..hop }) };
@@ -912,8 +1028,9 @@ pub(crate) struct Portals {
     landing: Vec<bool>,
     /// Each portal's walking links: to which, how far.
     pub(crate) links: Vec<Vec<(u32, f32)>>,
-    /// Each node's portals, by cell (`CELL`).
+    /// Each node's portals, by cell (`CELL`), and all of them.
     cells: HashMap<(u32, i32, i32), Vec<u32>>,
+    by_node: Vec<Vec<u32>>,
 }
 
 /// The cells portals are found by (m); how many a portal is joined to by
@@ -925,7 +1042,7 @@ const START: f64 = 48.0;
 
 impl Portals {
     fn new(hops: &HashMap<(u32, u32), Vec<Hop>>, drops: &[(u32, u32, Hop)], nodes: usize) -> Portals {
-        let mut p = Portals { node: Vec::new(), at: Vec::new(), y: Vec::new(), twin: Vec::new(), d: Vec::new(), leap: Vec::new(), landing: Vec::new(), links: Vec::new(), cells: HashMap::new() };
+        let mut p = Portals { node: Vec::new(), at: Vec::new(), y: Vec::new(), twin: Vec::new(), d: Vec::new(), leap: Vec::new(), landing: Vec::new(), links: Vec::new(), cells: HashMap::new(), by_node: vec![Vec::new(); nodes] };
         let pairs = hops.iter().flat_map(|(&(lo, hi), list)| list.iter().map(move |h| (lo, hi, h))).chain(drops.iter().map(|(a, b, h)| (*a, *b, h)));
         for (lo, hi, h) in pairs {
             let i = p.node.len() as u32;
@@ -938,6 +1055,7 @@ impl Portals {
             p.landing.extend([false, h.leap.is_some()]);
         }
         for (i, q) in p.at.iter().enumerate() {
+            p.by_node[p.node[i] as usize].push(i as u32);
             p.cells.entry((p.node[i], (q.x / CELL).floor() as i32, (q.y / CELL).floor() as i32)).or_default().push(i as u32);
         }
         // Each joined to the `NEAREST` of its own node.
@@ -951,38 +1069,62 @@ impl Portals {
             }
         }
         // (Each node's portals one part: where the nearest leave them in
-        // two, the nearest pair between the parts joined too.)
-        let mut by_node: Vec<Vec<u32>> = vec![Vec::new(); nodes];
-        for (i, &n) in p.node.iter().enumerate() {
-            by_node[n as usize].push(i as u32);
+        // parts, the parts joined by the shortest links between them, as a
+        // tree (Kruskal's way), from the edges of the portals' Delaunay
+        // triangulation, which hold every such link. The nearest pair
+        // between the part so far and all the rest, every pair weighed, part
+        // after part, cost the stacks 0.7 s, its portals no more than the
+        // tiers'.)
+        use spade::{DelaunayTriangulation, Point2, Triangulation};
+        fn root(parent: &mut [u32], mut i: u32) -> u32 {
+            while parent[i as usize] != i {
+                let up = parent[i as usize];
+                parent[i as usize] = parent[up as usize];
+                i = up;
+            }
+            i
         }
-        for list in &by_node {
-            let Some(&first) = list.first() else { continue };
-            loop {
-                let mut part: std::collections::HashSet<u32> = std::collections::HashSet::from([first]);
-                let mut stack = vec![first];
-                while let Some(i) = stack.pop() {
-                    for &(j, _) in &links[i as usize] {
-                        if part.insert(j) {
-                            stack.push(j);
-                        }
-                    }
+        let mut parent: Vec<u32> = (0..p.at.len() as u32).collect();
+        for list in &p.by_node {
+            if list.len() < 2 {
+                continue;
+            }
+            for &i in list {
+                for &(j, _) in &links[i as usize] {
+                    let (x, y) = (root(&mut parent, i), root(&mut parent, j));
+                    parent[x as usize] = y;
                 }
-                if part.len() == list.len() {
-                    break;
+            }
+            let r0 = root(&mut parent, list[0]);
+            if list.iter().all(|&i| root(&mut parent, i) == r0) {
+                continue;
+            }
+            // (Portals at one spot are one vertex: joined where they are.)
+            let mut tri: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
+            let mut first: Vec<u32> = Vec::new();
+            let mut edges: Vec<(f64, u32, u32)> = Vec::new();
+            for &i in list {
+                let q = p.at[i as usize];
+                let v = tri.insert(Point2::new(q.x, q.y)).expect("portal not finite").index();
+                if v < first.len() {
+                    edges.push((0.0, first[v], i));
+                } else {
+                    first.push(i);
                 }
-                let (inside, outside): (Vec<u32>, Vec<u32>) = list.iter().partition(|i| part.contains(i));
-                let mut best = (f64::INFINITY, 0, 0);
-                for &i in &inside {
-                    for &j in &outside {
-                        let d = p.at[i as usize].distance(p.at[j as usize]);
-                        if d < best.0 {
-                            best = (d, i, j);
-                        }
-                    }
+            }
+            for e in tri.undirected_edges() {
+                let [u, v] = e.vertices();
+                let (i, j) = (first[u.index()], first[v.index()]);
+                edges.push((p.at[i as usize].distance(p.at[j as usize]), i, j));
+            }
+            edges.sort_by(|x, y| x.0.total_cmp(&y.0));
+            for (d, i, j) in edges {
+                let (x, y) = (root(&mut parent, i), root(&mut parent, j));
+                if x != y {
+                    parent[x as usize] = y;
+                    links[i as usize].push((j, d as f32));
+                    links[j as usize].push((i, d as f32));
                 }
-                links[best.1 as usize].push((best.2, best.0 as f32));
-                links[best.2 as usize].push((best.1, best.0 as f32));
             }
         }
         for l in &mut links {
@@ -995,8 +1137,19 @@ impl Portals {
 
     /// The `k` portals of node `n` nearest `q`, and all within `within` (m).
     fn nearest(&self, n: u32, q: DVec2, k: usize, within: f64) -> Vec<(u32, f64)> {
-        let (cx, cz) = ((q.x / CELL).floor() as i32, (q.y / CELL).floor() as i32);
+        let all = &self.by_node[n as usize];
         let mut found: Vec<(u32, f64)> = Vec::new();
+        // (A node of few portals: all of them weighed. Fewer than `k`, the
+        // rings went on to the last, 16 000 cells, a portal: the stacks'
+        // pillar tops, its portals half a second.)
+        if all.len() <= 4 * k.max(8) {
+            found.extend(all.iter().map(|&i| (i, self.at[i as usize].distance(q))));
+            found.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let kth = found.get(k.saturating_sub(1)).map_or(f64::INFINITY, |f| f.1);
+            found.retain(|f| f.1 <= kth.max(within));
+            return found;
+        }
+        let (cx, cz) = ((q.x / CELL).floor() as i32, (q.y / CELL).floor() as i32);
         // (Ring by ring outwards, till `k` are found nearer than the ring
         // reaches, and it reaches `within`; or 64 rings, a kilometre.)
         for r in 0i32..64 {
@@ -1013,7 +1166,7 @@ impl Portals {
             // (Cells reached all round: `r` whole cells past `q`'s own.)
             let reach = r as f64 * CELL;
             found.sort_by(|a, b| a.1.total_cmp(&b.1));
-            if found.len() >= k && found[k - 1].1 <= reach && within <= reach {
+            if (found.len() >= k && found[k - 1].1 <= reach && within <= reach) || found.len() == all.len() {
                 break;
             }
         }
@@ -1431,7 +1584,7 @@ impl Blink {
                 w.retry -= dt;
                 if w.retry <= 0.0 {
                     w.retry = RETRY;
-                    if nodes.reaches(me, there, range, hop) {
+                    if nodes.reaches_now(me, there, range, hop) {
                         self.stranded = Stranded::Chasing;
                         self.no_way = None;
                         return (there, spot);
@@ -2161,6 +2314,7 @@ mod tests {
         };
         for (name, centre) in centres {
             let nodes = Nodes::build(world.clone(), DVec2::from(centre), SIDE, false).unwrap();
+            assert_eq!(nodes.cut, 0, "{name}: nodes whose navmesh is in parts");
             let area = &nodes.space.node_area;
             let total: f64 = area.iter().sum();
             let built: std::collections::HashSet<(i32, i32)> = nodes.space.pieces.iter().map(|p| p.plate.sites[0]).collect();
@@ -2182,9 +2336,12 @@ mod tests {
                     let covered: f64 = tris.iter().map(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) / 2.0).sum();
                     let want = poly.unsigned_area();
                     let e = (covered - want).abs() / want.max(1e-9);
-                    // (Off by a millionth, and by a square centimetre: specks
-                    // of a few square millimetres are all slivers, left out.)
-                    if e > 1e-6 && (covered - want).abs() > 1e-4 {
+                    // (Off by no more than its corners moved, snapped: its
+                    // edges' length by `TRIANGLE_SNAP`. By a millionth and a
+                    // square centimetre, fixed, at 0.1 mm snapping: one in
+                    // the stacks at 1 mm, two parts in 10⁶ of 133 m round.)
+                    let round: f64 = std::iter::once(poly.exterior()).chain(poly.interiors()).map(|r| r.lines().map(|l| (l.end - l.start).x.hypot((l.end - l.start).y)).sum::<f64>()).sum();
+                    if (covered - want).abs() > round * TRIANGLE_SNAP {
                         off += 1;
                     }
                     if e > worst.0 {
@@ -2192,7 +2349,7 @@ mod tests {
                     }
                 }
             }
-            println!("{name}: triangles against outlines: {off} off by more than a millionth (and a square centimetre), {none} not triangulated; worst {:.2e} (node {})", worst.0, worst.1);
+            println!("{name}: triangles against outlines: {off} off by more than their corners moved, snapped, {none} not triangulated; worst {:.2e} (node {})", worst.0, worst.1);
             assert_eq!((off, none), (0, 0), "{name}: nodes' triangles not covering their outlines");
             let biggest = (0..area.len()).max_by(|a, b| area[*a].total_cmp(&area[*b])).unwrap();
             for range in [10.0f32, 20.0] {
@@ -2201,7 +2358,7 @@ mod tests {
                 let mut queue = std::collections::VecDeque::from([biggest]);
                 while let Some(n) = queue.pop_front() {
                     // (Teleports either way, drops one way.)
-                    let next = nodes.adjacent[n].iter().filter(|(_, d)| *d <= range).map(|(m, _)| *m).chain(nodes.leaps_to[n].iter().filter(|l| l.1 < 0.0).map(|l| l.0));
+                    let next = nodes.teleports().adjacent[n].iter().filter(|(_, d)| *d <= range).map(|(m, _)| *m).chain(nodes.leaps_to[n].iter().filter(|l| l.1 < 0.0).map(|l| l.0));
                     for m in next {
                         if !main[m as usize] && area[m as usize] >= LAND_LEAST {
                             main[m as usize] = true;
@@ -2209,7 +2366,7 @@ mod tests {
                         }
                     }
                 }
-                let reached: Vec<bool> = (0..area.len()).map(|n| main[n] || nodes.adjacent[n].iter().any(|&(m, d)| d <= range && main[m as usize])).collect();
+                let reached: Vec<bool> = (0..area.len()).map(|n| main[n] || nodes.teleports().adjacent[n].iter().any(|&(m, d)| d <= range && main[m as usize])).collect();
                 let mut cut: Vec<usize> = (0..area.len()).filter(|n| !reached[*n]).collect();
                 cut.sort_by(|a, b| area[*b].total_cmp(&area[*a]));
                 let cut_area: f64 = cut.iter().map(|n| area[*n]).sum();
@@ -2256,6 +2413,10 @@ mod tests {
     fn hop_spots() {
         let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, 1).with_sites(&crate::structures::load_library().expect("the structure library")));
         let at: Vec<f64> = std::env::var("HOPS_AT").unwrap_or("7296,640".into()).split(',').map(|x| x.parse().unwrap()).collect();
+        // (BUILD_THREADS=1: the build on one thread, each stage's own work.)
+        if let Some(n) = std::env::var("BUILD_THREADS").ok().and_then(|v| v.parse().ok()) {
+            nodes::THREADS.store(n, std::sync::atomic::Ordering::Relaxed);
+        }
         let nodes = Nodes::build(world, DVec2::new(at[0], at[1]), SIDE, false).unwrap();
         println!("{}", nodes.report);
         // (Ledges within reach, found clear or not, by height.)
@@ -2265,7 +2426,7 @@ mod tests {
             band[(((l.by - l.ay) / 0.5) as usize).min(4)] += 1;
         }
         println!("ledges within reach, by half metre of height: {band:?}");
-        let p = &nodes.portals;
+        let p = &nodes.walks;
         let mut up: Vec<usize> = (0..p.at.len()).filter(|&i| p.leap[i].is_some() && p.y[p.twin[i] as usize] > p.y[i]).collect();
         up.sort_by(|a, b| (p.y[p.twin[*b] as usize] - p.y[*b]).total_cmp(&(p.y[p.twin[*a] as usize] - p.y[*a])));
         for &i in up.iter().take(12) {
