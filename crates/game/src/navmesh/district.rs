@@ -100,10 +100,13 @@ fn fall_time(up: f64, h: f64) -> f64 {
 /// at 30 frames a second its hop came down a fifth sooner, on its lip.)
 /// (`frames`: the frames it is stepped at.)
 #[allow(clippy::too_many_arguments)]
-fn fall_clear(space: &Space, world: &PlateWorld, a: DVec2, ay: f64, q: DVec2, by: f64, up: f64, onto: u32, frames: &[f64]) -> bool {
+fn fall_clear(space: &Space, world: &PlateWorld, a: DVec2, ay: f64, q: DVec2, by: f64, up: f64, onto: u32, frames: &[f64], body: bool) -> bool {
     // (A hop up a ledge stands at its foot, the ledge within its body's
-    // reach: the body's sweep is for a drop's look alone.)
-    let ring = by < ay;
+    // reach: the body's sweep is for a drop's look alone; and in play,
+    // made from where it stands, its root alone, the body's checked from
+    // its lip as the drop was found: the whole checked then, a leap took
+    // up to 8 ms in the frame.)
+    let ring = body && by < ay;
     let top = |q: DVec2| -> f64 {
         let pt = Point::new(q.x, q.y);
         if space.blocked.get(&((q.x / nodes::BIN).floor() as i32, (q.y / nodes::BIN).floor() as i32)).is_some_and(|ks| ks.iter().any(|k| geo::Intersects::intersects(&space.blocks[*k], &pt))) {
@@ -196,7 +199,7 @@ fn drops(space: &Space, world: &PlateWorld) -> Vec<(u32, u32, Hop)> {
                                         if on(b, q) && (0..8).all(|k| on(b, q + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET)) {
                                             let by = space.under(q).map(|i| world.plate_top(&space.pieces[i].plate, q))?;
                                             let up = if hop { (up0 * up0 + 2.0 * crate::rig::leap_gravity() as f64 * (by - l.ay)).sqrt() } else { up0 };
-                                            if fall_clear(space, world, from, l.ay, q, by, up, b, &FRAMES) {
+                                            if fall_clear(space, world, from, l.ay, q, by, up, b, &FRAMES, true) {
                                                 let d = (q.distance_squared(from) + (l.ay - by).powi(2)).sqrt();
                                                 return Some((a, b, Hop { a: from, ay: l.ay as f32, b: q, by: by as f32, d: d as f32, leap: Some(up as f32) }));
                                             }
@@ -1115,6 +1118,37 @@ impl Across for Vec3 {
     }
 }
 
+/// A plan asked for: from node `me` (at `mine`) to node `there` (at
+/// `spot`), going as it goes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ask {
+    me: u32,
+    mine: Vec2,
+    there: u32,
+    spot: Vec2,
+    range: f32,
+    cost: f32,
+    hop: f32,
+}
+
+/// A way found across a node: the node, from and to, its corners.
+type WayFound = (u32, Vec2, Vec2, Option<Vec<Vec2>>);
+
+/// A teleport chosen, told by its nodes and where it leaves from.
+type SoonerKey = (u32, u32, DVec2);
+
+/// Going from where it is asked for: the teleport chosen (its key, its
+/// hop), the node it lands on, its aim, where it is, its range.
+#[derive(Clone, Copy, Debug)]
+struct SoonerAsk {
+    key: SoonerKey,
+    planned: Hop,
+    onto: u32,
+    aim: Aim,
+    at: Vec3,
+    range: f32,
+}
+
 /// What a blinking walker does now.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Steer {
@@ -1202,18 +1236,89 @@ pub(crate) struct Blink {
     /// No way found from its node to yours (which), looked for again in
     /// how long (s).
     no_way: Option<(u32, u32, f32)>,
+    /// A plan asked for (from its node, where, to yours, where), being made
+    /// in the background, and made (see `plan_in_background`).
+    ask: Option<Ask>,
+    task: Option<Task<(Ask, Option<(Hop, u32, f32, Aim)>)>>,
+    answer: Option<(Ask, Option<(Hop, u32, f32, Aim)>)>,
+    /// Its way across its node, the same (`follow`): asked for (its node,
+    /// from, to), being found, found; and the goal none was found to.
+    way_ask: Option<(u32, Vec2, Vec2)>,
+    way_task: Option<Task<WayFound>>,
+    way_answer: Option<WayFound>,
+    way_failed: Option<(u32, Vec2)>,
+    /// Going from where it is (`Nodes::sooner`), the same: asked for (the
+    /// teleport chosen, by its nodes and where it leaves), found.
+    sooner_ask: Option<SoonerAsk>,
+    sooner_task: Option<Task<(SoonerKey, Option<Hop>)>>,
+    sooner_answer: Option<(SoonerKey, Option<Hop>)>,
     /// How high it hops up onto a ledge (m; 0, it doesn't): see `drops`.
     pub(crate) hop: f32,
 }
 
 impl Blink {
     pub(crate) fn new(range: f32, tell: f32, rest: f32, cost: f32, speed: f32) -> Blink {
-        Blink { range: range.min(FARTHEST as f32), tell, rest, speed: speed.max(1.0), shaded: false, cost, phase: Phase::Walk, resting: 0.0, node: None, way: Vec::new(), way_at: 0, way_to: Vec2::splat(f32::MAX), chosen: None, sooner: 0.0, made: None, teleports: 0, drops: 0, no_way: None, hop: 0.0 }
+        Blink { range: range.min(FARTHEST as f32), tell, rest, speed: speed.max(1.0), shaded: false, cost, phase: Phase::Walk, resting: 0.0, node: None, way: Vec::new(), way_at: 0, way_to: Vec2::splat(f32::MAX), chosen: None, sooner: 0.0, made: None, teleports: 0, drops: 0, no_way: None, ask: None, task: None, answer: None, way_ask: None, way_task: None, way_answer: None, way_failed: None, sooner_ask: None, sooner_task: None, sooner_answer: None, hop: 0.0 }
     }
 
     /// Hopping up onto ledges this high (m; see `drops`).
     pub(crate) fn with_hop(self, hop: f32) -> Blink {
         Blink { hop, ..self }
+    }
+
+    /// Its plan asked for (`steer`), made on another core; one made,
+    /// taken, for `steer` to use. Once a frame, after `steer`.
+    pub(crate) fn plan_in_background(&mut self, nodes: &Arc<Nodes>) {
+        if let Some(task) = self.task.as_mut()
+            && let Some(made) = block_on(poll_once(task))
+        {
+            self.task = None;
+            self.answer = Some(made);
+        }
+        if self.task.is_none()
+            && let Some(a) = self.ask.take()
+        {
+            let nodes = nodes.clone();
+            self.task = Some(AsyncComputeTaskPool::get().spawn(async move { (a, nodes.plan(a.me, a.mine, a.there, a.spot, a.range, a.cost, a.hop)) }));
+        }
+        if let Some(task) = self.way_task.as_mut()
+            && let Some(found) = block_on(poll_once(task))
+        {
+            self.way_task = None;
+            self.way_answer = Some(found);
+        }
+        if self.way_task.is_none()
+            && let Some((n, from, to)) = self.way_ask.take()
+        {
+            let nodes = nodes.clone();
+            self.way_task = Some(AsyncComputeTaskPool::get().spawn(async move { (n, from, to, nodes.way(n, from, to)) }));
+        }
+        if let Some(task) = self.sooner_task.as_mut()
+            && let Some(found) = block_on(poll_once(task))
+        {
+            self.sooner_task = None;
+            self.sooner_answer = Some(found);
+        }
+        if self.sooner_task.is_none()
+            && let Some(a) = self.sooner_ask.take()
+        {
+            let nodes = nodes.clone();
+            self.sooner_task = Some(AsyncComputeTaskPool::get().spawn(async move { (a.key, nodes.sooner(a.planned, a.onto, a.aim, a.at, a.range)) }));
+        }
+    }
+
+    /// As `plan_in_background`, at once (for the tests, frame by frame).
+    #[cfg(test)]
+    fn plan_now(&mut self, nodes: &Nodes) {
+        if let Some(a) = self.ask.take() {
+            self.answer = Some((a, nodes.plan(a.me, a.mine, a.there, a.spot, a.range, a.cost, a.hop)));
+        }
+        if let Some((n, from, to)) = self.way_ask.take() {
+            self.way_answer = Some((n, from, to, nodes.way(n, from, to)));
+        }
+        if let Some(a) = self.sooner_ask.take() {
+            self.sooner_answer = Some((a.key, nodes.sooner(a.planned, a.onto, a.aim, a.at, a.range)));
+        }
     }
 
     /// Its node, way and teleport forgotten (the nodes built anew), as it
@@ -1259,7 +1364,7 @@ impl Blink {
     /// way from the nearest to it: always on along it. (Dropping each
     /// corner within 30 cm of it, at a neck a few millimetres wide it went
     /// back and forth for ever, its way found anew from either side.)
-    fn follow(&mut self, nodes: &Nodes, node: u32, at: Vec3, from: Vec2, to: Vec2) -> Steer {
+    fn follow(&mut self, node: u32, at: Vec3, from: Vec2, to: Vec2) -> Steer {
         // (Found anew only when its goal moves, or it is off it: found anew
         // every half second, landmass's ways from two points a metre apart
         // went round a pillar on either side, and it went back and forth
@@ -1270,10 +1375,26 @@ impl Blink {
             let t = if ab.length_squared() < 1e-12 { 0.0 } else { ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) };
             (a + ab * t).distance(p) > MOVED
         });
+        // (Found in the background, not the frame: up to 2.6 ms in stacks,
+        // a walker. Meanwhile on along the way it has, or standing if it
+        // has none. A goal none was found to not asked again till it moves.)
         if self.way_to.distance(to) > MOVED || self.way.len() < 2 || off {
-            self.way = nodes.way(node, from, to).map(|w| std::iter::once(from).chain(w).collect()).unwrap_or_default();
-            self.way_at = 0;
-            self.way_to = to;
+            match self.way_answer.take().filter(|w| w.0 == node && w.2.distance(to) <= MOVED) {
+                Some((_, _, _, found)) => {
+                    self.way_failed = found.is_none().then_some((node, to));
+                    self.way = found.map(|w| std::iter::once(from).chain(w).collect()).unwrap_or_default();
+                    self.way_at = 0;
+                    self.way_to = to;
+                }
+                None => {
+                    if self.way_task.is_none() && self.way_failed.is_none_or(|f| f.0 != node || f.1.distance(to) > MOVED) {
+                        self.way_ask = Some((node, from, to));
+                    }
+                    if self.way.len() < 2 {
+                        return Steer::Stand;
+                    }
+                }
+            }
         }
         let p = at.xz_();
         let Some(&end) = self.way.last() else { return Steer::Stand };
@@ -1345,7 +1466,7 @@ impl Blink {
         let Some((there, spot)) = nodes.locate(goal, above, None) else { return Steer::Stand };
         if there == me {
             self.chosen = None;
-            return self.follow(nodes, me, at, mine, spot);
+            return self.follow(me, at, mine, spot);
         }
         // Another node: the first teleport of the best way there, kept till
         // it is made, unless its goal moves to another node or `REPLAN` m
@@ -1365,7 +1486,19 @@ impl Blink {
                     }
                     return Steer::Stand;
                 }
-                let Some((hop, onto, _, aim)) = nodes.plan(me, mine, there, spot, self.range, self.cost, self.hop) else {
+                // (Its plan made in the background, not in the frame: one
+                // could take 14 ms in stacks, and every walker after you
+                // made one as you stepped onto another node, the user,
+                // 2026-11-15: a game breaker. It stands meanwhile, a frame
+                // or two; the plan used if it is still to the point.)
+                let fits = |a: &Ask| a.me == me && a.there == there && a.spot.distance(spot) < REPLAN;
+                let Some((_, found)) = self.answer.take().filter(|(a, _)| fits(a)) else {
+                    if self.task.is_none() {
+                        self.ask = Some(Ask { me, mine, there, spot, range: self.range, cost: self.cost, hop: self.hop });
+                    }
+                    return Steer::Stand;
+                };
+                let Some((hop, onto, _, aim)) = found else {
                     self.no_way = Some((me, there, NO_WAY));
                     return Steer::Stand;
                 };
@@ -1388,8 +1521,8 @@ impl Blink {
                 // 17 ms; only till a metre below its lip, a step lower down
                 // caught it.)
                 let (from, q, onto) = (DVec2::new(at.x as f64, at.z as f64), hop.b, self.chosen.map_or(me, |c| c.1));
-                let ups = std::iter::once(up).chain((1..=12).map(|k| up + kick(1.5) as f32 * k as f32));
-                let up = ups.into_iter().find(|&u| fall_clear(&nodes.space, &nodes.world, from, at.y as f64, q, hop.by as f64, u as f64, onto, &FRAMES[..1])).unwrap_or(up);
+                let ups = std::iter::once(up).chain((1..=6).map(|k| up + kick(1.5) as f32 * k as f32));
+                let up = ups.into_iter().find(|&u| fall_clear(&nodes.space, &nodes.world, from, at.y as f64, q, hop.by as f64, u as f64, onto, &FRAMES[..1], false)).unwrap_or(up);
                 let v = (q.as_vec2() - at.xz_()) / fall_time(up as f64, (at.y - hop.by) as f64) as f32;
                 self.node = Some(onto);
                 self.chosen = None;
@@ -1397,7 +1530,7 @@ impl Blink {
                 self.drops += 1;
                 return Steer::Leap(Vec3::new(v.x, up, v.y));
             }
-            return match self.follow(nodes, me, at, mine, leave) {
+            return match self.follow(me, at, mine, leave) {
                 Steer::There => Steer::Stand,
                 s => s,
             };
@@ -1405,20 +1538,31 @@ impl Blink {
         // (Or from here, if it does as well from here: see `sooner`.)
         self.sooner -= dt;
         let mut hop = hop;
+        // (Found in the background, as its way: up to 2.8 ms a walker in
+        // stacks. Its answer used if it is for the teleport still chosen,
+        // and from where it nearly is.)
         if self.resting <= 0.0 && self.sooner <= 0.0 && leave.distance(at.xz_()) >= AT_HOP
             && let Some(c) = self.chosen
         {
             self.sooner = SOONER;
-            if let Some(now) = nodes.sooner(hop, c.1, c.3, at, self.range) {
-                hop = now;
-                leave = at.xz_();
+            if self.sooner_task.is_none() {
+                self.sooner_ask = Some(SoonerAsk { key: (c.0, c.1, hop.a), planned: hop, onto: c.1, aim: c.3, at, range: self.range });
             }
+        }
+        if let Some((key, found)) = self.sooner_answer.take()
+            && let Some(c) = self.chosen
+            && key == (c.0, c.1, c.2.a)
+            && let Some(now) = found
+            && now.a.as_vec2().distance(at.xz_()) < AT_HOP
+        {
+            hop = now;
+            leave = now.a.as_vec2();
         }
         if leave.distance(at.xz_()) < AT_HOP && self.resting <= 0.0 {
             self.phase = Phase::Tell(hop, self.tell, self.chosen.map_or(me, |c| c.1));
             return Steer::Stand;
         }
-        match self.follow(nodes, me, at, mine, leave) {
+        match self.follow(me, at, mine, leave) {
             Steer::There => Steer::Stand,
             s => s,
         }
@@ -1544,6 +1688,7 @@ mod tests {
                 let t = Instant::now();
                 let steer = blink.steer(&nodes, at, goal, crate::player::EYE, dt);
                 cost.push(t.elapsed().as_secs_f32() * 1e6);
+                blink.plan_now(&nodes);
                 // (What it did, each time its node or what it does changes.)
                 if only.is_some() && frame as f32 * dt >= std::env::var("BLINK_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0) && frame as f32 * dt < std::env::var("BLINK_FROM").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) + 1.0 {
                     let mine = nodes.locate(at, 0.0, blink.node);
@@ -1684,7 +1829,13 @@ mod tests {
         // 150 m, on two nodes.
         let mut plans: Vec<f32> = Vec::new();
         let mut unplanned: Vec<String> = Vec::new();
-        while plans.len() < 1000 {
+        // (A few tries for each: on ground nearly all one node, floor's once
+        // its pit had a stair, pairs on two nodes were near none, and this
+        // went on for ever.)
+        for _ in 0..200_000 {
+            if plans.len() == 1000 {
+                break;
+            }
             let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], anywhere[(rng.next() * anywhere.len() as f32) as usize % anywhere.len()]);
             let node = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).map(|n| n.0).unwrap();
             if !(20.0..=150.0).contains(&a.distance(b)) || node(a) == node(b) {
@@ -1698,7 +1849,10 @@ mod tests {
             }
         }
         plans.sort_by(f32::total_cmp);
-        println!("plans: median {:.0} µs, 90th {:.0} µs, 99th {:.0} µs, most {:.0} µs; {} of {} found none: {:?}", plans[plans.len() / 2], plans[plans.len() * 9 / 10], plans[plans.len() * 99 / 100], plans.last().unwrap(), unplanned.len(), plans.len(), unplanned.iter().take(8).collect::<Vec<_>>());
+        let made = plans.len();
+        plans.push(f32::NAN); // (none on ground all one node: told as NaN)
+        let plans = &plans[..(plans.len() - 1).max(1)];
+        println!("plans: median {:.0} µs, 90th {:.0} µs, 99th {:.0} µs, most {:.0} µs; {} of {} found none: {:?}", plans[plans.len() / 2], plans[plans.len() * 9 / 10], plans[plans.len() * 99 / 100], plans.last().unwrap(), unplanned.len(), made, unplanned.iter().take(8).collect::<Vec<_>>());
         // (All told first, then judged: one district's whole picture, not
         // the first thing wrong.)
         assert_eq!(reached, chases, "chases not reached");

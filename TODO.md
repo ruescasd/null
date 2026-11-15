@@ -507,8 +507,12 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   hop 2.45: floor 276/276 (the pit), tiers 167/300, stacks 56/218, broken
   156/299, uplands 274/300, highlands 236/298. The hop decides whether
   walkers without teleports reach most districts. Stacks with hops: plans
-  up to 46 ms (many leap portals): **to fix** before walkers without
-  teleports are viable there. Fixed: a walker with no way re-planned every
+  up to 46-49 ms (many leap portals); off the frame since 2026-11-15, so
+  now how quickly walkers react (standing up to ~5 frames a replan) and
+  the other cores' load (shared with terrain and node building): a faster
+  planner (fewer portals, flat arrays) before walkers without teleports
+  hunt in stacks, after the stand-still fallback and nodes built as the
+  world streams. Fixed: a walker with no way re-planned every
   frame (now waits 1 s), and a failed plan searched every portal (up to
   41 ms; now the nodes are searched first: 2 ms at most in tiers).
   The hop looked floaty to you: `--set leap_gravity=N` (25 unless given)
@@ -543,6 +547,15 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   first (0.4 to 0.5 ms a parent; `wells_cost`). Six raised in stacks'
   square, none elsewhere. `player_traps` now asserts none: none in all
   six districts.
+  Walkers' thinking off the frame (you, 2026-11-15: 9-14 ms a creature, a
+  game breaker): plans, ways across a node and going-from-here searches
+  are made on other cores (`Blink::plan_in_background`), the walker
+  standing a frame or two, or going on along the way it has; the leap's
+  check in play its root's landing alone, fewer hops tried. Steering in
+  the frame now at most 0.2 to 0.45 ms a walker (was 7 to 14). Tried and
+  dropped: one search from your node shared by all walkers: the same ways,
+  but 10 to 50 times slower (no heading: it searched all round, 387 000
+  portals in stacks).
 - **Agreed** Structures: move from the patched Rust crates to C++ Detour
   (through bindings, staying on Bevy); the crates fail the worst-case frame
   cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).

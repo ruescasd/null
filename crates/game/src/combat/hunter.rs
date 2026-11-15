@@ -1856,6 +1856,10 @@ pub(super) fn hunt(
             && h.rig.airborne.is_none()
         {
             let steer = b.steer(nodes, root, goal, crate::player::EYE, dt);
+            // (Its plan, if it asked for one, made on another core.)
+            if let Some(built) = districts.as_deref().and_then(|d| d.nodes.as_ref()) {
+                b.plan_in_background(built);
+            }
             if log {
                 info!("huntlog: {} on district node {:?}, {:?}", entity.index_u32(), b.node, steer);
             }
