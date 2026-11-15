@@ -222,6 +222,8 @@ fn drops(space: &Space, world: &PlateWorld) -> (Vec<(u32, u32, Hop)>, DropWork) 
     let links_s = clock.elapsed().as_secs_f32();
     let (spots_ns, falls_ns, falls_n, hops_n) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
     let found = nodes::par_chunks(&candidates, |c| {
+                    let (mut frags, mut cross): (Vec<(usize, usize)>, Vec<f64>) = (Vec::new(), Vec::new());
+                    let mut rays: [Vec<(f64, f64)>; 9] = Default::default();
                     c.iter()
                         .filter_map(|&(a, b, l)| {
                             let gap = l.a.distance(l.b);
@@ -247,12 +249,18 @@ fn drops(space: &Space, world: &PlateWorld) -> (Vec<(u32, u32, Hop)>, DropWork) 
                             // nine paths along it cross the node, its own and
                             // eight about it.)
                             let (s0, s1) = (gap, gap + DROP_ON);
-                            let main = space.node_along_in(&about, b, l.a, dir, s0, s1);
-                            let rays: Vec<Vec<(f64, f64)>> = if main.is_empty() {
-                                Vec::new()
-                            } else {
-                                std::iter::once(main).chain((0..8).map(|k| space.node_along_in(&about, b, l.a + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET, dir, s0, s1))).collect()
-                            };
+                            // (Node `b`'s fragments the nine paths may cross,
+                            // found once for them all.)
+                            let (p0, p1) = (l.a + dir * s0, l.a + dir * s1);
+                            space.node_fragments(&about, b, p0.min(p1) - INSET - nodes::ROUNDING, p0.max(p1) + INSET + nodes::ROUNDING, &mut frags);
+                            space.spans_along(&frags, l.a, dir, s0, s1, &mut cross, &mut rays[0]);
+                            let some = !rays[0].is_empty();
+                            if some {
+                                for k in 0..8 {
+                                    space.spans_along(&frags, l.a + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET, dir, s0, s1, &mut cross, &mut rays[k + 1]);
+                                }
+                            }
+                            let rays: &[Vec<(f64, f64)>] = if some { &rays } else { &[] };
                             let inside = |spans: &[(f64, f64)], s: f64| spans.iter().any(|&(u0, u1)| u0 <= s && s <= u1);
                             let spots: Vec<(DVec2, f64)> = (0..)
                                 .map(|k| gap + k as f64 * LAND_STEP)
@@ -3102,6 +3110,80 @@ portals: each portal a Delaunay point (dt)";
             }
         }
         println!("{} points: under differs at {under}, on a node at {on} of {tried}", points.len());
+    }
+
+    /// Finding the drops' lips (`Space::links`) taken apart: its edge
+    /// points, and how many pairs it weighs, of other nodes, in reach, and
+    /// that make a move. (`cargo test -p game --profile fast links_cost -- --ignored --nocapture`)
+    #[test]
+    #[ignore]
+    fn links_cost() {
+        use crate::navmesh::nodes::{self, Fit, Space};
+        nodes::THREADS.store(1, std::sync::atomic::Ordering::Relaxed);
+        let seed: u32 = std::env::var("SWEEP_SEEDS").ok().and_then(|v| v.split(',').next().and_then(|x| x.trim().parse().ok())).unwrap_or(2);
+        let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, seed).with_sites(&crate::structures::load_library().expect("the structure library")));
+        for kind in [worldgen::district::District::Broken, worldgen::district::District::Stacks, worldgen::district::District::Tiers] {
+            let centre = square_of(&world, kind, seed).unwrap();
+            let column = worldgen::column_size(0) as f64;
+            let (lo, hi) = (((centre - SIDE / 2.0) / column).floor() * column, ((centre + SIDE / 2.0) / column).ceil() * column);
+            let mut space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
+            space.prune(LAND_LEAST);
+            let climb = space.fit.climb;
+            let short = |gap: f64, rise: f64| {
+                if rise < -climb {
+                    gap - DROP_GAP
+                } else if rise > climb && gap <= HOP_GAP && rise <= crate::player::hookless_reach(gap) {
+                    gap - HOP_GAP
+                } else {
+                    f64::INFINITY
+                }
+            };
+            let t = Instant::now();
+            let points = space.edge_points(&world);
+            let points_ms = t.elapsed().as_secs_f64() * 1e3;
+            let t = Instant::now();
+            let links = space.links(&world, DROP_GAP, Some(nodes::HOP_CELL), short);
+            let links_ms = t.elapsed().as_secs_f64() * 1e3;
+            let mut cell: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+            for (k, p) in points.iter().enumerate() {
+                cell.entry(((p.0.x / DROP_GAP).floor() as i32, (p.0.y / DROP_GAP).floor() as i32)).or_default().push(k);
+            }
+            let (mut weighed, mut other, mut reach, mut moves, mut kept) = (0usize, 0usize, 0usize, 0usize, 0usize);
+            for (&(cx, cz), list) in &cell {
+                for &a in list {
+                    let mut to: Vec<u32> = Vec::new();
+                    for dz in -1..=1 {
+                        for dx in -1..=1 {
+                            for &b in cell.get(&(cx + dx, cz + dz)).into_iter().flatten() {
+                                weighed += 1;
+                                if points[a].2 == points[b].2 {
+                                    continue;
+                                }
+                                other += 1;
+                                let gap = points[a].0.distance(points[b].0);
+                                if gap > DROP_GAP {
+                                    continue;
+                                }
+                                reach += 1;
+                                if short(gap, points[b].1 - points[a].1).is_finite() {
+                                    moves += 1;
+                                    if !to.contains(&points[b].2) {
+                                        to.push(points[b].2);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    kept += to.len();
+                }
+            }
+            println!(
+                "{}: {} edge points ({points_ms:.0} ms), links {links_ms:.0} ms in all ({} pairs of nodes); pairs weighed {weighed}, of other nodes {other}, in reach {reach}, making a move {moves}; kept (a point and a node) {kept}",
+                kind.name(),
+                points.len(),
+                links.len()
+            );
+        }
     }
 
     /// A square of `SIDE` wholly in district `kind` on `world`'s map: the

@@ -670,6 +670,21 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   stacks' nodes in 0.5 s (0.7). Left: outlines 211 (100, 2.1×), drops 172
   (6: lips 65-110 ms, spots), pieces 156 (18), walking 80 (4), edges 33
   (1.5), join 20 (1).
+  Then (all the same results, counts identical over the 48 squares): the
+  lips' edge points in a grid counted out, by node, squared distances
+  (about half the time); a lip's rays through its node's fragments found
+  once, buffers kept (rays 119 to 73 ms in the broken); pieces 151 to 109:
+  every piece was cut against all the world's canals and stations (40 ms
+  in the broken), now by an index of those within reach (`cut_index_agrees`),
+  sites further than 1.5 squares from a plate passed over
+  (`far_cells_skipped_exactly`), a plate's sites found once and clipped
+  into kept buffers, pillars grown on the build's threads. Big squares
+  659 ms (752). In play, quiet machine, four runs each against the last
+  commit: start 1 to 2 slow frames (worst 50 to 53 ms) both, no later
+  hitches, nodes 0.4 s (0.5). (Hitches seen first were the machine's: busy,
+  both versions showed them alike.) Next: pillars grown once for the
+  mesher and the nodes both (each grows them now), outlines, edges by a
+  hash of their lines.
 - **Agreed** Structures: move from the patched Rust crates to C++ Detour
   (through bindings, staying on Bevy); the crates fail the worst-case frame
   cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).

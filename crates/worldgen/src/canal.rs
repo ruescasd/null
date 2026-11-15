@@ -155,6 +155,9 @@ struct Local {
 
 pub struct Canals {
     size: f64,
+    /// The stations and canals that may cut a piece, by where its centre
+    /// is (see `Index`): made the first time a piece is cut.
+    index: std::sync::OnceLock<Index>,
     pub lines: Vec<Canal>,
     pub stations: Vec<DVec2>,
     pub stones: Stones,
@@ -188,7 +191,7 @@ impl Canals {
                 }
             })
             .collect();
-        Self { size, lines, stations: network.stations, stones: Stones::default(), rise: Rise::default(), relief: 1.5 }
+        Self { size, index: std::sync::OnceLock::new(), lines, stations: network.stations, stones: Stones::default(), rise: Rise::default(), relief: 1.5 }
     }
 
     /// `d` round the wrap the short way.
@@ -346,9 +349,24 @@ impl Canals {
     /// The parts of a convex polygon outside every canal corridor and
     /// station court.
     pub fn cut(&self, poly: Vec<DVec2>) -> Vec<Vec<DVec2>> {
+        // (Only the stations and canals that may reach it, in order: the
+        // rest leave it whole. Every piece tried against all the world's,
+        // most of the plates' outlining.)
+        let near = centroid(&poly);
+        let reach = poly.iter().map(|v| v.distance(near)).fold(0.0, f64::max);
+        let index = self.index.get_or_init(|| Index::new(self));
+        let (stations, lines): (&[u32], &[u32]) = match index.at(near, reach) {
+            Some((s, l)) => (s, l),
+            None => (&index.all.0, &index.all.1),
+        };
+        self.cut_by(poly, stations, lines)
+    }
+
+    /// As `cut`, by `stations` and `lines` alone.
+    fn cut_by(&self, poly: Vec<DVec2>, stations: &[u32], lines: &[u32]) -> Vec<Vec<DVec2>> {
         let mut pieces = vec![poly];
         let end = self.end();
-        for s in 0..self.stations.len() {
+        for s in stations.iter().map(|&s| s as usize) {
             pieces = pieces
                 .into_iter()
                 .flat_map(|piece| {
@@ -362,7 +380,7 @@ impl Canals {
                 })
                 .collect();
         }
-        for i in 0..self.lines.len() {
+        for i in lines.iter().map(|&i| i as usize) {
             let c = self.lines[i];
             pieces = pieces
                 .into_iter()
@@ -644,6 +662,54 @@ impl Canals {
     }
 }
 
+/// The stations and canals that may cut a piece, by the square of `CELL`
+/// its centre lies in: those that come within `REACH` and the most a cut
+/// takes in (a court's radius, a canal's half width) of somewhere in it,
+/// each in order. A piece reaching further than `REACH` from its centre
+/// is tried against them all (`all`).
+struct Index {
+    n: usize,
+    cell: f64,
+    near: Vec<(Vec<u32>, Vec<u32>)>,
+    all: (Vec<u32>, Vec<u32>),
+}
+
+impl Index {
+    const CELL: f64 = 256.0;
+    /// Further than the biggest plate's corners from its centre (its
+    /// grid 128 m, jittered).
+    const REACH: f64 = 256.0;
+
+    fn new(canals: &Canals) -> Index {
+        let n = (canals.size / Self::CELL).ceil().max(1.0) as usize;
+        let cell = canals.size / n as f64;
+        let half_diagonal = cell * std::f64::consts::FRAC_1_SQRT_2;
+        let end = canals.end();
+        let mut near = vec![(Vec::new(), Vec::new()); n * n];
+        for (k, (stations, lines)) in near.iter_mut().enumerate() {
+            let centre = DVec2::new(((k % n) as f64 + 0.5) * cell, ((k / n) as f64 + 0.5) * cell);
+            stations.extend((0..canals.stations.len()).filter(|&s| canals.wrap(centre - canals.stations[s]).length() <= STATION_RADIUS + Self::REACH + half_diagonal + 1.0).map(|s| s as u32));
+            lines.extend((0..canals.lines.len()).filter(|&i| {
+                let l = canals.local(i, centre);
+                let length = canals.lines[i].length;
+                // (Its band, from `end` to `length - end` along it.)
+                let along = (l.along - l.along.clamp(end, (length - end).max(end))).abs();
+                (l.offset.abs() - HALF_WIDTH).max(0.0).hypot(along) <= Self::REACH + half_diagonal + 1.0
+            }).map(|i| i as u32));
+        }
+        Index { n, cell, near, all: ((0..canals.stations.len() as u32).collect(), (0..canals.lines.len() as u32).collect()) }
+    }
+
+    fn at(&self, p: DVec2, reach: f64) -> Option<(&[u32], &[u32])> {
+        if reach > Self::REACH {
+            return None;
+        }
+        let k = |v: f64| ((v / self.cell).floor() as i64).rem_euclid(self.n as i64) as usize;
+        let (s, l) = &self.near[k(p.y) * self.n + k(p.x)];
+        Some((s, l))
+    }
+}
+
 fn centroid(poly: &[DVec2]) -> DVec2 {
     poly.iter().copied().sum::<DVec2>() / poly.len() as f64
 }
@@ -734,6 +800,35 @@ fn push_quad(mesh: &mut ColumnMesh, quad: [Vec3; 4], normal: Vec3, albedo: f32, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `cut` by its index cuts every piece as by all the stations and
+    /// canals: hexagons of every size up to the index's reach, round every
+    /// station and along every canal, and anywhere.
+    #[test]
+    fn cut_index_agrees() {
+        for seed in 1..=3 {
+            let canals = Canals::new(16384.0, seed);
+            let all: (Vec<u32>, Vec<u32>) = ((0..canals.stations.len() as u32).collect(), (0..canals.lines.len() as u32).collect());
+            let mut centres: Vec<DVec2> = canals.stations.clone();
+            for c in &canals.lines {
+                centres.extend((0..40).map(|k| c.start + c.dir * (c.length * k as f64 / 40.0) + c.perp * (((k % 7) as f64 - 3.0) * 30.0)));
+            }
+            centres.extend((0..200).map(|k| DVec2::new((k * 7919 % 16384) as f64, (k * 104729 % 16384) as f64)));
+            let mut tried = 0;
+            for (k, &c) in centres.iter().enumerate() {
+                for r in [3.0, 20.0, 80.0, 250.0] {
+                    let poly: Vec<DVec2> = (0..6).map(|j| c + DVec2::from_angle(j as f64 * std::f64::consts::FRAC_PI_3 + k as f64) * r).collect();
+                    assert_eq!(canals.cut(poly.clone()), canals.cut_by(poly, &all.0, &all.1), "seed {seed}, round {c:?}, {r} m");
+                    tried += 1;
+                }
+            }
+            assert!(tried > 1000);
+        }
+        let canals = Canals::new(16384.0, 1);
+        let t = std::time::Instant::now();
+        let index = Index::new(&canals);
+        println!("index: {} stations, {} canals, {} cells, made in {:.1} ms", canals.stations.len(), canals.lines.len(), index.near.len(), t.elapsed().as_secs_f64() * 1e3);
+    }
 
     const SIZE: f64 = 16384.0;
 

@@ -181,6 +181,34 @@ pub struct Cache {
     splits: HashMap<(usize, i32, i32), bool>,
 }
 
+/// How far a plate's cell reaches from its site, at most, in its grid's
+/// squares: its sites are jittered by at most `JITTER` / 2 of a square each
+/// way, so every point lies within 1.13 squares of the nearest, and a cell
+/// clipped by its 24 neighbours within as much of its own; with a margin.
+const CELL_REACH: f64 = 1.5;
+
+/// Whether sites further than `CELL_REACH` are passed over (tests: off,
+/// to show it changes nothing).
+#[cfg(test)]
+static SKIP_FAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// How far `p` is from convex `poly` (0 inside).
+fn distance_to(p: DVec2, poly: &[DVec2]) -> f64 {
+    let n = poly.len();
+    let mut inside = n >= 3;
+    let mut least = f64::INFINITY;
+    for k in 0..n {
+        let (a, b) = (poly[k], poly[(k + 1) % n]);
+        let d = b - a;
+        if d.perp_dot(p - a) < 0.0 {
+            inside = false;
+        }
+        let t = if d.length_squared() > 0.0 { ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        least = least.min(p.distance(a + d * t));
+    }
+    if inside { 0.0 } else { least }
+}
+
 /// The plate `sites` to `level` (1 or 2) is split from.
 fn parent(sites: &[(i32, i32); 3], level: usize) -> Parent {
     (level - 1, [sites[0], if level == 2 { sites[1] } else { (i32::MAX, i32::MAX) }])
@@ -1022,10 +1050,17 @@ impl PlateWorld {
 
     /// Clips `poly` to the side of the bisector nearer `site` than `other`.
     fn clip(poly: &[DVec2], site: DVec2, other: DVec2) -> Vec<DVec2> {
+        let mut out = Vec::with_capacity(poly.len() + 1);
+        Self::clip_into(poly, site, other, &mut out);
+        out
+    }
+
+    /// As `clip`, into `out`.
+    fn clip_into(poly: &[DVec2], site: DVec2, other: DVec2, out: &mut Vec<DVec2>) {
+        out.clear();
         let mid = (site + other) * 0.5;
         let n = other - site;
         let side = |p: DVec2| (p - mid).dot(n);
-        let mut out = Vec::with_capacity(poly.len() + 1);
         for i in 0..poly.len() {
             let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
             let (sa, sb) = (side(a), side(b));
@@ -1036,19 +1071,26 @@ impl PlateWorld {
                 out.push(a + (b - a) * (sa / (sa - sb)));
             }
         }
-        out
     }
 
     /// The Voronoi cell of a site at `level`, intersected with `within`.
     fn cell(&self, level: usize, g: (i32, i32), within: &[DVec2]) -> Vec<DVec2> {
-        let s = self.site(level, g);
+        Self::cell_by(g, within, &|h| self.site(level, h), &mut Vec::new())
+    }
+
+    /// As `cell`, its sites by `site`, into a buffer kept from cell to cell
+    /// (`spare`). (Each cell's 25 sites found anew, and a new outline made
+    /// at each of its 24 clips, 1.5 µs a cell.)
+    fn cell_by(g: (i32, i32), within: &[DVec2], site: &dyn Fn((i32, i32)) -> DVec2, spare: &mut Vec<DVec2>) -> Vec<DVec2> {
+        let s = site(g);
         let mut poly = within.to_vec();
         for dz in -2..=2 {
             for dx in -2..=2 {
                 if (dx, dz) == (0, 0) || poly.len() < 3 {
                     continue;
                 }
-                poly = Self::clip(&poly, s, self.site(level, (g.0 + dx, g.1 + dz)));
+                Self::clip_into(&poly, s, site((g.0 + dx, g.1 + dz)), spare);
+                std::mem::swap(&mut poly, spare);
             }
         }
         poly
@@ -1165,9 +1207,24 @@ impl PlateWorld {
         }
         let (ix0, iz0) = ((min.x / grid).floor() as i32 - 1, (min.y / grid).floor() as i32 - 1);
         let (ix1, iz1) = ((max.x / grid).ceil() as i32 + 1, (max.y / grid).ceil() as i32 + 1);
+        // (A site further than `CELL_REACH` from `poly` has no part of it:
+        // two in three of those round it, each clipped 24 times to nothing.)
+        let reach = CELL_REACH * grid;
+        // (The sites round them all, found once.)
+        let wide = (ix1 - ix0 + 5) as usize;
+        let table: Vec<DVec2> = (iz0 - 2..=iz1 + 2).flat_map(|z| (ix0 - 2..=ix1 + 2).map(move |x| (x, z))).map(|h| self.site(next, h)).collect();
+        let site = |h: (i32, i32)| table[(h.1 - iz0 + 2) as usize * wide + (h.0 - ix0 + 2) as usize];
+        let mut spare = Vec::new();
         for iz in iz0..=iz1 {
             for ix in ix0..=ix1 {
-                let piece = self.cell(next, (ix, iz), poly);
+                #[cfg(test)]
+                let skip = SKIP_FAR.load(std::sync::atomic::Ordering::Relaxed);
+                #[cfg(not(test))]
+                let skip = true;
+                if skip && distance_to(site((ix, iz)), poly) > reach {
+                    continue;
+                }
+                let piece = Self::cell_by((ix, iz), poly, &site, &mut spare);
                 if piece.len() < 3 {
                     continue;
                 }
@@ -1487,6 +1544,31 @@ fn area(poly: &[DVec2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Passing over sites further than `CELL_REACH` from a plate changes
+    /// none of its pieces: the same pieces, in order, either way, over
+    /// squares of every district on two seeds, sites' ordered ground among
+    /// them. (Its own test: it alone sets `SKIP_FAR`.)
+    #[test]
+    fn far_cells_skipped_exactly() {
+        for seed in [1, 2] {
+            let world = PlateWorld::new(crate::WORLD_SIZE, seed);
+            for k in 0..12 {
+                let c = DVec2::new((k * 1361 % 16) as f64 * 1024.0 + 512.0, (k * 7 % 16) as f64 * 1024.0 + 512.0);
+                let (lo, hi) = (c - 200.0, c + 200.0);
+                SKIP_FAR.store(true, std::sync::atomic::Ordering::Relaxed);
+                let skipped = world.plate_pieces(lo, hi);
+                SKIP_FAR.store(false, std::sync::atomic::Ordering::Relaxed);
+                let all = world.plate_pieces(lo, hi);
+                SKIP_FAR.store(true, std::sync::atomic::Ordering::Relaxed);
+                assert!(!all.is_empty());
+                assert_eq!(skipped.len(), all.len(), "seed {seed}, square round {c:?}");
+                for (a, b) in skipped.iter().zip(&all) {
+                    assert_eq!((&a.0, a.1.sites, a.1.level, a.2), (&b.0, b.1.sites, b.1.level, b.2), "seed {seed}, square round {c:?}");
+                }
+            }
+        }
+    }
 
     /// What finding the wells costs (`WELL_REACH`), in four districts'
     /// squares: their pieces built twice on one world, the second time

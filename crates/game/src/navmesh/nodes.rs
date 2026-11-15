@@ -775,20 +775,17 @@ pub(crate) fn pieces(world: &PlateWorld, lo: DVec2, hi: DVec2) -> Vec<Piece> {
             (DVec2::new(x(k), lo.y), DVec2::new(x(k + 1), hi.y))
         })
         .collect();
-    par_chunks(&strips, |c| c.iter().flat_map(|&(a, b)| world.plate_pieces(a, b)).collect::<Vec<_>>())
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .map(|(poly, plate, kept)| {
-            let pillar = grows && plate.pillar > 0.0;
-            let o = poly.iter().fold(DVec2::ZERO, |s, q| s + *q) / poly.len() as f64;
-            let at = |v: &bevy::math::Vec2| o + DVec2::new(v.x as f64, v.y as f64);
-            let prisms = if pillar { world.pillar_prisms(&poly, &plate, o).into_iter().map(|p| (p.points.iter().map(at).collect(), p.top().iter().map(at).collect(), p.y0 as f64, p.y1 as f64)).collect() } else { Vec::new() };
-            let plate = if pillar { Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, ..plate } } else { plate };
-            Piece { pillar, hole: !kept, poly, plate, prisms }
-        })
-        .collect()
+    // (A pillar's form grown in its strip's thread too: after them, on one,
+    // half the stacks' pieces in play.)
+    let piece = |(poly, plate, kept): (Vec<DVec2>, Plate, bool)| {
+        let pillar = grows && plate.pillar > 0.0;
+        let o = poly.iter().fold(DVec2::ZERO, |s, q| s + *q) / poly.len() as f64;
+        let at = |v: &bevy::math::Vec2| o + DVec2::new(v.x as f64, v.y as f64);
+        let prisms = if pillar { world.pillar_prisms(&poly, &plate, o).into_iter().map(|p| (p.points.iter().map(at).collect(), p.top().iter().map(at).collect(), p.y0 as f64, p.y1 as f64)).collect() } else { Vec::new() };
+        let plate = if pillar { Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, ..plate } } else { plate };
+        Piece { pillar, hole: !kept, poly, plate, prisms }
+    };
+    par_chunks(&strips, |c| c.iter().flat_map(|&(a, b)| world.plate_pieces(a, b)).map(piece).collect::<Vec<_>>()).into_iter().flatten().collect()
 }
 
 /// Every piece's edges cut where the piece across changes, each stretch
@@ -940,6 +937,8 @@ pub(crate) struct Space {
     pub(crate) space: Vec<Vec<Polygon<f64>>>,
     /// Each fragment's node (as `space`).
     pub(crate) node_of: Vec<Vec<u32>>,
+    /// Each fragment's bounds (as `space`).
+    pub(crate) frag_boxes: Vec<Vec<(DVec2, DVec2)>>,
     /// Each node's area (m²).
     pub(crate) node_area: Vec<f64>,
     /// How many times two fragments were joined into one node.
@@ -1034,11 +1033,12 @@ impl Space {
         let boxes = hulls.iter().map(|h| bounds(h)).collect();
         let block_rings = blocks.iter().map(|b| b.0.iter().map(|p| ccw(p.exterior().0[..p.exterior().0.len() - 1].iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect()).collect();
         lap("obstacles", &mut times);
-        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, block_rings, boxes, closed, grid, shapes, times: Vec::new(), hulls, cutters: Default::default(), fallbacks: Default::default() };
+        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), frag_boxes: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, block_rings, boxes, closed, grid, shapes, times: Vec::new(), hulls, cutters: Default::default(), fallbacks: Default::default() };
         // Each piece's walking space: itself, less the radius round every
         // closed stretch near it, less the pillars' obstacles.
         let all: Vec<usize> = (0..space.pieces.len()).collect();
         let walking: Vec<Vec<Polygon<f64>>> = par_chunks(&all, |c| c.iter().map(|&i| if space.pieces[i].hole { Vec::new() } else { space.walking(i) }).collect::<Vec<_>>()).into_iter().flatten().collect();
+        space.frag_boxes = walking.iter().map(|frags| frags.iter().map(|f| f.bounding_rect().map_or((DVec2::ZERO, DVec2::ZERO), |r| (DVec2::new(r.min().x, r.min().y), DVec2::new(r.max().x, r.max().y)))).collect()).collect();
         space.space = walking;
         lap("walking", &mut times);
         space.join();
@@ -1139,11 +1139,12 @@ impl Space {
                 area.push(a);
             }
         }
-        for (frags, of) in self.space.iter_mut().zip(self.node_of.iter_mut()) {
-            let kept: Vec<(Polygon<f64>, u32)> = frags.drain(..).zip(of.drain(..)).filter_map(|(f, n)| number[n as usize].map(|m| (f, m))).collect();
-            for (f, m) in kept {
+        for ((frags, of), boxes) in self.space.iter_mut().zip(self.node_of.iter_mut()).zip(self.frag_boxes.iter_mut()) {
+            let kept: Vec<(Polygon<f64>, u32, (DVec2, DVec2))> = frags.drain(..).zip(of.drain(..)).zip(boxes.drain(..)).filter_map(|((f, n), b)| number[n as usize].map(|m| (f, m, b))).collect();
+            for (f, m, b) in kept {
                 frags.push(f);
                 of.push(m);
+                boxes.push(b);
             }
         }
         self.node_area = area;
@@ -1372,34 +1373,46 @@ impl Space {
         })
     }
 
-    /// Among `about`'s pieces: where along `a` + `dir` s (`dir` of length 1), s from `s0` to `s1`,
-    /// node `n`'s walking space is (within `ROUNDING` of it, as
-    /// `node_at_preferring` finds): its spans, merged, in order. The path's
-    /// line crossing each of the node's fragments' rings, the inside
-    /// between each pair. (Found point by point, nine about each of a
-    /// drop's landing spots, the stacks' landings were 0.9 s of work.)
-    pub(crate) fn node_along_in(&self, about: &About, n: u32, a: DVec2, dir: DVec2, s0: f64, s1: f64) -> Vec<(f64, f64)> {
+    /// Node `n`'s fragments among `about`'s pieces whose bounds meet the
+    /// box `lo`..`hi`: each its piece and its place among the piece's.
+    pub(crate) fn node_fragments(&self, about: &About, n: u32, lo: DVec2, hi: DVec2, out: &mut Vec<(usize, usize)>) {
+        out.clear();
+        let meets = |b: &(DVec2, DVec2)| b.0.cmple(hi).all() && b.1.cmpge(lo).all();
+        for &i in about.pieces.iter().filter(|&&i| meets(&self.boxes[i])) {
+            out.extend((0..self.space[i].len()).filter(|&k| self.node_of[i][k] == n && meets(&self.frag_boxes[i][k])).map(|k| (i, k)));
+        }
+    }
+
+    /// Where along `a` + `dir` s (`dir` of length 1), s from `s0` to `s1`,
+    /// the fragments `frags` (one node's, as `node_fragments` finds them)
+    /// are (within `ROUNDING` of them, as `node_at_preferring` finds): their
+    /// spans, merged, in order, into `out` (`cross` a buffer). The path's
+    /// line crossing each fragment's rings, the inside between each pair.
+    /// (Found point by point, nine about each of a drop's landing spots,
+    /// the stacks' landings were 0.9 s of work; then each of the nine paths
+    /// looked through all about it, three lists made each: 2.3 µs a lip.)
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spans_along(&self, frags: &[(usize, usize)], a: DVec2, dir: DVec2, s0: f64, s1: f64, cross: &mut Vec<f64>, out: &mut Vec<(f64, f64)>) {
         let (p0, p1) = (a + dir * s0, a + dir * s1);
         let (lo, hi) = (p0.min(p1) - ROUNDING, p0.max(p1) + ROUNDING);
-        let mut spans: Vec<(f64, f64)> = Vec::new();
-        let mut cross: Vec<f64> = Vec::new();
-        for i in about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(hi).all() && self.boxes[i].1.cmpge(lo).all()) {
-            for (k, f) in self.space[i].iter().enumerate() {
-                if self.node_of[i][k] != n {
-                    continue;
-                }
-                spans_in(f, a, dir, s0, s1, ROUNDING, &mut cross, &mut spans);
+        out.clear();
+        for &(i, k) in frags {
+            let b = self.frag_boxes[i][k];
+            if b.0.cmple(hi).all() && b.1.cmpge(lo).all() {
+                spans_in(&self.space[i][k], a, dir, s0, s1, ROUNDING, cross, out);
             }
         }
-        spans.sort_by(|x, y| x.0.total_cmp(&y.0));
-        let mut out: Vec<(f64, f64)> = Vec::new();
-        for (u0, u1) in spans {
-            match out.last_mut() {
-                Some(last) if u0 <= last.1 => last.1 = last.1.max(u1),
-                _ => out.push((u0, u1)),
+        out.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut m = 0;
+        for j in 0..out.len() {
+            if m > 0 && out[j].0 <= out[m - 1].1 {
+                out[m - 1].1 = out[m - 1].1.max(out[j].1);
+            } else {
+                out[m] = out[j];
+                m += 1;
             }
         }
-        out
+        out.truncate(m);
     }
 
     /// The hops between nodes no more than `far` apart (3D): points every
@@ -1510,13 +1523,49 @@ impl Space {
     /// leaves from, else one. Directed: a drop down is no climb up.
     pub(crate) fn links(&self, world: &PlateWorld, far: f64, spread: Option<f64>, short: impl Fn(f64, f64) -> f64 + Sync) -> HashMap<(u32, u32), Vec<Link>> {
         let points = self.edge_points(world);
-        // (Each cell's points in it, side by side, and its neighbours found
-        // once a cell, not once a point: 3 million lookups in the stacks.)
-        let mut cell: HashMap<(i32, i32), Vec<(DVec2, f64, u32)>> = HashMap::new();
-        for p in &points {
-            cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(*p);
+        if points.is_empty() {
+            return HashMap::new();
         }
-        let keys: Vec<(i32, i32)> = cell.keys().copied().collect();
+        // (Each cell's points side by side in one list, sorted by cell, then
+        // node: runs of one node; a point's own node's run passed over
+        // whole. A grid of cells counted out, not a map of lists: a map, a
+        // seventh of the work.)
+        let (lo, hi) = points.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
+        let (wide, high) = (((hi.x - lo.x) / far).floor() as usize + 1, ((hi.y - lo.y) / far).floor() as usize + 1);
+        let at = |q: DVec2| ((q.x - lo.x) / far).floor() as usize + wide * ((q.y - lo.y) / far).floor() as usize;
+        let mut first = vec![0usize; wide * high + 1];
+        for p in &points {
+            first[at(p.0) + 1] += 1;
+        }
+        for k in 0..wide * high {
+            first[k + 1] += first[k];
+        }
+        let mut list: Vec<(DVec2, f64, u32)> = vec![(DVec2::ZERO, 0.0, 0); points.len()];
+        {
+            let mut fill = first.clone();
+            for p in &points {
+                let c = at(p.0);
+                list[fill[c]] = *p;
+                fill[c] += 1;
+            }
+        }
+        // Runs of one node, each cell's from `first`.
+        let mut runs: Vec<(usize, usize, u32)> = Vec::new();
+        let mut run_first = vec![0usize; wide * high + 1];
+        for c in 0..wide * high {
+            let cell = &mut list[first[c]..first[c + 1]];
+            cell.sort_by_key(|p| p.2);
+            let base = first[c];
+            let mut start = 0;
+            for k in 1..=cell.len() {
+                if k == cell.len() || cell[k].2 != cell[start].2 {
+                    runs.push((base + start, base + k, cell[start].2));
+                    start = k;
+                }
+            }
+            run_first[c + 1] = runs.len();
+        }
+        let filled: Vec<usize> = (0..wide * high).filter(|&c| first[c + 1] > first[c]).collect();
         type Best = HashMap<((u32, u32), (i32, i32)), Link>;
         let keep = |out: &mut Best, pair: (u32, u32), l: Link| {
             let at = spread.map_or((0, 0), |c| ((l.a.x / c).floor() as i32, (l.a.y / c).floor() as i32));
@@ -1526,64 +1575,79 @@ impl Space {
                 *e = l;
             }
         };
-        {
-            let (cell, short) = (&cell, &short);
-            let handles = par_chunks(&keys, |c| {
-                        let mut out: Best = HashMap::new();
-                        for &(cx, cz) in c {
-                            let near: Vec<&Vec<(DVec2, f64, u32)>> = (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (cx + dx, cz + dz))).filter_map(|k| cell.get(&k)).collect();
-                            let mut best: Vec<Link> = Vec::new();
-                            let mut to: Vec<u32> = Vec::new();
-                            for &pa in &cell[&(cx, cz)] {
+        let far2 = far * far;
+        let (list, runs, run_first, short) = (&list, &runs, &run_first, &short);
+        let handles = par_chunks(&filled, |c| {
+                    let mut out: Best = HashMap::new();
+                    let mut best: Vec<Link> = Vec::new();
+                    let mut to: Vec<u32> = Vec::new();
+                    let mut near: Vec<usize> = Vec::new();
+                    for &cell in c {
+                        let (cx, cz) = (cell % wide, cell / wide);
+                        near.clear();
+                        for z in cz.saturating_sub(1)..=(cz + 1).min(high - 1) {
+                            for x in cx.saturating_sub(1)..=(cx + 1).min(wide - 1) {
+                                near.extend(run_first[z * wide + x]..run_first[z * wide + x + 1]);
+                            }
+                        }
+                        for &(a0, a1, na) in &runs[run_first[cell]..run_first[cell + 1]] {
+                            for &pa in &list[a0..a1] {
                                 // (The least of each node from this point,
                                 // then kept: kept pair by pair, most of it.)
                                 best.clear();
                                 to.clear();
-                                for &pb in near.iter().flat_map(|o| o.iter()) {
-                                    if pb.2 == pa.2 {
+                                for &r in &near {
+                                    let (b0, b1, nb) = runs[r];
+                                    if nb == na {
                                         continue;
                                     }
-                                    let gap = pa.0.distance(pb.0);
-                                    if gap > far {
-                                        continue;
+                                    let mut least: Option<Link> = None;
+                                    for &pb in &list[b0..b1] {
+                                        let d2 = pa.0.distance_squared(pb.0);
+                                        if d2 > far2 {
+                                            continue;
+                                        }
+                                        // (No move, none kept: most pairs.)
+                                        let s = short(d2.sqrt(), pb.1 - pa.1);
+                                        if !s.is_finite() {
+                                            continue;
+                                        }
+                                        if least.is_none_or(|l| (s, pb.0.x, pb.0.y) < (l.short, l.b.x, l.b.y)) {
+                                            least = Some(Link { short: s, a: pa.0, ay: pa.1, b: pb.0, by: pb.1 });
+                                        }
                                     }
-                                    // (No move, none kept: most pairs.)
-                                    let s = short(gap, pb.1 - pa.1);
-                                    if !s.is_finite() {
-                                        continue;
-                                    }
-                                    let l = Link { short: s, a: pa.0, ay: pa.1, b: pb.0, by: pb.1 };
-                                    match to.iter().position(|&n| n == pb.2) {
+                                    let Some(l) = least else { continue };
+                                    match to.iter().position(|&n| n == nb) {
                                         Some(k) => {
                                             if (l.short, l.b.x, l.b.y) < (best[k].short, best[k].b.x, best[k].b.y) {
                                                 best[k] = l;
                                             }
                                         }
                                         None => {
-                                            to.push(pb.2);
+                                            to.push(nb);
                                             best.push(l);
                                         }
                                     }
                                 }
                                 for (&n, &l) in to.iter().zip(&best) {
-                                    keep(&mut out, (pa.2, n), l);
+                                    keep(&mut out, (na, n), l);
                                 }
                             }
                         }
-                        out
-            });
-            let mut all: Best = HashMap::new();
-            for h in handles {
-                for ((pair, _), l) in h {
-                    keep(&mut all, pair, l);
-                }
+                    }
+                    out
+        });
+        let mut all: Best = HashMap::new();
+        for h in handles {
+            for ((pair, _), l) in h {
+                keep(&mut all, pair, l);
             }
-            let mut out: HashMap<(u32, u32), Vec<Link>> = HashMap::new();
-            for ((pair, _), l) in all {
-                out.entry(pair).or_default().push(l);
-            }
-            out
         }
+        let mut out: HashMap<(u32, u32), Vec<Link>> = HashMap::new();
+        for ((pair, _), l) in all {
+            out.entry(pair).or_default().push(l);
+        }
+        out
     }
 }
 
