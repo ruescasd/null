@@ -3004,6 +3004,7 @@ dependencies = [
  "landmass",
  "landmass_rerecast",
  "manifold-csg",
+ "spade",
  "worldgen",
 ]
 

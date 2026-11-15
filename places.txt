@@ -12,6 +12,15 @@ broken           7296,2,640,0,0      the broken's navigation sample point
 uplands          9344,2,4736,0,0     the uplands' navigation sample point
 highlands        9344,2,2688,0,0     the highlands' navigation sample point
 
+# District navigation, step 1 (2026-11-14): ground teleporting walkers can't
+# reach. Can the player?
+floor_pit        10960,25,40,180,-18 a walled pit ~16 m deep in floor, now with its stair out (2026-11-14)
+floor_pit_stair  11015,1.7,229.2,224,8 the floor pit's stair, from its floor: a pit's way out, cut along its wall
+broken_plateau   7090,40,760,180,-8 a sheer block 50-62 m up in broken: no teleport of 20 m reaches its top
+# Traps for a player without the hook (player_traps, 2026-11-14):
+floor_slot       10912,10,436,0,-40 a 2 by 5 m slot in floor, 3.9 m deep: dropped into, no climbing out
+stacks_basin     13089,25,150,0,-35 a pit among stacks' towers (157 by 164 m, 26-67 m up), now with its stair out along x 13175
+
 # The districts' views in docs/world.md (some with --time 60 there).
 floor_view       1024,25,1700,0,-4   a pit in the flat plates; the spire and the stacks behind
 tiers_view       1024,70,15760,0,-10 contour terraces round a hill, a hanging city behind

@@ -600,10 +600,12 @@ fn execute(line: &str, console: &mut Console, args: &mut Args, spawns: &mut Spaw
 
 /// `--do COMMAND` (repeatable): run as if typed, once the game is on (so a
 /// fight can be set up the same way again, from the command line); what
-/// they say also in the log.
+/// they say also in the log. With `--opt blink`, once the district nodes
+/// are built too (spawned before, a walker went as in the open, up a 2 m
+/// ledge it was to hop).
 #[allow(clippy::too_many_arguments)]
-fn given(mut done: Local<bool>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, lab: Option<Res<crate::groundlab::LabGround>>, mut exit: MessageWriter<AppExit>) {
-    if *done {
+fn given(mut done: Local<bool>, mut console: ResMut<Console>, mut args: ResMut<Args>, mut spawns: ResMut<Spawns>, camera: Single<(&Transform, &FlyCam)>, world: Option<Res<crate::terrain::WorldGen>>, lab: Option<Res<crate::groundlab::LabGround>>, districts: Option<Res<crate::navmesh::district::Districts>>, mut exit: MessageWriter<AppExit>) {
+    if *done || (args.opt("blink") && districts.is_none_or(|d| d.nodes.is_none())) {
         return;
     }
     *done = true;

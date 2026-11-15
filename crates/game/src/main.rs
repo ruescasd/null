@@ -196,6 +196,7 @@ fn main() {
         check::run(&argv);
     }
     let args = Args::parse();
+    rig::set_leap_gravity(args.num("leap_gravity", 60.0));
     // A name nothing reads is a mistake (the user: a mistyped `--set` did
     // nothing, silently): said so, with the nearest, and stopped.
     let unknown = args.unknown();

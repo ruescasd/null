@@ -213,7 +213,9 @@ pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64) -> Vec
 
 /// A teleport's way from one node to another: from `a` (its height `ay`)
 /// to `b` (`by`), `d` apart in 3D. Both on the edge of their nodes'
-/// walking space: where a body stands.
+/// walking space: where a body stands. Or a drop (`leap`, its upward
+/// speed as it goes, m/s): one way, off a lip down onto `b`, inside the
+/// node below (see `district::drops`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Hop {
     pub(crate) a: DVec2,
@@ -221,6 +223,20 @@ pub(crate) struct Hop {
     pub(crate) b: DVec2,
     pub(crate) by: f32,
     pub(crate) d: f32,
+    pub(crate) leap: Option<f32>,
+}
+
+/// A one way move between nodes (`Space::links`): how far it falls short
+/// of being made (at most 0, made), from `a` (its height `ay`) to `b`
+/// (`by`), on the edges of their nodes' walking space.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Link {
+    pub(crate) short: f64,
+    pub(crate) a: DVec2,
+    pub(crate) ay: f64,
+    pub(crate) b: DVec2,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) by: f64,
 }
 
 /// How far off an edge a point on it may be found (m): half a step of the
@@ -430,7 +446,6 @@ impl Space {
     }
 
     /// The piece under `q` (or within `ROUNDING` of it).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn under(&self, q: DVec2) -> Option<usize> {
         let pt = Point::new(q.x, q.y);
         let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
@@ -474,22 +489,7 @@ impl Space {
     /// each `HOP_CELL` of the lower-numbered node's side; keyed by the pair,
     /// the lower first, each hop from it.
     pub(crate) fn hops(&self, world: &PlateWorld, far: f64) -> HashMap<(u32, u32), Vec<Hop>> {
-        let mut points: Vec<(DVec2, f64, u32)> = Vec::new();
-        for (i, s) in self.space.iter().enumerate() {
-            for (k, f) in s.iter().enumerate() {
-                let n = self.node_of[i][k];
-                for ring in std::iter::once(f.exterior()).chain(f.interiors()) {
-                    for w in ring.0.windows(2) {
-                        let (a, b) = (DVec2::new(w[0].x, w[0].y), DVec2::new(w[1].x, w[1].y));
-                        let m = (a.distance(b) / 1.0).ceil().max(1.0) as usize;
-                        for j in 0..m {
-                            let q = a.lerp(b, j as f64 / m as f64);
-                            points.push((q, world.plate_top(&self.pieces[i].plate, q), n));
-                        }
-                    }
-                }
-            }
-        }
+        let points = self.edge_points(world);
         let mut cell: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (k, p) in points.iter().enumerate() {
             cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(k);
@@ -525,7 +525,7 @@ impl Space {
                                             let d = (pa.0.distance_squared(pb.0) + (pa.1 - pb.1).powi(2)).sqrt();
                                             if d <= far {
                                                 let at = ((pa.0.x / HOP_CELL).floor() as i32, (pa.0.y / HOP_CELL).floor() as i32);
-                                                keep(&mut out, ((pa.2, pb.2), at), Hop { a: pa.0, ay: pa.1 as f32, b: pb.0, by: pb.1 as f32, d: d as f32 });
+                                                keep(&mut out, ((pa.2, pb.2), at), Hop { a: pa.0, ay: pa.1 as f32, b: pb.0, by: pb.1 as f32, d: d as f32, leap: None });
                                             }
                                         }
                                     }
@@ -549,5 +549,95 @@ impl Space {
             out.entry(pair).or_default().push(hop);
         }
         out
+    }
+
+    /// Points every metre round each fragment's edges: where, how high,
+    /// and its node.
+    fn edge_points(&self, world: &PlateWorld) -> Vec<(DVec2, f64, u32)> {
+        let mut points: Vec<(DVec2, f64, u32)> = Vec::new();
+        for (i, s) in self.space.iter().enumerate() {
+            for (k, f) in s.iter().enumerate() {
+                let n = self.node_of[i][k];
+                for ring in std::iter::once(f.exterior()).chain(f.interiors()) {
+                    for w in ring.0.windows(2) {
+                        let (a, b) = (DVec2::new(w[0].x, w[0].y), DVec2::new(w[1].x, w[1].y));
+                        let m = (a.distance(b) / 1.0).ceil().max(1.0) as usize;
+                        for j in 0..m {
+                            let q = a.lerp(b, j as f64 / m as f64);
+                            points.push((q, world.plate_top(&self.pieces[i].plate, q), n));
+                        }
+                    }
+                }
+            }
+        }
+        points
+    }
+
+    /// One way moves between nodes: for each ordered pair of nodes with
+    /// edge points no more than `far` apart across (2D), the least
+    /// `short(gap, rise)` over them (how far the move falls short of
+    /// making it: at most 0, it is made), and where from and to; with
+    /// `spread`, the least in each cell of that side along the edge it
+    /// leaves from, else one. Directed: a drop down is no climb up.
+    pub(crate) fn links(&self, world: &PlateWorld, far: f64, spread: Option<f64>, short: impl Fn(f64, f64) -> f64 + Sync) -> HashMap<(u32, u32), Vec<Link>> {
+        let points = self.edge_points(world);
+        let mut cell: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (k, p) in points.iter().enumerate() {
+            cell.entry(((p.0.x / far).floor() as i32, (p.0.y / far).floor() as i32)).or_default().push(k);
+        }
+        let keys: Vec<(i32, i32)> = cell.keys().copied().collect();
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        type Best = HashMap<((u32, u32), (i32, i32)), Link>;
+        let keep = |out: &mut Best, pair: (u32, u32), l: Link| {
+            let at = spread.map_or((0, 0), |c| ((l.a.x / c).floor() as i32, (l.a.y / c).floor() as i32));
+            let e = out.entry((pair, at)).or_insert(l);
+            if l.short < e.short {
+                *e = l;
+            }
+        };
+        std::thread::scope(|scope| {
+            let chunk = keys.len().div_ceil(threads * 4).max(1);
+            let (cell, points, short) = (&cell, &points, &short);
+            let handles: Vec<_> = keys
+                .chunks(chunk)
+                .map(|c| {
+                    scope.spawn(move || {
+                        let mut out: Best = HashMap::new();
+                        for &(cx, cz) in c {
+                            for &a in &cell[&(cx, cz)] {
+                                let pa = points[a];
+                                for dz in -1..=1 {
+                                    for dx in -1..=1 {
+                                        let Some(others) = cell.get(&(cx + dx, cz + dz)) else { continue };
+                                        for &b in others {
+                                            let pb = points[b];
+                                            if pb.2 == pa.2 {
+                                                continue;
+                                            }
+                                            let gap = pa.0.distance(pb.0);
+                                            if gap <= far {
+                                                keep(&mut out, (pa.2, pb.2), Link { short: short(gap, pb.1 - pa.1), a: pa.0, ay: pa.1, b: pb.0, by: pb.1 });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        out
+                    })
+                })
+                .collect();
+            let mut all: Best = HashMap::new();
+            for h in handles {
+                for ((pair, _), l) in h.join().unwrap() {
+                    keep(&mut all, pair, l);
+                }
+            }
+            let mut out: HashMap<(u32, u32), Vec<Link>> = HashMap::new();
+            for ((pair, _), l) in all {
+                out.entry(pair).or_default().push(l);
+            }
+            out
+        })
     }
 }

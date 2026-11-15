@@ -29,7 +29,7 @@ pub struct NavmeshPlugin;
 
 impl Plugin for NavmeshPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(Landmass3dPlugin::default()).add_systems(Startup, district::setup).add_systems(Update, (ready, walk.after(ready), district::ask, district::ready, district::tells, district::glows));
+        app.add_plugins(Landmass3dPlugin::default()).add_systems(Update, (ready, walk.after(ready), district::ask, district::ready));
     }
 }
 

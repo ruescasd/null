@@ -29,7 +29,6 @@ use crate::{
 
 mod hunter;
 pub(crate) use hunter::{clip::folder as creatures_folder, clip::names as creatures, trace, trace_file};
-#[cfg(test)]
 pub(crate) use hunter::STEP_UP as CREATURE_STEP;
 mod cape;
 mod slab;

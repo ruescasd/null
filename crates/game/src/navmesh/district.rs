@@ -11,9 +11,16 @@
 //! another node, it plans the fewest teleports there (between the nearest
 //! points of nodes' edges), walks toward where the first leaves from (going
 //! from where it is as soon as that does as well: `Nodes::sooner`), stands
-//! for its tell (a glow where it stands and where it will land), and is
-//! there, as far on into the node as its range takes it (`Nodes::land`);
-//! then rests before it may again.
+//! for its tell, and is there, as far on into the node as its range takes
+//! it (`Nodes::land`); then rests before it may again. Teleporting is a
+//! creature's own, case by case (the user, 2026-11-14: applied to all it
+//! won't look good): only those with a look for it have it, authored
+//! bodies by their shade (`combat/hunter/clip/shade.rs`); the others'
+//! range is 0 (the glows they once had at both ends did not work, and
+//! are gone). Off a lip onto a lower node within
+//! `DROP_GAP` it drops instead (`drops`, the user, 2026-11-14: every enemy
+//! may drop down anywhere): one way, any depth, no tell; the rig's leap,
+//! its pose and landing.
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
@@ -26,7 +33,7 @@ use geo::{
     Buffer, Simplify,
     algorithm::buffer::{BufferStyle, LineJoin},
 };
-use geo::{BoundingRect, ClosestPoint, Distance, Euclidean, MultiPolygon, Point, Polygon, TriangulateDelaunay, algorithm::triangulate_delaunay::DelaunayTriangulationConfig};
+use geo::{BoundingRect, ClosestPoint, Distance, Euclidean, MultiPolygon, Point, Polygon};
 use bevy_landmass::coords::TwoD as XY;
 use landmass::{ArchipelagoOptions, FromAgentRadius, PathStep, PermittedAnimationLinks};
 use worldgen::plates::PlateWorld;
@@ -43,6 +50,171 @@ pub(crate) const FARTHEST: f64 = 20.0;
 /// slivers of a few square decimetres between steps, else.
 const LAND_LEAST: f64 = 10.0;
 
+/// Drops (the user, 2026-11-14: every enemy may drop down anywhere, one
+/// move for all; the rig's leap is its pose and landing): how far across
+/// a lip a walker steps off (m, between the walking space's edges above
+/// and below); how much further on it may land (m); how fast up it goes
+/// as it does (m/s, each tried in turn: enough to clear the lip before it
+/// sinks below it); what one counts as, planning (m walked, and its way
+/// across).
+const DROP_GAP: f64 = 3.0;
+const DROP_ON: f64 = 4.0;
+const DROP_UP: [f64; 3] = [1.5, 3.0, 4.5];
+
+/// A leap's upward speed (m/s), as given for gravity of 25 m/s²: as long
+/// in the air at the leaps' gravity (`rig::leap_gravity`; at 60, the
+/// kicks off a lip were too short to clear it).
+fn kick(up: f64) -> f64 {
+    up * crate::rig::leap_gravity() as f64 / 25.0
+}
+const DROP_COST: f32 = 2.0;
+/// Hops: how far across (m), and how far over its ledge it rises (m).
+const HOP_GAP: f64 = 1.5;
+const HOP_CLEAR: f64 = 0.4;
+/// How far back from its ledge's foot a hop may take off (m, tried in turn).
+const HOP_BACK: [f64; 5] = [0.0, 0.5, 1.0, 1.5, 2.0];
+/// A falling body's reach round its root (m, the beast's: the rig sweeps
+/// its capsule, `combat/hunter.rs`), and how high over its root the sweep
+/// goes (the rig's step up): ground no higher than that is cleared.
+const FALL_RADIUS: f64 = 0.45;
+const FALL_LIFT: f64 = crate::combat::CREATURE_STEP as f64;
+
+/// How long a leap of `up` m/s takes to come down `h` m (s; below 0, up
+/// onto a ledge `-h` high, on its way down: at its top, if it reaches no
+/// higher).
+fn fall_time(up: f64, h: f64) -> f64 {
+    let g = crate::rig::leap_gravity() as f64;
+    (up + (up * up + 2.0 * g * h).max(0.0).sqrt()) / g
+}
+
+/// Whether a leap of `up` m/s from `a` (its feet `ay` high), aimed by its
+/// fall time at `q` (`by` high), comes down on node `onto`: stepped as the
+/// rig steps it (its gravity, its velocity then its root, `rig.rs`), at a
+/// frame of 1/30 s and of 1/240 s (a longer frame loses height, so every
+/// frame between does as well); its root landing on the rig's own ground
+/// (`PlateWorld::height_at`, as `ground.rs` gives it outdoors: by the
+/// plates' tops, its first leap off a lip in play came down on it), on
+/// `onto`'s walking space; its body (`FALL_RADIUS` round it) never through
+/// the plates' tops more than `FALL_LIFT`, nor a pillar. (Outdoors nothing
+/// stops it sideways: that for the look of it.) (On the exact curve alone,
+/// at 30 frames a second its hop came down a fifth sooner, on its lip.)
+/// (`frames`: the frames it is stepped at.)
+#[allow(clippy::too_many_arguments)]
+fn fall_clear(space: &Space, world: &PlateWorld, a: DVec2, ay: f64, q: DVec2, by: f64, up: f64, onto: u32, frames: &[f64]) -> bool {
+    // (A hop up a ledge stands at its foot, the ledge within its body's
+    // reach: the body's sweep is for a drop's look alone.)
+    let ring = by < ay;
+    let top = |q: DVec2| -> f64 {
+        let pt = Point::new(q.x, q.y);
+        if space.blocked.get(&((q.x / nodes::BIN).floor() as i32, (q.y / nodes::BIN).floor() as i32)).is_some_and(|ks| ks.iter().any(|k| geo::Intersects::intersects(&space.blocks[*k], &pt))) {
+            return f64::INFINITY;
+        }
+        space.under(q).map_or(f64::NEG_INFINITY, |i| world.plate_top(&space.pieces[i].plate, q))
+    };
+    let g = crate::rig::leap_gravity() as f64;
+    let v = (q - a) / fall_time(up, ay - by);
+    frames.iter().all(|&dt| {
+        let (mut p, mut y, mut vy) = (a, ay, up);
+        loop {
+            vy -= g * dt;
+            p += v * dt;
+            y += vy * dt;
+            if ring && (0..8).any(|j| top(p + DVec2::from_angle(j as f64 * std::f64::consts::FRAC_PI_4) * FALL_RADIUS) > y + FALL_LIFT) {
+                return false;
+            }
+            // (Down on ground: where it lands, on `onto`. Rising into it, a
+            // hop not clearing its ledge: no.)
+            if y <= world.height_at(p.x as f32, p.y as f32) as f64 {
+                return vy < 0.0 && space.node_at_preferring(p, Some(onto)).is_some_and(|f| f.0 == onto);
+            }
+            // (Fallen past where it lands: missed it. From below, a hop
+            // begins a metre and more under it.)
+            if y < by.min(ay) - 1.0 {
+                return false;
+            }
+        }
+    })
+}
+
+/// The frames a fall is checked at (s): a long one loses height, so every
+/// frame between these does as well.
+const FRAMES: [f64; 2] = [1.0 / 30.0, 1.0 / 240.0];
+
+/// The drops off every lip of `space`: one way, from a point on the edge
+/// of a node's walking space, within `DROP_GAP` of a lower node's, onto a
+/// point `INSET` inside that one, the nearest whose fall is clear: the
+/// rig's leap, by its gravity, its root never coming down on ground
+/// short of there and its body never swept into any (any within
+/// `FALL_RADIUS` of it and `FALL_LIFT` over it), nor into a pillar. The
+/// nearest few along each edge (`nodes::HOP_CELL`), as teleports.
+/// And hops (the user, 2026-11-14: one case, to judge how its look would
+/// be made): up onto a ledge within `HOP_GAP` across and as high as you
+/// climb it without the hook (`player::hookless_reach`), its leap the
+/// least that clears it by `HOP_CLEAR`, a metre a second at a time.
+fn drops(space: &Space, world: &PlateWorld) -> Vec<(u32, u32, Hop)> {
+    let climb = space.fit.climb;
+    let links = space.links(world, DROP_GAP, Some(nodes::HOP_CELL), |gap, rise| {
+        if rise < -climb {
+            gap - DROP_GAP
+        } else if rise > climb && gap <= HOP_GAP && rise <= crate::player::hookless_reach(gap) {
+            gap - HOP_GAP
+        } else {
+            f64::INFINITY
+        }
+    });
+    let on = |n: u32, q: DVec2| space.node_at_preferring(q, Some(n)).is_some_and(|f| f.0 == n);
+    let candidates: Vec<(u32, u32, nodes::Link)> = links.iter().filter(|((_, b), _)| space.node_area[*b as usize] >= LAND_LEAST).flat_map(|(&(a, b), list)| list.iter().filter(|l| l.short <= 0.0).map(move |l| (a, b, *l))).collect();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    std::thread::scope(|scope| {
+        let chunk = candidates.len().div_ceil(threads * 4).max(1);
+        let handles: Vec<_> = candidates
+            .chunks(chunk)
+            .map(|c| {
+                scope.spawn(|| {
+                    c.iter()
+                        .filter_map(|&(a, b, l)| {
+                            let gap = l.a.distance(l.b);
+                            let dir = (l.b - l.a).try_normalize()?;
+                            // (A hop takes off a step or two back: its leap
+                            // goes across at one speed, and from the foot of
+                            // its ledge it met the edge still rising.)
+                            let backs: &[f64] = if l.b.length() > 0.0 && space.under(l.b).is_some_and(|i| world.plate_top(&space.pieces[i].plate, l.b) > l.ay) { &HOP_BACK } else { &[0.0] };
+                            // (The gentlest leap first, from as far back as
+                            // it takes: from the foot of its ledge, the first
+                            // that cleared it sprang twice its height.)
+                            let hop = backs.len() > 1;
+                            let ups: Vec<f64> = if hop { (0..9).map(|k| (2.0 * crate::rig::leap_gravity() as f64 * HOP_CLEAR).sqrt() + kick(0.5) * k as f64).collect() } else { DROP_UP.map(kick).to_vec() };
+                            for up0 in ups {
+                                for &back in backs {
+                                    let from = l.a - dir * back;
+                                    if back > 0.0 && !on(a, from) {
+                                        continue;
+                                    }
+                                    let mut s = gap;
+                                    while s <= gap + DROP_ON {
+                                        let q = l.a + dir * s;
+                                        if on(b, q) && (0..8).all(|k| on(b, q + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET)) {
+                                            let by = space.under(q).map(|i| world.plate_top(&space.pieces[i].plate, q))?;
+                                            let up = if hop { (up0 * up0 + 2.0 * crate::rig::leap_gravity() as f64 * (by - l.ay)).sqrt() } else { up0 };
+                                            if fall_clear(space, world, from, l.ay, q, by, up, b, &FRAMES) {
+                                                let d = (q.distance_squared(from) + (l.ay - by).powi(2)).sqrt();
+                                                return Some((a, b, Hop { a: from, ay: l.ay as f32, b: q, by: by as f32, d: d as f32, leap: Some(up as f32) }));
+                                            }
+                                        }
+                                        s += LAND_STEP;
+                                    }
+                                }
+                            }
+                            None
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
+}
+
 /// A district's nodes, ready to walk: the walking space, the hops between
 /// nodes, and a 2D navmesh of each (landmass's, in this square's own frame,
 /// from `origin`: f32 is fine there, not 8 km out).
@@ -50,9 +222,11 @@ pub(crate) struct Nodes {
     world: Arc<PlateWorld>,
     pub(crate) space: Space,
     /// Each node's neighbours, and the nearest a teleport between them goes
-    /// (for `route`).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// (for `route`, `reaches`).
     adjacent: Vec<Vec<(u32, f32)>>,
+    /// Each node's drops and hops (one way): onto which nodes, and the
+    /// least rise of those (below 0, a drop).
+    leaps_to: Vec<Vec<(u32, f32)>>,
     /// Where teleports leave from and land, to plan by.
     portals: Portals,
     /// Each node's navmesh, its own (one for all, a way begun on the edge
@@ -73,21 +247,133 @@ pub(crate) struct Nodes {
 /// f32, and left holes in the mesh, ways not found): its corners and each
 /// triangle's, counter-clockwise; how many came out of no area, and were
 /// left out; none if it could not be triangulated.
+///
+/// (By spade directly, in about n log n. geo's `constrained_triangulation`
+/// tests every pair of edges for crossings, again after each it splits, and
+/// every triangle against the whole outline: a node of 8125 fragments in the
+/// stacks, an outline of 134 615 points, never finished, hours of it. The
+/// triangles inside are found by crossing the outline: from outside, each
+/// edge of it crossed turns in to out or back, which holds for holes by
+/// construction.)
+///
+/// (Snapped first, as geo did, within `SNAP`: corners that near one another
+/// one corner, and an edge that near a corner split there. Unsnapped, a
+/// hole all but touching another left a hair of a triangle between them, of
+/// no area, left out, and the triangles either side of it no longer met:
+/// nodes cut in two, ways in them not found, in the tiers.)
 fn triangles(poly: &Polygon<f64>) -> Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)> {
-    let tris = poly.constrained_triangulation(DelaunayTriangulationConfig { snap_radius: 1e-4 }).ok()?;
-    let mut index: HashMap<(u64, u64), usize> = HashMap::new();
-    let mut corners: Vec<DVec2> = Vec::new();
-    let mut at = |c: geo::Coord<f64>| {
-        *index.entry((c.x.to_bits(), c.y.to_bits())).or_insert_with(|| {
-            corners.push(DVec2::new(c.x, c.y));
-            corners.len() - 1
-        })
-    };
-    let mut out = Vec::new();
-    let mut flat = 0;
-    for t in tris {
-        let (i, j, k) = (at(t.v1()), at(t.v2()), at(t.v3()));
-        let (a, b, c) = (DVec2::new(t.v1().x, t.v1().y), DVec2::new(t.v2().x, t.v2().y), DVec2::new(t.v3().x, t.v3().y));
+    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation, handles::FixedVertexHandle};
+    const SNAP: f64 = 1e-4;
+    const CELL: f64 = 0.25;
+    let key = |p: DVec2| ((p.x / CELL).floor() as i64, (p.y / CELL).floor() as i64);
+    let mut points: Vec<DVec2> = Vec::new();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut rings: Vec<Vec<usize>> = Vec::new();
+    for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
+        // (Closed: its last point its first.)
+        let n = ring.0.len().saturating_sub(1);
+        let mut ids: Vec<usize> = Vec::new();
+        for c in &ring.0[..n] {
+            let p = DVec2::new(c.x, c.y);
+            let (kx, kz) = key(p);
+            let near = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (kx + dx, kz + dz))).flat_map(|k| grid.get(&k).into_iter().flatten().copied()).find(|&i| points[i].distance(p) < SNAP);
+            let id = near.unwrap_or_else(|| {
+                points.push(p);
+                grid.entry((kx, kz)).or_default().push(points.len() - 1);
+                points.len() - 1
+            });
+            if ids.last() != Some(&id) {
+                ids.push(id);
+            }
+        }
+        while ids.len() > 1 && ids.first() == ids.last() {
+            ids.pop();
+        }
+        if ids.len() >= 3 {
+            rings.push(ids);
+        }
+    }
+    if points.len() < 3 || rings.is_empty() {
+        return None;
+    }
+    // Each edge split at the corners within `SNAP` of it; an edge twice
+    // over (where two rings meet along it) is no edge: in and out on either
+    // side alike.
+    let mut count: HashMap<(usize, usize), usize> = HashMap::new();
+    for ids in &rings {
+        for k in 0..ids.len() {
+            let (a, b) = (ids[k], ids[(k + 1) % ids.len()]);
+            let (pa, pb) = (points[a], points[b]);
+            let d = pb - pa;
+            let len2 = d.length_squared();
+            let mut on: Vec<(f64, usize)> = Vec::new();
+            let steps = (d.length() / CELL).ceil() as usize + 1;
+            for s in 0..=steps {
+                let (kx, kz) = key(pa + d * (s as f64 / steps as f64));
+                for i in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (kx + dx, kz + dz))).flat_map(|k| grid.get(&k).into_iter().flatten().copied()) {
+                    if i == a || i == b || len2 == 0.0 {
+                        continue;
+                    }
+                    let t = (points[i] - pa).dot(d) / len2;
+                    if t > 0.0 && t < 1.0 && (pa + d * t).distance(points[i]) < SNAP {
+                        on.push((t, i));
+                    }
+                }
+            }
+            on.sort_by(|x, y| x.0.total_cmp(&y.0));
+            on.dedup_by_key(|x| x.1);
+            let chain: Vec<usize> = std::iter::once(a).chain(on.into_iter().map(|x| x.1)).chain(std::iter::once(b)).collect();
+            for w in chain.windows(2) {
+                if w[0] != w[1] {
+                    *count.entry((w[0].min(w[1]), w[0].max(w[1]))).or_default() += 1;
+                }
+            }
+        }
+    }
+    let mut edges: Vec<[usize; 2]> = count.into_iter().filter(|(_, n)| n % 2 == 1).map(|((a, b), _)| [a, b]).collect();
+    edges.sort();
+    let vertices: Vec<Point2<f64>> = points.iter().map(|p| Point2::new(p.x, p.y)).collect();
+    // (Edges crossing others, or one already there, left out by the bulk
+    // load and added after, split where they cross.)
+    let mut crossing = Vec::new();
+    let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::try_bulk_load_cdt(vertices, edges, |e| crossing.push(e)).ok()?;
+    for [a, b] in crossing {
+        if a != b {
+            cdt.add_constraint_and_split(FixedVertexHandle::from_index(a), FixedVertexHandle::from_index(b), |p| p);
+        }
+    }
+    // Inside or out: from the faces on the hull (out), across each edge,
+    // turned by the outline's.
+    let mut inside: Vec<Option<bool>> = vec![None; cdt.num_all_faces()];
+    let mut queue = std::collections::VecDeque::new();
+    for e in cdt.convex_hull() {
+        let face = e.rev().face();
+        let Some(f) = face.as_inner() else { continue };
+        let i = f.fix().index();
+        if inside[i].is_none() {
+            inside[i] = Some(cdt.is_constraint_edge(e.as_undirected().fix()));
+            queue.push_back(f.fix());
+        }
+    }
+    while let Some(f) = queue.pop_front() {
+        let here = inside[f.index()].unwrap();
+        for e in cdt.face(f).adjacent_edges() {
+            let Some(g) = e.rev().face().as_inner() else { continue };
+            let j = g.fix().index();
+            if inside[j].is_none() {
+                inside[j] = Some(here ^ cdt.is_constraint_edge(e.as_undirected().fix()));
+                queue.push_back(g.fix());
+            }
+        }
+    }
+    let corners: Vec<DVec2> = cdt.vertices().map(|v| DVec2::new(v.position().x, v.position().y)).collect();
+    let (mut out, mut flat) = (Vec::new(), 0);
+    for face in cdt.inner_faces() {
+        if inside[face.fix().index()] != Some(true) {
+            continue;
+        }
+        let [i, j, k] = face.vertices().map(|v| v.fix().index());
+        let (a, b, c) = (corners[i], corners[j], corners[k]);
         let area = (b - a).perp_dot(c - a) / 2.0;
         if area.abs() < 1e-6 {
             flat += 1;
@@ -155,6 +441,19 @@ impl Nodes {
             adjacent[a as usize].push((b, d));
             adjacent[b as usize].push((a, d));
         }
+        let t_drops = Instant::now();
+        let drops = drops(&space, &world);
+        let mut leaps_to: Vec<Vec<(u32, f32)>> = vec![Vec::new(); space.nodes()];
+        for &(a, b, h) in &drops {
+            leaps_to[a as usize].push((b, h.by - h.ay));
+        }
+        for d in &mut leaps_to {
+            d.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
+            d.dedup_by_key(|x| x.0);
+        }
+        let dropped = (drops.len(), leaps_to.iter().map(|d| d.iter().filter(|l| l.1 < 0.0).count()).sum::<usize>(), t_drops.elapsed().as_secs_f32());
+        let hops_up: Vec<f32> = drops.iter().filter(|d| d.2.by > d.2.ay).map(|d| d.2.by - d.2.ay).collect();
+        let high = hops_up.iter().filter(|r| **r >= 1.5).count();
         // Each node's outline: its fragments as one (they meet along the
         // stretches they were joined across), triangulated.
         let mut of: Vec<Vec<&Polygon<f64>>> = vec![Vec::new(); space.nodes()];
@@ -250,9 +549,9 @@ impl Nodes {
             (corners, colours)
         });
         let t_portals = Instant::now();
-        let portals = Portals::new(&hops, space.nodes());
+        let portals = Portals::new(&hops, &drops, space.nodes());
         let report = format!(
-            "district nodes over {:.0} by {:.0} m round {:.0}, {:.0}: {} pieces, {} nodes ({} of {LAND_LEAST} m² or more), {} node pairs within {FARTHEST} m; {} portals, {} walking links between them ({:.1} s); navmesh {} triangles ({} of no area left out, {} outlines not triangulated, {} cut in parts by those left out), {} nodes not one outline; built in {:.1} s ({built:.1} s the walking space)",
+            "district nodes over {:.0} by {:.0} m round {:.0}, {:.0}: {} pieces, {} nodes ({} of {LAND_LEAST} m² or more), {} node pairs within {FARTHEST} m; {} drops, between {} node pairs, and {} hops up ({} of 1.5 m or more) ({:.1} s); {} portals, {} walking links between them ({:.1} s); navmesh {} triangles ({} of no area left out, {} outlines not triangulated, {} cut in parts by those left out), {} nodes not one outline; built in {:.1} s ({built:.1} s the walking space)",
             hi.x - lo.x,
             hi.y - lo.y,
             centre.x,
@@ -261,6 +560,11 @@ impl Nodes {
             space.nodes(),
             space.node_area.iter().filter(|a| **a >= LAND_LEAST).count(),
             hops.len(),
+            dropped.0 - hops_up.len(),
+            dropped.1,
+            hops_up.len(),
+            high,
+            dropped.2,
             portals.at.len(),
             portals.links.iter().map(|l| l.len()).sum::<usize>() / 2,
             t_portals.elapsed().as_secs_f32(),
@@ -271,7 +575,7 @@ impl Nodes {
             split,
             t.elapsed().as_secs_f32()
         );
-        Ok(Nodes { world, space, adjacent, portals, archipelagos, origin, lo, hi, report, drawn })
+        Ok(Nodes { world, space, adjacent, leaps_to, portals, archipelagos, origin, lo, hi, report, drawn })
     }
 
     /// The node a body at `p` is on, and the point on its walking space
@@ -335,6 +639,29 @@ impl Nodes {
             .collect())
     }
 
+    /// Whether node `to` is reached from `from`: by teleports of no more
+    /// than `range` (landing on nodes of `LAND_LEAST` or more, but for
+    /// `to`), drops, and hops of no more than `climb`.
+    pub(crate) fn reaches(&self, from: u32, to: u32, range: f32, climb: f32) -> bool {
+        let mut seen = vec![false; self.adjacent.len()];
+        seen[from as usize] = true;
+        let mut stack = vec![from];
+        while let Some(n) = stack.pop() {
+            if n == to {
+                return true;
+            }
+            let teleports = self.adjacent[n as usize].iter().filter(|&&(m, d)| d <= range && (m == to || self.space.node_area[m as usize] >= LAND_LEAST)).map(|&(m, _)| m);
+            let leaps = self.leaps_to[n as usize].iter().filter(|&&(_, rise)| rise <= climb).map(|&(m, _)| m);
+            for m in teleports.chain(leaps) {
+                if !seen[m as usize] {
+                    seen[m as usize] = true;
+                    stack.push(m);
+                }
+            }
+        }
+        false
+    }
+
     /// The fewest teleports of no more than `range` from node `from` to
     /// `to`: the nodes on the way, `from` first, `to` last (landing only on
     /// nodes of `LAND_LEAST` or more, but for `to`).
@@ -369,10 +696,16 @@ impl Nodes {
     /// straight line (a little short, in a winding node). Its teleport
     /// lands where `land` finds, not on the portal planned by; and what it
     /// aims for, landed, for `sooner`.
-    pub(crate) fn plan(&self, a: u32, from: Vec2, b: u32, to: Vec2, range: f32, cost: f32) -> Option<(Hop, u32, f32, Aim)> {
-        let (hop, onto, goal, onward) = self.portals.plan(&self.space.node_area, a, DVec2::new(from.x as f64, from.y as f64), b, DVec2::new(to.x as f64, to.y as f64), range, cost)?;
+    pub(crate) fn plan(&self, a: u32, from: Vec2, b: u32, to: Vec2, range: f32, cost: f32, climb: f32) -> Option<(Hop, u32, f32, Aim)> {
+        // (None there, known by its nodes first: the portals' search, finding
+        // none, went through them all, up to 41 ms in tiers.)
+        if !self.reaches(a, b, range, climb) {
+            return None;
+        }
+        let (hop, onto, goal, onward) = self.portals.plan(&self.space.node_area, a, DVec2::new(from.x as f64, from.y as f64), b, DVec2::new(to.x as f64, to.y as f64), range, cost, climb)?;
         let aim = Aim { onward, short: if onto == b { LAND_SHORT } else { 0.0 } };
-        let hop = self.land(hop.a, hop.ay, onto, aim, range, aim.left(hop.b)).map_or(hop, |(b, by, d)| Hop { b, by, d, ..hop });
+        // (A drop lands where it was found clear, not moved.)
+        let hop = if hop.leap.is_some() { hop } else { self.land(hop.a, hop.ay, onto, aim, range, aim.left(hop.b)).map_or(hop, |(b, by, d)| Hop { b, by, d, ..hop }) };
         Some((hop, onto, goal, aim))
     }
 
@@ -419,7 +752,7 @@ impl Nodes {
             return None;
         }
         let (b, by, d) = self.land(here, at.y, onto, aim, range, aim.left(planned.b) + on + 1e-6)?;
-        Some(Hop { a: here, ay: at.y, b, by, d })
+        Some(Hop { a: here, ay: at.y, b, by, d, leap: None })
     }
 
     /// Whether `p` lies inside the square built.
@@ -496,6 +829,10 @@ pub(crate) struct Portals {
     y: Vec<f32>,
     twin: Vec<u32>,
     d: Vec<f32>,
+    /// A drop's: from its lip, its leap; onto where it lands, none back
+    /// (`landing`).
+    leap: Vec<Option<f32>>,
+    landing: Vec<bool>,
     /// Each portal's walking links: to which, how far.
     pub(crate) links: Vec<Vec<(u32, f32)>>,
     /// Each node's portals, by cell (`CELL`).
@@ -510,17 +847,18 @@ const NEAREST: usize = 6;
 const START: f64 = 48.0;
 
 impl Portals {
-    fn new(hops: &HashMap<(u32, u32), Vec<Hop>>, nodes: usize) -> Portals {
-        let mut p = Portals { node: Vec::new(), at: Vec::new(), y: Vec::new(), twin: Vec::new(), d: Vec::new(), links: Vec::new(), cells: HashMap::new() };
-        for (&(lo, hi), list) in hops {
-            for h in list {
-                let i = p.node.len() as u32;
-                p.node.extend([lo, hi]);
-                p.at.extend([h.a, h.b]);
-                p.y.extend([h.ay, h.by]);
-                p.twin.extend([i + 1, i]);
-                p.d.extend([h.d, h.d]);
-            }
+    fn new(hops: &HashMap<(u32, u32), Vec<Hop>>, drops: &[(u32, u32, Hop)], nodes: usize) -> Portals {
+        let mut p = Portals { node: Vec::new(), at: Vec::new(), y: Vec::new(), twin: Vec::new(), d: Vec::new(), leap: Vec::new(), landing: Vec::new(), links: Vec::new(), cells: HashMap::new() };
+        let pairs = hops.iter().flat_map(|(&(lo, hi), list)| list.iter().map(move |h| (lo, hi, h))).chain(drops.iter().map(|(a, b, h)| (*a, *b, h)));
+        for (lo, hi, h) in pairs {
+            let i = p.node.len() as u32;
+            p.node.extend([lo, hi]);
+            p.at.extend([h.a, h.b]);
+            p.y.extend([h.ay, h.by]);
+            p.twin.extend([i + 1, i]);
+            p.d.extend([h.d, h.d]);
+            p.leap.extend([h.leap, None]);
+            p.landing.extend([false, h.leap.is_some()]);
         }
         for (i, q) in p.at.iter().enumerate() {
             p.cells.entry((p.node[i], (q.x / CELL).floor() as i32, (q.y / CELL).floor() as i32)).or_default().push(i as u32);
@@ -608,7 +946,7 @@ impl Portals {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn plan(&self, area: &[f64], a: u32, from: DVec2, b: u32, to: DVec2, range: f32, cost: f32) -> Option<(Hop, u32, f32, DVec2)> {
+    fn plan(&self, area: &[f64], a: u32, from: DVec2, b: u32, to: DVec2, range: f32, cost: f32, hop: f32) -> Option<(Hop, u32, f32, DVec2)> {
         use std::{cmp::Reverse, collections::BinaryHeap};
         const GOAL: u32 = u32::MAX;
         let h = |q: DVec2| q.distance(to) as f32;
@@ -638,8 +976,14 @@ impl Portals {
             let mut next: Vec<(u32, f32)> = self.links[i as usize].iter().map(|&(j, d)| (j, gi + d)).collect();
             let t = self.twin[i as usize];
             let m = self.node[t as usize];
-            if self.d[i as usize] <= range && (m == b || area[m as usize] >= LAND_LEAST) {
-                next.push((t, gi + cost));
+            if !self.landing[i as usize] && (m == b || area[m as usize] >= LAND_LEAST) {
+                if self.leap[i as usize].is_some() {
+                    if self.y[t as usize] - self.y[i as usize] <= hop {
+                        next.push((t, gi + DROP_COST + self.at[i as usize].distance(self.at[t as usize]) as f32));
+                    }
+                } else if self.d[i as usize] <= range {
+                    next.push((t, gi + cost));
+                }
             }
             if n == b {
                 let c = gi + self.at[i as usize].distance(to) as f32;
@@ -688,7 +1032,7 @@ impl Portals {
             _ => None,
         })?;
         let (u, v) = (u as usize, v as usize);
-        Some((Hop { a: self.at[u], ay: self.y[u], b: self.at[v], by: self.y[v], d: self.d[u] }, self.node[v], goal, onward))
+        Some((Hop { a: self.at[u], ay: self.y[u], b: self.at[v], by: self.y[v], d: self.d[u], leap: self.leap[u] }, self.node[v], goal, onward))
     }
 }
 
@@ -788,6 +1132,9 @@ pub(crate) enum Steer {
     Snap(Vec3),
     /// Isn't on the nodes (nor near them): goes as in the open.
     Off,
+    /// Drops: leaps (the rig's), from where it stands, with this velocity,
+    /// across and up, to come down where its drop lands (`drops`).
+    Leap(Vec3),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -805,19 +1152,22 @@ enum Phase {
 /// moves further than `MOVED` (m).
 const MOVED: f32 = 1.0;
 const REPLAN: f32 = 8.0;
+/// How long a walker with no way to you waits before looking again (s).
+const NO_WAY: f32 = 1.0;
 /// How far on along its way a walker heads for (m).
 const LOOK: f32 = 0.6;
-/// How near where a teleport leaves from it must be to go (m).
+/// How near where a teleport (or a drop) leaves from it must be to go (m).
 const AT_HOP: f32 = 0.6;
 /// How often a walker on its way to where a teleport leaves from looks
 /// whether it may go from where it is (s).
 const SOONER: f32 = 0.25;
 
-/// A walker that teleports between nodes: its teleports' range (3D, m),
+/// A walker on the nodes: walking, dropping, hopping (if given) and
+/// teleporting (if it may: range 0, never): its teleports' range (3D, m),
 /// its tell before one (s), its rest after one (s); what it is doing,
 /// its way and plan (kept a while, not found anew every frame: a choice
 /// flipping between two every frame shakes a body, see
-/// memory/vibration-causes); what began this frame, for the glows.
+/// memory/vibration-causes).
 #[derive(Component)]
 pub(crate) struct Blink {
     pub(crate) range: f32,
@@ -825,8 +1175,7 @@ pub(crate) struct Blink {
     pub(crate) rest: f32,
     /// How fast it glides along a teleport's line (m/s).
     pub(crate) speed: f32,
-    /// Whether its body has a shade to split off (see `clip/shade.rs`):
-    /// then no glows.
+    /// Whether its body has a shade to split off (see `clip/shade.rs`).
     pub(crate) shaded: bool,
     /// How many metres of walking a teleport is worth, planning.
     pub(crate) cost: f32,
@@ -845,22 +1194,32 @@ pub(crate) struct Blink {
     /// How long till it next looks whether it may go from where it is
     /// (s, every `SOONER`; see `Nodes::sooner`).
     sooner: f32,
-    /// A tell begun (where it leaves from, where it lands, how long), or a
-    /// teleport made (from, to), this frame.
-    pub(crate) begun: Option<(Vec3, Vec3, f32)>,
+    /// A teleport made this frame (from, to).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) made: Option<(Vec3, Vec3)>,
     pub(crate) teleports: u32,
+    pub(crate) drops: u32,
+    /// No way found from its node to yours (which), looked for again in
+    /// how long (s).
+    no_way: Option<(u32, u32, f32)>,
+    /// How high it hops up onto a ledge (m; 0, it doesn't): see `drops`.
+    pub(crate) hop: f32,
 }
 
 impl Blink {
     pub(crate) fn new(range: f32, tell: f32, rest: f32, cost: f32, speed: f32) -> Blink {
-        Blink { range: range.min(FARTHEST as f32), tell, rest, speed: speed.max(1.0), shaded: false, cost, phase: Phase::Walk, resting: 0.0, node: None, way: Vec::new(), way_at: 0, way_to: Vec2::splat(f32::MAX), chosen: None, sooner: 0.0, begun: None, made: None, teleports: 0 }
+        Blink { range: range.min(FARTHEST as f32), tell, rest, speed: speed.max(1.0), shaded: false, cost, phase: Phase::Walk, resting: 0.0, node: None, way: Vec::new(), way_at: 0, way_to: Vec2::splat(f32::MAX), chosen: None, sooner: 0.0, made: None, teleports: 0, drops: 0, no_way: None, hop: 0.0 }
+    }
+
+    /// Hopping up onto ledges this high (m; see `drops`).
+    pub(crate) fn with_hop(self, hop: f32) -> Blink {
+        Blink { hop, ..self }
     }
 
     /// Its node, way and teleport forgotten (the nodes built anew), as it
     /// was made but for its settings.
     fn forget(&mut self) {
-        *self = Blink { shaded: self.shaded, teleports: self.teleports, ..Blink::new(self.range, self.tell, self.rest, self.cost, self.speed) };
+        *self = Blink { shaded: self.shaded, teleports: self.teleports, drops: self.drops, hop: self.hop, ..Blink::new(self.range, self.tell, self.rest, self.cost, self.speed) };
     }
 
     /// Whether it is telling (standing, about to go).
@@ -997,12 +1356,52 @@ impl Blink {
         let hop = match keep {
             Some(c) => c.2,
             None => {
-                let Some((hop, onto, _, aim)) = nodes.plan(me, mine, there, spot, self.range, self.cost) else { return Steer::Stand };
+                // (No way there: not looked for again for `NO_WAY` s, unless
+                // it or you are on another node. Looked for every frame,
+                // with no teleports, a walker cost milliseconds a frame.)
+                if self.no_way.is_some_and(|(a, b, left)| a == me && b == there && left > 0.0) {
+                    if let Some(w) = self.no_way.as_mut() {
+                        w.2 -= dt;
+                    }
+                    return Steer::Stand;
+                }
+                let Some((hop, onto, _, aim)) = nodes.plan(me, mine, there, spot, self.range, self.cost, self.hop) else {
+                    self.no_way = Some((me, there, NO_WAY));
+                    return Steer::Stand;
+                };
+                self.no_way = None;
                 self.chosen = Some((me, onto, hop, aim, there, spot));
                 hop
             }
         };
         let mut leave = Vec2::new(hop.a.x as f32, hop.a.y as f32);
+        // A drop: at its lip, at once (no tell, no rest: a fall is no
+        // teleport), from where it stands, to land where it was found clear.
+        if let Some(up) = hop.leap {
+            let off = leave.distance(at.xz_());
+            if off < AT_HOP {
+                // (From where it stands, up to `AT_HOP` short of its lip:
+                // the hop found clear from its lip came down on it there, in
+                // play, so the least that comes down where it was to, found
+                // at a long frame only; else as planned. The rig, turning as
+                // it goes, came no nearer. At both frames, a frame took
+                // 17 ms; only till a metre below its lip, a step lower down
+                // caught it.)
+                let (from, q, onto) = (DVec2::new(at.x as f64, at.z as f64), hop.b, self.chosen.map_or(me, |c| c.1));
+                let ups = std::iter::once(up).chain((1..=12).map(|k| up + kick(1.5) as f32 * k as f32));
+                let up = ups.into_iter().find(|&u| fall_clear(&nodes.space, &nodes.world, from, at.y as f64, q, hop.by as f64, u as f64, onto, &FRAMES[..1])).unwrap_or(up);
+                let v = (q.as_vec2() - at.xz_()) / fall_time(up as f64, (at.y - hop.by) as f64) as f32;
+                self.node = Some(onto);
+                self.chosen = None;
+                self.way.clear();
+                self.drops += 1;
+                return Steer::Leap(Vec3::new(v.x, up, v.y));
+            }
+            return match self.follow(nodes, me, at, mine, leave) {
+                Steer::There => Steer::Stand,
+                s => s,
+            };
+        }
         // (Or from here, if it does as well from here: see `sooner`.)
         self.sooner -= dt;
         let mut hop = hop;
@@ -1017,7 +1416,6 @@ impl Blink {
         }
         if leave.distance(at.xz_()) < AT_HOP && self.resting <= 0.0 {
             self.phase = Phase::Tell(hop, self.tell, self.chosen.map_or(me, |c| c.1));
-            self.begun = Some((Vec3::new(hop.a.x as f32, hop.ay, hop.a.y as f32), Vec3::new(hop.b.x as f32, hop.by, hop.b.y as f32), self.tell));
             return Steer::Stand;
         }
         match self.follow(nodes, me, at, mine, leave) {
@@ -1027,63 +1425,10 @@ impl Blink {
     }
 }
 
-/// A glow: a teleport's tell, where it leaves from and where it lands, or
-/// its flash as it goes; how old, how long it lasts, how big it grows.
-#[derive(Component)]
-pub(crate) struct Glow {
-    age: f32,
-    life: f32,
-    size: f32,
-}
-
-/// The glows' look.
-#[derive(Resource)]
-pub(crate) struct GlowLook {
-    mesh: Handle<Mesh>,
-    tell: Handle<StandardMaterial>,
-    flash: Handle<StandardMaterial>,
-}
-
-pub(crate) fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let glow = |c: Color| StandardMaterial { base_color: c, emissive: c.to_linear() * 6.0, unlit: true, alpha_mode: AlphaMode::Add, ..default() };
-    commands.insert_resource(GlowLook { mesh: meshes.add(Sphere::new(1.0).mesh().ico(3).unwrap()), tell: materials.add(glow(Color::srgb(0.35, 0.6, 1.0))), flash: materials.add(glow(Color::srgb(0.9, 0.95, 1.0))) });
-}
-
-/// Each tell begun this frame, a glow at both ends, growing; each teleport
-/// made, a flash at both.
-pub(crate) fn tells(mut commands: Commands, look: Option<Res<GlowLook>>, mut blinks: Query<&mut Blink>) {
-    let Some(look) = look else { return };
-    for mut b in &mut blinks {
-        if let Some((from, to, tell)) = b.begun.take().filter(|_| !b.shaded) {
-            for at in [from, to] {
-                commands.spawn((Mesh3d(look.mesh.clone()), MeshMaterial3d(look.tell.clone()), Transform::from_translation(at + Vec3::Y * 1.2).with_scale(Vec3::splat(0.05)), Glow { age: 0.0, life: tell, size: 0.9 }));
-            }
-        }
-        if let Some((from, to)) = b.made.take().filter(|_| !b.shaded) {
-            for at in [from, to] {
-                commands.spawn((Mesh3d(look.mesh.clone()), MeshMaterial3d(look.flash.clone()), Transform::from_translation(at + Vec3::Y * 1.2).with_scale(Vec3::splat(1.2)), Glow { age: 0.0, life: 0.18, size: -1.2 }));
-            }
-        }
-    }
-}
-
-/// Glows grow (a tell) or shrink (a flash), and are gone.
-pub(crate) fn glows(mut commands: Commands, time: Res<Time>, mut glows: Query<(Entity, &mut Glow, &mut Transform)>) {
-    for (e, mut g, mut t) in &mut glows {
-        g.age += time.delta_secs();
-        if g.age >= g.life {
-            commands.entity(e).despawn();
-            continue;
-        }
-        let k = g.age / g.life;
-        t.scale = Vec3::splat(if g.size > 0.0 { 0.05 + g.size * k * k } else { -g.size * (1.0 - k) });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::Contains;
+    use geo::{Area, Contains, LineString};
 
     /// A walker blinking after a target on tiers (the most broken-up
     /// ground but stacks), moved as its steering says, its feet on the
@@ -1115,12 +1460,24 @@ mod tests {
         let mut rng = super::super::zz_world::Rng(0x5eed_b11c_0de5_0001);
         let (lo, hi) = (nodes.lo + 100.0, nodes.hi - 100.0);
         let mut spots: Vec<Vec2> = Vec::new();
-        while spots.len() < 2000 {
+        // (And where you may stand to be chased: anywhere on the walking
+        // space, small nodes too, as you can stand there; chased from
+        // spots on nodes it lands on. Small ones, under `LAND_LEAST`, told
+        // apart: drawn from big ones only, the test once missed them.)
+        let mut anywhere: Vec<Vec2> = Vec::new();
+        while spots.len() < 2000 || anywhere.len() < 2000 {
             let q = DVec2::new(lo.x + (hi.x - lo.x) * rng.next() as f64, lo.y + (hi.y - lo.y) * rng.next() as f64);
-            if nodes.space.node_at(q).is_some_and(|(n, ..)| nodes.space.node_area[n as usize] >= LAND_LEAST) {
-                spots.push(q.as_vec2());
+            if let Some((n, ..)) = nodes.space.node_at(q) {
+                if nodes.space.node_area[n as usize] >= LAND_LEAST && spots.len() < 2000 {
+                    spots.push(q.as_vec2());
+                }
+                if anywhere.len() < 2000 {
+                    anywhere.push(q.as_vec2());
+                }
             }
         }
+        let small = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).is_some_and(|(n, ..)| nodes.space.node_area[n as usize] < LAND_LEAST);
+        println!("where you stand: {} of {} spots on small nodes (under {LAND_LEAST} m²)", anywhere.iter().filter(|q| small(**q)).count(), anywhere.len());
         // (Ways within a node first: pairs of spots on one node.)
         let mut why: HashMap<String, usize> = HashMap::new();
         let (mut asked, mut found) = (0, 0);
@@ -1144,17 +1501,24 @@ mod tests {
         }
         println!("ways within a node: {found} of {asked} found; none: {why:?}");
         assert_eq!(found, asked, "ways within a node not found");
-        let range = 10.0;
+        // (BLINK_RANGE=0: no teleports, as most creatures; BLINK_HOP=2.45:
+        // hopping up ledges too, see `drops`.)
+        let range: f32 = std::env::var("BLINK_RANGE").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
+        let hop: f32 = std::env::var("BLINK_HOP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let (dt, speed) = (1.0 / 30.0, 5.0);
         let (mut reached, mut chases, mut strayed, mut walked, mut worst_stray) = (0, 0, 0.0f32, 0.0f32, (0.0f64, Vec2::ZERO));
+        // (Chases to small nodes: how many, how many reached.)
+        let (mut to_small, mut reached_small) = (0, 0);
         let (mut teleports, mut fewest, mut extra) = (0u32, 0usize, Vec::new());
+        // (Drops made, and the deepest.)
+        let (mut drops, mut deepest, mut hops, mut highest) = (0u32, 0.0f32, 0u32, 0.0f32);
         let mut cost: Vec<f32> = Vec::new();
         // (Each teleport's length, and whether it landed inset, not on the
         // edge: see `Nodes::land`.)
         let (mut lengths, mut inset) = (Vec::<f32>::new(), 0usize);
         let mut failed: Vec<String> = Vec::new();
         while chases < std::env::var("BLINK_CHASES").ok().and_then(|v| v.parse().ok()).unwrap_or(300) {
-            let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], spots[(rng.next() * spots.len() as f32) as usize % spots.len()]);
+            let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], anywhere[(rng.next() * anywhere.len() as f32) as usize % anywhere.len()]);
             // (BLINK_ONLY=x,z,x,z: that chase alone, every frame told from
             // BLINK_FROM s on, to see what it does.)
             let only: Option<Vec<f32>> = std::env::var("BLINK_ONLY").ok().map(|v| v.split(',').map(|x| x.parse().unwrap()).collect());
@@ -1166,10 +1530,11 @@ mod tests {
                 continue;
             }
             chases += 1;
+            to_small += small(b) as usize;
             let goal = Vec3::new(b.x, on(b).unwrap().0 + crate::player::EYE, b.y);
             let (na, nb) = (nodes.locate(Vec3::new(a.x, on(a).unwrap().0, a.y), 0.0, None).unwrap().0, nodes.locate(goal, crate::player::EYE, None).unwrap().0);
             let least = nodes.route(na, nb, range).map(|r| r.len() - 1);
-            let mut blink = Blink::new(range, 0.6, 1.5, 8.0, 20.0);
+            let mut blink = Blink::new(range, 0.6, 1.5, 8.0, 20.0).with_hop(hop);
             let mut at = Vec3::new(a.x, on(a).unwrap().0, a.y);
             let mut done = false;
             let mut why = String::new();
@@ -1229,6 +1594,42 @@ mod tests {
                         done = true;
                         break;
                     }
+                    Steer::Leap(v) => {
+                        // (As the rig leaps: by its gravity, stepped as it
+                        // is, down onto whatever ground is under it.)
+                        let onto = blink.node;
+                        let (mut p, mut y, mut vy) = (Vec2::new(at.x, at.z), at.y, v.y);
+                        let landed = loop {
+                            vy -= crate::rig::leap_gravity() * dt;
+                            p += Vec2::new(v.x, v.z) * dt;
+                            y += vy * dt;
+                            let q = DVec2::new(p.x as f64, p.y as f64);
+                            let floor = world.height_at(q.x as f32, q.y as f32);
+                            if y <= floor && vy < 0.0 {
+                                break Some(Vec3::new(p.x, floor, p.y));
+                            }
+                            if y < at.y - 1000.0 {
+                                break None;
+                            }
+                        };
+                        let Some(to) = landed else {
+                            why = format!("fell through from {at:.1}");
+                            break;
+                        };
+                        let landed_on = nodes.locate(to, 0.0, onto).map(|n| n.0);
+                        if landed_on != onto || on(Vec2::new(to.x, to.z)).is_none_or(|(_, off)| off > 0.05) {
+                            why = format!("dropped from {at:.1} onto {to:.1}, node {landed_on:?}, not {onto:?}");
+                            break;
+                        }
+                        if to.y < at.y {
+                            drops += 1;
+                            deepest = deepest.max(at.y - to.y);
+                        } else {
+                            hops += 1;
+                            highest = highest.max(to.y - at.y);
+                        }
+                        at = to;
+                    }
                     Steer::Stand | Steer::Glide(_) => {}
                     Steer::Off => {
                         why = format!("off the nodes at {at:.1}");
@@ -1242,6 +1643,7 @@ mod tests {
             }
             if done {
                 reached += 1;
+                reached_small += small(b) as usize;
                 teleports += blink.teleports;
                 if let Some(l) = least {
                     fewest += l;
@@ -1269,31 +1671,361 @@ mod tests {
             cost[cost.len() * 99 / 100],
             cost.last().unwrap()
         );
+        println!("drops: {drops}, the deepest {deepest:.1} m; hops: {hops}, the highest {highest:.1} m");
         lengths.sort_by(f32::total_cmp);
+        lengths.push(f32::NAN); // (none in a district without teleports: told as NaN, not a panic)
+        let lengths = &lengths[..(lengths.len() - 1).max(1)];
         println!("teleports: length median {:.1} m, tenth {:.1} m, ninetieth {:.1} m; {inset} of {} landed {INSET} m or more inside the walking space", lengths[lengths.len() / 2], lengths[lengths.len() / 10], lengths[lengths.len() * 9 / 10], lengths.len());
+        println!("chases to small nodes: {reached_small} of {to_small} reached");
         for f in &failed {
             println!("  not reached: {f}");
         }
-        assert_eq!(reached, chases, "chases not reached");
-        // (Off it no more than the corners it cuts, at 30 cm: within the
-        // band of its radius round the walking space, its body clear of
-        // any edge it can't cross.)
-        assert!(worst_stray.0 <= 0.3, "{:.2} m off the walking space, at {:.1}", worst_stray.0, worst_stray.1);
         // Planning alone, to see what it costs: from spot to spot, 20 to
         // 150 m, on two nodes.
         let mut plans: Vec<f32> = Vec::new();
+        let mut unplanned: Vec<String> = Vec::new();
         while plans.len() < 1000 {
-            let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], spots[(rng.next() * spots.len() as f32) as usize % spots.len()]);
+            let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], anywhere[(rng.next() * anywhere.len() as f32) as usize % anywhere.len()]);
             let node = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).map(|n| n.0).unwrap();
             if !(20.0..=150.0).contains(&a.distance(b)) || node(a) == node(b) {
                 continue;
             }
             let t = Instant::now();
-            let found = nodes.plan(node(a), a, node(b), b, range, 8.0);
+            let found = nodes.plan(node(a), a, node(b), b, range, 8.0, hop);
             plans.push(t.elapsed().as_secs_f32() * 1e6);
-            assert!(found.is_some(), "no plan from {a:.1} to {b:.1}");
+            if found.is_none() {
+                unplanned.push(format!("{a:.1} to {b:.1}{}", if small(b) { " (small)" } else { "" }));
+            }
         }
         plans.sort_by(f32::total_cmp);
-        println!("plans: median {:.0} µs, 90th {:.0} µs, 99th {:.0} µs, most {:.0} µs", plans[plans.len() / 2], plans[plans.len() * 9 / 10], plans[plans.len() * 99 / 100], plans.last().unwrap());
+        println!("plans: median {:.0} µs, 90th {:.0} µs, 99th {:.0} µs, most {:.0} µs; {} of {} found none: {:?}", plans[plans.len() / 2], plans[plans.len() * 9 / 10], plans[plans.len() * 99 / 100], plans.last().unwrap(), unplanned.len(), plans.len(), unplanned.iter().take(8).collect::<Vec<_>>());
+        // (All told first, then judged: one district's whole picture, not
+        // the first thing wrong.)
+        assert_eq!(reached, chases, "chases not reached");
+        // (Off it no more than the corners it cuts, at 30 cm: within the
+        // band of its radius round the walking space, its body clear of
+        // any edge it can't cross.)
+        assert!(worst_stray.0 <= 0.3, "{:.2} m off the walking space, at {:.1}", worst_stray.0, worst_stray.1);
+        assert!(unplanned.is_empty(), "plans not found");
+    }
+
+    /// A square with a grid of round holes (the stacks' pillars, in small):
+    /// its triangles cover it exactly, holes left out, and quickly.
+    #[test]
+    fn triangles_cover_holes() {
+        let square = |o: DVec2, r: f64, n: usize| -> LineString<f64> { LineString::from((0..=n).map(|k| { let a = k as f64 / n as f64 * std::f64::consts::TAU; (o.x + r * a.cos(), o.y + r * a.sin()) }).collect::<Vec<_>>()) };
+        let outer = LineString::from(vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]);
+        let holes: Vec<LineString<f64>> = (0..30).flat_map(|i| (0..30).map(move |j| (i, j))).map(|(i, j)| square(DVec2::new(2.0 + i as f64 * 3.2, 2.0 + j as f64 * 3.2), 1.0, 48).into_iter().rev().collect()).collect();
+        let poly = Polygon::new(outer, holes);
+        let t = Instant::now();
+        let (pts, tris, flat) = triangles(&poly).expect("triangulated");
+        let took = t.elapsed().as_secs_f32();
+        let covered: f64 = tris.iter().map(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) / 2.0).sum();
+        assert!(tris.iter().all(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) > 0.0), "counter-clockwise");
+        assert!((covered - poly.unsigned_area()).abs() < 1e-6 * poly.unsigned_area(), "covered {covered}, the polygon {}", poly.unsigned_area());
+        // (Slivers between holes' points in a row, of no area: left out,
+        // counted, as from geo; the cover above holds without them.)
+        assert!(flat < tris.len() / 100, "{flat} slivers");
+        assert!(took < 1.0, "{took} s for {} points", pts.len());
+    }
+
+    /// Whether `poly` lies at the edge of what was built (its big plates,
+    /// `built`): a corner of it within 0.6 m of a big plate not built,
+    /// where a way on may lie. (By the square asked for, a slot open onto a
+    /// big plate not built, its centre outside it, was taken for a trap.)
+    fn at_built_edge(world: &PlateWorld, built: &std::collections::HashSet<(i32, i32)>, poly: &Polygon<f64>) -> bool {
+        poly.exterior().0.iter().any(|c| [(0.6, 0.0), (-0.6, 0.0), (0.0, 0.6), (0.0, -0.6)].iter().any(|(dx, dz)| !built.contains(&world.big_site(c.x + dx, c.y + dz))))
+    }
+
+    /// Every node of every district, not a sample (chases drawn by area
+    /// all but never land on small ones): which ones a walker cannot reach
+    /// from the main body of nodes, teleporting no more than 10 m, or 20 m,
+    /// and dropping.
+    /// The main body: the nodes reached from the biggest, landing only on
+    /// nodes of `LAND_LEAST` or more; a node is reached if it is in it or a
+    /// teleport from it lands there (where you may stand, though it may
+    /// not land there otherwise).
+    /// (`cargo test -p game --profile fast node_reach -- --ignored --nocapture`)
+    #[test]
+    #[ignore]
+    fn node_reach() {
+        let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, 1).with_sites(&crate::structures::load_library().expect("the structure library")));
+        let centres = [("floor", (10880.0, 128.0)), ("tiers", (5248.0, 640.0)), ("stacks", (12928.0, 128.0)), ("broken", (7296.0, 640.0)), ("uplands", (9344.0, 4736.0)), ("highlands", (9344.0, 2688.0))];
+        // (NODE_REACH_AT=x,z: a square round that spot alone.)
+        let at: Option<Vec<f64>> = std::env::var("NODE_REACH_AT").ok().map(|v| v.split(',').map(|x| x.parse().unwrap()).collect());
+        let centres: Vec<(&str, (f64, f64))> = match &at {
+            Some(a) => vec![("there", (a[0], a[1]))],
+            None => centres.to_vec(),
+        };
+        for (name, centre) in centres {
+            let nodes = Nodes::build(world.clone(), DVec2::from(centre), SIDE, false).unwrap();
+            let area = &nodes.space.node_area;
+            let total: f64 = area.iter().sum();
+            let built: std::collections::HashSet<(i32, i32)> = nodes.space.pieces.iter().map(|p| p.plate.sites[0]).collect();
+            // (Every node's triangles cover its outline exactly: no more, no
+            // less, holes and all; slivers of no area apart.)
+            let mut of: Vec<Vec<&Polygon<f64>>> = vec![Vec::new(); area.len()];
+            for (i, frags) in nodes.space.space.iter().enumerate() {
+                for (k, f) in frags.iter().enumerate() {
+                    of[nodes.space.node_of[i][k] as usize].push(f);
+                }
+            }
+            let (mut worst, mut off, mut none) = ((0.0f64, 0usize), 0, 0);
+            for (n, list) in of.iter().enumerate() {
+                for poly in outline(list).0 {
+                    let Some((pts, tris, _)) = triangles(&poly) else {
+                        none += 1;
+                        continue;
+                    };
+                    let covered: f64 = tris.iter().map(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) / 2.0).sum();
+                    let want = poly.unsigned_area();
+                    let e = (covered - want).abs() / want.max(1e-9);
+                    // (Off by a millionth, and by a square centimetre: specks
+                    // of a few square millimetres are all slivers, left out.)
+                    if e > 1e-6 && (covered - want).abs() > 1e-4 {
+                        off += 1;
+                    }
+                    if e > worst.0 {
+                        worst = (e, n);
+                    }
+                }
+            }
+            println!("{name}: triangles against outlines: {off} off by more than a millionth (and a square centimetre), {none} not triangulated; worst {:.2e} (node {})", worst.0, worst.1);
+            assert_eq!((off, none), (0, 0), "{name}: nodes' triangles not covering their outlines");
+            let biggest = (0..area.len()).max_by(|a, b| area[*a].total_cmp(&area[*b])).unwrap();
+            for range in [10.0f32, 20.0] {
+                let mut main = vec![false; area.len()];
+                main[biggest] = true;
+                let mut queue = std::collections::VecDeque::from([biggest]);
+                while let Some(n) = queue.pop_front() {
+                    // (Teleports either way, drops one way.)
+                    let next = nodes.adjacent[n].iter().filter(|(_, d)| *d <= range).map(|(m, _)| *m).chain(nodes.leaps_to[n].iter().filter(|l| l.1 < 0.0).map(|l| l.0));
+                    for m in next {
+                        if !main[m as usize] && area[m as usize] >= LAND_LEAST {
+                            main[m as usize] = true;
+                            queue.push_back(m as usize);
+                        }
+                    }
+                }
+                let reached: Vec<bool> = (0..area.len()).map(|n| main[n] || nodes.adjacent[n].iter().any(|&(m, d)| d <= range && main[m as usize])).collect();
+                let mut cut: Vec<usize> = (0..area.len()).filter(|n| !reached[*n]).collect();
+                cut.sort_by(|a, b| area[*b].total_cmp(&area[*a]));
+                let cut_area: f64 = cut.iter().map(|n| area[*n]).sum();
+                let big_cut = cut.iter().filter(|n| area[**n] >= LAND_LEAST).count();
+                // (Where each node not reached lies, how high, and whether it
+                // touches the edge of the square built: there it may be
+                // reached from outside it.)
+                let mut place: HashMap<usize, (DVec2, f64, bool)> = HashMap::new();
+                for (i, frags) in nodes.space.space.iter().enumerate() {
+                    for (f, poly) in frags.iter().enumerate() {
+                        let n = nodes.space.node_of[i][f] as usize;
+                        if reached[n] || place.contains_key(&n) {
+                            continue;
+                        }
+                        use geo::Centroid;
+                        let Some(c) = poly.centroid() else { continue };
+                        let c = DVec2::new(c.x(), c.y());
+                        let edge = at_built_edge(&world, &built, poly);
+                        place.insert(n, (c, world.plate_top(&nodes.space.pieces[i].plate, c), edge));
+                    }
+                }
+                let inner: Vec<usize> = cut.iter().copied().filter(|n| !place.get(n).is_some_and(|p| p.2)).collect();
+                let inner_area: f64 = inner.iter().map(|n| area[*n]).sum();
+                println!("  of them inside the square (not touching its edge): {}, {:.0} m², {:.2}% of the ground; the biggest: {:?}", inner.len(), inner_area, 100.0 * inner_area / total, inner.iter().take(6).map(|n| { let p = place[n]; format!("{:.0} m² at {:.0},{:.0} y {:.1}", area[*n], p.0.x, p.0.y, p.1) }).collect::<Vec<_>>());
+                println!(
+                    "{name} at {range} m: {} nodes, {:.0} m²; {} not reached ({} of {LAND_LEAST} m² or more), {:.0} m², {:.2}% of the ground; the biggest of them {:?} m²",
+                    area.len(),
+                    total,
+                    cut.len(),
+                    big_cut,
+                    cut_area,
+                    100.0 * cut_area / total,
+                    cut.iter().take(6).map(|n| area[*n].round()).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    /// Where hops up onto ledges are, the highest first: to see one in
+    /// play (`spawn KIND hop=2.45` below, you above).
+    /// (`HOPS_AT=x,z cargo test -p game --profile fast hop_spots -- --ignored --nocapture`)
+    #[test]
+    #[ignore]
+    fn hop_spots() {
+        let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, 1).with_sites(&crate::structures::load_library().expect("the structure library")));
+        let at: Vec<f64> = std::env::var("HOPS_AT").unwrap_or("7296,640".into()).split(',').map(|x| x.parse().unwrap()).collect();
+        let nodes = Nodes::build(world, DVec2::new(at[0], at[1]), SIDE, false).unwrap();
+        println!("{}", nodes.report);
+        // (Ledges within reach, found clear or not, by height.)
+        let links = nodes.space.links(&nodes.world, HOP_GAP, Some(nodes::HOP_CELL), |gap, rise| if rise > nodes.space.fit.climb && gap <= HOP_GAP && rise <= crate::player::hookless_reach(gap) { gap - HOP_GAP } else { f64::INFINITY });
+        let mut band = [0usize; 5];
+        for l in links.values().flatten().filter(|l| l.short <= 0.0) {
+            band[(((l.by - l.ay) / 0.5) as usize).min(4)] += 1;
+        }
+        println!("ledges within reach, by half metre of height: {band:?}");
+        let p = &nodes.portals;
+        let mut up: Vec<usize> = (0..p.at.len()).filter(|&i| p.leap[i].is_some() && p.y[p.twin[i] as usize] > p.y[i]).collect();
+        up.sort_by(|a, b| (p.y[p.twin[*b] as usize] - p.y[*b]).total_cmp(&(p.y[p.twin[*a] as usize] - p.y[*a])));
+        for &i in up.iter().take(12) {
+            let t = p.twin[i] as usize;
+            println!("  {:.2} m up: from {:.1},{:.1} y {:.1} to {:.1},{:.1} y {:.1}, leaping {:.1} m/s", p.y[t] - p.y[i], p.at[i].x, p.at[i].y, p.y[i], p.at[t].x, p.at[t].y, p.y[t], p.leap[i].unwrap());
+        }
+    }
+
+    /// Traps (the user, 2026-11-14: no ground where a player without the
+    /// hook can get stuck, a rule for the generator; none, asserted): every node of the
+    /// player's walking space (its width, step and height) in each
+    /// district, linked one way where a running jump and a mantle
+    /// (`player::hookless_reach`) or a drop takes it to another; a trap is
+    /// a node got into from the main body (the nodes the biggest one
+    /// reaches) with no way back to it. Each group of them listed: where,
+    /// how high, and the least it falls short of climbing out.
+    /// (`cargo test -p game --profile fast player_traps -- --ignored --nocapture`;
+    /// `NODE_REACH_AT=x,z` for one square.)
+    #[test]
+    #[ignore]
+    fn player_traps() {
+        use crate::navmesh::nodes::{self, Fit, Space};
+        use std::collections::VecDeque;
+        let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, 1).with_sites(&crate::structures::load_library().expect("the structure library")));
+        let centres = [("floor", (10880.0, 128.0)), ("tiers", (5248.0, 640.0)), ("stacks", (12928.0, 128.0)), ("broken", (7296.0, 640.0)), ("uplands", (9344.0, 4736.0)), ("highlands", (9344.0, 2688.0))];
+        let at: Option<Vec<f64>> = std::env::var("NODE_REACH_AT").ok().filter(|v| !v.is_empty()).map(|v| v.split(',').map(|x| x.parse().unwrap()).collect());
+        let centres: Vec<(&str, (f64, f64))> = match &at {
+            Some(a) => vec![("there", (a[0], a[1]))],
+            None => centres.to_vec(),
+        };
+        let (radius, climb, height) = crate::player::FIT;
+        // (Across no more than this, m: a running drop of 20 m lands 12 m
+        // out; farther ones are left out, which can only show a trap where
+        // there is none, never hide one.)
+        const FAR: f64 = 15.0;
+        let mut found = 0;
+        for (name, centre) in centres {
+            let t = Instant::now();
+            let column = worldgen::column_size(0) as f64;
+            let centre = DVec2::from(centre);
+            let (lo, hi) = (((centre - SIDE / 2.0) / column).floor() * column, ((centre + SIDE / 2.0) / column).ceil() * column);
+            let space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit { radius, climb, height });
+            let links: HashMap<(u32, u32), nodes::Link> = space.links(&world, FAR, None, |gap, rise| rise - crate::player::hookless_reach(gap)).into_iter().map(|(k, v)| (k, v[0])).collect();
+            let took = t.elapsed().as_secs_f32();
+            let area = &space.node_area;
+            let n = area.len();
+            let built: std::collections::HashSet<(i32, i32)> = space.pieces.iter().map(|p| p.plate.sites[0]).collect();
+            let (mut out, mut into): (Vec<Vec<u32>>, Vec<Vec<u32>>) = (vec![Vec::new(); n], vec![Vec::new(); n]);
+            for (&(a, b), l) in &links {
+                if l.short <= 0.0 {
+                    out[a as usize].push(b);
+                    into[b as usize].push(a);
+                }
+            }
+            let flood = |from: usize, next: &Vec<Vec<u32>>| {
+                let mut seen = vec![false; n];
+                seen[from] = true;
+                let mut queue = VecDeque::from([from]);
+                while let Some(k) = queue.pop_front() {
+                    for &m in &next[k] {
+                        if !seen[m as usize] {
+                            seen[m as usize] = true;
+                            queue.push_back(m as usize);
+                        }
+                    }
+                }
+                seen
+            };
+            let biggest = (0..n).max_by(|a, b| area[*a].total_cmp(&area[*b])).unwrap();
+            let (got_to, back) = (flood(biggest, &out), flood(biggest, &into));
+            // Each node's place: a point in it, how high, whether it touches
+            // the edge of the square (where a way out may lie beyond it).
+            let mut place: Vec<Option<(DVec2, f64, bool)>> = vec![None; n];
+            for (i, frags) in space.space.iter().enumerate() {
+                for (f, poly) in frags.iter().enumerate() {
+                    let k = space.node_of[i][f] as usize;
+                    let r = poly.bounding_rect().unwrap();
+                    let edge = at_built_edge(&world, &built, poly);
+                    let was = place[k];
+                    use geo::InteriorPoint;
+                    let c = poly.interior_point().map_or(DVec2::new(r.min().x, r.min().y), |p| DVec2::new(p.x(), p.y()));
+                    let y = world.plate_top(&space.pieces[i].plate, c);
+                    place[k] = Some(match was {
+                        Some((c0, y0, e0)) => (c0, y0, e0 || edge),
+                        None => (c, y, edge),
+                    });
+                }
+            }
+            let trapped: Vec<bool> = (0..n).map(|k| got_to[k] && !back[k]).collect();
+            // Groups: trapped nodes one move apart, either way.
+            let mut group = vec![usize::MAX; n];
+            let mut groups: Vec<Vec<usize>> = Vec::new();
+            for k in 0..n {
+                if !trapped[k] || group[k] != usize::MAX {
+                    continue;
+                }
+                let g = groups.len();
+                let mut members = vec![k];
+                group[k] = g;
+                let mut queue = VecDeque::from([k]);
+                while let Some(j) = queue.pop_front() {
+                    for &m in out[j].iter().chain(&into[j]) {
+                        let m = m as usize;
+                        if trapped[m] && group[m] == usize::MAX {
+                            group[m] = g;
+                            members.push(m);
+                            queue.push_back(m);
+                        }
+                    }
+                }
+                groups.push(members);
+            }
+            // The least each group falls short of climbing back to ground
+            // with a way to the main body.
+            let mut short: Vec<Option<nodes::Link>> = vec![None; groups.len()];
+            for (&(a, b), l) in &links {
+                if trapped[a as usize] && back[b as usize] {
+                    let g = group[a as usize];
+                    if short[g].is_none_or(|s| l.short < s.short) {
+                        short[g] = Some(*l);
+                    }
+                }
+            }
+            // Each group's bounds.
+            let mut bounds = vec![(DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)); groups.len()];
+            for (i, frags) in space.space.iter().enumerate() {
+                for (f, poly) in frags.iter().enumerate() {
+                    let k = space.node_of[i][f] as usize;
+                    if trapped[k] {
+                        let r = poly.bounding_rect().unwrap();
+                        let b = &mut bounds[group[k]];
+                        b.0 = b.0.min(DVec2::new(r.min().x, r.min().y));
+                        b.1 = b.1.max(DVec2::new(r.max().x, r.max().y));
+                    }
+                }
+            }
+            let total: f64 = area.iter().sum();
+            let unentered: f64 = (0..n).filter(|k| !got_to[*k]).map(|k| area[k]).sum();
+            let mut list: Vec<(f64, usize)> = groups.iter().enumerate().map(|(g, m)| (m.iter().map(|k| area[*k]).sum::<f64>(), g)).collect();
+            list.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let inside: Vec<&(f64, usize)> = list.iter().filter(|(_, g)| !groups[*g].iter().any(|k| place[*k].is_some_and(|p| p.2))).collect();
+            println!(
+                "{name}: {n} player nodes, {total:.0} m², built and linked in {took:.1} s; {} not got into from the main body ({unentered:.0} m², {:.2}%: plateaus, perches); traps: {} groups ({} of 1 m² or more), {} at the square's edge left out",
+                (0..n).filter(|k| !got_to[*k]).count(),
+                100.0 * unentered / total,
+                inside.len(),
+                inside.iter().filter(|(a, _)| *a >= 1.0).count(),
+                list.len() - inside.len()
+            );
+            for &&(a, g) in inside.iter().take(12) {
+                let big = *groups[g].iter().max_by(|x, y| area[**x].total_cmp(&area[**y])).unwrap();
+                let (c, y, _) = place[big].unwrap();
+                let ys: Vec<f64> = groups[g].iter().filter_map(|k| place[*k].map(|p| p.1)).collect();
+                let (y0, y1) = (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+                let (b0, b1) = bounds[g];
+                let way = short[g].map_or("no way out within reach".to_string(), |l| format!("out needs {:.2} m more climb: from {:.0},{:.0} y {:.1} to {:.0},{:.0} y {:.1}", l.short, l.a.x, l.a.y, l.ay, l.b.x, l.b.y, l.by));
+                println!("  {a:.1} m² in {} nodes at {:.0},{:.0} y {y:.1} (from {y0:.1} to {y1:.1}), over x {:.0} to {:.0}, z {:.0} to {:.0}; {way}", groups[g].len(), c.x, c.y, b0.x, b1.x, b0.y, b1.y);
+            }
+            found += inside.iter().filter(|(a, _)| *a >= 1.0).count();
+        }
+        println!("traps of 1 m² or more, in all: {found}");
+        // (The user's rule: none; pits have stairs, wells are raised.)
+        assert_eq!(found, 0, "ground a player without the hook is stuck in");
     }
 }

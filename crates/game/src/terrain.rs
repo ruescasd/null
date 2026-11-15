@@ -613,8 +613,10 @@ pub fn column_collider(column: &ColumnMesh) -> Option<Collider> {
     if column.is_empty() {
         return None;
     }
-    let vertices = column.positions.iter().map(|&p| Vec3::from(p)).collect();
-    let indices = column.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+    // (And what is walked on but not drawn: stairs' hidden slopes.)
+    let base = column.positions.len() as u32;
+    let vertices = column.positions.iter().chain(&column.walk).map(|&p| Vec3::from(p)).collect();
+    let indices = column.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).chain(column.walk_indices.chunks_exact(3).map(|t| [base + t[0], base + t[1], base + t[2]])).collect();
     Collider::try_trimesh(vertices, indices)
         .inspect_err(|e| warn!("column collider failed: {e:?}"))
         .ok()

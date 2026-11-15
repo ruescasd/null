@@ -81,6 +81,25 @@ const MANTLE_REACH: f32 = 1.1;
 const MANTLE_TIME: f32 = 0.2;
 /// Least horizontal speed when coming out of a mantle.
 const MANTLE_EXIT_SPEED: f32 = 6.0;
+
+/// The highest ledge (above the feet, m) the player reaches without the
+/// tether across a horizontal `gap` (m): a running jump, then a mantle;
+/// below zero, how far it must drop. (The user, 2026-11-14: no ground
+/// where a player without the hook is stuck; `navmesh` checks it with
+/// this.) At full speed, rising until the apex, any gap shorter than the
+/// apex's is crossed at the apex (slower). A margin of 0.1 m off the
+/// mantle, which needs room to rise and to settle.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn hookless_reach(gap: f64) -> f64 {
+    let (v, up, g) = (MAX_SPEED as f64, JUMP_SPEED as f64, GRAVITY as f64);
+    let t = (gap / v).max(up / g);
+    up * t - g * t * t / 2.0 + MANTLE_REACH as f64 - 0.1
+}
+
+/// The player's fit to its walking space (m): half its width, the step it
+/// climbs, its height.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const FIT: (f64, f64, f64) = (HALF_WIDTH as f64, STEP_HEIGHT as f64, HEIGHT as f64);
 /// Time constant of the view catching up with the body after stepping up or
 /// down a step, so stairs read as walking rather than a run of hops.
 const VIEW_SMOOTH: f32 = 0.05;
@@ -1266,6 +1285,48 @@ mod tests {
                 (t.translation - Vec3::Y * (EYE - HEIGHT * 0.5 + p.view_offset), p.velocity, anchor)
             })
             .collect()
+    }
+
+    /// A pit's stair walked up (the user, 2026-11-15: in fits and starts,
+    /// lifted a step at a time): on its hidden slope (see worldgen's
+    /// `Stair`), walking and running, up the floor pit's flight from its
+    /// landing, on the world's own columns: never lifted more than 10 cm in
+    /// a frame on it (a step is 50), and up at its top. (Without the slope,
+    /// 0.5 m in a frame.)
+    #[test]
+    fn stairs_walked_smoothly() {
+        let args = Args { opts: vec!["headless".into()], sets: Vec::new(), cam: None, time: None, shot: None, seed: 1, focus: None, ground: None, run: Vec::new() };
+        let world = crate::terrain::plate_world(&args);
+        let (foot, low, top, high) = world.0.pit_stair(10958.0, 130.0).expect("the floor pit's stair");
+        let along = (top - foot).normalize();
+        // (Into the pit: towards its middle.)
+        let mut inward = along.perp();
+        if inward.dot(bevy::math::DVec2::new(10958.0, 190.0) - foot) < 0.0 {
+            inward = -inward;
+        }
+        let size = worldgen::mesh::column_size(0);
+        let mid = (foot + top) * 0.5;
+        let (cx, cz) = ((mid.x as f32 / size).floor() as i32, (mid.y as f32 / size).floor() as i32);
+        let colliders: Vec<(Collider, Vec3)> = (-6..=6)
+            .flat_map(|i| (-6..=6).map(move |k| (cx + i, cz + k)))
+            .filter_map(|(i, k)| crate::terrain::column_collider(&world.0.mesh_column(0, i, k)).map(|c| (c, Vec3::new(i as f32 * size, 0.0, k as f32 * size))))
+            .collect();
+        let start = foot + along * 1.0 + inward * 2.0;
+        let eye = Vec3::new(start.x as f32, low as f32 + EYE + 0.05, start.y as f32);
+        let yaw = (-along.x).atan2(-along.y).to_degrees() as f32;
+        for walk in [true, false] {
+            let mut player = Player::fresh();
+            player.ready = true;
+            let frames = run(world.clone(), &colliders, eye, (yaw, 0.0), player, MoveInput { wish: Vec2::Y, walk, ..default() }, 60.0, 1500);
+            // (On the stair: past its top, the ground beyond is the
+            // floor's, a kerb's step up from its top step.)
+            let on = |p: Vec3| (bevy::math::DVec2::new(p.x as f64, p.z as f64) - foot).dot(along) < (top - foot).length() - 0.5;
+            let lift = frames.windows(2).filter(|w| on(w[1].0)).map(|w| w[1].0.y - w[0].0.y).fold(0.0f32, f32::max);
+            let reached = frames.iter().map(|f| f.0.y - HEIGHT * 0.5).fold(f32::MIN, f32::max);
+            println!("{}: lifted at most {lift:.3} m a frame; up to {reached:.2} (its top {high:.2})", if walk { "walking" } else { "running" });
+            assert!(lift < 0.1, "lifted {lift:.3} m in a frame, {}", if walk { "walking" } else { "running" });
+            assert!(reached > high as f32 - 0.1, "up to {reached:.2}, not its top {high:.2}");
+        }
     }
 
     /// The user's climb (2026-10-27, `--opt slidelog`): up the first wall

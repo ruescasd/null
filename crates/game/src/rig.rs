@@ -171,6 +171,18 @@ pub struct Plan {
 /// its torso up through its neck to its head bent, the user. Its head now
 /// goes with its body, on its line: see `neck_end`.)
 const STILT_SWAY: (f32, f32, f32) = (120.0, 10.0, 0.035);
+/// Gravity on a leaping body (m/s²; `--set leap_gravity=N`, 60 unless
+/// given: the user, 2026-11-14, found the hop floaty at 25, best at 60); district walkers' drops and hops are planned by it
+/// (`navmesh/district.rs`). Set once, at the start.
+static LEAP_GRAVITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(60.0f32.to_bits());
+
+pub fn leap_gravity() -> f32 {
+    f32::from_bits(LEAP_GRAVITY.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_leap_gravity(g: f32) {
+    LEAP_GRAVITY.store(g.max(1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
 /// How far the stalker tips its head up or down to look (radians), and how
 /// much of a stretch it reaches its neck out.
 const STALKER_PITCH: f32 = 0.3;
@@ -1258,7 +1270,7 @@ impl Rig {
         if let Some(vy) = self.airborne.as_mut() {
             // A leap: ballistic.
             self.air.0 += dt;
-            *vy -= 25.0 * dt;
+            *vy -= leap_gravity() * dt;
             let before = self.root;
             self.root = sweep(self.root, Vec3::new(self.velocity.x, *vy, self.velocity.z) * dt);
             // (Against a wall it drops, not flying on into it.)
@@ -2433,7 +2445,7 @@ impl Rig {
     pub fn leap(&mut self, dir: Vec3, speed: f32, up: f32) {
         self.velocity = Vec3::new(dir.x, 0.0, dir.z).normalize_or(Vec3::Z) * speed;
         self.airborne = Some(up);
-        self.air = (0.0, 2.0 * up / 25.0);
+        self.air = (0.0, 2.0 * up / leap_gravity());
         self.root.y += 0.05;
     }
 }

@@ -307,6 +307,11 @@ pub(crate) struct Hunter {
     /// Gliding along a teleport's line (on district ground, see
     /// `navmesh/district.rs`): its body moved as in a dash.
     gliding: bool,
+    /// In the air on a drop's or a hop's leap (district ground): its
+    /// stances and dash stand aside till it lands, as they set its pace
+    /// every frame (a hop up a ledge fell short of it: the gladiator's
+    /// dash, the harrow's haul).
+    way_leap: bool,
     /// A foot of its authored body left the ground this frame (pushing off,
     /// see `clip.rs`): a dash goes on it.
     pub(super) push: bool,
@@ -663,6 +668,13 @@ pub(super) fn bodies(hunters: Query<&Hunter>, mut bodies: ResMut<crate::player::
     }
 }
 
+/// An attack leap's upward speed (m/s), made for gravity of 25 m/s²: as
+/// long in the air at the leaps' gravity (`rig::leap_gravity`, 60 since
+/// 2026-11-14, the user: hops floaty at 25).
+fn air(up: f32) -> f32 {
+    up * crate::rig::leap_gravity() / 25.0
+}
+
 /// On district ground (`--opt blink`): each hunter kept on its node's
 /// walking space after whatever else moved it this frame (kept apart from
 /// another, say; its own steps are kept on it as they are made, see
@@ -1015,7 +1027,7 @@ fn spawn_hunter(
         // the harrow's long ones: the user, 2026-11-12.)
         // Its forelegs in turn or (`fore=0`) together as the harrow's; its
         // motion varied (`vary_time`, `vary_length`): the user, 2026-11-13.
-        Some("harrow") if traits.value("mesh", 0.0) == 1.0 => {
+        Some("harrow") if traits.value("mesh", 1.0) == 1.0 => {
             let mut plan = super::pieces::joints(super::pieces::Kind::Harrow).plan();
             if traits.value("fore", 1.0) == 0.0 {
                 plan.gaits = plan.gaits.iter().zip(&Plan::beast().gaits).map(|(g, b)| crate::rig::Gait { offsets: b.offsets.clone(), ..g.clone() }).collect();
@@ -1041,13 +1053,14 @@ fn spawn_hunter(
     let health = traits.value("health", HUNTER_HEALTH) * if traits.has("tough") { 10.0 } else { 1.0 };
     let hunter = commands
         .spawn((
-            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, detour: (hash01(seed as i32, 5, 0, 0x6c7) * DETOUR, 0.0), aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new(), clip: None, hitbox: Vec::new(), dash: Dash::Walk, dash_rest: 0.0, gliding: false, push: false, pace: 1.0 },
+            Hunter { kind, rig, traits: traits.clone(), last_bones: Vec::new(), stance: Stance::Stalk, timer: 1.0, health, stun: 0.0, hits: Vec::new(), struck: false, jaw: 0.0, gesture: Gesture::None, gesture_in: 2.0, detour: (hash01(seed as i32, 5, 0, 0x6c7) * DETOUR, 0.0), aware: Aware::Unaware, known: Vec3::ZERO, went: Vec3::ZERO, unseen: f32::MAX, search: None, alarmed: false, shards: 0, blast: Vec3::ZERO, flank: if hash01(seed as i32, 3, 0, 0x6c7) < 0.5 { -1.0 } else { 1.0 }, flank_spot: Vec3::ZERO, flank_age: 0.0, hung: 0.0, line: None, mind: None, may_fire: false, aiming: Vec3::ZERO, locked: None, shots: 0, felt: health, hurt_lately: 0.0, pain_in: 0.0, pain_due: None, on_you: None, trail: std::collections::VecDeque::new(), clip: None, hitbox: Vec::new(), dash: Dash::Walk, dash_rest: 0.0, gliding: false, way_leap: false, push: false, pace: 1.0 },
             Transform::from_translation(feet + Vec3::Y * 1.5),
             Visibility::default(),
             Walker::new(if kind == Kind::Beast { Body::Beast } else { Body::Biped }, feet, 5.0),
-            // (On district ground, `--opt blink`: its teleports; see
-            // `navmesh/district.rs`.)
-            crate::navmesh::district::Blink::new(traits.value("blink_range", 10.0), traits.value("blink_tell", 0.6), traits.value("blink_rest", 1.5), traits.value("blink_cost", 8.0), traits.value("blink_speed", 20.0)),
+            // (On district ground, `--opt blink`: its way there; teleports
+            // only its own, given (an authored body's, with its shade: see
+            // `clip.rs`), see `navmesh/district.rs`.)
+            crate::navmesh::district::Blink::new(traits.value("blink_range", 0.0), traits.value("blink_tell", 0.6), traits.value("blink_rest", 1.5), traits.value("blink_cost", 8.0), traits.value("blink_speed", 20.0)).with_hop(traits.value("hop", 0.0)),
         ))
         .id();
     // The stalker's gun (its `nolance` option, none; see `lance.rs`).
@@ -1088,7 +1101,7 @@ fn spawn_hunter(
         return hunter;
     }
     // (The harrow's body cut from a generated mesh, once it is in.)
-    if want == Some("harrow") && traits.value("mesh", 0.0) == 1.0 {
+    if want == Some("harrow") && traits.value("mesh", 1.0) == 1.0 {
         commands.entity(hunter).insert(super::pieces::Wants { kind: super::pieces::Kind::Harrow, head: true, own: false, look: Some(assets.dark.clone()), marks: Some(assets.pale.clone()) });
         return hunter;
     }
@@ -1833,6 +1846,9 @@ pub(super) fn hunt(
         // within its node by its way across it; to another, by teleports,
         // each told first, standing. (A straight run at you only within its
         // node: a leap off a terrace's edge is a fall.)
+        if h.rig.airborne.is_none() {
+            h.way_leap = false;
+        }
         if navs.is_none()
             && let Some(nodes) = nodes
             && let Some(b) = blink.as_deref_mut()
@@ -1850,6 +1866,15 @@ pub(super) fn hunt(
                     settle = 0.0;
                 }
                 crate::navmesh::district::Steer::There | crate::navmesh::district::Steer::Off => {}
+                crate::navmesh::district::Steer::Leap(v) => {
+                    let across = Vec3::new(v.x, 0.0, v.z);
+                    h.rig.leap(across, across.length(), v.y);
+                    h.way_leap = true;
+                    settle = 0.0;
+                    if args.opt("huntlog") {
+                        info!("huntlog: {} drops from {:.1} ({} so far)", entity.index_u32(), root, b.drops);
+                    }
+                }
                 crate::navmesh::district::Steer::Stand => settle = 0.0,
                 crate::navmesh::district::Steer::Snap(to) => {
                     h.rig.moved_to(to, &|x, z| ground.at(Vec3::new(x, to.y + 1.0, z)));
@@ -2046,7 +2071,7 @@ pub(super) fn hunt(
                     if h.timer <= 0.0 {
                         // (Carrying the dart's speed: at 7 m/s a runner left it
                         // behind, never bitten.)
-                        h.rig.leap(toward, 14.3, 1.5);
+                        h.rig.leap(toward, 14.3, air(1.5));
                         h.stance = Stance::Attack(toward);
                         h.timer = 1.0;
                     }
@@ -2093,6 +2118,7 @@ pub(super) fn hunt(
             }
         } else if beast {
             match h.stance {
+                _ if h.way_leap => {}
                 // Prowling: low and slow, closing in; now and then it freezes,
                 // or breaks into a charge.
                 Stance::Stalk => {
@@ -2242,11 +2268,11 @@ pub(super) fn hunt(
                     if h.timer <= 0.0 {
                         // Fast and flat, aimed to land on you: about a third
                         // of a second in the air.
-                        let up = 4.5;
-                        let flight = 2.0 * up / 25.0;
+                        let up = air(4.5);
+                        let flight = 2.0 * up / crate::rig::leap_gravity();
                         // (Close, a short low lunge into you.)
                         if distance < SNAP {
-                            h.rig.leap(toward, 6.0, 2.0);
+                            h.rig.leap(toward, 6.0, air(2.0));
                         } else {
                             h.rig.leap(toward, (distance / flight).clamp(12.0, 34.0), up);
                         }
@@ -2308,6 +2334,7 @@ pub(super) fn hunt(
                     }
                 }
                 Stance::Stagger => {}
+                _ if h.way_leap => {}
                 _ => {
                     let stop = moves.reach * 0.8;
                     // A dash: hunting you, far enough off, its way open

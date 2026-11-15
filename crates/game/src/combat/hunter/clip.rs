@@ -404,6 +404,9 @@ pub(super) fn dress(mut commands: Commands, args: Res<crate::Args>, kits: Res<Ki
             && let Some(mut blink) = blink
         {
             blink.shaded = true;
+            // (Its shade its teleport's look: so it teleports, 10 m but as
+            // given.)
+            blink.range = h.traits.value("blink_range", 10.0).min(crate::navmesh::district::FARTHEST as f32);
             // (No tell, standing, before it goes: its shade leaving it is
             // the tell; it paused, the user, 2026-11-04. Given, kept.)
             if !h.traits.has("blink_tell") {

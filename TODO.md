@@ -14,7 +14,7 @@ Each item is marked by what it waits on:
 | **Parked** | set aside on purpose, to come back to |
 | **Idea** | exploratory, not decided |
 
-Last updated 2026-11-09.
+Last updated 2026-11-14.
 
 ## Current focus
 
@@ -29,9 +29,10 @@ navigation, so the three are now one line of work.
 
 ## Waiting on you
 
-- **You** Stalker: the latest hover. Darts and holds, legs walking the air,
-  landing to fire, strike shown as a black ray on a miss. (stalker notes)
-- **You** Harrow on the new mesh (2026-11-12): `spawn harrow mesh=1` (add
+- **Parked** Harrow on the new mesh (2026-11-12). You, 2026-11-14: needs
+  work overall (between good enough and not distinct enough), but better
+  than before the mesh; its forelegs belong, its elbows as they are; no
+  more time on it now. `spawn harrow mesh=1` (add
   `tame` to see it walk). The Planar Guillotine mesh, cut into rigid pieces
   on the harrow's bones and moved by its haul walk and haul attack,
   unchanged. Its forelegs stretched to the harrow's long ones (about 2.1
@@ -61,7 +62,8 @@ navigation, so the three are now one line of work.
   estimates). To judge: the look and the walk; whether the stretched
   forelegs belong to it; whether the elbows should stand higher. Tuning
   lives in that file (`height`, `thicken`, joints).
-- **You** Tumbler (2026-11-13), the X-shaped Compact Core mesh, cut into
+- **Parked** Tumbler (2026-11-13; you, 2026-11-14: its dark cracks read
+  well; shove, stagger and throw right; later passes to come), the X-shaped Compact Core mesh, cut into
   its two diagonals (rigid blades turning where they cross) and its core
   (a diamond body, its point a head). Two ways to move (you, 2026-11-13:
   the rest removed, kept in db34738: 1 cartwheeling, 3 both, 4 a thrown
@@ -209,26 +211,20 @@ navigation, so the three are now one line of work.
   cannot make). Dead, all dark. You: the light cracks read clearly, good
   as they are (their shape could be tuned). To judge: the dark ones.
   Not yet: navigation, sounds; breaking geometry (your idea).
-- **You** Stalker: searchlight pale or black, never judged.
-  `spawn stalker searchlight=1`.
-- **You** Teleporting walkers: feel test (`--opt blink`). (blink notes)
-- **You** Walkers: choose step-up or mantle for small ledges.
+- **Next** Prove district navigation (you, 2026-11-14: the item with most
+  uncertainty): teleporting walkers (`--opt blink`) need testing across the
+  districts to see whether they hold up. See Navigation for creatures.
 - **You** Sounds you are finding:
   - stalker call and death;
   - bishop arrival;
   - cable-creak warning (swarm);
   - void low hums.
-- **You** Engine decision: whether spike B (streaming, far detail) goes in
-  the timebox, and whether to sign in to a Unity ID for its navigation
-  test. (`docs/engine-decision.md`)
 - **You** Chasm: you had a more ambitious answer to "the chasm has no floor",
   held back; and another decoration idea. (chasm notes)
 - **You** The catalogue (https://ruescasd.github.io/null-catalogue/, repo
   `../null-catalogue`): your shots. F12 in the game, copy the chosen `.png`
   and `.txt` pairs into its `shots/`, `python build.py --publish`. The build
   lists the unused `shot_` places in places.txt, to remove if you want.
-- **You** Commit: everything since 3066c55 is uncommitted (navigation,
-  gladiator waves, stalker hover and mesh, show, places, and more).
 
 ## Creatures and combat
 
@@ -240,7 +236,9 @@ The critical path is enemies (enemy-pipeline notes).
   now reversed by default (your pick, "better than what we had, but still
   work to do"); quieting them, a stoop and arms held in were tried and
   didn't work; the legs, the most human motion left, untouched. Judge with
-  `spawn gladiator still`.
+  `spawn gladiator still`. Its drops and hops too (you, 2026-11-14: its hop
+  "not so much"): clip creatures have no airborne pose, it rises upright
+  in its walk, as if lifted (a hop and a fall clip, or a pose made for it).
 - **Parked** The weirdness pass, part of that animation pass, one effect at
   a time, each an option to compare:
   1. freezes mid-motion (your idea);
@@ -260,27 +258,39 @@ The critical path is enemies (enemy-pipeline notes).
 propulsion; the flyer of the navigation plan, and a test of flight for
 creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 `tools/impaled_mesh.py`: back flattened, shards in place of the spikes.
-- **You** Step 2 built: `spawn impaled` flies after you (14 m off,
+- **Next** Your verdicts (2026-11-14), deciding the open questions below:
+  - it never lands: flight is all it does, and it falls only when killed
+    (nothing gives it a reason to land). Goes, listed and asked first: the
+    crash landing and its ring, the slide, choosing a landing spot, staying
+    down while you are in range. Its flights over obstacles stay;
+  - damage shown in its flight: a flinch, its thrust cutting out more often
+    the more it is hurt, flying lower;
+  - body 4 (pale crests) the default, the other skins and `bodies` go;
+  - its impaling shards go, the dimples where the spikes were cut domed;
+  - a cable holding you only hurts (`latch=1` the default);
+  - its cost: stop here; the shimmer as it is;
+  - overall: needs work (the landing question above).
+- Step 2 built: `spawn impaled` flies after you (14 m off,
   facing you, feet 1.5 m up); `spawn impaled course` flies a set course to
   judge it; its weight's numbers are options (`lift=`, `spool=`, `tilt=`,
   `climb=`, `speed=`, `hover=`). Your feel test. It flies through
   structures (step 4) and takes no shots yet.
-- **You** Step 3 built, the field (b), low and labouring (your picks):
+- Step 3 built, the field (b), low and labouring (your picks):
   two beams from its soles to the ground, white-hot fading to black (your
   gradient picture), born 0.35 m below its soles, bent all along, in hard
   straight-edged shards (the other four fields removed, your say
   2026-11-10). They follow its thrust; a placeholder hum (pitch and
   loudness its thrust's).
-- **You** Feet: soles made four-pointed stars (an X, prongs splayed),
+- Feet: soles made four-pointed stars (an X, prongs splayed),
   flat-shaded, in `tools/impaled_mesh.py` (in place of the paw's toes).
 - Its plume: `plume=1` curves, `plume=2` shards (default).
-- **You** Taking hits built: shards stick in it a moment, push and rock it,
+- Taking hits built: shards stick in it a moment, push and rock it,
   each hit cuts its thrust 0.12 s (it dips); health 80 (about six blasts at
   7 m; `health=`); dead it falls, lands hard (placeholder: the stalker's
   impact) and topples away from the killing shot, and lies. Open: under
   steady fire it is beaten down to the ground and drags (it can't climb
   back between blasts); keep that, or let it recover?
-- **You** Step 4, stage 1 built (your call 2026-11-10: it lands to attack,
+- Step 4, stage 1 built (your call 2026-11-10: it lands to attack,
   flight its only way to move): it chooses a spot 5-14 m from you (flat,
   in your sight, apart from others), flies there straight or up over what
   is in the way (ways out first when it is shut in, as in the arena's
@@ -295,7 +305,7 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   beaten down on its way, it stays landed. Checked: floor, stacks, spire,
   city and an arena round, every way clear (a warning if it is ever
   inside something). `keep=N` keeps the old hovering after you.
-- **You** Its attacks: the crash (sliding in, its letting go the tell;
+- Its attacks: the crash (sliding in, its letting go the tell;
   where it can't slide, it hangs 0.5 s over its spot first; sliding, it
   digs in at 16 m/s², about 2.5 m from 9 m/s; a ring sweeps
   out where it hits; within 6 m on the ground you are hurt, up to 25, and
@@ -335,7 +345,7 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   slides at 13-15 m/s, its crash struck 8+ m from you (out of reach). Its arms and band are cables, not mesh
   (tools/impaled_mesh.py, creatures/impaled.cables); its cables could
   borrow the buds' leeching-cable look (combat/leech.rs), your note.
-- **You** Its cables' heads, and its body's skin (2026-11-12: the heads
+- Its cables' heads, and its body's skin (2026-11-12: the heads
   lost among the parts lagging behind; its black body hides its cables as
   its anatomy). Built: each flung cable's head a small pale barbed shard
   (its shards' material) clamped in the loop's bend, pointing the way it
@@ -353,7 +363,7 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   where the spikes were cut and capped (to dome in tools/impaled_mesh.py
   if they go for good). Open (yours): a verdict on body and shards; then
   the losers and `bodies` go.
-- **You** Its cost (2026-11-12, your call: 1.25 ms of a 6.9 ms frame for
+- Its cost (2026-11-12, your call: 1.25 ms of a 6.9 ms frame for
   one attacking brute is really bad). Traced: almost all of it is meshes
   and materials changed every frame, which Bevy then re-uploads and
   re-prepares (shadows included). Agreed order: 1 shaders animate the
@@ -388,8 +398,11 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 - Open: a choice costs 0.2-3 ms of sweeps (one a frame across all brutes).
 
 **Stalker** (stalker notes)
-- **Agreed** Once the hover is approved: remove the gladiator-walk-on-stalker
-  code (`hover=0`), listing what goes and asking first.
+- **Next** The hover approved (you, 2026-11-14): remove the
+  gladiator-walk-on-stalker code (`hover=0`), listing what goes and asking
+  first. Its air stride's pace to tune: `air` (now 0, 1 or 2 only) opened to
+  any number.
+- **Next** The searchlight stays pale (you, 2026-11-14): the black option goes.
 
 **Bishop** (bishop notes)
 - **Agreed** Beyond 30 m it doesn't search for you.
@@ -424,6 +437,117 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 - **Parked** Creatures pushed into a canal.
 
 **Navigation for creatures** (`docs/outdoor-navigation.md`, navmesh notes)
+- **Next** Prove district navigation (you, 2026-11-14: the most uncertain
+  item): navigable nodes plus teleporting, tested across the districts.
+  Correctness is shown (nodes exact; 300 of 300 chases in tiers, broken,
+  stacks); unproven: how it plays in each district, and its runtime cost
+  (node building, plans in stacks).
+  Step 1 done (2026-11-14, all six districts; every node checked by
+  `node_reach`, not sampled): walking within nodes and teleporting itself
+  hold everywhere. Found: floor's pit (16 m deep) unreachable at a 10 m
+  teleport (50 of 300 chases; fine at 20 m); a raised cluster in broken
+  (~14 000 m², 50-62 m up, round 7070, 930) unreachable even at 20 m;
+  highlands' long strip nodes make walks of 600 m where a teleport across
+  would do (the planner only walks within a node); plans over 2 ms (stacks
+  99th 5.4 ms, worst 8.5; broken worst 8.2; tiers worst 2.4). Your rules
+  (2026-11-14, from the pit and the plateau): no terrain where a player
+  without the hook can get stuck (a generation constraint; the pit breaks
+  it); a few places walkers can't reach are fine (flyers cover them); all
+  enemies able to drop down anywhere, one move for all (proposed). A walker
+  with no plan must never just stand: gather below, fire, or give up the
+  chase (which can mean leaving the area). Plan agreed: a player-reach
+  check, the traps it finds, drop links in the planner, then a hop
+  (~1.4 m, the player's) and the generator fixes. Known from the code: nodes
+  ignore structures standing on district ground (walkers pass through
+  them), and are cut for the biped only.
+  Step 2 done: the `stacks_view` hang was a node of 8125 fragments (an
+  outline of 134 615 points) through geo's triangulation, quadratic twice
+  over; now spade directly with geo's snapping (`triangles`), every node's
+  triangles checked to cover its outline; stacks builds in 4.2 s (12.7).
+  Player traps found (2026-11-14, `player_traps`: the player's own walking
+  space, linked one way by a running jump and a mantle, about 2.45 m up,
+  `player::hookless_reach`, or a drop): floor's pit (13.4 m short of a way
+  out), a 2 by 5 m slot in floor (`floor_slot`, 1.5 m short), a basin in
+  stacks among its towers (`stacks_basin`, 3.5 m short); tiers, broken,
+  uplands, highlands none. A report for now; it asserts none once the
+  generator rules are in.
+  Drops built (2026-11-14): one way links off every lip onto a lower node
+  within 3 m across, any depth, the landing checked as the rig falls (its
+  gravity, its ground, frames of 1/30 to 1/240 s); in the planner beside
+  teleports; the walker leaps with the rig's leap (its airborne pose and
+  landing crouch), its hop found from where it stands. All six districts:
+  every drop landed where planned (deepest 23 m, stacks); 300 of 300 in
+  tiers, broken, stacks, uplands; highlands 298 (its long strip walks);
+  floor 276 (only walkers starting in the pit: the trap). Building drops
+  0.7 to 1.7 s more. Seen in play: a gladiator on floor's rim drops into
+  the pit after you. Walkers now reach every node but broken's plateau.
+  Your decisions (2026-11-14): the hop only as one case first, to judge
+  how hard its animation is (every walker would need it): a spawn option,
+  off by default, the rig's leap as it is. Traps fixed by ways out: stairs,
+  added freely (a scale cue too). Then step 3, nodes built as the world
+  streams.
+  Hop built as that one case (2026-11-14, `spawn KIND hop=2.45`, off by
+  default): up onto ledges as high as you climb without the hook, taking
+  off up to 2 m back (from the ledge's foot the rig's leap, going across
+  at one speed, met the edge still rising), the gentlest leap that clears
+  by 0.4 m. Walkers with it: 300 of 300 in stacks and broken, hops up to
+  2.2 m. Seen in play (broken, `hop_spots` lists them): the harrow (its
+  legs procedural) leaps up with its pounce pose; the gladiator (clips)
+  rises upright in its walk, as if lifted: clip creatures have no leap
+  pose. Hops cost the build ~1 s more in stacks. **You:** judge the look.
+  Found on the way: a walker spawned before its nodes are built goes as
+  in the open, up ledges (`--do` now waits for the nodes); in play, for
+  step 3. The gladiator's dash set its pace in the air (now not in the air).
+  Teleporting is a creature's own, case by case (you, 2026-11-14: applied
+  to all it won't look good): only authored bodies, by their shade, have
+  it (10 m); the rest range 0 (`blink_range` gives it, gliding as itself,
+  no look). The white glows (the tell for creatures without a shade) are
+  removed: they did not work.
+  Without teleports (2026-11-14, `BLINK_RANGE=0`), chases reached, no hop /
+  hop 2.45: floor 276/276 (the pit), tiers 167/300, stacks 56/218, broken
+  156/299, uplands 274/300, highlands 236/298. The hop decides whether
+  walkers without teleports reach most districts. Stacks with hops: plans
+  up to 46 ms (many leap portals): **to fix** before walkers without
+  teleports are viable there. Fixed: a walker with no way re-planned every
+  frame (now waits 1 s), and a failed plan searched every portal (up to
+  41 ms; now the nodes are searched first: 2 ms at most in tiers).
+  The hop looked floaty to you: `--set leap_gravity=N` (25 unless given)
+  to try others in play; drops and hops planned by it. Stances and dashes
+  no longer steer a creature in the air on a drop or hop (the harrow's
+  haul cut a hop short).
+  Your verdicts (2026-11-14): leap gravity 60 (now the default; attack
+  leaps and drop kicks keep their time in the air, scaled from 25); the
+  harrow's hop looks good; the gladiator's not so much, part of the
+  gladiator's animation work (below). The harrow's mesh is its default
+  (`mesh=1`; `mesh=0` its shards).
+  Pits' stairs (2026-11-14, `worldgen/src/plates.rs`, `Stair`): every pit
+  has a flight cut along one edge, inside it, 4 m wide, steps of at most
+  0.5 m up and 1 m on, from its floor to plain ground beyond (not a pit,
+  mesa, pillar, canal or site's ground), climbing half its depth at least,
+  a landing at its foot; its steps are plates, so walls and navigation
+  have them as any. Floor's pit and stacks' basin (a pit too) are traps no
+  more (`floor_pit_stair`); walkers with teleports 300 of 300 in floor now.
+  Hidden slopes over their steps (2026-11-15, collider only,
+  `ColumnMesh::walk`): walked smoothly (test `stairs_walked_smoothly`:
+  0.033 m a frame walking, 0.5 without); shots hit the slope till the
+  slopes are the player's alone (deferred, memory/stair-slopes).
+  Floor's slot was no trap: the checks took the edge of the square for a
+  wall (they now judge the edge by the big plates built). Fills of
+  pockets tried and removed (you, 2026-11-15): their simple picture of
+  movement (pillars solid, no body width, no jumps) told no pocket
+  reliably. Stacks' last pocket was a well (a plate 6.5 m below its
+  sibling, in a crack): wells raised (2026-11-15, `WELL_REACH` in
+  plates.rs): a plate more than 2.45 m below every plate a body can pass
+  to (a metre of border or more), by walkable tops, raised to 0.5 below
+  the lowest; worked out once per parent and kept, siblings screened
+  first (0.4 to 0.5 ms a parent; `wells_cost`). Six raised in stacks'
+  square, none elsewhere. `player_traps` now asserts none: none in all
+  six districts.
+- **Agreed** Structures: move from the patched Rust crates to C++ Detour
+  (through bindings, staying on Bevy); the crates fail the worst-case frame
+  cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).
+- **Agreed** Walkers: a knee-high step-up (to 0.8 m), animated, timeboxed:
+  stop if it drags (you, 2026-11-14: animation has led to goose chases).
 - **Agreed** Exporting our plate polygons into Detour tiles: still open, to
   be decided as the combat and creature work needs it (the teleport
   prototype walks each node on its own small navmesh meanwhile).
@@ -437,8 +561,6 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   each, ~5 million walking links. Flying the broken with it: 29 frames over
   33 ms (worst 121 ms) against 1 without. Needs incremental building (by
   tile, as the world streams), part of the navmesh streaming item below.
-- **Agreed** Bug: blink's node build never finishes at `stacks_view` (still
-  building after 120 s, one core spinning the whole time).
 - **Agreed** Navmeshes:
   - built near the player as the world streams;
   - the stalker using them;
@@ -498,10 +620,11 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 
 ## Rendering, performance and tech
 
-- **You/Agreed** Engine decision, what's open (`docs/engine-decision.md`):
+- **Agreed** Engine decision, what's open (`docs/engine-decision.md`):
+  - spike B, streaming dense places and far detail (you, 2026-11-14: run
+    it); Unity left out (no sign-in);
   - the two shadow checks;
   - an even-handed navigation bench rerun;
-  - Unity's navigation, if you sign in;
   - a switching estimate;
   - a fresh review.
 - **Parked** Lamp shadows, behind combat fun:

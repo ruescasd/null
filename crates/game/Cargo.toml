@@ -20,6 +20,9 @@ landmass = "0.9"
 # District ground's navigable nodes (navmesh/nodes.rs): 2D booleans,
 # buffers and triangulation, already built for landmass.
 geo = "0.31"
+# (Constrained triangulation directly: geo's wrapper checks every pair of
+# edges, and hung on a node of 134 615 points; see navmesh/district.rs.)
+spade = "2.15"
 
 [features]
 # Per-system timings written as a Chrome trace (trace-*.json) on exit: build

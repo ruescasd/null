@@ -13,7 +13,10 @@
 //! the plates and bring their own geometry. Sites (see `sites.rs`) reshape
 //! the plates around them into a flat core and terraces.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use glam::{DVec2, Vec3};
 
@@ -69,7 +72,34 @@ pub struct PlateWorld {
     /// ground joins up when its steps are made walkable (see
     /// docs/outdoor-navigation.md).
     pub step_cap: Option<f64>,
+    /// Each pit's stair (see `stair`), worked out once and kept: a ground
+    /// query in a pit reads it (creatures' feet ask many a frame). And each
+    /// plate's wells (see `wells`), the same way.
+    stairs: RwLock<HashMap<(i32, i32), Option<Arc<Stair>>>>,
+    wells: RwLock<HashMap<Parent, Arc<HashMap<(i32, i32), f64>>>>,
 }
+
+/// A plate split into smaller ones: its level and its sites to it (the
+/// rest none).
+type Parent = (usize, [(i32, i32); 2]);
+
+/// Wells (the user, 2026-11-15: no ground a player without the hook is
+/// stuck in): a plate more than `WELL_REACH` below every plate round it
+/// (a running jump and a mantle: the game's `player::hookless_reach`, under
+/// its 2.45), each by its walkable top (a pillar's by its base, where you
+/// walk round it), is raised to `WELL_STEP` below the lowest of them; not
+/// by more than `WELL_MOST` (more, it is walled-in ground for a stair, and
+/// a guard against a tower raised). (Stacks' rough relief left one in a
+/// crack, 6.5 m below its sibling.)
+const WELL_REACH: f64 = 2.45;
+const WELL_STEP: f64 = 0.5;
+const WELL_MOST: f64 = 8.0;
+/// How long a border a body passes (m), and how often a well's edges are
+/// sampled (m).
+const WELL_NECK: f64 = 1.0;
+const WELL_SAMPLE: f64 = 1.0;
+/// Siblings within this many grid spacings are taken to be beside a plate.
+const WELL_NEAR: f64 = 1.0;
 
 mod bricks;
 mod slabs;
@@ -147,6 +177,102 @@ pub struct Cache {
     landform: HashMap<(usize, i32, i32), f64>,
 }
 
+/// The plate `sites` to `level` (1 or 2) is split from.
+fn parent(sites: &[(i32, i32); 3], level: usize) -> Parent {
+    (level - 1, [sites[0], if level == 2 { sites[1] } else { (i32::MAX, i32::MAX) }])
+}
+
+/// A pit's way out (the user, 2026-11-14: no ground a player without the
+/// hook can get stuck in; stairs added freely, a scale cue too): a flight
+/// of steps cut along one edge of the pit, inside it, from its floor up to
+/// the ground beyond. The strip within `STAIR_WIDTH` of that edge is cut
+/// into steps square to it, each its own plate, so the mesher (walls and
+/// all) and navigation have them as any plate. From `a` along `along` (a
+/// unit; the edge's foot end), `inward` into the pit; the flight begins
+/// `start` m along, each step `run` m; each step's top, the first the
+/// landing at its foot (the edge's length before the flight too), the last
+/// the ground beyond its top.
+#[derive(Clone, Debug)]
+pub struct Stair {
+    a: DVec2,
+    along: DVec2,
+    inward: DVec2,
+    length: f64,
+    start: f64,
+    run: f64,
+    heights: Vec<f64>,
+    albedo: f32,
+}
+
+/// A stair's width (m), the most a step rises (m: under what you and the
+/// walkers step up, 0.58 and 0.6), how far a step runs (m; less, to the
+/// least, where its edge is short).
+const STAIR_WIDTH: f64 = 4.0;
+const STAIR_RISE: f64 = 0.5;
+const STAIR_RUN: f64 = 1.0;
+const STAIR_RUN_LEAST: f64 = 0.35;
+/// Its steps' plates are told by this in their site chain (`sites[2].0`).
+const STAIR_TAG: i32 = i32::MIN;
+
+impl Stair {
+    /// Which step `p` is on, if it is in the stair's strip.
+    fn step(&self, p: DVec2) -> Option<usize> {
+        let d = (p - self.a).dot(self.inward);
+        if !(0.0..=STAIR_WIDTH).contains(&d) {
+            return None;
+        }
+        let n = self.heights.len();
+        let t = ((p - self.a).dot(self.along) - self.start) / self.run;
+        Some((t.floor().max(0.0) as usize).min(n - 1))
+    }
+
+    /// The hidden slope walked over its steps (the rooms' flights' way, see
+    /// memory/stair-slopes; the user, 2026-11-15: you went up its steps in
+    /// fits and starts, lifted a step at a time): a plane through every
+    /// step's nose, from its landing to its top step, flush with both, the
+    /// strip's width; walked on, never drawn (`ColumnMesh::walk`).
+    fn emit_slope(&self, mesh: &mut crate::mesh::ColumnMesh, origin: (f64, f64)) {
+        let n = self.heights.len();
+        if n < 2 {
+            return;
+        }
+        let (t0, t1) = (self.start, self.start + (n - 1) as f64 * self.run);
+        let (h0, h1) = (self.heights[0], self.heights[n - 1]);
+        let at = |t: f64, d: f64, h: f64| {
+            let p = self.a + self.along * t + self.inward * d;
+            [(p.x - origin.0) as f32, h as f32, (p.y - origin.1) as f32]
+        };
+        let first = mesh.walk.len() as u32;
+        mesh.walk.extend([at(t0, 0.0, h0), at(t1, 0.0, h1), at(t1, STAIR_WIDTH, h1), at(t0, STAIR_WIDTH, h0)]);
+        mesh.walk_indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+    }
+
+    /// The strip and the rest of `poly` (convex, the pit's cell or a piece
+    /// of it): the steps' pieces, each with its step, and what is left.
+    fn cut(&self, poly: &[DVec2]) -> (Vec<(Vec<DVec2>, usize)>, Vec<DVec2>) {
+        let w = self.a + self.inward * STAIR_WIDTH;
+        // (`clip` keeps the side nearer its first point than its second.)
+        let strip = PlateWorld::clip(poly, w - self.inward, w + self.inward);
+        let rest = PlateWorld::clip(poly, w + self.inward, w - self.inward);
+        let n = self.heights.len();
+        let at = |k: usize| self.a + self.along * (self.start + k as f64 * self.run);
+        let mut steps = Vec::new();
+        for k in 0..n {
+            let mut piece = strip.clone();
+            if k > 0 {
+                piece = PlateWorld::clip(&piece, at(k) + self.along, at(k) - self.along);
+            }
+            if k + 1 < n {
+                piece = PlateWorld::clip(&piece, at(k + 1) - self.along, at(k + 1) + self.along);
+            }
+            if piece.len() >= 3 {
+                steps.push((piece, k));
+            }
+        }
+        (steps, rest)
+    }
+}
+
 #[inline]
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
@@ -174,6 +300,8 @@ impl PlateWorld {
             kerbs: false,
             wall_least: 1.5,
             step_cap: None,
+            stairs: RwLock::default(),
+            wells: RwLock::default(),
         }
     }
 
@@ -429,8 +557,21 @@ impl PlateWorld {
     }
 
     /// Height and look of the plate with the given site chain, following
-    /// the rules of the district its biggest plate belongs to.
+    /// the rules of the district its biggest plate belongs to; a well
+    /// raised (see `WELL_REACH`).
     fn plate(&self, cache: &mut Cache, sites: [(i32, i32); 3], level: usize) -> Plate {
+        let mut plate = self.plate_raw(cache, sites, level);
+        if level >= 1
+            && !self.lab
+            && let Some(up) = self.wells(parent(&sites, level)).get(&sites[level])
+        {
+            plate.height += up;
+        }
+        plate
+    }
+
+    /// As `plate`, no well raised.
+    fn plate_raw(&self, cache: &mut Cache, sites: [(i32, i32); 3], level: usize) -> Plate {
         if self.lab {
             let albedo = 0.19 + 0.04 * (self.rand(level, sites[level], 6) as f32 - 0.5);
             return Plate { height: 0.0, albedo, level, sites, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, center: DVec2::ZERO };
@@ -535,6 +676,109 @@ impl PlateWorld {
 
     /// The plate covering (x, z), using at most `max_level` levels of detail.
     pub fn plate_at(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> Plate {
+        let g = self.nearest_site(0, DVec2::new(x, z));
+        if let Some(stair) = self.stair(g)
+            && let Some(k) = stair.step(DVec2::new(x, z))
+        {
+            return self.step_plate(g, &stair, k);
+        }
+        self.plate_plain(cache, x, z, max_level)
+    }
+
+    /// A pit's stair (see `Stair`), if it is a pit with one: from the pit's
+    /// floor by its foot (its ground, under any pillar) up to the ground
+    /// beyond its top, onto plain ground (not a pit, a mesa, a pillar, a
+    /// canal or a site's ground), climbing half the pit's depth at least
+    /// (a foot on high ground in a rough pit made a flight of no rise);
+    /// along the edge whose flight fits at `STAIR_RUN` and comes out
+    /// lowest, else the gentlest that fits at all.
+    fn stair(&self, g: (i32, i32)) -> Option<Arc<Stair>> {
+        if let Some(s) = self.stairs.read().unwrap().get(&g) {
+            return s.clone();
+        }
+        let s = self.make_stair(&mut Cache::default(), g).map(Arc::new);
+        self.stairs.write().unwrap().insert(g, s.clone());
+        s
+    }
+
+    fn make_stair(&self, cache: &mut Cache, g: (i32, i32)) -> Option<Stair> {
+        let s0 = self.site(0, g);
+        let depth = self.pit_or_mesa(s0.x, s0.y).0?;
+        if self.lab {
+            return None;
+        }
+        let cell = self.big_cell(g);
+        let n = cell.len();
+        let centroid = cell.iter().copied().sum::<DVec2>() / n as f64;
+        // (Fits at its run, how high it comes out, how gentle.)
+        let mut best: Option<((bool, f64, f64), Stair)> = None;
+        for i in 0..n {
+            let (p, q) = (cell[i], cell[(i + 1) % n]);
+            let length = p.distance(q);
+            if length < 3.0 * STAIR_WIDTH {
+                continue;
+            }
+            let mut inward = (q - p).perp() / length;
+            if inward.dot(centroid - p) < 0.0 {
+                inward = -inward;
+            }
+            for (a, along) in [(p, (q - p) / length), (q, (p - q) / length)] {
+                let top = a + along * (length - 1.0) - inward * 0.5;
+                let foot = a + along * 1.5 + inward * (STAIR_WIDTH + 1.5);
+                // (Not where a site's ground sets the heights: by its foot,
+                // its top, or beyond.)
+                if self.pit_or_mesa(top.x, top.y) != (None, None) || (!self.lab && self.canals.surface(top, &|c| self.canal_floor(c)).is_some()) || [top, foot, a + inward, a + along * length + inward].iter().any(|q| self.sites.at(*q, 0.0).is_some()) {
+                    continue;
+                }
+                let beyond = self.plate_plain(cache, top.x, top.y, 2);
+                if beyond.pillar > 0.0 {
+                    continue;
+                }
+                let floor = self.plate_plain(cache, foot.x, foot.y, 2);
+                let (low, high) = (floor.top(self, foot) - floor.pillar, beyond.top(self, top));
+                if high - low < depth * 0.5 {
+                    continue;
+                }
+                let rises = ((high - low) / STAIR_RISE).ceil() as usize;
+                let run = (length / (rises + 1) as f64).min(STAIR_RUN);
+                let fits = run >= STAIR_RUN;
+                if run < STAIR_RUN_LEAST {
+                    continue;
+                }
+                // (Better: fitting; then coming out lower; then gentler.)
+                let score = (fits, -high, run);
+                if best.as_ref().is_some_and(|b| (b.0.0, b.0.1, b.0.2) >= score) {
+                    continue;
+                }
+                let heights = (0..=rises).map(|k| low + (high - low) * k as f64 / rises as f64).collect();
+                let start = length - (rises + 1) as f64 * run;
+                best = Some((score, Stair { a, along, inward, length, start, run, heights, albedo: floor.albedo + 0.02 }));
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// The stair out of the pit round a point, if it has one: its foot and
+    /// top (along its outer edge), and their heights.
+    pub fn pit_stair(&self, x: f64, z: f64) -> Option<(DVec2, f64, DVec2, f64)> {
+        let g = self.nearest_site(0, DVec2::new(x, z));
+        let st = self.stair(g)?;
+        Some((st.a, st.heights[0], st.a + st.along * st.length, *st.heights.last()?))
+    }
+
+    /// A stair's step `k` as a plate: flat, told apart by its site chain.
+    fn step_plate(&self, g: (i32, i32), stair: &Stair, k: usize) -> Plate {
+        Plate { height: stair.heights[k], albedo: stair.albedo, level: 2, sites: [g, (STAIR_TAG, k as i32), (STAIR_TAG, k as i32)], pillar: 0.0, sloped: false, tilt: DVec2::ZERO, center: DVec2::ZERO }
+    }
+
+    /// As `plate_at`, but for any stair.
+    fn plate_plain(&self, cache: &mut Cache, x: f64, z: f64, max_level: usize) -> Plate {
+        let (sites, level) = self.chain(x, z, max_level);
+        self.plate(cache, sites, level)
+    }
+
+    /// The site chain of the plate at a point, and its level.
+    fn chain(&self, x: f64, z: f64, max_level: usize) -> ([(i32, i32); 3], usize) {
         let p = DVec2::new(x, z);
         let mut sites = [(0, 0); 3];
         let mut level = 0;
@@ -543,7 +787,145 @@ impl PlateWorld {
             level += 1;
             sites[level] = self.nearest_site(level, p);
         }
-        self.plate(cache, sites, level)
+        (sites, level)
+    }
+
+    /// The wells among `parent`'s plates (see `WELL_REACH`): how much each
+    /// (by its site) is raised; worked out once, from the plates as they
+    /// are, and kept. Each of its plates that splits no further, flat:
+    /// round its edges, sampled just across (three to an edge), the
+    /// walkable tops beyond it, as they are; a canal there is a way out.
+    fn wells(&self, parent: Parent) -> Arc<HashMap<(i32, i32), f64>> {
+        if let Some(w) = self.wells.read().unwrap().get(&parent) {
+            return w.clone();
+        }
+        let w = Arc::new(self.find_wells(parent));
+        self.wells.write().unwrap().insert(parent, w.clone());
+        w
+    }
+
+    fn find_wells(&self, (level, up): Parent) -> HashMap<(i32, i32), f64> {
+        let mut cache = Cache::default();
+        let mut out = HashMap::new();
+        let mut poly = self.big_cell(up[0]);
+        if level == 1 {
+            poly = self.cell(1, up[1], &poly);
+        }
+        if poly.len() < 3 {
+            return out;
+        }
+        let next = level + 1;
+        let (mut min, mut max) = (poly[0], poly[0]);
+        for q in &poly {
+            min = min.min(*q);
+            max = max.max(*q);
+        }
+        let grid = GRID[next];
+        let mut sites = [up[0], up[1], (0, 0)];
+        // (Each plate's walkable top and site, first: a well is more than
+        // `WELL_REACH` below those beside it, so a plate with a sibling
+        // within a grid's spacing that is not, is none, and is not sampled
+        // round, the costly part: 2 to 3 ms a parent, sampling them all.)
+        let mut tops: Vec<(DVec2, f64)> = Vec::new();
+        for iz in (min.y / grid).floor() as i32 - 1..=(max.y / grid).ceil() as i32 + 1 {
+            for ix in (min.x / grid).floor() as i32 - 1..=(max.x / grid).ceil() as i32 + 1 {
+                let piece = self.cell(next, (ix, iz), &poly);
+                if piece.len() < 3 || area(&piece) < LEAST_PIECE {
+                    continue;
+                }
+                sites[next] = (ix, iz);
+                let plate = self.plate_raw(&mut cache, sites, next);
+                tops.push((self.site(next, (ix, iz)), plate.height - plate.pillar));
+            }
+        }
+        for iz in (min.y / grid).floor() as i32 - 1..=(max.y / grid).ceil() as i32 + 1 {
+            for ix in (min.x / grid).floor() as i32 - 1..=(max.x / grid).ceil() as i32 + 1 {
+                let piece = self.cell(next, (ix, iz), &poly);
+                if piece.len() < 3 || area(&piece) < LEAST_PIECE {
+                    continue;
+                }
+                sites[next] = (ix, iz);
+                // (One that splits on is not a plate but its parts.)
+                if next < 2 && self.splits(next, sites[next]) {
+                    continue;
+                }
+                let plate = self.plate_raw(&mut cache, sites, next);
+                if plate.sloped || plate.tilt != DVec2::ZERO {
+                    continue;
+                }
+                let top = plate.height - plate.pillar;
+                let here = self.site(next, (ix, iz));
+                if tops.iter().any(|&(at, t)| at != here && at.distance(here) <= grid * WELL_NEAR && t - top <= WELL_REACH) {
+                    continue;
+                }
+                let centroid = piece.iter().copied().sum::<DVec2>() / piece.len() as f64;
+                // (Each plate round it: how long a border, its lowest top.)
+                let mut round: HashMap<[(i32, i32); 3], (f64, f64)> = HashMap::new();
+                let mut canal = false;
+                for e in 0..piece.len() {
+                    let (a, b) = (piece[e], piece[(e + 1) % piece.len()]);
+                    let length = a.distance(b);
+                    if length < 1e-6 {
+                        continue;
+                    }
+                    let mut outward = (b - a).perp() / length;
+                    if outward.dot((a + b) * 0.5 - centroid) < 0.0 {
+                        outward = -outward;
+                    }
+                    let n = (length / WELL_SAMPLE).ceil().max(1.0) as usize;
+                    for k in 0..n {
+                        let q = a + (b - a) * ((k as f64 + 0.5) / n as f64) + outward * 0.3;
+                        if !self.lab && self.canals.surface(q, &|c| self.canal_floor(c)).is_some() {
+                            canal = true;
+                            continue;
+                        }
+                        let (mut chain, at) = self.chain(q.x, q.y, 2);
+                        for c in chain.iter_mut().skip(at + 1) {
+                            *c = (0, 0);
+                        }
+                        if at == next && chain[..=next] == sites[..=next] {
+                            continue;
+                        }
+                        let beyond = self.plate_raw(&mut cache, chain, at);
+                        let r = round.entry(chain).or_insert((0.0, f64::INFINITY));
+                        r.0 += length / n as f64;
+                        r.1 = r.1.min(beyond.top(self, q) - beyond.pillar);
+                    }
+                }
+                // (Only a way a body passes: a sliver beside it, 0.2 m²,
+                // taken for its lowest, left it a well still.)
+                let lowest = round.values().filter(|r| r.0 >= WELL_NECK).map(|r| r.1).fold(f64::INFINITY, f64::min);
+                if canal {
+                    continue;
+                }
+                let by = lowest - WELL_STEP - top;
+                if lowest.is_finite() && lowest - top > WELL_REACH && by <= WELL_MOST {
+                    out.insert(sites[next], by);
+                }
+            }
+        }
+        out
+    }
+
+    /// The big plate round a point (its site's grid index).
+    pub fn big_site(&self, x: f64, z: f64) -> (i32, i32) {
+        self.nearest_site(0, DVec2::new(x, z))
+    }
+
+    /// How far the big plate round a point is sunk as a pit (m; none if it
+    /// is not one), and raised as a mesa (m).
+    pub fn pit_or_mesa(&self, x: f64, z: f64) -> (Option<f64>, Option<f64>) {
+        let g = self.nearest_site(0, DVec2::new(x, z));
+        let s0 = self.site(0, g);
+        let rules = self.districts.at(s0.x, s0.y).rules();
+        let r = self.rand(0, g, 4);
+        if r < rules.mesa_chance {
+            (None, Some(25.0 + self.rand(0, g, 5) * 60.0))
+        } else if r < rules.mesa_chance + rules.pit_chance {
+            (Some(6.0 + self.rand(0, g, 5) * 14.0), None)
+        } else {
+            (None, None)
+        }
     }
 
     /// The outline of the big (128 m) plate around a point.
@@ -688,6 +1070,9 @@ impl PlateWorld {
                 let poly = self.big_cell(g);
                 let mut sites = [g, (0, 0), (0, 0)];
                 self.emit_split(&mut cache, &mut mesh, &poly, &mut sites, 0, max_level, (x0, z0));
+                if let Some(stair) = self.stair(g) {
+                    stair.emit_slope(&mut mesh, (x0, z0));
+                }
                 if let Some(slab) = self.slab(&mut cache, g, &poly) {
                     self.emit_slab(&mut mesh, &slab, (x0, z0));
                 }
@@ -726,6 +1111,29 @@ impl PlateWorld {
         if poly.len() < 3 {
             return;
         }
+        // A pit's stair: its steps cut out first, the rest as any plate.
+        if level == 0
+            && let Some(stair) = self.stair(sites[0])
+        {
+            let (steps, rest) = stair.cut(poly);
+            for (piece, k) in steps {
+                let plate = self.step_plate(sites[0], &stair, k);
+                let pieces = if self.lab { vec![piece] } else { self.canals.cut(piece) };
+                for piece in pieces {
+                    f(cache, &piece, &plate, area(&piece) >= LEAST_PIECE);
+                }
+            }
+            self.visit_plain(cache, &rest, sites, level, max_level, f);
+            return;
+        }
+        self.visit_plain(cache, poly, sites, level, max_level, f);
+    }
+
+    /// As `visit_split`, but for any stair.
+    fn visit_plain(&self, cache: &mut Cache, poly: &[DVec2], sites: &mut [(i32, i32); 3], level: usize, max_level: usize, f: &mut dyn FnMut(&mut Cache, &[DVec2], &Plate, bool)) {
+        if poly.len() < 3 {
+            return;
+        }
         if (level >= max_level && !self.site_detail(level, sites[level])) || !self.splits(level, sites[level]) {
             let plate = self.plate(cache, *sites, level);
             let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec()) };
@@ -757,7 +1165,7 @@ impl PlateWorld {
                     f(cache, &piece, &plate, false);
                     continue;
                 }
-                self.visit_split(cache, &piece, sites, next, max_level, f);
+                self.visit_plain(cache, &piece, sites, next, max_level, f);
             }
         }
     }
@@ -1065,6 +1473,29 @@ fn area(poly: &[DVec2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What finding the wells costs (`WELL_REACH`), in four districts'
+    /// squares: their pieces built twice on one world, the second time
+    /// with every parent's wells found already. (Sampling every plate,
+    /// 2 to 3 ms a parent; with the siblings' screen first, 0.4 to 0.5.)
+    /// (`cargo test -p worldgen --profile fast wells_cost -- --ignored --nocapture`)
+    #[test]
+    #[ignore]
+    fn wells_cost() {
+        for (name, c) in [("tiers", DVec2::new(5248.0, 640.0)), ("stacks", DVec2::new(12928.0, 128.0)), ("broken", DVec2::new(7296.0, 640.0)), ("floor", DVec2::new(10880.0, 128.0))] {
+            let world = PlateWorld::new(crate::WORLD_SIZE, 1);
+            let (lo, hi) = (c - 320.0, c + 320.0);
+            let t = std::time::Instant::now();
+            let n = world.plate_pieces(lo, hi).len();
+            let first = t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            world.plate_pieces(lo, hi);
+            let again = t.elapsed().as_secs_f64();
+            let parents = world.wells.read().unwrap().len();
+            let raised = world.wells.read().unwrap().values().map(|w| w.len()).sum::<usize>();
+            println!("{name}: {n} pieces; first {first:.2} s, again {again:.2} s: wells {:.2} s for {parents} parents ({:.1} ms each), {raised} raised", first - again, (first - again) * 1000.0 / parents as f64);
+        }
+    }
 
     #[test]
     fn plates_tile() {

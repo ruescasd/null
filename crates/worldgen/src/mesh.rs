@@ -35,6 +35,11 @@ pub struct ColumnMesh {
     /// and missing entries are 0.
     pub glow: Vec<f32>,
     pub indices: Vec<u32>,
+    /// What is walked on but not drawn (as `positions`, `indices`): the
+    /// hidden slopes over stairs' steps (see `plates::Stair`), in the
+    /// collider only.
+    pub walk: Vec<[f32; 3]>,
+    pub walk_indices: Vec<u32>,
 }
 
 /// What a plate's top tells the shader: its level (0..=2), a number of its
@@ -56,7 +61,7 @@ pub fn wall_code(code: f32, line: u32) -> f32 {
 
 impl ColumnMesh {
     pub fn is_empty(&self) -> bool {
-        self.indices.is_empty()
+        self.indices.is_empty() && self.walk_indices.is_empty()
     }
 
     /// Makes the `count` vertices just added glow.
