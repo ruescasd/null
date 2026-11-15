@@ -219,21 +219,39 @@ pub(crate) fn ccw(mut poly: Vec<DVec2>) -> Vec<DVec2> {
 
 /// The part of the path `a` + `span` u (u in 0..1, and beyond) within
 /// convex `hull` (counter-clockwise) grown by `grow` (each edge moved out
-/// by it: a little more at its corners): from and to which u, if any.
+/// by it, and kept within its bounds grown by as much: a little more than
+/// `grow` at its corners, no more than 1.5 times): from and to which u, if
+/// any. (Edges moved out alone meet far off at a sharp corner: a sliver's
+/// reached a fall's path from 2.7 m away, the falls' check taking it for
+/// ground under the body, 37 drops in 340 000 not found.)
 pub(crate) fn along(hull: &[DVec2], a: DVec2, span: DVec2, grow: f64) -> Option<(f64, f64)> {
     let (mut u0, mut u1) = (f64::NEG_INFINITY, f64::INFINITY);
+    let mut side = |out: DVec2, num: f64| {
+        let den = span.dot(out);
+        if den.abs() < 1e-15 {
+            num >= 0.0
+        } else {
+            if den > 0.0 {
+                u1 = u1.min(num / den);
+            } else {
+                u0 = u0.max(num / den);
+            }
+            true
+        }
+    };
     for i in 0..hull.len() {
         let (p, q) = (hull[i], hull[(i + 1) % hull.len()]);
         let Some(out) = (-(q - p).perp()).try_normalize() else { continue };
-        let (num, den) = (grow - (a - p).dot(out), span.dot(out));
-        if den.abs() < 1e-15 {
-            if num < 0.0 {
+        if !side(out, grow - (a - p).dot(out)) {
+            return None;
+        }
+    }
+    if grow > 0.0 && !hull.is_empty() {
+        let (lo, hi) = bounds(hull);
+        for (out, at) in [(DVec2::X, hi.x + grow), (DVec2::NEG_X, -(lo.x - grow)), (DVec2::Y, hi.y + grow), (DVec2::NEG_Y, -(lo.y - grow))] {
+            if !side(out, at - a.dot(out)) {
                 return None;
             }
-        } else if den > 0.0 {
-            u1 = u1.min(num / den);
-        } else {
-            u0 = u0.max(num / den);
         }
     }
     (u0 <= u1).then_some((u0, u1))
@@ -298,7 +316,7 @@ fn convex_meet(a: &[geo::Coord<f64>], b: &[DVec2]) -> bool {
 
 /// Convex `poly` (counter-clockwise) on the left of line `a`-`b` moved `r`
 /// to its left: the part of it further than `r` inside the line.
-fn keep_left(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
+pub(crate) fn keep_left(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
     let Some(dir) = (b - a).try_normalize() else { return poly.to_vec() };
     let side = |q: DVec2| dir.perp_dot(q - a) - r;
     let mut out = Vec::with_capacity(poly.len() + 1);
@@ -313,6 +331,344 @@ fn keep_left(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
         }
     }
     out
+}
+
+/// How near a line a segment's ends lie for it to run along it (m).
+const ON_LINE: f64 = 1e-9;
+/// How near two ends of the boundary's parts are for one corner (m).
+const LINK: f64 = 1e-7;
+
+/// The part of segment `p`-`q` (0 to 1 along it) inside a convex shape
+/// given by its edges' `lines` (each a point on it and its direction, of
+/// length 1, counter-clockwise), closed: none if none, or only a point. A
+/// part running along one of its edges is inside if `same` (the same way
+/// round as it) or `opposite`.
+fn inside_part(p: DVec2, q: DVec2, lines: &[(DVec2, DVec2)], same: bool, opposite: bool) -> Option<(f64, f64)> {
+    let d = q - p;
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for &(a, dir) in lines {
+        let (s0, s1) = (dir.perp_dot(p - a), dir.perp_dot(q - a));
+        if s0.abs() <= ON_LINE && s1.abs() <= ON_LINE {
+            if !(if d.dot(dir) > 0.0 { same } else { opposite }) {
+                return None;
+            }
+            continue;
+        }
+        if s0 < 0.0 && s1 < 0.0 {
+            return None;
+        }
+        if s0 < 0.0 {
+            t0 = t0.max(s0 / (s0 - s1));
+        } else if s1 < 0.0 {
+            t1 = t1.min(s0 / (s0 - s1));
+        }
+        if t0 >= t1 {
+            return None;
+        }
+    }
+    Some((t0, t1))
+}
+
+/// `convex_less`'s working space, kept from call to call on each thread.
+#[derive(Default)]
+struct LessScratch {
+    /// Every shape's edges (a point and a direction), `shape`'s first.
+    lines: Vec<(DVec2, DVec2)>,
+    /// Each shape's corners and edges in them, and its bounds.
+    of: Vec<(usize, usize, DVec2, DVec2)>,
+    into: Vec<u32>,
+    parts: Vec<(DVec2, DVec2)>,
+    covered: Vec<(f64, f64)>,
+    ends: Vec<(DVec2, u32)>,
+    corner: Vec<u32>,
+    corners: Vec<DVec2>,
+    edges: Vec<(u32, u32)>,
+    order: Vec<u32>,
+    first: Vec<u32>,
+    used: Vec<bool>,
+}
+
+/// `convex_less` says why its rings did not close (tests).
+#[cfg(test)]
+pub(crate) static LESS_DEBUG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+thread_local! {
+    static LESS: std::cell::RefCell<LessScratch> = std::cell::RefCell::new(LessScratch::default());
+}
+
+/// `shape` (convex, counter-clockwise) less the convex shapes `cut`
+/// (each counter-clockwise, its last corner not its first): the walking
+/// space's difference, by its boundary. What is left is bounded by the
+/// parts of `shape`'s edges no cutter covers and the parts of the cutters'
+/// edges inside `shape` that no other cutter covers, these run backwards
+/// (what is left on the left of every part); linked end to end into rings,
+/// outer ones counter-clockwise, holes clockwise, each hole in the least
+/// outer ring round it. Where two shapes run along one line: the same way
+/// round, the line is kept once (`shape`'s gives way, then the later
+/// cutter's); opposite ways, two cutters meeting there, neither. Exact:
+/// its corners where the edges cross (geo's boolean puts them on a grid of
+/// about half a millimetre). None if the rings do not close: the caller
+/// then makes it by geo's boolean. (geo's boolean, the general case, 20 to
+/// 40 µs a piece in the stacks and the broken, was most of the walking
+/// space's building; see `walking`.)
+pub(crate) fn convex_less(shape: &[DVec2], cut: &[Vec<DVec2>]) -> Option<Vec<Polygon<f64>>> {
+    LESS.with(|s| less(&mut s.borrow_mut(), shape, cut))
+}
+
+fn less(s: &mut LessScratch, shape: &[DVec2], cut: &[Vec<DVec2>]) -> Option<Vec<Polygon<f64>>> {
+    let LessScratch { lines, of, into, parts, covered, ends, corner, corners, edges, order, first, used } = s;
+    lines.clear();
+    of.clear();
+    parts.clear();
+    for poly in std::iter::once(shape).chain(cut.iter().map(|c| c.as_slice())) {
+        let start = lines.len();
+        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        let m = poly.len();
+        for k in 0..m {
+            let (a, b) = (poly[k], poly[(k + 1) % m]);
+            lo = lo.min(a);
+            hi = hi.max(a);
+            if let Some(dir) = (b - a).try_normalize() {
+                lines.push((a, dir));
+            }
+        }
+        of.push((start, lines.len(), lo, hi));
+    }
+    let meets = |a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2| a0.x <= b1.x + ON_LINE && a0.y <= b1.y + ON_LINE && b0.x <= a1.x + ON_LINE && b0.y <= a1.y + ON_LINE;
+    // (The parts of `p`-`q` from `t0` to `t1` not `covered`, kept, run
+    // backwards if `back`.)
+    let keep = |p: DVec2, q: DVec2, t0: f64, t1: f64, covered: &mut Vec<(f64, f64)>, back: bool, parts: &mut Vec<(DVec2, DVec2)>| {
+        covered.sort_unstable_by(|x, y| x.0.total_cmp(&y.0));
+        let len = p.distance(q);
+        let mut put = |u0: f64, u1: f64| {
+            if (u1 - u0) * len > LINK {
+                let (a, b) = (p.lerp(q, u0), p.lerp(q, u1));
+                parts.push(if back { (b, a) } else { (a, b) });
+            }
+        };
+        let mut at = t0;
+        for &(c0, c1) in covered.iter() {
+            if c0 > at {
+                put(at, c0.min(t1));
+            }
+            at = at.max(c1);
+            if at >= t1 {
+                break;
+            }
+        }
+        if at < t1 {
+            put(at, t1);
+        }
+    };
+    let (s0, s1, slo, shi) = of[0];
+    // `shape`'s edges, less what the cutters cover.
+    let n = s1 - s0;
+    for k in 0..n {
+        let (p, q) = (lines[s0 + k].0, lines[s0 + (k + 1) % n].0);
+        let (b0, b1) = (p.min(q), p.max(q));
+        covered.clear();
+        for &(c0, c1, lo, hi) in &of[1..] {
+            if meets(b0, b1, lo, hi)
+                && let Some(i) = inside_part(p, q, &lines[c0..c1], true, false)
+            {
+                covered.push(i);
+            }
+        }
+        keep(p, q, 0.0, 1.0, covered, false, parts);
+    }
+    // The cutters' edges inside `shape`, less what the others cover.
+    for j in 1..of.len() {
+        let (c0, c1, lo, hi) = of[j];
+        if !meets(lo, hi, slo, shi) {
+            continue;
+        }
+        let m = c1 - c0;
+        for k in 0..m {
+            let (p, q) = (lines[c0 + k].0, lines[c0 + (k + 1) % m].0);
+            let (b0, b1) = (p.min(q), p.max(q));
+            if !meets(b0, b1, slo, shi) {
+                continue;
+            }
+            let Some((t0, t1)) = inside_part(p, q, &lines[s0..s1], false, false) else { continue };
+            covered.clear();
+            for (i, &(o0, o1, olo, ohi)) in of.iter().enumerate().skip(1) {
+                if i != j
+                    && meets(b0, b1, olo, ohi)
+                    && let Some(u) = inside_part(p, q, &lines[o0..o1], j > i, true)
+                {
+                    covered.push(u);
+                }
+            }
+            keep(p, q, t0, t1, covered, true, parts);
+        }
+    }
+    if parts.is_empty() {
+        return Some(Vec::new());
+    }
+    // Their ends, each the corner it is one with (within `LINK`): by x,
+    // each against those before it within `LINK`.
+    ends.clear();
+    for (k, &(a, b)) in parts.iter().enumerate() {
+        ends.push((a, 2 * k as u32));
+        ends.push((b, 2 * k as u32 + 1));
+    }
+    ends.sort_unstable_by(|x, y| x.0.x.total_cmp(&y.0.x));
+    corner.clear();
+    corner.resize(ends.len(), u32::MAX);
+    corners.clear();
+    for e in 0..ends.len() {
+        let (p, id) = ends[e];
+        let mut c = u32::MAX;
+        for f in (0..e).rev() {
+            let (o, oid) = ends[f];
+            if p.x - o.x > LINK {
+                break;
+            }
+            if (p.y - o.y).abs() <= LINK {
+                c = corner[oid as usize];
+                break;
+            }
+        }
+        if c == u32::MAX {
+            corners.push(p);
+            c = corners.len() as u32 - 1;
+        }
+        corner[id as usize] = c;
+    }
+    edges.clear();
+    for k in 0..parts.len() {
+        let (a, b) = (corner[2 * k], corner[2 * k + 1]);
+        if a != b {
+            edges.push((a, b));
+        }
+    }
+    // (A part and one back along it: nothing between them.)
+    order.clear();
+    order.extend(0..edges.len() as u32);
+    order.sort_unstable_by_key(|&e| {
+        let (a, b) = edges[e as usize];
+        (a.min(b), a.max(b))
+    });
+    let mut gone = false;
+    for w in order.windows(2) {
+        let (x, y) = (edges[w[0] as usize], edges[w[1] as usize]);
+        if x.0 == y.1 && x.1 == y.0 && x.0 != u32::MAX {
+            edges[w[0] as usize] = (u32::MAX, u32::MAX);
+            edges[w[1] as usize] = (u32::MAX, u32::MAX);
+            gone = true;
+        }
+    }
+    if gone {
+        edges.retain(|e| e.0 != u32::MAX);
+    }
+    // Each corner's parts out (by corner), and as many in as out.
+    let n = corners.len();
+    first.clear();
+    first.resize(n + 1, 0);
+    into.clear();
+    into.resize(n, 0);
+    for &(a, b) in edges.iter() {
+        first[a as usize + 1] += 1;
+        into[b as usize] += 1;
+    }
+    for c in 0..n {
+        if first[c + 1] != into[c] {
+            #[cfg(test)]
+            if LESS_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+                println!("corner {c} at {:?}: {} out, {} in", corners[c], first[c + 1], into[c]);
+                for (k, &(a, b)) in parts.iter().enumerate() {
+                    println!("  part {k}: {a:?} -> {b:?} ({:.3e} m), corners {} -> {}", a.distance(b), corner[2 * k], corner[2 * k + 1]);
+                }
+            }
+            return None;
+        }
+        first[c + 1] += first[c];
+    }
+    order.clear();
+    order.extend(0..edges.len() as u32);
+    order.sort_unstable_by_key(|&e| edges[e as usize].0);
+    // Rings: from each part, on to the one turning furthest left at its
+    // end (two pieces meeting at a corner kept apart).
+    used.clear();
+    used.resize(edges.len(), false);
+    let mut rings: Vec<(Vec<DVec2>, f64)> = Vec::new();
+    for e0 in 0..edges.len() {
+        if used[e0] {
+            continue;
+        }
+        let mut ring: Vec<DVec2> = Vec::new();
+        let mut e = e0;
+        loop {
+            used[e] = true;
+            let (a, b) = edges[e];
+            ring.push(corners[a as usize]);
+            let out = &order[first[b as usize] as usize..first[b as usize + 1] as usize];
+            let next = if out.len() == 1 {
+                out[0] as usize
+            } else {
+                let d_in = corners[b as usize] - corners[a as usize];
+                let turn = |o: u32| {
+                    let (x, y) = edges[o as usize];
+                    let d = corners[y as usize] - corners[x as usize];
+                    d_in.perp_dot(d).atan2(d_in.dot(d))
+                };
+                *out.iter().max_by(|&&x, &&y| turn(x).total_cmp(&turn(y)))? as usize
+            };
+            if next == e0 {
+                break;
+            }
+            if used[next] {
+                #[cfg(test)]
+                if LESS_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("ring from part {e0} met a used part {next}");
+                }
+                return None;
+            }
+            e = next;
+        }
+        // (From its first corner: from the origin, 15 km off, the products'
+        // rounding was as big as a speck's area, and turned it round.)
+        let o = ring[0];
+        let area = (1..ring.len().saturating_sub(1)).map(|k| (ring[k] - o).perp_dot(ring[k + 1] - o)).sum::<f64>() / 2.0;
+        if area.abs() > 1e-12 {
+            rings.push((ring, area));
+        }
+    }
+    // Holes into the least outer ring round them.
+    let line = |ring: &[DVec2]| LineString::from(ring.iter().chain(ring.first()).map(|p| (p.x, p.y)).collect::<Vec<_>>());
+    if rings.iter().all(|r| r.1 > 0.0) {
+        return Some(rings.iter().map(|r| Polygon::new(line(&r.0), Vec::new())).collect());
+    }
+    let inside = |q: DVec2, ring: &[DVec2]| {
+        let mut c = false;
+        for k in 0..ring.len() {
+            let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
+            if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (b.x - a.x) * (q.y - a.y) / (b.y - a.y) {
+                c = !c;
+            }
+        }
+        c
+    };
+    let outer: Vec<usize> = (0..rings.len()).filter(|&r| rings[r].1 > 0.0).collect();
+    let mut holes: Vec<Vec<usize>> = vec![Vec::new(); rings.len()];
+    for h in (0..rings.len()).filter(|&r| rings[r].1 < 0.0) {
+        let ring = &rings[h].0;
+        let k = (0..ring.len()).max_by(|&x, &y| ring[x].distance_squared(ring[(x + 1) % ring.len()]).total_cmp(&ring[y].distance_squared(ring[(y + 1) % ring.len()]))).unwrap();
+        let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
+        let q = (a + b) / 2.0 + (b - a).normalize().perp() * 1e-6;
+        let Some(o) = outer.iter().copied().filter(|&o| inside(q, &rings[o].0)).min_by(|&x, &y| rings[x].1.total_cmp(&rings[y].1)) else {
+            #[cfg(test)]
+            if LESS_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+                println!("hole {h} ({:.3e} m², {} corners) in no outer ring; rings {:?}", rings[h].1, ring.len(), rings.iter().map(|r| (r.1, r.0.len())).collect::<Vec<_>>());
+                for (k, &(a, b)) in parts.iter().enumerate() {
+                    println!("  part {k}: {a:?} -> {b:?} ({:.3e} m)", a.distance(b));
+                }
+            }
+            return None;
+        };
+        holes[o].push(h);
+    }
+    Some(outer.iter().map(|&o| Polygon::new(line(&rings[o].0), holes[o].iter().map(|&h| line(&rings[h].0)).collect())).collect())
 }
 
 /// Whether segment `a`-`b` comes within `r` of convex `poly` (counter-
@@ -337,29 +693,33 @@ fn within(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> bool {
 }
 
 /// Steps in each half circle of a capsule's ends (`capsule`).
-const CAP_STEPS: usize = 6;
+pub(crate) const CAP_STEPS: usize = 6;
 
-/// Segment `a`-`b` grown by `r` (counter-clockwise): its sides, each end a
-/// half circle in `CAP_STEPS`, its corners just outside the circle (the
-/// polygon round it, not in it: never less than `r`).
-fn capsule(a: DVec2, b: DVec2, r: f64) -> Polygon<f64> {
-    let k = r / (std::f64::consts::PI / (2.0 * CAP_STEPS as f64)).cos();
-    let d = (b - a).normalize_or(DVec2::X);
-    let n = d.perp();
-    let half = |c: DVec2, from: DVec2, to: DVec2| {
-        (0..=CAP_STEPS).map(move |j| {
+/// Segment `a`-`b` grown by `r`, counter-clockwise, its last corner not
+/// its first: its sides, each end a half circle in `CAP_STEPS`, its corners
+/// just outside the circle (the polygon round it, not in it: never less
+/// than `r`). (Each turn round an end from a table: a sine and a cosine
+/// for each of its corners, 100 000 capsules in the stacks.)
+pub(crate) fn capsule(a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
+    static TURNS: std::sync::LazyLock<[(f64, f64); CAP_STEPS + 1]> = std::sync::LazyLock::new(|| {
+        let k = 1.0 / (std::f64::consts::PI / (2.0 * CAP_STEPS as f64)).cos();
+        std::array::from_fn(|j| {
             let t = std::f64::consts::PI * j as f64 / CAP_STEPS as f64;
-            let q = c + (from * t.cos() + to * t.sin()) * if j == 0 || j == CAP_STEPS { r } else { k };
-            (q.x, q.y)
+            let f = if j == 0 || j == CAP_STEPS { 1.0 } else { k };
+            (t.cos() * f, t.sin() * f)
         })
-    };
-    let mut pts: Vec<(f64, f64)> = half(b, -n, d).chain(half(a, n, -d)).collect();
-    pts.push(pts[0]);
-    let mut poly = Polygon::new(LineString::from(pts), Vec::new());
-    if poly.signed_area() < 0.0 {
-        poly.exterior_mut(|e| e.0.reverse());
+    });
+    let d = (b - a).normalize_or(DVec2::X) * r;
+    let n = d.perp();
+    let mut ring = Vec::with_capacity(2 * (CAP_STEPS + 1));
+    // (Round `b` from its right to its left, then `a` from its left to its
+    // right: counter-clockwise.)
+    for (c, from, to) in [(b, -n, d), (a, n, -d)] {
+        for &(cos, sin) in TURNS.iter() {
+            ring.push(c + from * cos + to * sin);
+        }
     }
-    poly
+    ring
 }
 
 /// `hull` (convex) grown by `r`, counter-clockwise: the hull of its corners
@@ -389,6 +749,11 @@ pub(crate) fn snap(v: f64) -> f64 {
 
 pub(crate) fn polygon(points: &[DVec2]) -> Polygon<f64> {
     Polygon::new(LineString::from(points.iter().map(|p| (snap(p.x), snap(p.y))).collect::<Vec<_>>()), vec![])
+}
+
+/// `points` as a polygon as they are (`polygon` rounds them).
+pub(crate) fn polygon_exact(points: &[DVec2]) -> Polygon<f64> {
+    Polygon::new(LineString::from(points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()), vec![])
 }
 
 fn bounds(poly: &[DVec2]) -> (DVec2, DVec2) {
@@ -440,6 +805,8 @@ pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64) -> Vec
     }
     let top = |i: usize, q: DVec2| world.plate_top(&pieces[i].plate, q);
     let mut out = Vec::new();
+    let mut near: Vec<(usize, usize)> = Vec::new();
+    let mut across: Vec<(f64, f64, usize)> = Vec::new();
     for (i, p) in pieces.iter().enumerate() {
         for k in 0..p.poly.len() {
             let (a, b) = (p.poly[k], p.poly[(k + 1) % p.poly.len()]);
@@ -450,24 +817,22 @@ pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64) -> Vec
             }
             let dir = d / len;
             // Who lies across it, and along which part (0..1).
-            let mut across: Vec<(f64, f64, usize)> = Vec::new();
-            let mut seen = bevy::platform::collections::HashSet::new();
-            for c in cells(a, b, ON) {
-                for &(j, m) in grid.get(&c).into_iter().flatten() {
-                    if j == i || !seen.insert((j, m)) {
-                        continue;
-                    }
-                    let q = &pieces[j].poly;
-                    let (c0, c1) = (q[m], q[(m + 1) % q.len()]);
-                    let off = |x: DVec2| (x - a).perp_dot(dir).abs();
-                    if off(c0) > ON || off(c1) > ON {
-                        continue;
-                    }
-                    let (t0, t1) = ((c0 - a).dot(dir) / len, (c1 - a).dot(dir) / len);
-                    let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(1.0));
-                    if hi - lo > ON / len {
-                        across.push((lo, hi, j));
-                    }
+            across.clear();
+            near.clear();
+            near.extend(cells(a, b, ON).flat_map(|c| grid.get(&c).into_iter().flatten().copied()).filter(|&(j, _)| j != i));
+            near.sort_unstable();
+            near.dedup();
+            for &(j, m) in &near {
+                let q = &pieces[j].poly;
+                let (c0, c1) = (q[m], q[(m + 1) % q.len()]);
+                let off = |x: DVec2| (x - a).perp_dot(dir).abs();
+                if off(c0) > ON || off(c1) > ON {
+                    continue;
+                }
+                let (t0, t1) = ((c0 - a).dot(dir) / len, (c1 - a).dot(dir) / len);
+                let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(1.0));
+                if hi - lo > ON / len {
+                    across.push((lo, hi, j));
                 }
             }
             across.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -520,6 +885,12 @@ pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64) -> Vec
         }
     }
     out
+}
+
+/// What lies about a stretch of ground (`Space::about`).
+pub(crate) struct About {
+    pub(crate) pieces: Vec<usize>,
+    pub(crate) blocks: Vec<usize>,
 }
 
 /// A teleport's way from one node to another: from `a` (its height `ay`)
@@ -577,6 +948,10 @@ pub(crate) struct Space {
     /// ground, grown by the radius), and by cell.
     pub(crate) blocks: Vec<MultiPolygon<f64>>,
     pub(crate) blocked: HashMap<(i32, i32), Vec<usize>>,
+    /// Each block's hulls' corners, counter-clockwise, last not first.
+    pub(crate) block_rings: Vec<Vec<Vec<DVec2>>>,
+    /// Each piece's bounds.
+    pub(crate) boxes: Vec<(DVec2, DVec2)>,
     /// The closed stretches by cell (padded by the radius).
     closed: HashMap<(i32, i32), Vec<usize>>,
     /// The pieces by cell.
@@ -590,6 +965,12 @@ pub(crate) struct Space {
     /// are; one a canal cuts, round it): what a fall's path crosses (see
     /// `district::fall_clear`).
     pub(crate) hulls: Vec<Vec<DVec2>>,
+    /// How many shapes were taken out of the pieces, all told (the walking
+    /// space's unit of work: `seed_sweep`).
+    pub(crate) cutters: std::sync::atomic::AtomicUsize,
+    /// Pieces whose walking space `convex_less` could not make (made by
+    /// geo's boolean instead): none, `seed_sweep` checks.
+    pub(crate) fallbacks: std::sync::atomic::AtomicUsize,
 }
 
 impl Space {
@@ -649,9 +1030,11 @@ impl Space {
             }
         }
         let shapes: Vec<Polygon<f64>> = pieces.iter().map(|p| polygon(&p.poly)).collect();
-        let hulls = shapes.iter().map(|s| ccw(s.convex_hull().exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
+        let hulls: Vec<Vec<DVec2>> = shapes.iter().map(|s| ccw(s.convex_hull().exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
+        let boxes = hulls.iter().map(|h| bounds(h)).collect();
+        let block_rings = blocks.iter().map(|b| b.0.iter().map(|p| ccw(p.exterior().0[..p.exterior().0.len() - 1].iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect()).collect();
         lap("obstacles", &mut times);
-        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, closed, grid, shapes, times: Vec::new(), hulls };
+        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, block_rings, boxes, closed, grid, shapes, times: Vec::new(), hulls, cutters: Default::default(), fallbacks: Default::default() };
         // Each piece's walking space: itself, less the radius round every
         // closed stretch near it, less the pillars' obstacles.
         let all: Vec<usize> = (0..space.pieces.len()).collect();
@@ -778,6 +1161,28 @@ impl Space {
     /// 0.2 ms a piece, 3.8 s in the stacks; every stretch and hull near a
     /// piece a boolean, 1.3 s.)
     fn walking(&self, i: usize) -> Vec<Polygon<f64>> {
+        let Some((shape, cut, convex)) = self.cutting(i) else {
+            return Vec::new();
+        };
+        self.cutters.fetch_add(cut.len(), std::sync::atomic::Ordering::Relaxed);
+        if cut.is_empty() {
+            return vec![polygon(&shape)];
+        }
+        if convex {
+            if let Some(made) = convex_less(&shape, &cut) {
+                return made;
+            }
+            self.fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        polygon(&shape).boolean_op_with_fill_rule(&MultiPolygon::new(cut.iter().map(|c| polygon_exact(c)).collect()), geo::algorithm::bool_ops::OpType::Difference, geo::algorithm::bool_ops::FillRule::NonZero).0
+    }
+
+    /// Piece `i` as `walking` cuts it: itself, cut along its own edges
+    /// closed all along where that is exact (counter-clockwise), the shapes
+    /// to take out of what is left (each convex, counter-clockwise, its
+    /// last corner not its first), and whether it is convex; none if
+    /// nothing is left.
+    pub(crate) fn cutting(&self, i: usize) -> Option<(Vec<DVec2>, Vec<Vec<DVec2>>, bool)> {
         let p = &self.pieces[i];
         let r = self.fit.radius;
         let (lo, hi) = bounds(&p.poly);
@@ -848,7 +1253,7 @@ impl Space {
             for k in (0..n).filter(|&k| lines[k]) {
                 shape = keep_left(&shape, at(k), at(k + 1), r);
                 if shape.len() < 3 {
-                    return Vec::new();
+                    return None;
                 }
             }
             // (A stretch along an edge cut by its line: its band within the
@@ -865,20 +1270,19 @@ impl Space {
             // (Only bands that reach into what is left.)
             near.retain(|&s| within(&shape, self.edges[s].a, self.edges[s].b, r));
         }
-        let mut cut: Vec<Polygon<f64>> = near.iter().map(|&s| capsule(self.edges[s].a, self.edges[s].b, r)).collect();
+        let mut cut: Vec<Vec<DVec2>> = near.iter().map(|&s| capsule(self.edges[s].a, self.edges[s].b, r)).collect();
         let mut ks: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.blocked.get(&c).into_iter().flatten().copied()).collect();
         ks.sort();
         ks.dedup();
         // (Only the pillars' hulls that meet it: a pillar's every hull came
         // with any cell it shares, 60 cutters a piece in the stacks.)
-        let piece = polygon(&shape);
         cut.extend(ks.into_iter().flat_map(|k| self.blocks[k].0.iter()).filter(|b| {
             b.bounding_rect().is_some_and(|q| q.min().x <= hi.x && q.min().y <= hi.y && q.max().x >= lo.x && q.max().y >= lo.y) && (!convex || convex_meet(&b.exterior().0, &shape))
-        }).cloned());
-        if cut.is_empty() {
-            return vec![piece];
-        }
-        piece.boolean_op_with_fill_rule(&MultiPolygon::new(cut), geo::algorithm::bool_ops::OpType::Difference, geo::algorithm::bool_ops::FillRule::NonZero).0
+        }).map(|b| {
+            let ring = &b.exterior().0;
+            ring[..ring.len() - 1].iter().map(|c| DVec2::new(c.x, c.y)).collect()
+        }));
+        Some((shape, cut, convex))
     }
 
     /// The closed stretches near `poly` (within the radius of its bounds).
@@ -934,20 +1338,52 @@ impl Space {
         Some(found.find(|f| Some(f.0) == prefer).unwrap_or(first))
     }
 
-    /// Where along `a` + `dir` s (`dir` of length 1), s from `s0` to `s1`,
+    /// What lies within `pad` of the box `lo`..`hi`: the pieces and the
+    /// pillars' blocks whose bounds meet it, each once, in order. (Found
+    /// once for a drop's every ray and fall, not for each: its landing
+    /// spots and falls were most of the drops' work.)
+    pub(crate) fn about(&self, lo: DVec2, hi: DVec2, pad: f64) -> About {
+        let (lo, hi) = (lo - pad, hi + pad);
+        let meets = |b: &(DVec2, DVec2)| b.0.cmple(hi).all() && b.1.cmpge(lo).all();
+        let mut pieces: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.grid.get(&c).into_iter().flatten().copied()).filter(|&i| meets(&self.boxes[i])).collect();
+        pieces.sort_unstable();
+        pieces.dedup();
+        let mut blocks: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.blocked.get(&c).into_iter().flatten().copied()).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        About { pieces, blocks }
+    }
+
+    /// The piece under `q` (as `under`), among `about`'s.
+    pub(crate) fn under_in(&self, about: &About, q: DVec2) -> Option<usize> {
+        let pt = Point::new(q.x, q.y);
+        let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
+        about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(q + ROUNDING).all() && self.boxes[i].1.cmpge(q - ROUNDING).all()).find(|&i| near(&self.shapes[i]))
+    }
+
+    /// Whether `q` is on node `n`'s walking space (within `ROUNDING`, as
+    /// `node_at_preferring` with `n` preferred finds it), among `about`'s
+    /// pieces.
+    pub(crate) fn on_node_in(&self, about: &About, q: DVec2, n: u32) -> bool {
+        let pt = Point::new(q.x, q.y);
+        let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
+        about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(q + ROUNDING).all() && self.boxes[i].1.cmpge(q - ROUNDING).all()).any(|i| {
+            self.space[i].iter().enumerate().any(|(k, f)| self.node_of[i][k] == n && near(f)) && near(&self.shapes[i])
+        })
+    }
+
+    /// Among `about`'s pieces: where along `a` + `dir` s (`dir` of length 1), s from `s0` to `s1`,
     /// node `n`'s walking space is (within `ROUNDING` of it, as
     /// `node_at_preferring` finds): its spans, merged, in order. The path's
     /// line crossing each of the node's fragments' rings, the inside
     /// between each pair. (Found point by point, nine about each of a
     /// drop's landing spots, the stacks' landings were 0.9 s of work.)
-    pub(crate) fn node_along(&self, n: u32, a: DVec2, dir: DVec2, s0: f64, s1: f64) -> Vec<(f64, f64)> {
+    pub(crate) fn node_along_in(&self, about: &About, n: u32, a: DVec2, dir: DVec2, s0: f64, s1: f64) -> Vec<(f64, f64)> {
         let (p0, p1) = (a + dir * s0, a + dir * s1);
-        let mut ks: Vec<usize> = cells(p0, p1, ROUNDING).flat_map(|c| self.grid.get(&c).into_iter().flatten().copied()).collect();
-        ks.sort();
-        ks.dedup();
+        let (lo, hi) = (p0.min(p1) - ROUNDING, p0.max(p1) + ROUNDING);
         let mut spans: Vec<(f64, f64)> = Vec::new();
         let mut cross: Vec<f64> = Vec::new();
-        for i in ks {
+        for i in about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(hi).all() && self.boxes[i].1.cmpge(lo).all()) {
             for (k, f) in self.space[i].iter().enumerate() {
                 if self.node_of[i][k] != n {
                     continue;
@@ -1046,7 +1482,7 @@ impl Space {
 
     /// Points every metre round each fragment's edges: where, how high,
     /// and its node.
-    fn edge_points(&self, world: &PlateWorld) -> Vec<(DVec2, f64, u32)> {
+    pub(crate) fn edge_points(&self, world: &PlateWorld) -> Vec<(DVec2, f64, u32)> {
         let mut points: Vec<(DVec2, f64, u32)> = Vec::new();
         for (i, s) in self.space.iter().enumerate() {
             for (k, f) in s.iter().enumerate() {
@@ -1148,5 +1584,21 @@ impl Space {
             }
             out
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `convex_less` on pieces it once could not make (seed 3's stacks).
+    #[test]
+    fn convex_less_hard_cases() {
+        LESS_DEBUG.store(true, std::sync::atomic::Ordering::Relaxed);
+        let v = |p: &[(f64, f64)]| p.iter().map(|&(x, y)| DVec2::new(x, y)).collect::<Vec<_>>();
+        let shape = v(&[(15716.541114303176, 14026.09497634145), (15717.22669393342, 14021.787170677344), (15718.690557827851, 14020.279662931578), (15719.166234969935, 14025.416179117788), (15718.267110427825, 14026.385118840128)]);
+        let cut = vec![ccw(v(&[(15718.60600181567, 14020.2876953125), (15719.07670494067, 14020.24375), (15719.36665443433, 14020.24375), (15719.5716796875, 14020.44877525317), (15719.7494140625, 14022.36869712817), (15719.7494140625, 14022.65864662183), (15719.54438880933, 14022.863671875), (15719.07368568433, 14022.9076171875), (15718.78373619067, 14022.9076171875), (15718.5787109375, 14022.70259193433), (15718.4009765625, 14020.78267005933), (15718.4009765625, 14020.49272056567)]))];
+        let made = convex_less(&shape, &cut);
+        assert!(made.is_some(), "not made");
     }
 }

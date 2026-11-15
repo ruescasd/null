@@ -636,6 +636,40 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   the capsules at its corners), not more trimming. Stacks, one thread:
   1.9 s; in play 0.7 s (pieces 137 ms of it, sharing the start with the
   terrain's loading).
+  Then (you, 2026-11-15: the target is the techniques' essential cost, not
+  a seed made faster): `seed_sweep` (ignored test), 8 seeds × the six
+  districts, a square of each found on each seed's map, built on one
+  thread, each stage's time against a written model of its least work
+  (`MODEL`) priced by primitives timed in the same run, and checked. 65 s.
+  Gaps stable across seeds (within a district, least to most mostly under
+  1.5×) and alike across districts: the work was not fitted to a seed.
+  Per stage, the big squares (stacks, broken, tiers), ours/essential:
+  drops 318/5 ms (61×), walking 223/3.5 (64×), pieces 151/18 (8×),
+  outlines 206/97 (2.1×: my earlier "outlines need the cut alike on both
+  sides" is mostly wrong, the triangulation itself is most of it), edges
+  32/1.4 (22×: a hash set made for every edge, every edge in its 8 m cells
+  tried), join 20/1 (17×), navmeshes 23/2.4, obstacles 32/19, portals
+  23/14. Whole squares 5-8× (floor 14×, small). Checks: no traps in all
+  48, no navmesh in parts; seed 4's stacks had two outline specks 0.7 mm
+  across left untriangulated, held to the coverage's own bound now.
+  Then, by the sweep: walking 223 to 80 ms (big squares, one thread):
+  geo's boolean (20 to 40 µs a piece: not its wrapper, not a fixed cost,
+  the cutters' corners and overlaps) replaced by `nodes::convex_less`, a
+  convex piece less convex cutters by its boundary (each edge kept where
+  nothing covers it, linked into rings; geo's as the fallback, counted, none
+  in 48 squares); exact where geo's put corners on a ~0.4 mm grid (some of
+  the mm mismatches either side of a stretch were that), checked against
+  geo's on every piece (`walking_difference`). Capsules from a table, plain
+  rings. Drops 324 to 172 ms: what lies about each lip found once for its
+  rays, spots and falls (`Space::about`), blocks' rings made once; and a
+  bug: `along` grew a sliver's hull by moving its edges out, its sharp
+  corner reaching a fall's path from 2.7 m off and failing good drops (37
+  in 340 000), now kept within its bounds grown as much. Edges: a set per
+  edge removed, no gain (28 candidates an edge from 8 m cells is the cost:
+  a hash by line would do). Whole big squares 1035 to 752 ms; in play
+  stacks' nodes in 0.5 s (0.7). Left: outlines 211 (100, 2.1×), drops 172
+  (6: lips 65-110 ms, spots), pieces 156 (18), walking 80 (4), edges 33
+  (1.5), join 20 (1).
 - **Agreed** Structures: move from the patched Rust crates to C++ Detour
   (through bindings, staying on Bevy); the crates fail the worst-case frame
   cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).
