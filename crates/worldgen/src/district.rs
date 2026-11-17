@@ -337,6 +337,26 @@ impl DistrictMap {
         }
     }
 
+    /// How far a point is from a void's outline, as the map has it (before
+    /// the plates make a coast of it): the nearest void cell's site less the
+    /// nearest other's, from where the point falls warped (see `at`);
+    /// below 0 in a void, 0 on its outline. With no void near, large.
+    pub fn void_field(&self, x: f64, z: f64) -> f64 {
+        if self.force.is_some() || self.voids <= 0.0 {
+            return 1e9;
+        }
+        let near = self.nearby(self.warped(x, z));
+        let (mut void, mut land) = (1e9f64, 1e9f64);
+        for (g, d) in near {
+            if self.kind(g) == District::Void {
+                void = void.min(d);
+            } else {
+                land = land.min(d);
+            }
+        }
+        void - land
+    }
+
     /// Relief, base albedo and ridges, blended smoothly across district
     /// borders.
     pub fn blended(&self, x: f64, z: f64) -> Blend {

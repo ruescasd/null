@@ -7,6 +7,8 @@ mod check;
 mod console;
 mod combat;
 mod ground;
+mod rt_shadow;
+mod shell;
 mod far_shadow;
 mod figure;
 mod beams;
@@ -326,7 +328,7 @@ fn main() {
     }
     app.insert_resource(args)
         .add_plugins((
-            (terrain::TerrainPlugin, far_shadow::FarShadowPlugin),
+            (terrain::TerrainPlugin, far_shadow::FarShadowPlugin, shell::ShellPlugin, rt_shadow::RtShadowPlugin),
             camera::FlyCameraPlugin,
             look::LookPlugin,
             (beams::BeamsPlugin, canal_light::CanalLightPlugin, streetlights::StreetlightsPlugin, show::plugin),

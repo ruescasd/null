@@ -88,7 +88,8 @@ fn show(
     mut clock: ResMut<Time<Virtual>>,
     mut on: ResMut<Playing>,
 ) {
-    if *shown || args.unattended() {
+    // (DIAGNOSTIC `--opt showshot`: a capture shown, full screen, as played.)
+    if *shown || (args.unattended() && !args.opt("showshot")) {
         return;
     }
     let dt = time.delta_secs();

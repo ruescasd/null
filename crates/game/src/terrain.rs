@@ -41,6 +41,22 @@ use crate::Args;
 /// Radius of each detail level's disc, in metres.
 pub const LOD_RADIUS: [f32; LOD_LEVELS as usize] = [450.0, 1700.0, 4800.0];
 
+/// The levels' radii (`LOD_RADIUS`); DIAGNOSTIC `--set lod_near N`: the
+/// finest level out to N m (the middle level at least as far), to see what
+/// changes when nothing near changes level.
+pub fn lod_radius(lod: u32) -> f32 {
+    let near = NEAR_RADIUS.load(std::sync::atomic::Ordering::Relaxed);
+    let near = if near > 0 { near as f32 } else { LOD_RADIUS[0] };
+    match lod {
+        0 => near,
+        1 => LOD_RADIUS[1].max(near + 600.0),
+        _ => LOD_RADIUS[lod as usize].max(near + 1800.0),
+    }
+}
+
+/// See `lod_radius` (0: as `LOD_RADIUS`).
+pub static NEAR_RADIUS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// How far each coarser level of detail is lowered (m, see `WorldGen::sink`)
 /// drawn at a fixed depth (`--set far_px 0`).
 const SINK: f32 = 3.0;
@@ -132,6 +148,7 @@ fn sink(tol: [f64; 3], lod: u32) -> f32 {
 /// The main world, as `args` asks for it: the plates, their canals and
 /// districts, reshaped by the sites in the structure library.
 pub fn plate_world(args: &Args) -> WorldGen {
+    NEAR_RADIUS.store(args.num("lod_near", 0.0) as u32, std::sync::atomic::Ordering::Relaxed);
     let world = plates(args);
     match crate::structures::load_library() {
         Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
@@ -164,6 +181,13 @@ pub fn plates(args: &Args) -> PlateWorld {
     world.districts.coast = args.num("coast", 600.0) as f64;
     // (`--set void_depth`: how far below the world their walls reach, m.)
     world.void_depth = -(args.num("void_depth", -worldgen::plates::VOID_DEPTH as f32) as f64);
+    // (PROBE `--opt vaults`: the world the top of vaults on pillars, see
+    // worldgen's `Vaults`; `--set vault_bay`, `vault_crown`, m.)
+    if args.opt("vaults") {
+        world.vaults = Some(worldgen::plates::Vaults { bay: args.num("vault_bay", 1024.0) as f64, crown: args.num("vault_crown", 60.0) as f64 });
+    }
+    // (`--set strata N`: the void walls' strata while judged, 0 none.)
+    world.strata = args.num("strata", 0.0) as u8;
     // (`--set wall_least`: the lowest wall panelled, m; see worldgen.)
     world.wall_least = args.num("wall_least", 1.5) as f64;
     // (`--set district=N`: one district everywhere, in the order of
@@ -250,7 +274,9 @@ pub struct TerrainExtension {
     #[uniform(103)]
     pub paving: Vec4,
     /// The plates' subdivision: x the smallest pieces drawn (m), y the slope
-    /// of the joints' sides (degrees; 0, flat dark lines).
+    /// of the joints' sides (degrees; 0, flat dark lines); z how far a
+    /// void's walls (and the vaults and pillars) go into the dark: a factor
+    /// e every z m below their first 60 (`--set void_fade`, m).
     #[uniform(104)]
     pub pieces: Vec4,
     /// The plates' walls' panels (`--set walls N`, see `wall` in
@@ -284,6 +310,14 @@ pub struct TerrainExtension {
     pub far_outer: Handle<Image>,
     #[texture(112, sample_type = "depth")]
     pub far_second: Handle<Image>,
+    /// PROBE: the shell's mask (see shell.rs, `SHELL`).
+    #[texture(113)]
+    #[sampler(114)]
+    pub shell: Handle<Image>,
+    /// SPIKE: the suns' traced shadows, a texel a pixel (see rt_shadow.rs;
+    /// read when `pieces.w` is 1).
+    #[texture(115)]
+    pub rt_mask: Handle<Image>,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -377,7 +411,7 @@ fn fade_columns(
             } else {
                 commands.entity(entity).remove::<(Fading, VisibilityRange)>();
                 // (The nearest level casting live again.)
-                if fade.quiet && !far {
+                if fade.quiet && !far && !crate::rt_shadow::enabled(&args) {
                     commands.entity(entity).remove::<bevy::light::NotShadowCaster>();
                 }
                 *tag = fade_tag(0);
@@ -406,13 +440,20 @@ struct Built {
     /// Collision shape; only the finest level gets one, since that is the
     /// only level the player can reach.
     collider: Option<Collider>,
+    /// Its blocks (see worldgen's `ColumnMesh::blocks`).
+    blocks: Arc<Vec<(u32, u32)>>,
 }
+
+/// A column's blocks, for the traced shadows' scene (see worldgen's
+/// `ColumnMesh::blocks`, rt_shadow.rs).
+#[derive(Component, Clone)]
+pub struct ColumnBlocks(pub Arc<Vec<(u32, u32)>>);
 
 #[derive(Resource, Default)]
 pub struct Streamer {
     /// (lod, wrapped key) -> mesh (None when the column is empty).
     cache: HashMap<Key, Option<Built>>,
-    pending: HashMap<Key, Task<(Option<(Mesh, Aabb)>, Option<Collider>, [f32; 2])>>,
+    pending: HashMap<Key, Task<(Option<(Mesh, Aabb, Vec<(u32, u32)>)>, Option<Collider>, [f32; 2])>>,
     /// (lod, unwrapped key) -> instance.
     spawned: HashMap<Key, Entity>,
     /// Instances of a world that has since changed, kept until their
@@ -453,8 +494,10 @@ fn setup_material(
     mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // The ground may be paved; `glow` is the brightness of lit geometry.
-    let ground = surface(&args, world.size(), 0.0, args.num("paving", 0.0));
-    let structures = surface(&args, world.size(), args.num("glow", 3000.0), 0.0);
+    // (Its glow for the vaults' pillars' lines of light, the only lit
+    // geometry in the ground.)
+    let ground = surface(&args, &world, args.num("glow", 3000.0), args.num("paving", 0.0));
+    let structures = surface(&args, &world, args.num("glow", 3000.0), 0.0);
     let mut level = |lod: u32| {
         let mut m = ground.clone();
         m.base.depth_bias = -LOD_DEPTH_BIAS * lod as f32;
@@ -466,12 +509,13 @@ fn setup_material(
 }
 
 /// The ground's surface (the plates' pieces on their tops, panels on their
-/// walls), for a world `size` across; `glow` the brightness of lit
+/// walls), for the `world`; `glow` the brightness of lit
 /// geometry, `paving` the paving's pattern. Albedo comes from vertex
 /// colours (red; green the plate's code, see terrain.wgsl); the material
 /// only sets the surface response. Not bent round the camera until
 /// `update_material` makes it so (the ground's and the structures' only).
-pub fn surface(args: &Args, size: f32, glow: f32, paving: f32) -> TerrainMaterial {
+pub fn surface(args: &Args, world: &WorldGen, glow: f32, paving: f32) -> TerrainMaterial {
+    let size = world.size();
     // (The walls' preset, see `walls` below.)
     let preset = args.num("walls", 1.0).round();
     let glyphs = (preset == 2.0) as u8 as f32;
@@ -498,7 +542,7 @@ pub fn surface(args: &Args, size: f32, glow: f32, paving: f32) -> TerrainMateria
             // (`--set subdiv_smallest`: the smaller pieces read as painted,
             // the user, between 8 and 32 m perhaps a district's own;
             // `subdiv_groove`, the joints' slope.)
-            pieces: Vec4::new(args.num("subdiv_smallest", 8.0), args.num("subdiv_groove", 45.0), 0.0, 0.0),
+            pieces: Vec4::new(args.num("subdiv_smallest", 8.0), args.num("subdiv_groove", 45.0), args.num("void_fade", 120.0), if crate::rt_shadow::enabled(args) { 1.0 + args.num("rt_debug", 0.0) } else { 0.0 }),
             // (`--set walls N`, the panels' presets while they are judged:
             // 0 none; 1 rectangles, the user's best (`wall_split` 1.5); 2
             // glyphs, some cuts left open, some curved (`wall_open` 0.25,
@@ -518,6 +562,8 @@ pub fn surface(args: &Args, size: f32, glow: f32, paving: f32) -> TerrainMateria
             far_data: crate::far_shadow::FAR_DATA,
             far_outer: crate::far_shadow::FAR_MAPS[1].clone(),
             far_second: crate::far_shadow::FAR_MAPS[2].clone(),
+            shell: crate::shell::SHELL.clone(),
+            rt_mask: crate::rt_shadow::RT_MASK.clone(),
         },
     }
 }
@@ -601,7 +647,7 @@ fn stream_columns(
     let mut wanted: Vec<HashSet<IVec2>> = Vec::new();
     for lod in 0..LOD_LEVELS {
         let size = column_size(lod);
-        let radius = LOD_RADIUS[lod as usize];
+        let radius = lod_radius(lod);
         let center = (pos / size).floor().as_ivec2();
         let r = (radius / size).ceil() as i32 + 1;
         let mut set = HashSet::new();
@@ -632,7 +678,7 @@ fn stream_columns(
                 let fine = lod - 1;
                 let margin = column_size(lod);
                 let needed = children(key)
-                    .any(|c| column_distance(fine, c, pos) > LOD_RADIUS[fine as usize] - margin);
+                    .any(|c| column_distance(fine, c, pos) > lod_radius(fine) - margin);
                 if !needed || ctx.covered(lod, key) {
                     continue;
                 }
@@ -673,7 +719,10 @@ fn stream_columns(
             let spent = [meshed, start.elapsed().as_secs_f32() - meshed];
             // (Ready to draw here, with its bounds: made so as it was taken
             // in, in the frame it came.)
-            let shown = (!column.is_empty()).then(|| (bounds(&column), column)).map(|(aabb, column)| (to_bevy_mesh(column, key.0), aabb));
+            let shown = (!column.is_empty()).then(|| (bounds(&column), column)).map(|(aabb, column)| {
+                let blocks = column.blocks.clone();
+                (to_bevy_mesh(column, key.0), aabb, blocks)
+            });
             (shown, collider, spent)
         });
         streamer.pending.insert(key, task);
@@ -720,6 +769,7 @@ fn stream_columns(
         let fade_in = fades && (quiet || finer((lod, key), &|k| shown.contains(k)));
         let mut entity = commands.spawn((
             TerrainColumn,
+            ColumnBlocks(built.blocks.clone()),
             Mesh3d(built.mesh.clone()),
             built.aabb,
             NoAutoAabb,
@@ -734,8 +784,10 @@ fn stream_columns(
             }
         }
         // The coarser levels' shadows from the cached far map (see
-        // far_shadow.rs), not live.
-        if lod >= 1 && far_cache {
+        // far_shadow.rs), not live; traced (SPIKE `--opt rt`), none live.
+        if crate::rt_shadow::enabled(&args) {
+            entity.insert(bevy::light::NotShadowCaster);
+        } else if lod >= 1 && far_cache {
             entity.insert((bevy::light::NotShadowCaster, crate::far_shadow::FarCaster));
         }
         if let Some(collider) = &built.collider {
@@ -762,7 +814,7 @@ fn stream_columns(
         let center = wrap_key((pos / size).floor().as_ivec2(), n);
         let d = (*key - center).abs();
         let d = IVec2::new(d.x.min(n - d.x), d.y.min(n - d.y));
-        d.max_element() as f32 * size > LOD_RADIUS[*lod as usize] + size * 3.0
+        d.max_element() as f32 * size > lod_radius(*lod) + size * 3.0
     };
     streamer.cache.retain(|key, _| !far(key));
     streamer.pending.retain(|key, _| !far(key));
@@ -801,9 +853,9 @@ fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh
     let mut done = Vec::new();
     for (key, task) in streamer.pending.iter_mut() {
         if let Some((shown, collider, cost)) = check_ready(task) {
-            let built = shown.map(|(mesh, aabb)| {
+            let built = shown.map(|(mesh, aabb, blocks)| {
                 budget.spend(&mesh);
-                Built { aabb, mesh: meshes.add(mesh), collider }
+                Built { aabb, mesh: meshes.add(mesh), collider, blocks: Arc::new(blocks) }
             });
             done.push((*key, built, cost));
         }
@@ -858,6 +910,10 @@ pub fn to_bevy_mesh(mut column: ColumnMesh, lod: u32) -> Mesh {
         *code += 131072.0 * lod as f32;
     }
     column.glow.resize(column.positions.len(), 0.0);
+    // (On every column, so all share one vertex layout: see far_shadow.rs.)
+    column.below.resize(column.positions.len(), 0.0);
+    column.under.resize(column.positions.len(), 0.0);
+    let below: Vec<[f32; 2]> = column.below.iter().zip(&column.under).map(|(&b, &u)| [b, u]).collect();
     let colors: Vec<[f32; 4]> = column
         .albedo
         .iter()
@@ -873,5 +929,9 @@ pub fn to_bevy_mesh(mut column: ColumnMesh, lod: u32) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, column.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, column.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        // (A void wall's depth below its top, as the first texture
+        // coordinate, and whether it is under the world, the second: see
+        // `ColumnMesh::below`, `under`.)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, below)
         .with_inserted_indices(Indices::U32(column.indices))
 }

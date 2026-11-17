@@ -36,6 +36,7 @@
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
     shadows::set_far,
+    mesh_view_bindings::view,
 }
 #endif
 
@@ -76,6 +77,25 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(110) var far_data: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(111) var far_outer: texture_depth_2d;
 @group(#{MATERIAL_BIND_GROUP}) @binding(112) var far_second: texture_depth_2d;
+// PROBE: the shell's mask, open (1) over voids (see shell.rs, `SHELL`).
+@group(#{MATERIAL_BIND_GROUP}) @binding(113) var shell_mask: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(114) var shell_sampler: sampler;
+// SPIKE: the suns' traced shadows, lit (1) or not, red and green, a texel a
+// pixel (see rt_shadow.rs); read when `pieces.w` is 1.
+@group(#{MATERIAL_BIND_GROUP}) @binding(115) var rt_mask: texture_2d<f32>;
+// A point (unbent, `p`) under the world if `under` (what the mesh says it
+// is, worldgen's `ColumnMesh::under`: the vaults' undersides, their
+// pillars; by height, low ground darkened, and a piece across the crease
+// between two bays' vaults lit, the user's dark patch and lit flaps): lit
+// by the sun towards `sun` only if its way there reaches the deck's level
+// (the world's) over a void. 1 if not under the world.
+fn shell_light(p: vec3<f32>, sun: vec3<f32>, under: bool) -> f32 {
+    if !under || sun.y <= 0.0 {
+        return 1.0;
+    }
+    let q = p.xz + sun.xz * (-p.y / sun.y);
+    return textureSampleLevel(shell_mask, shell_sampler, fract(q / wrap.x), 0.0).r;
+}
 
 fn far_texel(map: i32, i: i32) -> vec4<f32> {
     return textureLoad(far_data, vec2<i32>(map * 8 + i, 0), 0);
@@ -99,6 +119,10 @@ fn far_size(map: i32) -> vec2<i32> {
     return vec2<i32>(textureDimensions(far_second));
 }
 
+// How far a receiver is pushed out along its normal before its far maps
+// are read, in their texels (see `far_map`).
+const FAR_NORMAL: f32 = 1.0;
+
 // Lit (1) or in shadow (0) by one far map at a point seen bent round the
 // camera, with its normal; x -1 where the map is off or does not reach, y
 // how near its edge (1 at it). Bent as the map was drawn, round where the
@@ -118,7 +142,13 @@ fn far_map(map: i32, world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     }
     let now = world.xz - params.zw;
     let then = world.xz - bend.xy;
-    var p = world;
+    // (Pushed out along its normal by a texel (`FAR_NORMAL`), as the live
+    // shadows are (Bevy's normal bias): the slanted void walls' strips
+    // shadowed themselves at every crease between them, sawtooth stripes
+    // where the far maps took over from the live shadows, the user. The
+    // steps' shadows a texel shorter, under a metre.)
+    let texel = far_texel(map, 7);
+    var p = world + normal * max(texel.x, texel.y) * FAR_NORMAL;
     p.y += dot(now, now) * params.y - dot(then, then) * bend.z;
     let right = far_texel(map, 6).xyz;
     let up = cross(right, -sun);
@@ -130,7 +160,6 @@ fn far_map(map: i32, world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     if any(uv <= vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || c.z < 0.0 || c.z > 1.0 {
         return vec2<f32>(-1.0, 0.0);
     }
-    let texel = far_texel(map, 7);
     let size = far_size(map);
     let at = uv * vec2<f32>(size);
     let t = at - 0.5;
@@ -154,7 +183,10 @@ fn far_map(map: i32, world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
 // main sun's from its inner map where it reaches, blending into the outer
 // at its edge; the second's fading out at its map's edge (its live shadows
 // end nearer still).
-fn far_shadow(world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+fn far_shadow(world: vec3<f32>, normal: vec3<f32>, under: bool) -> vec2<f32> {
+    // (Under the world, the shell's shadow too: see `shell_light`.)
+    let flat = world + vec3<f32>(0.0, dot(world.xz - params.zw, world.xz - params.zw) * params.y, 0.0);
+    let shell = vec2<f32>(shell_light(flat, far_texel(0, 5).xyz, under), shell_light(flat, far_texel(2, 5).xyz, under));
     var main = 1.0;
     let inner = far_map(0, world, normal);
     if inner.x >= 0.0 && inner.y < 0.9 {
@@ -174,7 +206,7 @@ fn far_shadow(world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     if s.x >= 0.0 {
         second = mix(s.x, 1.0, clamp((s.y - 0.9) / 0.1, 0.0, 1.0));
     }
-    return vec2<f32>(main, second);
+    return min(vec2<f32>(main, second), shell);
 }
 
 fn hash(cell: vec2<i32>, period: i32) -> f32 {
@@ -743,9 +775,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         pbr_input.material.base_color = vec4<f32>(c, 1.0);
     }
 
-    // Lit pieces of geometry (glowing etchings and seams).
+    // Lit pieces of geometry (glowing etchings and seams). (Their own
+    // light, added after the shell's shadow below: darkened with the stone
+    // round them, the pillars' lines under the land were not seen.)
+    var self_lit = vec3<f32>(0.0);
     if lit > 0.0 {
+#ifdef PREPASS_PIPELINE
         pbr_input.material.emissive = vec4<f32>(pbr_input.material.emissive.rgb + vec3<f32>(lit * glow.x), 1.0);
+#else
+        self_lit = vec3<f32>(lit * glow.x);
+#endif
     }
 
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
@@ -754,14 +793,46 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let out = deferred_output(in, pbr_input);
 #else
     var out: FragmentOutput;
-    set_far(far_shadow(in.world_position.xyz, normalize(in.world_normal)), far_texel(0, 5).xyz, far_texel(2, 5).xyz);
+    var under = false;
+#ifdef VERTEX_UVS_A
+    under = in.uv.y > 0.5;
+#endif
+    var far_lit = vec2<f32>(1.0);
+    if pieces.w > 0.5 {
+        far_lit = textureLoad(rt_mask, vec2<i32>(in.position.xy), 0).rg;
+    } else {
+        far_lit = far_shadow(in.world_position.xyz, normalize(in.world_normal), under);
+    }
+    set_far(far_lit, far_texel(0, 5).xyz, far_texel(2, 5).xyz);
     out.color = apply_pbr_lighting(pbr_input);
-    // A void's walls sink into the dark below the world (see worldgen's
-    // `VOID_DEPTH`): the hole reads as one, not as more ground (its far
-    // wall, lit, did). By the height unbent, 60 m under the world's level
-    // on (the ground's lowest is about -20 m).)
-    let flat = in.world_position.xyz + vec3<f32>(0.0, dot(in.world_position.xz - params.zw, in.world_position.xz - params.zw) * params.y, 0.0);
-    out.color = vec4<f32>(out.color.rgb * exp(min(flat.y + 60.0, 0.0) / 120.0), out.color.a);
+    // (Below the deck, in the shell's shadow from both suns, the fill and
+    // the sky's light cut too: nothing reaches under the world but through
+    // its holes.)
+    let flat_y = in.world_position.y + dot(in.world_position.xz - params.zw, in.world_position.xz - params.zw) * params.y;
+    if under {
+        let open = max(shell_light(vec3<f32>(in.world_position.x, flat_y, in.world_position.z), far_texel(0, 5).xyz, true), shell_light(vec3<f32>(in.world_position.x, flat_y, in.world_position.z), far_texel(2, 5).xyz, true));
+        out.color = vec4<f32>(out.color.rgb * mix(0.12, 1.0, open), out.color.a);
+    }
+    out.color = vec4<f32>(out.color.rgb + self_lit * view.exposure, out.color.a);
+    // (SPIKE DEBUG `--set rt_debug 1`: the main sun's traced hits' distance.)
+    // (SPIKE DEBUG `--set rt_debug 2`: only which way it faces the main
+    // sun, white towards, black away.)
+    if pieces.w > 2.5 {
+        out.color = vec4<f32>(vec3<f32>(select(0.02, 1.0, dot(normalize(in.world_normal), far_texel(0, 5).xyz) > 0.0)), 1.0);
+    } else if pieces.w > 1.5 {
+        let m = textureLoad(rt_mask, vec2<i32>(in.position.xy), 0);
+        out.color = vec4<f32>(vec3<f32>(select(m.b * 0.05, 1.0, m.r > 0.5)), 1.0);
+    }
+    // What goes down into a void for ever sinks into the dark (see
+    // worldgen's `VOID_DEPTH`): its walls, without the vaults, and the
+    // vaults' pillars; the hole reads as one, not as more ground (its far
+    // wall, lit, did). (On the vaults, the walls end on their arches and
+    // do not fade.) By
+    // each wall's depth below its own top (`ColumnMesh::below`), 60 m down
+    // on, the same at every rim.
+#ifdef VERTEX_UVS_A
+    out.color = vec4<f32>(out.color.rgb * exp(-max(in.uv.x - 60.0, 0.0) / pieces.z), out.color.a);
+#endif
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
 #endif
     return out;

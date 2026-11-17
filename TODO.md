@@ -34,6 +34,28 @@ scale (world-identity note).
   the voids' outlines warped (`coast`); falling 400 m below the world
   kills, back where you stood 2 s before; canals over a void as bridges,
   stations in one as platforms (the basics). Voids note.
+- **Probe** The world the top of vaults on pillars (you, 2026-11-17;
+  `--opt vaults`, `--set vault_bay 1024`, `vault_crown 60`): void walls cut
+  down to the vaults' underside, slanting from the jagged coast at the
+  top to the smooth outline at their foot (your idea), unfaded so the
+  arches read; pillars on the grid outline of the bays a void reaches
+  (your blue path), lines of light down them; under the world lit only
+  through the voids (the shell's mask). Built into the terrain, at every
+  void; no frame cost measured (+11-16% triangles in view, the
+  undersides; building +1-4% at rims). Open: two tiny lit specks seen
+  from inside a void; whether vaults become how voids always are.
+  The slanted walls' panels (you, 2026-11-17, `--cam
+  12089.25,70.14,10178.73,5370.09,-37.19`): courses broken and skewed
+  across the strips' seams, each strip leaning its own way.
+  Slanted rim walls (you, 2026-11-17): a wedge-shaped hole between two
+  walls, widening downwards (`--cam 10510.80,6.00,11973.64,3780.44,-4.16`,
+  `--set voids 0.2 --opt vaults`; my unverified guess: a slanted wall
+  beside an unslanted one, sharing a top corner, not a foot); and the
+  walls look strange (what exactly: to ask). Walls now in rows following
+  the twisted surface (creases cast spikes); untested in motion.
+  The shadow flicker on a slanted wall as levels of detail cross-fade
+  (`--cam 10732.11,-51.16,10564.72,4429.72,-2.90`, a tap forward): fixed
+  by one underside grid at every level, waiting on your test.
 - **Next** Voids on by default: check places.txt for places falling into
   one first.
 - **Idea** Bridges made more interesting (you, 2026-11-17): what holds a
@@ -950,6 +972,31 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 
 ## Rendering, performance and tech
 
+- **Next** Shadows and levels of detail (you, 2026-11-17): ~18 shadow
+  problems since October; the older ones the shadow maps' own (resolution,
+  tolerances, view-fitted cascades), most of today's from the levels of
+  detail: two copies of the ground during each 0.4 s cross-fade, the
+  coarser lowered metres, each level's coarse version built by its own
+  branch (fitted planes, plain prisms, fewer pillar sides, coarser
+  canals, extended wall feet), so they disagree. Direction agreed in
+  principle: geomorphing, coarse levels by one rule (each finer vertex
+  carries its coarser target; plates' targets from the hierarchy, forms'
+  recorded by each operation as it runs), no lowering, no cross-fade.
+  Checked: coarse plate walls lie on fine boundaries (~2 M points);
+  every other part has a way back (pillar form's 7 operations, canals
+  nested, wall rows, vault pillar sides, kerbs; attributes need targets).
+  Measured: +22% vertex memory for targets. Unmeasured: plate targets'
+  cost (estimate +25% fine build), sliding in motion. Next: a plates-only
+  prototype judged by you in motion. Not checked: slabs, site structures.
+- **Probe** Ray-traced sun shadows (`--opt rt`, rt_shadow.rs, wgpu 29 ray
+  queries, not Solari): no view dependence, cheaper where shadows were
+  costly (stacks 9.9 to 6.8 ms; flight frames over 10 ms ~790 to ~90),
+  exact on settled views; worse than the maps in motion through LOD
+  cross-fades (depth-pass reconstruction meets the lowered copies).
+  Parked until the levels of detail agree. Diagnostics to remove before
+  it is judged again: `lod_near`, `showshot`, `rtholes`, `rtlog`,
+  `rt_debug`, `rt_px`/`rt_py`, `rt_seen`, `rt_keep`, `rt_finest`,
+  `rt_only`.
 - **You** The far view (2026-11-17), the game's default now; judge it in
   motion:
   - the coarser levels of detail drawn as planes fitted to the finest

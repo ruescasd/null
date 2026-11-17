@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use glam::{DVec2, Vec3};
+use glam::{DVec2, DVec3, Vec3};
 use crate::planar::{self, Corner, Geometry, Key, Line};
 
 use crate::canal::{CanalHit, Canals, PIPE_RADIUS};
@@ -71,6 +71,12 @@ pub struct PlateWorld {
     /// How far below the world a void's walls reach (m, a height): the
     /// ground's height in a void. (How deep is open, the user, 2026-11-17.)
     pub void_depth: f64,
+    /// The void walls' strata, while judged (`--set strata`): 0 none, else
+    /// one of `STRATA`.
+    pub strata: u8,
+    /// PROBE (the user, 2026-11-17): the world's underside as vaults, the
+    /// floor their top; a void's walls cut down to them (see `Vaults`).
+    pub vaults: Option<Vaults>,
     /// The lowest a wall carries its pattern (m, out of the ground beyond
     /// it, at its tallest; the game's `--set wall_least`). (The user: on a
     /// short wall the panels do not fit, a few ticks with no panel's edge;
@@ -199,7 +205,244 @@ pub struct Cache {
     sky: Option<SkyGrid>,
     /// Whether each big plate is in a void (see `in_void`).
     voids: HashMap<(i32, i32), bool>,
+    /// Whether each vault bay encloses part of a void (see `encloses`).
+    bays: HashMap<(i64, i64), bool>,
+    /// Where the world's underside is at each point of the grid it is cut
+    /// on (see `under_at`), by the grid's step.
+    feet: HashMap<(i64, i64, u64), (DVec2, f64)>,
 }
+
+/// A void wall's strata (the user, 2026-11-17: the walls an edge of the
+/// world, the world a built shell cut open): gaps recessed into the wall at
+/// the same heights at every rim (every `period` m down from the world's
+/// level, each `(from, height, inset)`: from the period's top, m), stopping
+/// `margin` m short of the wall's ends, a pier at every corner; below a
+/// solid lip at the rim, down to where the walls are dark.
+struct Strata {
+    period: f64,
+    gaps: &'static [(f64, f64, f64)],
+    margin: f64,
+}
+
+/// The strata to judge (`--set strata 1..3`): tight courses; a few deep
+/// floors; deep floors with grooves between.
+const STRATA: [Strata; 3] = [
+    Strata { period: 12.0, gaps: &[(0.0, 4.0, 3.0)], margin: 3.0 },
+    Strata { period: 60.0, gaps: &[(0.0, 20.0, 15.0)], margin: 8.0 },
+    Strata { period: 60.0, gaps: &[(0.0, 20.0, 15.0), (30.0, 1.0, 1.0), (40.0, 1.0, 1.0), (50.0, 1.0, 1.0)], margin: 8.0 },
+];
+
+/// PROBE (the user, 2026-11-17): the world is the top of a structure of
+/// pillars on a square grid `bay` m apart, each bay covered by a sail vault
+/// (a dome cut by the bay's four sides): the floor its top, `crown` m below
+/// the world's level at a bay's middle. A void is a hole cut through it:
+/// its walls run down to the vault's underside where they stand, shallow
+/// mid-bay, plunging near a pillar; the underside one formula for the
+/// whole world.
+#[derive(Clone, Copy, Debug)]
+pub struct Vaults {
+    pub bay: f64,
+    pub crown: f64,
+}
+
+impl Vaults {
+    /// The vaults' sphere's radius: half a bay's diagonal.
+    pub fn radius(&self) -> f64 {
+        self.bay * std::f64::consts::FRAC_1_SQRT_2
+    }
+
+    /// Where the vaults spring from the pillars (a height).
+    pub fn spring(&self) -> f64 {
+        -(self.radius() + self.crown)
+    }
+
+    /// The bay's middle round a point.
+    fn middle(&self, p: DVec2) -> DVec2 {
+        ((p / self.bay).floor() + DVec2::splat(0.5)) * self.bay
+    }
+
+    /// The vaults' underside's height at a point.
+    pub fn intrados(&self, p: DVec2) -> f64 {
+        let r = self.radius();
+        self.spring() + (r * r - (p - self.middle(p)).length_squared()).max(0.0).sqrt()
+    }
+
+    /// The underside's normal there, facing down into the bay.
+    pub fn normal(&self, p: DVec2) -> Vec3 {
+        let c = self.middle(p);
+        let y = self.intrados(p);
+        let n = DVec3::new(c.x - p.x, self.spring() - y, c.y - p.y).normalize_or(DVec3::NEG_Y);
+        Vec3::new(n.x as f32, n.y as f32, n.z as f32)
+    }
+}
+
+/// PROBE: the underside's grid's step, about (m; see `emit_prism`).
+const UNDER_STEP: f64 = 24.0;
+
+/// PROBE: how far a void wall's rows may be from the twisted surface they
+/// stand for (m; see `emit_prism`), and the most rows one strip is cut into.
+const RULED_TOL: f64 = 0.25;
+const RULED_ROWS: u32 = 64;
+
+/// PROBE: the direction across the grid cells' diagonals (see `under_at`):
+/// a cell's diagonal is where `x - z` is the cell's own.
+const DIAGONAL: DVec2 = DVec2::new(1.0, -1.0);
+
+/// PROBE: where `p · n` is `at`: how far along `a` to `b` (see `clip_line`,
+/// `grid_cuts`).
+fn crossing(a: DVec2, b: DVec2, n: DVec2, at: f64) -> f64 {
+    (at - a.dot(n)) / (b - a).dot(n)
+}
+
+/// PROBE: `poly` cut by the line where `p · n` is `at`, the side above it
+/// kept if `above`, else below, into `out`.
+fn clip_line(poly: &[DVec2], n: DVec2, at: f64, above: bool, out: &mut Vec<DVec2>) {
+    out.clear();
+    let inside = |p: DVec2| if above { p.dot(n) >= at } else { p.dot(n) <= at };
+    for k in 0..poly.len() {
+        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+        if inside(a) {
+            out.push(a);
+        }
+        if inside(a) != inside(b) {
+            out.push(a + (b - a) * crossing(a, b, n, at));
+        }
+    }
+}
+
+/// PROBE: an edge `a` to `b` cut where it crosses the underside's grid
+/// (`step`, see `under_at`): its lines and its cells' diagonals, each cut
+/// how far along and where, in order, from `a` to `b`.
+fn grid_cuts(a: DVec2, b: DVec2, step: f64) -> Vec<(f64, DVec2)> {
+    let mut cuts = vec![(0.0, a), (1.0, b)];
+    for n in [DVec2::X, DVec2::Y, DIAGONAL] {
+        let (from, to) = (a.dot(n).min(b.dot(n)), a.dot(n).max(b.dot(n)));
+        let mut g = (from / step).floor() + 1.0;
+        while g * step < to {
+            let t = crossing(a, b, n, g * step);
+            cuts.push((t, a + (b - a) * t));
+            g += 1.0;
+        }
+    }
+    cuts.sort_by(|p, q| p.0.total_cmp(&q.0));
+    cuts.dedup_by(|p, q| p.0 - q.0 < 1e-9);
+    cuts
+}
+
+/// PROBE (see `foot`): within the first of the void's smooth outline (m),
+/// moved all the way onto it; beyond the second, not at all.
+const FOOT_REACH: (f64, f64) = (130.0, 260.0);
+
+/// PROBE: a pillar's radius, as a share of a bay (see `emit_pillars`).
+const PILLAR_WIDTH: f64 = 0.05;
+/// PROBE: how deep the pillars go below their capitals (m): for ever, as
+/// far as anyone sees.
+const PILLAR_DEPTH: f64 = 6000.0;
+/// PROBE: the pillars' lines of light (0.3: at 0.05 not seen at all).
+const PILLAR_GLOW: f32 = 0.3;
+/// PROBE: a pillar's stone.
+const PILLAR_ALBEDO: f32 = 0.3;
+
+/// PROBE: a quad of a pillar's (`q`: points and heights), facing `normal`,
+/// its albedo and glow; fading below `fade` (a height) if given.
+fn pillar_quad(mesh: &mut ColumnMesh, q: [(DVec2, f64); 4], normal: Vec3, albedo: f32, glow: f32, fade: Option<f64>, origin: (f64, f64)) {
+    let base = mesh.positions.len() as u32;
+    let mut below = [0f32; 4];
+    for (k, &(p, y)) in q.iter().enumerate() {
+        mesh.positions.push([(p.x - origin.0) as f32, y as f32, (p.y - origin.1) as f32]);
+        mesh.normals.push(normal.to_array());
+        mesh.albedo.push(albedo);
+        mesh.ao.push(1.0);
+        below[k] = fade.map_or(0.0, |f| (f - y).max(0.0) as f32);
+    }
+    mesh.below_of(&below);
+    mesh.plate_of(4, 0.0);
+    mesh.glow_of(4, glow);
+    mesh.under_of(4);
+    let v = |k: usize| Vec3::new(q[k].0.x as f32, q[k].1 as f32, q[k].0.y as f32);
+    let face = (v(1) - v(0)).cross(v(2) - v(0));
+    if face.dot(normal) >= 0.0 {
+        mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    } else {
+        mesh.indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+    }
+}
+
+/// PROBE: the part of a convex polygon on the land side of a cut (a point
+/// on it and the way to the land), each kept point with whether the edge
+/// from it is the cut's.
+fn pillar_clip(poly: &[DVec2], cut: Option<(DVec2, DVec2)>) -> Vec<(DVec2, bool)> {
+    let Some((at, land)) = cut else { return poly.iter().map(|&p| (p, false)).collect() };
+    let side = |p: DVec2| (p - at).dot(land);
+    let mut out = Vec::new();
+    for k in 0..poly.len() {
+        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+        let (sa, sb) = (side(a), side(b));
+        if sa >= 0.0 {
+            out.push((a, false));
+        }
+        if (sa >= 0.0) != (sb >= 0.0) {
+            out.push((a + (b - a) * (sa / (sa - sb)), sa >= 0.0));
+        }
+    }
+    out
+}
+
+/// PROBE: a prism of a pillar's: `poly` cut (see `pillar_clip`), from `y0`
+/// up to `y1`, its sides (round about `round`'s middle if given), the
+/// cut's face towards the void, its underside; fading below `fade`.
+#[allow(clippy::too_many_arguments)]
+fn pillar_prism(mesh: &mut ColumnMesh, poly: &[DVec2], cut: Option<(DVec2, DVec2)>, y0: f64, y1: f64, round: Option<DVec2>, fade: f64, origin: (f64, f64)) {
+    let kept = pillar_clip(poly, cut);
+    if kept.len() < 3 {
+        return;
+    }
+    let centre = kept.iter().map(|q| q.0).sum::<DVec2>() / kept.len() as f64;
+    for k in 0..kept.len() {
+        let ((a, is_cut), (b, _)) = (kept[k], kept[(k + 1) % kept.len()]);
+        let out = if is_cut {
+            -cut.map_or(DVec2::X, |c| c.1)
+        } else {
+            let mid = (a + b) * 0.5;
+            match round {
+                Some(c) => (mid - c).normalize_or(DVec2::X),
+                None => {
+                    let e = b - a;
+                    let n = DVec2::new(e.y, -e.x).normalize_or(DVec2::X);
+                    if n.dot(mid - centre) < 0.0 { -n } else { n }
+                }
+            }
+        };
+        pillar_quad(mesh, [(a, y1), (b, y1), (b, y0), (a, y0)], Vec3::new(out.x as f32, 0.0, out.y as f32), PILLAR_ALBEDO, 0.0, Some(fade), origin);
+    }
+    // Its underside, a fan.
+    let base = mesh.positions.len() as u32;
+    for &(p, _) in &kept {
+        mesh.positions.push([(p.x - origin.0) as f32, y0 as f32, (p.y - origin.1) as f32]);
+        mesh.normals.push([0.0, -1.0, 0.0]);
+        mesh.albedo.push(PILLAR_ALBEDO);
+        mesh.ao.push(1.0);
+    }
+    let below: Vec<f32> = kept.iter().map(|_| (fade - y0).max(0.0) as f32).collect();
+    mesh.below_of(&below);
+    mesh.plate_of(kept.len(), 0.0);
+    mesh.glow_of(kept.len(), 0.0);
+    mesh.under_of(kept.len());
+    for k in 1..kept.len() as u32 - 1 {
+        let (a, b, c) = (kept[0].0, kept[k as usize].0, kept[k as usize + 1].0);
+        let up = (b - a).perp_dot(c - a) < 0.0;
+        if up {
+            mesh.indices.extend_from_slice(&[base, base + k, base + k + 1]);
+        } else {
+            mesh.indices.extend_from_slice(&[base, base + k + 1, base + k]);
+        }
+    }
+}
+
+/// The solid lip at a void's rim, above its strata (m).
+const STRATA_LIP: f64 = 15.0;
+/// How deep below a wall's top its strata go (m): below, dark.
+const STRATA_DEPTH: f64 = 450.0;
 
 /// How far below the world a void's walls reach by default (m, see
 /// `PlateWorld::void_depth`): the shell the world is, stars below it (the
@@ -393,6 +636,8 @@ impl PlateWorld {
             kerbs: false,
             far_tol: [0.0; 3],
             void_depth: VOID_DEPTH,
+            strata: 0,
+            vaults: None,
             wall_least: 1.5,
             step_cap: None,
             stairs: RwLock::default(),
@@ -520,6 +765,182 @@ impl PlateWorld {
             return self.slope_at(p);
         }
         plate.top(self, p)
+    }
+
+    /// PROBE: the vaults' pillars whose middles stand in the column at
+    /// `origin`, `size` across: only those round a void, on the outline of
+    /// the bays it reaches (`encloses`), the user's "enclosing grid
+    /// perimeter": a corner where bays it reaches meet bays it does not
+    /// (behind them, more: layers on layers of pillars, the user); the
+    /// vaults' undersides drawn in the same bays. Cut by the void like anything else
+    /// (the user: the cut cuts whatever is there), along the chord where
+    /// land meets void round its widest; all void, none. A square abacus,
+    /// two rings and the shaft, going down for ever, its capital's top
+    /// meeting the vaults' underside; faint lines of light down four flutes
+    /// on the land side (`PILLAR_GLOW`), all the way. Fewer sides further
+    /// off.
+    fn emit_pillars(&self, cache: &mut Cache, mesh: &mut ColumnMesh, v: Vaults, origin: (f64, f64), size: f64, lod: u32, block_of: &dyn Fn(DVec2) -> u8) {
+        let (x0, z0) = origin;
+        let r = PILLAR_WIDTH * v.bay;
+        let radius = v.radius();
+        let top = v.spring() + (radius * radius - (radius - 1.4 * r).powi(2)).max(0.0).sqrt();
+        let sides = [20usize, 12, 8][(lod as usize).min(2)];
+        let void = |cache: &mut Cache, q: DVec2| {
+            let plate = self.plate_at(cache, q.x, q.y, 0);
+            self.in_void(cache, plate.sites[0])
+        };
+        let (i0, i1) = ((x0 / v.bay).ceil() as i64, ((x0 + size) / v.bay).ceil() as i64);
+        let (k0, k1) = ((z0 / v.bay).ceil() as i64, ((z0 + size) / v.bay).ceil() as i64);
+        for i in i0..i1 {
+            for k in k0..k1 {
+                let p = DVec2::new(i as f64 * v.bay, k as f64 * v.bay);
+                let reached = [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)]
+                    .map(|(a, b)| self.encloses(cache, v, p + DVec2::new(a, b) * v.bay));
+                if reached.iter().all(|&e| e) || !reached.iter().any(|&e| e) {
+                    continue;
+                }
+                let marks: Vec<(DVec2, bool)> = (0..48)
+                    .map(|j| {
+                        let a = j as f64 / 48.0 * std::f64::consts::TAU;
+                        let q = p + DVec2::new(a.cos(), a.sin()) * 2.0 * r;
+                        (q, !void(cache, q))
+                    })
+                    .collect();
+                let land = marks.iter().filter(|m| m.1).count();
+                if land == 0 {
+                    continue;
+                }
+                let cut = (land < marks.len()).then(|| {
+                    let n = marks.len();
+                    let changes: Vec<DVec2> = (0..n).filter(|&j| marks[j].1 != marks[(j + 1) % n].1).map(|j| (marks[j].0 + marks[(j + 1) % n].0) * 0.5).collect();
+                    let (a, b) = (changes[0], changes[changes.len() - 1]);
+                    let along = (b - a).normalize_or(DVec2::X);
+                    let mut normal = DVec2::new(-along.y, along.x);
+                    let middle = marks.iter().filter(|m| m.1).map(|m| m.0).sum::<DVec2>() / land as f64;
+                    if (middle - a).dot(normal) < 0.0 {
+                        normal = -normal;
+                    }
+                    (a, normal)
+                });
+                let ring = |rad: f64| -> Vec<DVec2> {
+                    (0..sides).map(|j| {
+                        let a = j as f64 / sides as f64 * std::f64::consts::TAU;
+                        p + DVec2::new(a.cos(), a.sin()) * rad
+                    }).collect()
+                };
+                let h = 1.4 * r;
+                let square = [p + DVec2::new(-h, -h), p + DVec2::new(h, -h), p + DVec2::new(h, h), p + DVec2::new(-h, h)];
+                let (abacus, echinus, shaft, bottom) = (top - 0.25 * r, top - 0.55 * r, top - 0.9 * r, top - PILLAR_DEPTH);
+                let first = mesh.indices.len();
+                pillar_prism(mesh, &square, cut, abacus, top, None, top, origin);
+                pillar_prism(mesh, &ring(1.25 * r), cut, echinus, abacus, Some(p), top, origin);
+                pillar_prism(mesh, &ring(1.1 * r), cut, shaft, echinus, Some(p), top, origin);
+                pillar_prism(mesh, &ring(r), cut, bottom, shaft, Some(p), top, origin);
+                for j in [0, sides / 4, sides / 2, 3 * sides / 4] {
+                    let a = j as f64 / sides as f64 * std::f64::consts::TAU;
+                    let n = DVec2::new(a.cos(), a.sin());
+                    let base = p + n * (r + 0.05);
+                    if cut.is_some_and(|(at, land)| (base - at).dot(land) < 0.0) {
+                        continue;
+                    }
+                    let side = DVec2::new(-n.y, n.x) * (0.06 * r);
+                    let q = [(base - side, shaft), (base + side, shaft), (base + side, bottom), (base - side, bottom)];
+                    pillar_quad(mesh, q, Vec3::new(n.x as f32, 0.0, n.y as f32), 0.0, PILLAR_GLOW, None, origin);
+                }
+                // (In the block where it stands, as the finer column there
+                // holds it.)
+                mesh.block_from(first, block_of(p));
+            }
+        }
+    }
+
+    /// PROBE: whether the vault bay round `p` encloses part of a void
+    /// (itself, or within a big plate of its edges): only there is its
+    /// underside ever seen (the user: why build the rest at all?). Sampled
+    /// every 32 m, once a bay.
+    fn encloses(&self, cache: &mut Cache, v: Vaults, p: DVec2) -> bool {
+        let key = ((p.x / v.bay).floor() as i64, (p.y / v.bay).floor() as i64);
+        if let Some(&e) = cache.bays.get(&key) {
+            return e;
+        }
+        let (x0, z0) = (key.0 as f64 * v.bay - GRID[0], key.1 as f64 * v.bay - GRID[0]);
+        let n = ((v.bay + 2.0 * GRID[0]) / 32.0).ceil() as i64;
+        let mut e = false;
+        'search: for i in 0..=n {
+            for k in 0..=n {
+                let q = DVec2::new(x0 + i as f64 * 32.0, z0 + k as f64 * 32.0);
+                let plate = self.plate_at(cache, q.x, q.y, 0);
+                if self.in_void(cache, plate.sites[0]) {
+                    e = true;
+                    break 'search;
+                }
+            }
+        }
+        cache.bays.insert(key, e);
+        e
+    }
+
+    /// PROBE (see `foot`): a point near a void's coast moved onto the
+    /// void's own outline, smooth (the region map's, see
+    /// `DistrictMap::void_field`), the nearest way: Newton's steps along the
+    /// field's gradient.
+    fn settle(&self, p: DVec2) -> DVec2 {
+        let f = |q: DVec2| self.districts.void_field(q.x, q.y);
+        // (Far from any void, where it is: see `foot`.)
+        if f(p).abs() > 2.0 * FOOT_REACH.1 {
+            return p;
+        }
+        let mut q = p;
+        for _ in 0..4 {
+            let v = f(q);
+            let g = DVec2::new(f(q + DVec2::X) - f(q - DVec2::X), f(q + DVec2::Y) - f(q - DVec2::Y)) * 0.5;
+            if g.length_squared() < 1e-9 {
+                break;
+            }
+            q -= g * (v / g.length_squared());
+        }
+        q
+    }
+
+    /// PROBE (the user, 2026-11-17): on the vaults, a void's walls slant
+    /// from the coast at the top (the plates' edges) to the void's smooth
+    /// outline at their foot, straight between: the arches' line along the
+    /// foot without the coast's zigzag, and the rim faceted. This is where
+    /// what is under the world at `p` stands,
+    /// by `p` alone (so every wall's foot and underside at a point go the
+    /// same way, nothing torn between them; by the plates facing the void
+    /// only, a corner three plates share moved for two, the third's
+    /// underside left: gaps, lit through): onto the void's smooth outline
+    /// within `FOOT_REACH.0` of it, as far as the coast ever is, less and
+    /// less on to `FOOT_REACH.1`, then not at all.
+    fn foot(&self, p: DVec2) -> DVec2 {
+        let d = self.settle(p) - p;
+        let (near, far) = FOOT_REACH;
+        let w = ((far - d.length()) / (far - near)).clamp(0.0, 1.0);
+        p + d * w
+    }
+
+    /// PROBE: on the vaults, where the world's underside is under `p`
+    /// (where it stands, see `foot`, and the vault's height there): worked
+    /// out at the points of a grid `step` apart, between them straight
+    /// across each of its cells' two triangles (split from the lesser corner
+    /// to the greater). A straight line within a triangle stays straight, so
+    /// a corner of one piece partway along the edge of the next stays on it.
+    /// (Each point moved on its own way, `foot` bending what was straight,
+    /// a small plate's corner left the big plate's edge beside it: cracks,
+    /// lit through.) The undersides and the void walls' feet are cut where
+    /// they cross the grid's lines (`clip_line`, `grid_cuts`).
+    fn under_at(&self, cache: &mut Cache, v: Vaults, step: f64, p: DVec2) -> (DVec2, f64) {
+        let (i, k) = ((p.x / step).floor() as i64, (p.y / step).floor() as i64);
+        let (u, w) = (p.x / step - i as f64, p.y / step - k as f64);
+        let mut at = |di: i64, dk: i64| {
+            *cache.feet.entry((i + di, k + dk, step.to_bits())).or_insert_with(|| {
+                let q = self.foot(DVec2::new((i + di) as f64 * step, (k + dk) as f64 * step));
+                (q, v.intrados(q))
+            })
+        };
+        let parts = if u >= w { [(at(0, 0), 1.0 - u), (at(1, 0), u - w), (at(1, 1), w)] } else { [(at(0, 0), 1.0 - w), (at(1, 1), u), (at(0, 1), w - u)] };
+        parts.iter().fold((DVec2::ZERO, 0.0), |(q, y), &((cq, cy), t)| (q + cq * t, y + cy * t))
     }
 
     /// Whether a point is over a void (see `in_void`).
@@ -1282,6 +1703,16 @@ impl PlateWorld {
             cache.sky = Some(SkyGrid::new(DVec2::new(x0 - reach, z0 - reach), step, n));
         }
         let mut mesh = ColumnMesh::default();
+        // (Which of the finer level's columns a point is in, 4 by 4: see
+        // `ColumnMesh::blocks`.)
+        let child = size / 4.0;
+        let block_of = |p: DVec2| -> u8 {
+            if lod == 0 {
+                return 0;
+            }
+            let (bx, bz) = (((p.x - x0) / child).floor().clamp(0.0, 3.0) as u8, ((p.y - z0) / child).floor().clamp(0.0, 3.0) as u8);
+            bz * 4 + bx
+        };
 
         let g0 = GRID[0];
         let (gx0, gz0) = ((x0 / g0).floor() as i32 - 1, (z0 / g0).floor() as i32 - 1);
@@ -1297,6 +1728,7 @@ impl PlateWorld {
                 }
                 let poly = self.big_corners(g);
                 let mut sites = [g, (0, 0), (0, 0)];
+                let first = mesh.indices.len();
                 self.emit_split(&mut cache, &mut mesh, &poly, &mut sites, 0, max_level, (x0, z0));
                 if let Some(stair) = self.stair(g) {
                     stair.emit_slope(&mut mesh, (x0, z0));
@@ -1304,11 +1736,30 @@ impl PlateWorld {
                 if let Some(slab) = self.slab(&mut cache, g, &planar::points(&poly)) {
                     self.emit_slab(&mut mesh, &slab, (x0, z0));
                 }
+                // (A big plate in the block its site is in: the finer
+                // column there holds it whole, see `ColumnMesh::blocks`.)
+                mesh.block_from(first, block_of(s));
             }
+        }
+        // (PROBE: the vaults' pillars standing here, see `emit_pillars`.)
+        if let Some(v) = self.vaults {
+            self.emit_pillars(&mut cache, &mut mesh, v, (x0, z0), size, lod, &block_of);
         }
         let scale = 4f64.powi(lod as i32);
         if !self.lab {
+            let first = mesh.indices.len();
             self.canals.mesh_square(&mut mesh, (x0, z0), size, scale, &|c| self.canal_floor(c), &|p| self.is_void(p.x as f32, p.y as f32));
+            // (The canals' pieces, cut to the square, by where they are.)
+            for t in first / 3..mesh.indices.len() / 3 {
+                let c = (0..3).map(|j| { let q = mesh.positions[mesh.indices[3 * t + j] as usize]; DVec2::new(q[0] as f64 + x0, q[2] as f64 + z0) }).sum::<DVec2>() / 3.0;
+                mesh.tri_block.resize(t, 0);
+                mesh.tri_block.push(block_of(c));
+            }
+        }
+        if lod > 0 {
+            mesh.sort_blocks(16);
+        } else {
+            mesh.blocks = vec![(0, mesh.indices.len() as u32)];
         }
         mesh
     }
@@ -1596,6 +2047,8 @@ impl PlateWorld {
             beyond.push(edge_low);
         }
         let foot = lowest - 1.0;
+        // (Its walls reach a void's depth: it is on a void's rim.)
+        let into_void = self.districts.voids > 0.0 && foot <= self.void_depth + 1.0;
 
         let local = |p: DVec2, y: f64| [(p.x - origin.0) as f32, y as f32, (p.y - origin.1) as f32];
         let push = |mesh: &mut ColumnMesh, pos: [f32; 3], normal: Vec3, albedo: f32, ao: f32| {
@@ -1665,6 +2118,65 @@ impl PlateWorld {
         if self.kerbs && max_level == 2 && !cache.plain && !plate.sloped && plate.tilt == DVec2::ZERO {
             self.emit_kerbs(mesh, poly, plate, h, origin);
         }
+        let faces_void = |i: usize| self.vaults.is_some() && into_void && beyond[i] <= self.void_depth + 1.0;
+        // (PROBE: on the vaults, the grid the undersides and the walls'
+        // feet are cut on and placed by (`under_at`), one for the world, so
+        // a piece and the next, and a wall and the underside beside it, have
+        // the same points along what they share: each cut its own way (an
+        // underside by its own triangles, a wall in 16 m strips), the
+        // dome's chords sagged apart, cracks lit through. About 24 m, so an
+        // underside follows the vault down to a pillar's capital; a whole
+        // number of them to a bay, a pillar on the grid. The same at every
+        // level of detail, so a void wall is the same at each, only lowered
+        // with its level (`sink`) like everything else: on a coarser grid
+        // further off (as the far view's tolerance allowed), a coarser
+        // level's slanted wall stood in front of the finer's, and while one
+        // faded into the other, its shadow lay on it, the user's flicker.)
+        let step = self.vaults.map_or(1.0, |v| v.bay / (v.bay / UNDER_STEP).ceil());
+        // (PROBE: on the vaults, its underside, theirs, smoothly shaded, see
+        // `Vaults`; only in a bay round a void, the rest never seen, see
+        // `encloses`, and under a wall into the void wherever it is.)
+        if let Some(v) = self.vaults
+            && (into_void || self.encloses(cache, v, centroid))
+        {
+            let start = mesh.positions.len();
+            let (mut lo, mut hi) = (poly[0], poly[0]);
+            for p in poly {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+            let (i0, i1) = ((lo.x / step).floor() as i64, (hi.x / step).floor() as i64);
+            let (k0, k1) = ((lo.y / step).floor() as i64, (hi.y / step).floor() as i64);
+            let (mut cell, mut half, mut spare) = (Vec::new(), Vec::new(), Vec::new());
+            for i in i0..=i1 {
+                for k in k0..=k1 {
+                    cell.clear();
+                    cell.extend_from_slice(poly);
+                    let (x, z) = (i as f64 * step, k as f64 * step);
+                    for (n, at, above) in [(DVec2::X, x, true), (DVec2::X, x + step, false), (DVec2::Y, z, true), (DVec2::Y, z + step, false)] {
+                        clip_line(&cell, n, at, above, &mut spare);
+                        std::mem::swap(&mut cell, &mut spare);
+                    }
+                    // (Its two triangles, see `under_at`.)
+                    for above in [true, false] {
+                        clip_line(&cell, DIAGONAL, x - z, above, &mut half);
+                        if half.len() < 3 {
+                            continue;
+                        }
+                        let first = mesh.positions.len() as u32;
+                        for &p in &half {
+                            let (q, y) = self.under_at(cache, v, step, p);
+                            push(mesh, local(q, y), v.normal(q), plate.albedo * 0.7, 0.5);
+                        }
+                        for t in 1..half.len() as u32 - 1 {
+                            tri(mesh, [first, first + t, first + t + 1], Vec3::NEG_Y);
+                        }
+                    }
+                }
+            }
+            mesh.plate_of(mesh.positions.len() - start, 0.0);
+            mesh.under_of(mesh.positions.len() - start);
+        }
 
         // Walls, darkening towards their foot.
         let wall_albedo = plate.albedo * 0.85;
@@ -1686,16 +2198,169 @@ impl PlateWorld {
             if beyond[i] >= tops[i].max(tops[j]) - 1e-3 {
                 continue;
             }
+            let top = tops[i].max(tops[j]);
+            let wall_line = |tall: bool| if tall { crate::mesh::wall_code(code, (line * 16.0) as u32) } else { 0.0 };
+            // (PROBE: facing a void, on the vaults: down to their underside
+            // where it stands, in strips cut on the undersides' grid
+            // (`step`) so its foot is theirs, see `Vaults`. Not fading into the dark (`below`): it
+            // ends on its arch, to be seen; faded, the arches were lost,
+            // and from afar the haze's glow lit what was black, darker
+            // as you came nearer, the user.)
+            if faces_void(i)
+                && let Some(v) = self.vaults
+            {
+                let code = wall_line(true);
+                let cuts = grid_cuts(a, b, step);
+                for w in cuts.windows(2) {
+                    let ((t0, p0), (t1, p1)) = (w[0], w[1]);
+                    // (Its foot, see `under_at`.)
+                    let ((q0, u0), (q1, u1)) = (self.under_at(cache, v, step, p0), self.under_at(cache, v, step, p1));
+                    let (h0, h1) = (tops[i] + (tops[j] - tops[i]) * t0, tops[i] + (tops[j] - tops[i]) * t1);
+                    let (f0, f1) = (u0.min(h0 - 1.0), u1.min(h1 - 1.0));
+                    // (The wall the user meant: each point of the rim's top
+                    // joined by a straight line to its own on the smooth
+                    // path at the foot, the surface those lines sweep, so
+                    // twisted where the rim turns and the path does not, a
+                    // saddle. Between two of its lines, the surface is
+                    // `S(u, v)`, along the top `u`, down the line `v`; drawn
+                    // as two flat triangles from top to foot, it was creased
+                    // along their diagonal (folds of 29 degrees at the
+                    // median, 79 at most), the creases casting long spikes
+                    // of shadow, the one facing given to all four corners
+                    // hiding them from the light. In rows down the lines,
+                    // each within `RULED_TOL` of the surface, each corner
+                    // facing as the surface there.)
+                    let corner = |p: DVec2, y: f64| DVec3::new(p.x, y, p.y);
+                    let (c00, c10, c01, c11) = (corner(p0, h0), corner(p1, h1), corner(q0, f0), corner(q1, f1));
+                    let s = |u: f64, w: f64| (c00 * (1.0 - u) + c10 * u) * (1.0 - w) + (c01 * (1.0 - u) + c11 * u) * w;
+                    let out = DVec3::new(normal.x as f64, 0.0, normal.z as f64);
+                    let facing_at = |u: f64, w: f64| {
+                        let along = (c10 - c00) * (1.0 - w) + (c11 - c01) * w;
+                        let down = (c01 * (1.0 - u) + c11 * u) - (c00 * (1.0 - u) + c10 * u);
+                        let n = along.cross(down).normalize_or(out);
+                        let n = if n.dot(out) < 0.0 { -n } else { n };
+                        Vec3::new(n.x as f32, n.y as f32, n.z as f32)
+                    };
+                    // How far the surface is from flat over the strip (its
+                    // twist, a quarter of it at the middle), each row a
+                    // part of it; rows a power of two, so a line two strips
+                    // share is cut at points of both's (on it exactly: the
+                    // line is straight).
+                    let twist = (c00 - c10 - c01 + c11).dot(facing_at(0.5, 0.5).as_dvec3()).abs() / 4.0;
+                    let rows = ((twist / RULED_TOL).ceil().max(1.0) as u32).next_power_of_two().min(RULED_ROWS);
+                    let first = mesh.positions.len() as u32;
+                    for r in 0..=rows {
+                        let w = r as f64 / rows as f64;
+                        for u in [0.0, 1.0] {
+                            let p = s(u, w);
+                            let ao = (if u == 0.0 { corner_ao[i] } else { corner_ao[j] }) * (1.0 - w as f32) + 0.3 * w as f32;
+                            push(mesh, local(DVec2::new(p.x, p.z), p.y), facing_at(u, w), wall_albedo, ao);
+                        }
+                    }
+                    mesh.plate_of(2 * (rows as usize + 1), code);
+                    for r in 0..rows {
+                        let (k, w) = (first + 2 * r, (r as f64 + 0.5) / rows as f64);
+                        let n = facing_at(0.5, w);
+                        tri(mesh, [k, k + 2, k + 3], n);
+                        tri(mesh, [k, k + 3, k + 1], n);
+                    }
+                }
+                continue;
+            }
+            // (Facing a void, its strata: see `Strata`.)
+            if into_void && beyond[i] <= self.void_depth + 1.0 && self.strata > 0 {
+                let st = &STRATA[(self.strata as usize - 1).min(STRATA.len() - 1)];
+                let length = edge.length();
+                let along = edge / length;
+                let out = DVec2::new(normal.x as f64, normal.z as f64);
+                let at = |u: f64, y: f64, inset: f64| (a + along * u - out * inset, y);
+                // A rectangle in the wall's own terms (along it, height, how
+                // far in), facing `facing`, as two triangles.
+                let quad = |mesh: &mut ColumnMesh, corners: [(f64, f64, f64); 4], facing: Vec3, albedo: f32, ao: f32, code: f32| {
+                    let mut ids = [0u32; 4];
+                    let mut below = [0f32; 4];
+                    for (k, &(u, y, inset)) in corners.iter().enumerate() {
+                        let (p, y) = at(u, y, inset);
+                        ids[k] = push(mesh, local(p, y), facing, albedo, ao);
+                        below[k] = (top - y) as f32;
+                    }
+                    mesh.below_of(&below);
+                    mesh.plate_of(4, code);
+                    tri(mesh, [ids[0], ids[1], ids[2]], facing);
+                    tri(mesh, [ids[0], ids[2], ids[3]], facing);
+                };
+                // The gaps from the lip down, at the world's heights.
+                let start = tops[i].min(tops[j]) - STRATA_LIP;
+                let end = (top - STRATA_DEPTH).max(foot + 1.0);
+                let mut gaps: Vec<(f64, f64, f64)> = Vec::new();
+                if length > 2.0 * st.margin + 1.0 {
+                    let mut k = (-start / st.period).floor() as i64;
+                    loop {
+                        let base = -(k as f64) * st.period;
+                        if base < end {
+                            break;
+                        }
+                        for &(from, height, inset) in st.gaps {
+                            let (hi, lo) = (base - from, base - from - height);
+                            if hi <= start && lo >= end {
+                                gaps.push((hi, lo, inset));
+                            }
+                        }
+                        k += 1;
+                    }
+                    gaps.sort_by(|p, q| q.0.total_cmp(&p.0));
+                }
+                let code = wall_line(true);
+                let dark = wall_albedo * 0.8;
+                // The wall's face: from its top to the first gap, between
+                // gaps, from the last to its foot; beside each gap, its piers.
+                let mut upper = None::<f64>;
+                for &(hi, lo, inset) in &gaps {
+                    match upper {
+                        None => {
+                            let corners = [(0.0, tops[i], 0.0), (length, tops[j], 0.0), (length, hi, 0.0), (0.0, hi, 0.0)];
+                            quad(mesh, corners, normal, wall_albedo, corner_ao[i].min(corner_ao[j]), code);
+                        }
+                        Some(above) if above > hi => quad(mesh, [(0.0, above, 0.0), (length, above, 0.0), (length, hi, 0.0), (0.0, hi, 0.0)], normal, wall_albedo, 0.6, code),
+                        _ => {}
+                    }
+                    let m = st.margin;
+                    quad(mesh, [(0.0, hi, 0.0), (m, hi, 0.0), (m, lo, 0.0), (0.0, lo, 0.0)], normal, wall_albedo, 0.6, code);
+                    quad(mesh, [(length - m, hi, 0.0), (length, hi, 0.0), (length, lo, 0.0), (length - m, lo, 0.0)], normal, wall_albedo, 0.6, code);
+                    // The gap: its back, its ceiling, its floor, its sides.
+                    let along3 = Vec3::new(along.x as f32, 0.0, along.y as f32);
+                    quad(mesh, [(m, hi, inset), (length - m, hi, inset), (length - m, lo, inset), (m, lo, inset)], normal, dark, 0.3, 0.0);
+                    quad(mesh, [(m, hi, 0.0), (length - m, hi, 0.0), (length - m, hi, inset), (m, hi, inset)], Vec3::NEG_Y, dark, 0.3, 0.0);
+                    quad(mesh, [(m, lo, 0.0), (length - m, lo, 0.0), (length - m, lo, inset), (m, lo, inset)], Vec3::Y, dark, 0.4, 0.0);
+                    quad(mesh, [(m, hi, 0.0), (m, hi, inset), (m, lo, inset), (m, lo, 0.0)], along3, dark, 0.3, 0.0);
+                    quad(mesh, [(length - m, hi, 0.0), (length - m, hi, inset), (length - m, lo, inset), (length - m, lo, 0.0)], -along3, dark, 0.3, 0.0);
+                    upper = Some(lo);
+                }
+                let (from_a, from_b) = upper.map_or((tops[i], tops[j]), |y| (y, y));
+                quad(mesh, [(0.0, from_a, 0.0), (length, from_b, 0.0), (length, foot, 0.0), (0.0, foot, 0.0)], normal, wall_albedo, 0.5, code);
+                continue;
+            }
+            // (PROBE: on the vaults, a rim plate's other walls only down to
+            // their own neighbour: to the common foot, the void's depth,
+            // they hung below the vaults.)
+            let foot = if self.vaults.is_some() && into_void { beyond[i] - 1.0 } else { foot };
             let top_a = push(mesh, local(a, tops[i]), normal, wall_albedo, corner_ao[i]);
             let top_b = push(mesh, local(b, tops[j]), normal, wall_albedo, corner_ao[j]);
             let bot_a = push(mesh, local(a, foot), normal, wall_albedo, 0.0);
             let bot_b = push(mesh, local(b, foot), normal, wall_albedo, 0.0);
+            // (Down into a void: its depth below its own top, for its
+            // fading, the same at every rim; by the world's level, a high
+            // rim's stayed lit 200 m, a low one's darkened at once. On the
+            // vaults, down to its neighbour only: it ends, no fading.)
+            if into_void && self.vaults.is_none() {
+                mesh.below_of(&[(top - tops[i]) as f32, (top - tops[j]) as f32, (top - foot) as f32, (top - foot) as f32]);
+            }
             tri(mesh, [top_a, bot_a, bot_b], normal);
             tri(mesh, [top_a, bot_b, top_b], normal);
             // (Its plate and line, for its pattern, if it is tall enough:
             // see the walls in `terrain.wgsl`.)
             let tall = tops[i].max(tops[j]) - beyond[i] >= self.wall_least - 1e-3;
-            mesh.plate_of(4, if tall { crate::mesh::wall_code(code, (line * 16.0) as u32) } else { 0.0 });
+            mesh.plate_of(4, wall_line(tall));
         }
     }
 }

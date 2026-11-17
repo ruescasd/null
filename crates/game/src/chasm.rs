@@ -1010,7 +1010,7 @@ fn build(
         // its flights the same stone, plain. (Not where nothing is drawn,
         // as in the headless check: there, as the other built places.)
         if let (Some(mut surfaces), Some(world)) = (surfaces, world) {
-            let mut surface = crate::terrain::surface(&args, world.size(), 0.0, 0.0);
+            let mut surface = crate::terrain::surface(&args, &world, 0.0, 0.0);
             surface.extension.round = Vec4::new(arena::CENTRE.x, arena::CENTRE.z, 0.0, 1.0);
             let surface = surfaces.add(surface);
             let albedo = Color::srgb(0.62, 0.62, 0.62).to_linear().red;

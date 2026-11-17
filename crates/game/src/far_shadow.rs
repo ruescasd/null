@@ -91,7 +91,12 @@ pub const FAR_MAPS: [Handle<Image>; 3] = [
 pub const FAR_DATA: Handle<Image> = uuid_handle!("6b0e8f8e-3f7c-4f51-9a34-2f7d1f0c5a02");
 
 /// Texels in `FAR_DATA` for each map.
-const BLOCK: usize = 8;
+pub const BLOCK: usize = 8;
+
+/// The lowest the far maps reach (m): the world's deck's deepest, the vaults'
+/// springing (-784) and the void walls (-600); below it, the shell's
+/// shadow alone (terrain.wgsl's `shell_light`).
+const FAR_LOW: f32 = -1000.0;
 
 /// A terrain column drawn into the far maps, casting no live shadow.
 #[derive(Component)]
@@ -99,7 +104,7 @@ pub struct FarCaster;
 
 /// Whether the far terrain's shadows come from the cached maps.
 pub fn enabled(args: &Args) -> bool {
-    !args.opt("nofarcache")
+    !args.opt("nofarcache") && !crate::rt_shadow::enabled(args)
 }
 
 /// What a far map is to be drawn with, for the render world.
@@ -254,7 +259,10 @@ fn plan(
         return;
     }
     let (low, high) = bounds.iter().fold((f32::MAX, f32::MIN), |(lo, hi), b| (lo.min(b.3.y), hi.max(b.4.y)));
-    let low = low - 2.0 * radius * radius * curvature;
+    // (No lower than `FAR_LOW`: the vaults' pillars go down 6 km, and the
+    // maps' depth spread over them; below it, the shell's shadow alone, see
+    // terrain.wgsl's `shell_light`.)
+    let low = low.max(FAR_LOW) - 2.0 * radius * radius * curvature;
     let in_view = |lo: Vec3, hi: Vec3| {
         let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
         for i in 0..8 {
