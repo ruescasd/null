@@ -19,6 +19,7 @@ use std::{
 };
 
 use glam::{DVec2, Vec3};
+use crate::planar::{self, Corner, Geometry, Key, Line};
 
 use crate::canal::{CanalHit, Canals, PIPE_RADIUS};
 use crate::district::{District, DistrictMap};
@@ -60,6 +61,16 @@ pub struct PlateWorld {
     /// Kerbs along the flat plates' edges, near (see `bricks.rs`; the
     /// game's `--opt kerbs`).
     pub kerbs: bool,
+    /// At each coarser level of detail, how far (m) a fitted plane may
+    /// stand from the finest pieces' tops: each plate there drawn as planes
+    /// fitted to them, one over it if near enough, else over its finer
+    /// plates, down to the finest; pillars taller than it as plain prisms
+    /// (see `visit_fitted`). 0: the level's plates at a fixed depth. (The
+    /// game's from `--set far_px`: the far view, 2026-11-17.)
+    pub far_tol: [f64; 3],
+    /// How far below the world a void's walls reach (m, a height): the
+    /// ground's height in a void. (How deep is open, the user, 2026-11-17.)
+    pub void_depth: f64,
     /// The lowest a wall carries its pattern (m, out of the ground beyond
     /// it, at its tallest; the game's `--set wall_least`). (The user: on a
     /// short wall the panels do not fit, a few ticks with no panel's edge;
@@ -179,6 +190,42 @@ pub struct SitePlate {
 pub struct Cache {
     landform: HashMap<(usize, i32, i32), f64>,
     splits: HashMap<(usize, i32, i32), bool>,
+    /// A fitted level (see `far_tol`): pillars as plain prisms, no kerbs,
+    /// fitted within `tol`.
+    plain: bool,
+    tol: f64,
+    /// The ground's heights on a grid round the column, for the sky's
+    /// visibility at a coarser level (see `SkyGrid`).
+    sky: Option<SkyGrid>,
+    /// Whether each big plate is in a void (see `in_void`).
+    voids: HashMap<(i32, i32), bool>,
+}
+
+/// How far below the world a void's walls reach by default (m, see
+/// `PlateWorld::void_depth`): the shell the world is, stars below it (the
+/// user, 2026-11-17), its walls black by then (see terrain.wgsl). (3 km,
+/// its walls' tall triangles' depths fought between the depth prepass and
+/// the main pass at a distance, whole walls blinking with the camera's
+/// jitter, the user's "blink".)
+pub const VOID_DEPTH: f64 = -600.0;
+
+/// The ground's heights (`surface`) on a square grid, each found when first
+/// asked for and kept: the sky's visibility at a coarser level of detail,
+/// read between them, from 32 heights round each corner found anew 50 to
+/// 75% of its column's build (the far levels drawn as fitted planes, the
+/// user, 2026-11-17). Already of that level's coarser plates, not of the
+/// fitted ones drawn, so stylised as before.
+struct SkyGrid {
+    origin: DVec2,
+    step: f64,
+    n: usize,
+    heights: Vec<f64>,
+}
+
+impl SkyGrid {
+    fn new(origin: DVec2, step: f64, n: usize) -> Self {
+        Self { origin, step, n, heights: vec![f64::NAN; n * n] }
+    }
 }
 
 /// How far a plate's cell reaches from its site, at most, in its grid's
@@ -279,23 +326,37 @@ impl Stair {
         mesh.walk_indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
     }
 
+    /// Its line `k` (`planar::Line::Stair`): a point on it and its normal,
+    /// the strip's side below its inner side (0), a step's side below the
+    /// edge to the next (`k` from 1).
+    fn line(&self, k: u16) -> (DVec2, DVec2) {
+        if k == 0 {
+            (self.a + self.inward * STAIR_WIDTH, self.inward)
+        } else {
+            (self.a + self.along * (self.start + k as f64 * self.run), self.along)
+        }
+    }
+
     /// The strip and the rest of `poly` (convex, the pit's cell or a piece
-    /// of it): the steps' pieces, each with its step, and what is left.
-    fn cut(&self, poly: &[DVec2]) -> (Vec<(Vec<DVec2>, usize)>, Vec<DVec2>) {
-        let w = self.a + self.inward * STAIR_WIDTH;
-        // (`clip` keeps the side nearer its first point than its second.)
-        let strip = PlateWorld::clip(poly, w - self.inward, w + self.inward);
-        let rest = PlateWorld::clip(poly, w + self.inward, w - self.inward);
+    /// of it, big plate `site`'s): the steps' pieces, each with its step,
+    /// and what is left.
+    fn cut<G: Geometry + ?Sized>(&self, site: (i32, i32), poly: &[Corner], geometry: &G) -> (Vec<(Vec<Corner>, usize)>, Vec<Corner>) {
+        let line = |k: usize| Line::Stair { site, k: k as u16 };
+        let (mut strip, mut rest) = (Vec::new(), Vec::new());
+        planar::clip(poly, line(0), true, geometry, &mut strip);
+        planar::clip(poly, line(0), false, geometry, &mut rest);
         let n = self.heights.len();
-        let at = |k: usize| self.a + self.along * (self.start + k as f64 * self.run);
         let mut steps = Vec::new();
+        let mut spare = Vec::new();
         for k in 0..n {
             let mut piece = strip.clone();
             if k > 0 {
-                piece = PlateWorld::clip(&piece, at(k) + self.along, at(k) - self.along);
+                planar::clip(&piece, line(k), false, geometry, &mut spare);
+                std::mem::swap(&mut piece, &mut spare);
             }
             if k + 1 < n {
-                piece = PlateWorld::clip(&piece, at(k + 1) - self.along, at(k + 1) + self.along);
+                planar::clip(&piece, line(k + 1), true, geometry, &mut spare);
+                std::mem::swap(&mut piece, &mut spare);
             }
             if piece.len() >= 3 {
                 steps.push((piece, k));
@@ -330,6 +391,8 @@ impl PlateWorld {
             lab: false,
             slabs: 0,
             kerbs: false,
+            far_tol: [0.0; 3],
+            void_depth: VOID_DEPTH,
             wall_least: 1.5,
             step_cap: None,
             stairs: RwLock::default(),
@@ -450,10 +513,36 @@ impl PlateWorld {
             return h;
         }
         let plate = self.plate_at(cache, x, z, max_level);
+        if self.in_void(cache, plate.sites[0]) {
+            return self.void_depth;
+        }
         if plate.sloped {
             return self.slope_at(p);
         }
         plate.top(self, p)
+    }
+
+    /// Whether a point is over a void (see `in_void`).
+    pub fn is_void(&self, x: f32, z: f32) -> bool {
+        let mut cache = Cache::default();
+        let plate = self.plate_at(&mut cache, x as f64, z as f64, 0);
+        self.in_void(&mut cache, plate.sites[0])
+    }
+
+    /// Whether the big plate `g` is in a void (by its site): none of it
+    /// there, at every level of detail, so a void's coast is the big
+    /// plates' edges (128 m Voronoi) along its warped outline.
+    fn in_void(&self, cache: &mut Cache, g: (i32, i32)) -> bool {
+        if self.districts.voids <= 0.0 {
+            return false;
+        }
+        if let Some(&v) = cache.voids.get(&g) {
+            return v;
+        }
+        let s = self.site(0, g);
+        let v = self.districts.at(s.x, s.y) == District::Void;
+        cache.voids.insert(g, v);
+        v
     }
 
     /// The ground's solid top at a point, for the walls beside it: as
@@ -469,11 +558,111 @@ impl PlateWorld {
             return h;
         }
         let plate = self.plate_at(cache, x, z, max_level);
+        if self.in_void(cache, plate.sites[0]) {
+            return self.void_depth;
+        }
         if plate.sloped {
             return self.slope_at(p);
         }
         let top = plate.top(self, p);
-        if plate.pillar > 0.0 && self.grows_pillars(max_level) { top - plate.pillar } else { top }
+        let own = if plate.pillar > 0.0 && self.grows_pillars(max_level) && !cache.plain { top - plate.pillar } else { top };
+        // (Fitted, what is drawn beside may be any depth.)
+        if cache.tol > 0.0 && max_level < 2 { own.min(self.solid(cache, x, z, 2)) } else { own }
+    }
+
+    /// A fitted level's plate (see `far_tol`): the plate `sites` at `level` drawn as planes
+    /// fitted to its pieces' tops (at full detail; a pillar's by its base):
+    /// one over the whole plate if every piece's top is within `cache.tol`
+    /// of it, else each of its next level's plates so, down to the finest;
+    /// pillars taller than `cache.tol` on them as plain prisms. Its finest
+    /// pieces found once, and shared down (found again for each plate a
+    /// level down, half the far level's build).
+    fn visit_fitted(&self, cache: &mut Cache, poly: &[Corner], sites: &[(i32, i32); 3], level: usize, f: &mut dyn FnMut(&mut Cache, &[Corner], &Plate, bool)) {
+        let tol = cache.tol;
+        cache.tol = 0.0;
+        let mut leaves: Vec<(Vec<Corner>, Plate)> = Vec::new();
+        let mut s = *sites;
+        self.visit_plain(cache, poly, &mut s, level, 2, &mut |_, piece, plate, kept| {
+            if kept {
+                leaves.push((piece.to_vec(), *plate));
+            }
+        });
+        cache.tol = tol;
+        let all: Vec<&(Vec<Corner>, Plate)> = leaves.iter().collect();
+        let mut s = *sites;
+        self.fit_or_split(cache, poly, &mut s, level, &all, f);
+    }
+
+    /// See `visit_fitted`: the plate `sites` at `level`, its finest pieces
+    /// `leaves`.
+    fn fit_or_split(&self, cache: &mut Cache, poly: &[Corner], sites: &mut [(i32, i32); 3], level: usize, leaves: &[&(Vec<Corner>, Plate)], f: &mut dyn FnMut(&mut Cache, &[Corner], &Plate, bool)) {
+        if level == 2 || !self.splits(level, sites[level]) {
+            for (piece, plate) in leaves.iter().copied() {
+                f(cache, piece, plate, true);
+            }
+            return;
+        }
+        if self.fit(cache, poly, sites, level, leaves, f) {
+            return;
+        }
+        let next = level + 1;
+        for (g, piece) in self.cells_within(next, poly) {
+            // (Under `LEAST_PIECE`, nothing to mesh.)
+            if planar::area(&piece) < LEAST_PIECE {
+                continue;
+            }
+            sites[next] = g;
+            let mine: Vec<&(Vec<Corner>, Plate)> = leaves.iter().copied().filter(|l| l.1.sites[next] == g).collect();
+            self.fit_or_split(cache, &piece, sites, next, &mine, f);
+        }
+    }
+
+    /// See `visit_fitted`: one plane over the plate `sites` at `level`, if
+    /// every one of its `leaves`' corners is within `cache.tol` of it;
+    /// whether it was.
+    fn fit(&self, cache: &mut Cache, poly: &[Corner], sites: &[(i32, i32); 3], level: usize, leaves: &[&(Vec<Corner>, Plate)], f: &mut dyn FnMut(&mut Cache, &[Corner], &Plate, bool)) -> bool {
+        let tol = cache.tol;
+        // Corners and their tops, each weighed by its piece's share of area.
+        let mut points: Vec<(DVec2, f64, f64)> = Vec::new();
+        for (piece, plate) in leaves.iter().copied() {
+            let corners = planar::points(piece);
+            let w = planar::area(piece) / corners.len() as f64;
+            for p in corners {
+                points.push((p, plate.top(self, p) - plate.pillar, w));
+            }
+        }
+        let total: f64 = points.iter().map(|q| q.2).sum();
+        if total <= 0.0 {
+            return false;
+        }
+        let c = points.iter().map(|q| q.0 * q.2).sum::<DVec2>() / total;
+        let a = points.iter().map(|q| q.1 * q.2).sum::<f64>() / total;
+        let (mut sxx, mut sxz, mut szz, mut sxh, mut szh) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        for &(p, h, w) in &points {
+            let d = p - c;
+            sxx += w * d.x * d.x;
+            sxz += w * d.x * d.y;
+            szz += w * d.y * d.y;
+            sxh += w * d.x * (h - a);
+            szh += w * d.y * (h - a);
+        }
+        let det = sxx * szz - sxz * sxz;
+        let tilt = if det.abs() > 1e-9 { DVec2::new((sxh * szz - szh * sxz) / det, (szh * sxx - sxh * sxz) / det) } else { DVec2::ZERO };
+        let error = points.iter().map(|&(p, h, _)| (h - (a + tilt.dot(p - c))).abs()).fold(0.0, f64::max);
+        if error > tol {
+            return false;
+        }
+        let plane = Plate { height: a, tilt, center: c, sloped: false, pillar: 0.0, ..self.plate(cache, *sites, level) };
+        let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec(), self) };
+        for piece in pieces {
+            f(cache, &piece, &plane, planar::area(&piece) >= LEAST_PIECE);
+        }
+        for (piece, plate) in leaves.iter().copied() {
+            if plate.pillar > tol {
+                f(cache, piece, plate, true);
+            }
+        }
+        true
     }
 
     /// Whether pillars are grown from the library's form (at full detail),
@@ -840,19 +1029,14 @@ impl PlateWorld {
     fn find_wells(&self, (level, up): Parent) -> HashMap<(i32, i32), f64> {
         let mut cache = Cache::default();
         let mut out = HashMap::new();
-        let mut poly = self.big_cell(up[0]);
+        let mut corners = self.big_corners(up[0]);
         if level == 1 {
-            poly = self.cell(1, up[1], &poly);
+            corners = self.cell(1, up[1], &corners);
         }
-        if poly.len() < 3 {
+        if corners.len() < 3 {
             return out;
         }
         let next = level + 1;
-        let (mut min, mut max) = (poly[0], poly[0]);
-        for q in &poly {
-            min = min.min(*q);
-            max = max.max(*q);
-        }
         let grid = GRID[next];
         let mut sites = [up[0], up[1], (0, 0)];
         // (Each plate's walkable top and site, first: a well is more than
@@ -863,17 +1047,15 @@ impl PlateWorld {
         // there, a third of the wells' work.)
         let mut tops: Vec<(DVec2, f64)> = Vec::new();
         let mut kids: Vec<((i32, i32), Vec<DVec2>, Plate)> = Vec::new();
-        for iz in (min.y / grid).floor() as i32 - 1..=(max.y / grid).ceil() as i32 + 1 {
-            for ix in (min.x / grid).floor() as i32 - 1..=(max.x / grid).ceil() as i32 + 1 {
-                let piece = self.cell(next, (ix, iz), &poly);
-                if piece.len() < 3 || area(&piece) < LEAST_PIECE {
-                    continue;
-                }
-                sites[next] = (ix, iz);
-                let plate = self.plate_raw(&mut cache, sites, next);
-                tops.push((self.site(next, (ix, iz)), plate.height - plate.pillar));
-                kids.push(((ix, iz), piece, plate));
+        for ((ix, iz), cell) in self.cells_within(next, &corners) {
+            let piece = planar::points(&cell);
+            if area(&piece) < LEAST_PIECE {
+                continue;
             }
+            sites[next] = (ix, iz);
+            let plate = self.plate_raw(&mut cache, sites, next);
+            tops.push((self.site(next, (ix, iz)), plate.height - plate.pillar));
+            kids.push(((ix, iz), piece, plate));
         }
         {
             for ((ix, iz), piece, plate) in kids {
@@ -962,15 +1144,7 @@ impl PlateWorld {
 
     /// The outline of the big (128 m) plate around a point.
     pub fn big_plate(&self, x: f64, z: f64) -> Vec<DVec2> {
-        let g = self.nearest_site(0, DVec2::new(x, z));
-        let s = self.site(0, g);
-        let square = [
-            s + DVec2::new(-3.0, -3.0) * GRID[0],
-            s + DVec2::new(3.0, -3.0) * GRID[0],
-            s + DVec2::new(3.0, 3.0) * GRID[0],
-            s + DVec2::new(-3.0, 3.0) * GRID[0],
-        ];
-        self.cell(0, g, &square)
+        self.big_cell(self.nearest_site(0, DVec2::new(x, z)))
     }
 
     /// The plates a site's ground is made of, exactly as they are meshed.
@@ -988,16 +1162,11 @@ impl PlateWorld {
                 if s.distance(c) > reach || !self.splits(0, g) {
                     continue;
                 }
-                let square = [
-                    s + DVec2::new(-3.0, -3.0) * g0,
-                    s + DVec2::new(3.0, -3.0) * g0,
-                    s + DVec2::new(3.0, 3.0) * g0,
-                    s + DVec2::new(-3.0, 3.0) * g0,
-                ];
-                let poly = self.cell(0, g, &square);
-                if poly.len() < 3 {
+                let corners = self.big_corners(g);
+                if corners.len() < 3 {
                     continue;
                 }
+                let poly = planar::points(&corners);
                 let (mut min, mut max) = (poly[0], poly[0]);
                 for p in &poly {
                     min = min.min(*p);
@@ -1009,7 +1178,7 @@ impl PlateWorld {
                         if distance >= ground.radius {
                             continue;
                         }
-                        let piece = self.cell(1, (ix, iz), &poly);
+                        let piece = planar::points(&self.cell(1, (ix, iz), &corners));
                         if piece.len() < 3 || area(&piece) < 0.5 {
                             continue;
                         }
@@ -1048,59 +1217,49 @@ impl PlateWorld {
         self.solid(&mut Cache::default(), x as f64, z as f64, 2) as f32
     }
 
-    /// Clips `poly` to the side of the bisector nearer `site` than `other`.
-    fn clip(poly: &[DVec2], site: DVec2, other: DVec2) -> Vec<DVec2> {
-        let mut out = Vec::with_capacity(poly.len() + 1);
-        Self::clip_into(poly, site, other, &mut out);
-        out
-    }
-
-    /// As `clip`, into `out`.
-    fn clip_into(poly: &[DVec2], site: DVec2, other: DVec2, out: &mut Vec<DVec2>) {
-        out.clear();
-        let mid = (site + other) * 0.5;
-        let n = other - site;
-        let side = |p: DVec2| (p - mid).dot(n);
-        for i in 0..poly.len() {
-            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-            let (sa, sb) = (side(a), side(b));
-            if sa <= 0.0 {
-                out.push(a);
-            }
-            if (sa <= 0.0) != (sb <= 0.0) {
-                out.push(a + (b - a) * (sa / (sa - sb)));
-            }
-        }
-    }
-
     /// The Voronoi cell of a site at `level`, intersected with `within`.
-    fn cell(&self, level: usize, g: (i32, i32), within: &[DVec2]) -> Vec<DVec2> {
-        Self::cell_by(g, within, &|h| self.site(level, h), &mut Vec::new())
+    fn cell(&self, level: usize, g: (i32, i32), within: &[Corner]) -> Vec<Corner> {
+        Self::cell_by(level, g, within, self, &mut Vec::new())
     }
 
-    /// As `cell`, its sites by `site`, into a buffer kept from cell to cell
-    /// (`spare`). (Each cell's 25 sites found anew, and a new outline made
-    /// at each of its 24 clips, 1.5 µs a cell.)
-    fn cell_by(g: (i32, i32), within: &[DVec2], site: &dyn Fn((i32, i32)) -> DVec2, spare: &mut Vec<DVec2>) -> Vec<DVec2> {
-        let s = site(g);
+    /// As `cell`, its sites and lines by `geometry`, into a buffer kept from
+    /// cell to cell (`spare`). (Each cell's 25 sites found anew, and a new
+    /// outline made at each of its 24 clips, 1.5 µs a cell.)
+    fn cell_by<G: Geometry + ?Sized>(level: usize, g: (i32, i32), within: &[Corner], geometry: &G, spare: &mut Vec<Corner>) -> Vec<Corner> {
         let mut poly = within.to_vec();
         for dz in -2..=2 {
             for dx in -2..=2 {
                 if (dx, dz) == (0, 0) || poly.len() < 3 {
                     continue;
                 }
-                Self::clip_into(&poly, s, site((g.0 + dx, g.1 + dz)), spare);
+                let h = (g.0 + dx, g.1 + dz);
+                planar::clip(&poly, Line::bisector(level, g, h), g < h, geometry, spare);
                 std::mem::swap(&mut poly, spare);
             }
         }
         poly
     }
 
-    /// Big plate `g`'s outline (its level-0 Voronoi cell).
+    /// The square a cell of `level` round site `g` is cut from: three
+    /// spacings each way (`Line::Bound`).
+    fn bound(&self, level: usize, g: (i32, i32)) -> Vec<Corner> {
+        let line = |k: usize| Line::Bound { level: level as u8, site: g, k: (k % 4) as u8 };
+        (0..4)
+            .map(|k| {
+                let key = Key::of(line(k + 3), line(k));
+                Corner::new(self.corner(key), key, line(k))
+            })
+            .collect()
+    }
+
+    /// Big plate `g`'s outline (its level-0 Voronoi cell), by its corners.
+    fn big_corners(&self, g: (i32, i32)) -> Vec<Corner> {
+        self.cell(0, g, &self.bound(0, g))
+    }
+
+    /// Big plate `g`'s outline.
     fn big_cell(&self, g: (i32, i32)) -> Vec<DVec2> {
-        let (s, g0) = (self.site(0, g), GRID[0]);
-        let square = [s + DVec2::new(-3.0, -3.0) * g0, s + DVec2::new(3.0, -3.0) * g0, s + DVec2::new(3.0, 3.0) * g0, s + DVec2::new(-3.0, 3.0) * g0];
-        self.cell(0, g, &square)
+        planar::points(&self.big_corners(g))
     }
 
     /// Meshes every plate whose level-0 site lies in the given column. At
@@ -1108,8 +1267,20 @@ impl PlateWorld {
     pub fn mesh_column(&self, lod: u32, cx: i32, cz: i32) -> ColumnMesh {
         let size = column_size(lod) as f64;
         let (x0, z0) = (cx as f64 * size, cz as f64 * size);
+        let tol = self.far_tol[lod as usize];
+        let plain = tol > 0.0;
         let max_level = 2usize.saturating_sub(lod as usize);
-        let mut cache = Cache::default();
+        let mut cache = Cache { plain, tol, ..Cache::default() };
+        // (At the coarser levels, the sky's visibility from a grid of
+        // heights round the column, 2 m apart at the middle level, 4 m at
+        // the far; reaching as far as its plates do, a big square and a
+        // half, and the farthest any is looked round.)
+        if plain {
+            let step = 2.0 * lod as f64;
+            let reach = GRID[0] * CELL_REACH + 30.0;
+            let n = ((size + 2.0 * reach) / step).ceil() as usize + 1;
+            cache.sky = Some(SkyGrid::new(DVec2::new(x0 - reach, z0 - reach), step, n));
+        }
         let mut mesh = ColumnMesh::default();
 
         let g0 = GRID[0];
@@ -1119,23 +1290,25 @@ impl PlateWorld {
             for gx in gx0..=gx1 {
                 let g = (gx, gz);
                 let s = self.site(0, g);
-                if s.x < x0 || s.x >= x0 + size || s.y < z0 || s.y >= z0 + size {
+                // (Nothing of a big plate in a void: no stair's slope nor
+                // slab either, left floating, walked on in the air.)
+                if s.x < x0 || s.x >= x0 + size || s.y < z0 || s.y >= z0 + size || self.in_void(&mut cache, g) {
                     continue;
                 }
-                let poly = self.big_cell(g);
+                let poly = self.big_corners(g);
                 let mut sites = [g, (0, 0), (0, 0)];
                 self.emit_split(&mut cache, &mut mesh, &poly, &mut sites, 0, max_level, (x0, z0));
                 if let Some(stair) = self.stair(g) {
                     stair.emit_slope(&mut mesh, (x0, z0));
                 }
-                if let Some(slab) = self.slab(&mut cache, g, &poly) {
+                if let Some(slab) = self.slab(&mut cache, g, &planar::points(&poly)) {
                     self.emit_slab(&mut mesh, &slab, (x0, z0));
                 }
             }
         }
         let scale = 4f64.powi(lod as i32);
         if !self.lab {
-            self.canals.mesh_square(&mut mesh, (x0, z0), size, scale, &|c| self.canal_floor(c));
+            self.canals.mesh_square(&mut mesh, (x0, z0), size, scale, &|c| self.canal_floor(c), &|p| self.is_void(p.x as f32, p.y as f32));
         }
         mesh
     }
@@ -1145,7 +1318,7 @@ impl PlateWorld {
         &self,
         cache: &mut Cache,
         mesh: &mut ColumnMesh,
-        poly: &[DVec2],
+        poly: &[Corner],
         sites: &mut [(i32, i32); 3],
         level: usize,
         max_level: usize,
@@ -1153,7 +1326,7 @@ impl PlateWorld {
     ) {
         self.visit_split(cache, poly, sites, level, max_level, &mut |cache, piece, plate, kept| {
             if kept {
-                self.emit_prism(cache, mesh, piece, plate, max_level, origin);
+                self.emit_prism(cache, mesh, &planar::points(piece), plate, max_level, origin);
             }
         });
     }
@@ -1161,21 +1334,25 @@ impl PlateWorld {
     /// Each plate's pieces within `poly` (its site chain from `level`
     /// down), cut by the canals, each with its plate and whether it is
     /// meshed (not under `LEAST_PIECE`): the mesher's and navigation's one
-    /// source of the plates' outlines.
-    fn visit_split(&self, cache: &mut Cache, poly: &[DVec2], sites: &mut [(i32, i32); 3], level: usize, max_level: usize, f: &mut dyn FnMut(&mut Cache, &[DVec2], &Plate, bool)) {
+    /// source of the plates' outlines, a planar map (see `planar`).
+    fn visit_split(&self, cache: &mut Cache, poly: &[Corner], sites: &mut [(i32, i32); 3], level: usize, max_level: usize, f: &mut dyn FnMut(&mut Cache, &[Corner], &Plate, bool)) {
         if poly.len() < 3 {
+            return;
+        }
+        // (No ground in a void.)
+        if level == 0 && self.in_void(cache, sites[0]) {
             return;
         }
         // A pit's stair: its steps cut out first, the rest as any plate.
         if level == 0
             && let Some(stair) = self.stair(sites[0])
         {
-            let (steps, rest) = stair.cut(poly);
+            let (steps, rest) = stair.cut(sites[0], poly, self);
             for (piece, k) in steps {
                 let plate = self.step_plate(sites[0], &stair, k);
-                let pieces = if self.lab { vec![piece] } else { self.canals.cut(piece) };
+                let pieces = if self.lab { vec![piece] } else { self.canals.cut(piece, self) };
                 for piece in pieces {
-                    f(cache, &piece, &plate, area(&piece) >= LEAST_PIECE);
+                    f(cache, &piece, &plate, planar::area(&piece) >= LEAST_PIECE);
                 }
             }
             self.visit_plain(cache, &rest, sites, level, max_level, f);
@@ -1185,23 +1362,46 @@ impl PlateWorld {
     }
 
     /// As `visit_split`, but for any stair.
-    fn visit_plain(&self, cache: &mut Cache, poly: &[DVec2], sites: &mut [(i32, i32); 3], level: usize, max_level: usize, f: &mut dyn FnMut(&mut Cache, &[DVec2], &Plate, bool)) {
+    fn visit_plain(&self, cache: &mut Cache, poly: &[Corner], sites: &mut [(i32, i32); 3], level: usize, max_level: usize, f: &mut dyn FnMut(&mut Cache, &[Corner], &Plate, bool)) {
         if poly.len() < 3 {
             return;
         }
-        if (level >= max_level && !self.site_detail(level, sites[level])) || !self.splits(level, sites[level]) {
+        let coarse = level >= max_level && !self.site_detail(level, sites[level]);
+        if coarse && cache.tol > 0.0 && self.splits(level, sites[level]) {
+            // (Fitted, see `visit_fitted`.)
+            self.visit_fitted(cache, poly, sites, level, f);
+            return;
+        } else if coarse || !self.splits(level, sites[level]) {
             let plate = self.plate(cache, *sites, level);
-            let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec()) };
+            let pieces = if self.lab { vec![poly.to_vec()] } else { self.canals.cut(poly.to_vec(), self) };
             for piece in pieces {
-                f(cache, &piece, &plate, area(&piece) >= LEAST_PIECE);
+                f(cache, &piece, &plate, planar::area(&piece) >= LEAST_PIECE);
             }
             return;
         }
         // Pieces of the next level's Voronoi diagram inside this polygon.
         let next = level + 1;
-        let grid = GRID[next];
-        let (mut min, mut max) = (poly[0], poly[0]);
-        for p in poly {
+        for (g, piece) in self.cells_within(next, poly) {
+            sites[next] = g;
+            // (Under `LEAST_PIECE`, nothing to mesh: told as a hole.)
+            if planar::area(&piece) < LEAST_PIECE {
+                let plate = self.plate(cache, *sites, next);
+                f(cache, &piece, &plate, false);
+                continue;
+            }
+            self.visit_plain(cache, &piece, sites, next, max_level, f);
+        }
+    }
+
+    /// The cells of `level`'s sites within `poly` (by its corners, see
+    /// `planar`), each with its site, in order: every site whose cell may
+    /// meet it, clipped to it, those left empty passed over. The plates' and
+    /// the wells' one way to them.
+    fn cells_within(&self, level: usize, poly: &[Corner]) -> Vec<((i32, i32), Vec<Corner>)> {
+        let grid = GRID[level];
+        let at = planar::points(poly);
+        let (mut min, mut max) = (at[0], at[0]);
+        for p in &at {
             min = min.min(*p);
             max = max.max(*p);
         }
@@ -1210,40 +1410,38 @@ impl PlateWorld {
         // (A site further than `CELL_REACH` from `poly` has no part of it:
         // two in three of those round it, each clipped 24 times to nothing.)
         let reach = CELL_REACH * grid;
-        // (The sites round them all, found once.)
+        // (The sites round them all, found once: found for each clip and
+        // each corner made, a site's place, its jitter and the ordered
+        // ground round it, the wells took three times as long.)
         let wide = (ix1 - ix0 + 5) as usize;
-        let table: Vec<DVec2> = (iz0 - 2..=iz1 + 2).flat_map(|z| (ix0 - 2..=ix1 + 2).map(move |x| (x, z))).map(|h| self.site(next, h)).collect();
+        let table: Vec<DVec2> = (iz0 - 2..=iz1 + 2).flat_map(|z| (ix0 - 2..=ix1 + 2).map(move |x| (x, z))).map(|h| self.site(level, h)).collect();
+        let sites_here = Sites { world: self, level, x0: ix0 - 2, z0: iz0 - 2, wide, high: (iz1 - iz0 + 5) as usize, table: &table };
         let site = |h: (i32, i32)| table[(h.1 - iz0 + 2) as usize * wide + (h.0 - ix0 + 2) as usize];
         let mut spare = Vec::new();
+        let mut out = Vec::new();
         for iz in iz0..=iz1 {
             for ix in ix0..=ix1 {
                 #[cfg(test)]
                 let skip = SKIP_FAR.load(std::sync::atomic::Ordering::Relaxed);
                 #[cfg(not(test))]
                 let skip = true;
-                if skip && distance_to(site((ix, iz)), poly) > reach {
+                if skip && distance_to(site((ix, iz)), &at) > reach {
                     continue;
                 }
-                let piece = Self::cell_by((ix, iz), poly, &site, &mut spare);
-                if piece.len() < 3 {
-                    continue;
+                let piece = Self::cell_by(level, (ix, iz), poly, &sites_here, &mut spare);
+                if piece.len() >= 3 {
+                    out.push(((ix, iz), piece));
                 }
-                sites[next] = (ix, iz);
-                // (Under `LEAST_PIECE`, nothing to mesh: told as a hole.)
-                if area(&piece) < LEAST_PIECE {
-                    let plate = self.plate(cache, *sites, next);
-                    f(cache, &piece, &plate, false);
-                    continue;
-                }
-                self.visit_plain(cache, &piece, sites, next, max_level, f);
             }
         }
+        out
     }
 
     /// Every plate piece whose biggest plate's site lies within `lo`..`hi`
-    /// (x, z), at full detail, with its plate and whether `mesh_column`
-    /// meshes it (pieces under `LEAST_PIECE` are left out: holes).
-    pub fn plate_pieces(&self, lo: DVec2, hi: DVec2) -> Vec<(Vec<DVec2>, Plate, bool)> {
+    /// (x, z), at full detail, by its corners (see `planar`), with its plate
+    /// and whether `mesh_column` meshes it (pieces under `LEAST_PIECE` are
+    /// left out: holes).
+    pub fn plate_pieces(&self, lo: DVec2, hi: DVec2) -> Vec<(Vec<Corner>, Plate, bool)> {
         let mut cache = Cache::default();
         let mut out = Vec::new();
         let g0 = GRID[0];
@@ -1256,7 +1454,7 @@ impl PlateWorld {
                 if s.x < lo.x || s.x >= hi.x || s.y < lo.y || s.y >= hi.y {
                     continue;
                 }
-                let poly = self.big_cell(g);
+                let poly = self.big_corners(g);
                 let mut sites = [g, (0, 0), (0, 0)];
                 self.visit_split(&mut cache, &poly, &mut sites, 0, 2, &mut |_, piece, plate, kept| out.push((piece.to_vec(), *plate, kept)));
             }
@@ -1280,6 +1478,7 @@ impl PlateWorld {
     /// in eight directions. Stylised rather than exact.
     fn sky_visibility(&self, cache: &mut Cache, p: DVec2, h: f64, max_level: usize) -> f32 {
         const DIST: [f64; 4] = [1.5, 4.0, 10.0, 25.0];
+        let mut grid = cache.sky.take();
         let mut vis = 0.0;
         for i in 0..8 {
             let a = i as f64 / 8.0 * std::f64::consts::TAU;
@@ -1287,14 +1486,40 @@ impl PlateWorld {
             let mut max_sin: f64 = 0.0;
             for r in DIST {
                 let q = p + dir * r;
-                let dh = self.surface(cache, q.x, q.y, max_level) - h;
+                let dh = match &mut grid {
+                    Some(grid) => self.grid_surface(cache, grid, q, max_level),
+                    None => self.surface(cache, q.x, q.y, max_level),
+                } - h;
                 if dh > 0.0 {
                     max_sin = max_sin.max(dh / (dh * dh + r * r).sqrt());
                 }
             }
             vis += 1.0 - max_sin;
         }
+        cache.sky = grid;
         (vis / 8.0) as f32
+    }
+
+    /// The ground's height at `q` read between the grid's (`SkyGrid`), each
+    /// found as first asked for; off the grid, found there.
+    fn grid_surface(&self, cache: &mut Cache, grid: &mut SkyGrid, q: DVec2, max_level: usize) -> f64 {
+        let t = (q - grid.origin) / grid.step;
+        let (i, j) = (t.x.floor(), t.y.floor());
+        if i < 0.0 || j < 0.0 || i as usize + 1 >= grid.n || j as usize + 1 >= grid.n {
+            return self.surface(cache, q.x, q.y, max_level);
+        }
+        let (i, j) = (i as usize, j as usize);
+        let mut at = |a: usize, b: usize| {
+            let k = b * grid.n + a;
+            if grid.heights[k].is_nan() {
+                let p = grid.origin + DVec2::new(a as f64, b as f64) * grid.step;
+                grid.heights[k] = self.surface(cache, p.x, p.y, max_level);
+            }
+            grid.heights[k]
+        };
+        let (fx, fz) = (t.x - i as f64, t.y - j as f64);
+        let (h00, h10, h01, h11) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+        (h00 * (1.0 - fx) + h10 * fx) * (1.0 - fz) + (h01 * (1.0 - fx) + h11 * fx) * fz
     }
 
     fn emit_prism(
@@ -1310,6 +1535,7 @@ impl PlateWorld {
         // base, rather than drawn as one plain prism.
         if plate.pillar > 0.0
             && self.grows_pillars(max_level)
+            && !cache.plain
             && let Some(library) = &self.library
         {
             let base = Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, ..*plate };
@@ -1364,6 +1590,8 @@ impl PlateWorld {
                     edge_low = edge_low.min(f);
                 }
             }
+            // (Fitted, what is drawn beside may be up to `tol` lower.)
+            let edge_low = edge_low - cache.tol;
             lowest = lowest.min(edge_low);
             beyond.push(edge_low);
         }
@@ -1434,7 +1662,7 @@ impl PlateWorld {
         let code = crate::mesh::plate_code(plate.level, id, big);
         mesh.plate_of(mesh.positions.len() - top_start, code);
         // (Its kerbs, near: flat plates only.)
-        if self.kerbs && max_level == 2 && !plate.sloped && plate.tilt == DVec2::ZERO {
+        if self.kerbs && max_level == 2 && !cache.plain && !plate.sloped && plate.tilt == DVec2::ZERO {
             self.emit_kerbs(mesh, poly, plate, h, origin);
         }
 
@@ -1532,6 +1760,62 @@ impl PlateWorld {
     }
 }
 
+/// Where the plates' lines and corners are (see `planar`).
+impl Geometry for PlateWorld {
+    fn site(&self, level: usize, g: (i32, i32)) -> DVec2 {
+        PlateWorld::site(self, level, g)
+    }
+
+    fn line(&self, l: Line) -> (DVec2, DVec2) {
+        match l {
+            Line::Bisector { level, a, b } => self.bisector(level, a, b),
+            Line::Canal { .. } | Line::Station { .. } => self.canals.line(l),
+            Line::Stair { site, k } => self.stair(site).expect("a stair's line: its stair").line(k),
+            Line::Bound { level, site, k } => {
+                let s = PlateWorld::site(self, level as usize, site);
+                let corner = |k: u8| {
+                    let o = [(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)][k as usize % 4];
+                    s + DVec2::new(o.0, o.1) * GRID[level as usize]
+                };
+                let (p, q) = (corner(k), corner(k + 1));
+                (p, (q - p).perp())
+            }
+            Line::Grid { a, b, c } => planar::grid_line(a, b, c),
+        }
+    }
+}
+
+/// The sites of one level round a polygon, found once (`table`, from `x0`,
+/// `z0`, `wide` by `high`), for its cells' clipping; any other's, the
+/// world's.
+struct Sites<'a> {
+    world: &'a PlateWorld,
+    level: usize,
+    x0: i32,
+    z0: i32,
+    wide: usize,
+    high: usize,
+    table: &'a [DVec2],
+}
+
+impl Geometry for Sites<'_> {
+    fn site(&self, level: usize, g: (i32, i32)) -> DVec2 {
+        let (x, z) = (g.0 - self.x0, g.1 - self.z0);
+        if level == self.level && x >= 0 && z >= 0 && (x as usize) < self.wide && (z as usize) < self.high {
+            self.table[z as usize * self.wide + x as usize]
+        } else {
+            PlateWorld::site(self.world, level, g)
+        }
+    }
+
+    fn line(&self, l: Line) -> (DVec2, DVec2) {
+        match l {
+            Line::Bisector { level, a, b } => self.bisector(level, a, b),
+            _ => self.world.line(l),
+        }
+    }
+}
+
 fn area(poly: &[DVec2]) -> f64 {
     let mut a = 0.0;
     for i in 0..poly.len() {
@@ -1544,6 +1828,53 @@ fn area(poly: &[DVec2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plates are one planar map (see `planar`): their pieces stitched
+    /// and every corner rounded to a grid (1/1024 m), every edge inside the
+    /// area has its twin, the other way, once, and itself once: no crack
+    /// between pieces, none overlapping. All but edges along a canal's or a
+    /// station's line, the corridor or court beyond them. Squares on two
+    /// seeds, each district and the canals' and stairs' among them.
+    #[test]
+    fn plates_one_planar_map() {
+        use std::collections::HashMap;
+        let (mut edges_n, mut squares) = (0, 0);
+        for seed in [1, 2] {
+            let world = PlateWorld::new(crate::WORLD_SIZE, seed);
+            let mut centres: Vec<DVec2> = (0..8).map(|k| DVec2::new((k * 1361 % 16) as f64 * 1024.0 + 300.0, (k * 7 % 16) as f64 * 1024.0 + 700.0)).collect();
+            // (Over a canal and a station, for their cuts.)
+            let c = &world.canals.lines[0];
+            centres.push(c.start + c.dir * (c.length * 0.5));
+            centres.push(world.canals.stations[0]);
+            for c in centres {
+                let (lo, hi) = (c - 300.0, c + 300.0);
+                let mut pieces: Vec<Vec<Corner>> = world.plate_pieces(lo, hi).into_iter().map(|p| p.0).collect();
+                planar::stitch(&mut pieces, &world);
+                let grid = |p: DVec2| ((p.x * 1024.0).round() as i64, (p.y * 1024.0).round() as i64);
+                let mut count: HashMap<((i64, i64), (i64, i64)), i32> = HashMap::new();
+                let mut inside: Vec<((i64, i64), (i64, i64), Line)> = Vec::new();
+                for piece in &pieces {
+                    for k in 0..piece.len() {
+                        let (a, b) = (piece[k], piece[(k + 1) % piece.len()]);
+                        let (ga, gb) = (grid(a.at), grid(b.at));
+                        if ga == gb {
+                            continue;
+                        }
+                        *count.entry((ga, gb)).or_default() += 1;
+                        let m = (a.at + b.at) * 0.5;
+                        if m.x > lo.x + 200.0 && m.x < hi.x - 200.0 && m.y > lo.y + 200.0 && m.y < hi.y - 200.0 && !matches!(a.next, Line::Canal { .. } | Line::Station { .. }) {
+                            inside.push((ga, gb, a.next));
+                        }
+                    }
+                }
+                let bad: Vec<&((i64, i64), (i64, i64), Line)> = inside.iter().filter(|(a, b, _)| count.get(&(*a, *b)) != Some(&1) || count.get(&(*b, *a)) != Some(&1)).collect();
+                assert!(bad.is_empty(), "seed {seed}, round {c:?}: {} of {} edges inside without their twin, as {:?}", bad.len(), inside.len(), &bad[..bad.len().min(4)]);
+                edges_n += inside.len();
+                squares += 1;
+            }
+        }
+        println!("{edges_n} edges inside {squares} squares, each with its twin");
+    }
 
     /// Passing over sites further than `CELL_REACH` from a plate changes
     /// none of its pieces: the same pieces, in order, either way, over

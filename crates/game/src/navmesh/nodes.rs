@@ -4,9 +4,20 @@
 //! body's walking space is exact in 2D: every plate piece, less a band of
 //! the body's radius round every edge it can't cross (a step over its
 //! climb, a canal's cut, the edge of what was built, a pillar). Nodes are
-//! what is left, joined across the edges it can cross. A pillar plate is
-//! ground at its base, less its grown prisms within a body's height of it
-//! (their tops, perches, are left out: walkers don't get onto them).
+//! what is left, joined across the edges it can cross. A pillar a body
+//! would walk into is solid, its whole plate (the user, 2026-11-16: its
+//! panels sunk into faces flush with its plate, nothing of its plate is
+//! walked on; a walker's centre reached at most 15 cm into a recess):
+//! its edges walls, like a hole's. (Before, its plate less each of its
+//! slabs within a body's height, grown: ~11 overlapping regions a pillar,
+//! half the walking space's cuts, for strips at most 15 cm wide.)
+//!
+//! Correct by construction, by the plates' own structure (the user,
+//! 2026-11-16): the plates are one planar map of convex cells
+//! (`worldgen::planar`); the walking space is each cell less the convex
+//! regions a body keeps out of, in convex parts whose corners are known by
+//! what they are; the nodes are those parts joined edge to edge, and their
+//! own meshes (`Space`). No stage has a tolerance of its own.
 //!
 //! Walkers walk within a node and teleport between nodes (`district.rs`);
 //! the hops a teleport may take are the nodes' nearest edge points.
@@ -14,7 +25,8 @@
 use bevy::platform::collections::HashMap;
 
 use bevy::math::DVec2;
-use geo::{Area, BooleanOps, BoundingRect, ConvexHull, Distance, Intersects, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
+use geo::{ConvexHull, MultiPoint, Point};
+use worldgen::planar::{self, Corner, Geometry, Key, Line};
 use worldgen::plates::{Plate, PlateWorld};
 
 /// A body's fit (m): its radius, the highest step it climbs, its height.
@@ -89,12 +101,15 @@ pub(crate) fn background() {
     }
 }
 
-/// How near two edges must lie to be one border (m).
-pub(crate) const ON: f64 = 1e-4;
 /// The grid edges and pieces are found by (m).
 pub(crate) const BIN: f64 = 8.0;
 
 pub(crate) struct Piece {
+    /// Its corners (see `worldgen::planar`), stitched: a corner of a piece
+    /// beside it on an edge of its is one of its, so pieces beside one
+    /// another share their edges corner for corner.
+    pub(crate) corners: Vec<Corner>,
+    /// Their places.
     pub(crate) poly: Vec<DVec2>,
     /// Its plate; a pillar's, at its base.
     pub(crate) plate: Plate,
@@ -102,25 +117,10 @@ pub(crate) struct Piece {
     pub(crate) pillar: bool,
     /// Left out of the mesh: a hole.
     pub(crate) hole: bool,
-    /// A pillar's prisms: each its foot and top outlines (the same points,
-    /// in order), and its bottom and top heights.
+    /// A pillar's prisms within reach of its ground (see `pieces`): each its
+    /// foot and top outlines (the same points, in order), and its bottom and
+    /// top heights.
     pub(crate) prisms: Vec<(Vec<DVec2>, Vec<DVec2>, f64, f64)>,
-}
-
-/// A prism's outline between heights `a` and `b` (within its own): the
-/// hull of its cross-sections there (it narrows and leans as it rises).
-pub(crate) fn section(prism: &(Vec<DVec2>, Vec<DVec2>, f64, f64), a: f64, b: f64) -> Option<Polygon<f64>> {
-    let (foot, top, y0, y1) = prism;
-    let (a, b) = (a.max(*y0), b.min(*y1));
-    if b <= a {
-        return None;
-    }
-    let at = |y: f64| {
-        let t = if y1 > y0 { (y - y0) / (y1 - y0) } else { 0.0 };
-        foot.iter().zip(top).map(move |(f, u)| f.lerp(*u, t))
-    };
-    let points: Vec<Point<f64>> = at(a).chain(at(b)).map(|q| Point::new(snap(q.x), snap(q.y))).collect();
-    Some(MultiPoint::new(points).convex_hull())
 }
 
 /// A stretch of a piece's edge: from `a` to `b`, with the piece across
@@ -129,80 +129,11 @@ pub(crate) fn section(prism: &(Vec<DVec2>, Vec<DVec2>, f64, f64), a: f64, b: f64
 pub(crate) struct Stretch {
     pub(crate) a: DVec2,
     pub(crate) b: DVec2,
+    /// The line it lies on (see `worldgen::planar`).
+    pub(crate) line: Line,
     pub(crate) piece: usize,
     pub(crate) other: Option<usize>,
     pub(crate) open: bool,
-}
-
-/// The parts of segment `a`-`b` further than `r` from every line of
-/// `walls`: by each wall's capsule's interval along it (the line through
-/// its rectangle, Liang-Barsky, and its two end circles), merged, and what
-/// is left. Exact, as geo's band round them clipped to it was, at a
-/// fraction of the cost (0.2 ms an open stretch, the join's 1.4 s in the
-/// stacks).
-fn clear_of(a: DVec2, b: DVec2, walls: &MultiLineString<f64>, r: f64) -> Vec<(DVec2, DVec2)> {
-    let d = b - a;
-    let len2 = d.length_squared();
-    if len2 < 1e-18 {
-        return Vec::new();
-    }
-    let mut cover: Vec<(f64, f64)> = Vec::new();
-    for w in &walls.0 {
-        let (c, e) = (DVec2::new(w.0[0].x, w.0[0].y), DVec2::new(w.0[1].x, w.0[1].y));
-        let mut lo = f64::INFINITY;
-        let mut hi = f64::NEG_INFINITY;
-        // The end circles: |a + t d - c|² = r².
-        for q in [c, e] {
-            let f = a - q;
-            let (qa, qb, qc) = (len2, 2.0 * f.dot(d), f.length_squared() - r * r);
-            let disc = qb * qb - 4.0 * qa * qc;
-            if disc >= 0.0 {
-                let s = disc.sqrt();
-                lo = lo.min((-qb - s) / (2.0 * qa));
-                hi = hi.max((-qb + s) / (2.0 * qa));
-            }
-        }
-        // The rectangle: along the wall within its length, across within r.
-        let u = e - c;
-        let ul = u.length();
-        if ul > 1e-12 {
-            let (ux, n) = (u / ul, (u / ul).perp());
-            let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
-            let mut inside = true;
-            for (axis, min, max) in [(ux, 0.0, ul), (n, -r, r)] {
-                let (p, v) = ((a - c).dot(axis), d.dot(axis));
-                if v.abs() < 1e-15 {
-                    if p < min || p > max {
-                        inside = false;
-                    }
-                } else {
-                    let (s0, s1) = ((min - p) / v, (max - p) / v);
-                    t0 = t0.max(s0.min(s1));
-                    t1 = t1.min(s0.max(s1));
-                }
-            }
-            if inside && t0 <= t1 {
-                lo = lo.min(t0);
-                hi = hi.max(t1);
-            }
-        }
-        if lo < hi && hi > 0.0 && lo < 1.0 {
-            cover.push((lo.max(0.0), hi.min(1.0)));
-        }
-    }
-    cover.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let mut out = Vec::new();
-    let mut at = 0.0;
-    for (lo, hi) in cover {
-        if lo > at {
-            out.push((a + d * at, a + d * lo));
-        }
-        at = at.max(hi);
-    }
-    if at < 1.0 {
-        out.push((a + d * at, b));
-    }
-    out
 }
 
 /// `poly` counter-clockwise, its last point not its first.
@@ -258,480 +189,40 @@ pub(crate) fn along(hull: &[DVec2], a: DVec2, span: DVec2, grow: f64) -> Option<
 }
 
 
-/// How far two fragments either side of an open stretch must meet along it
-/// to be one node (m): a gap a body's centre passes (its radius already
-/// taken off), five times what a node's outline is made simpler by (2 mm,
-/// `district::outline`), so it is kept in its navmesh. (Found every 10 cm
-/// before, a meeting shorter than that joined or not by where the points
-/// fell: 134 in the tiers did not.)
-const MEET: f64 = 0.01;
-
-/// The parts of the line `a` + `dir` s (`dir` of length 1), s from `s0` to
-/// `s1`, inside `f`, each grown by `pad` at its ends: where it crosses `f`'s
-/// rings, inside between each pair; pushed onto `spans` (`cross` a buffer).
-pub(crate) fn spans_in(f: &Polygon<f64>, a: DVec2, dir: DVec2, s0: f64, s1: f64, pad: f64, cross: &mut Vec<f64>, spans: &mut Vec<(f64, f64)>) {
-    cross.clear();
-    for ring in std::iter::once(f.exterior()).chain(f.interiors()) {
-        for e in ring.lines() {
-            let (p, q) = (DVec2::new(e.start.x, e.start.y), DVec2::new(e.end.x, e.end.y));
-            let (sp, sq) = (dir.perp_dot(p - a), dir.perp_dot(q - a));
-            if (sp > 0.0) != (sq > 0.0) {
-                cross.push((p + (q - p) * (sp / (sp - sq)) - a).dot(dir));
-            }
+/// Every point within `r` of the hull of `points`, and no more than the
+/// grid's rounding beyond: the hull, on the grid (whole numbers of
+/// `planar::GRID`), counter-clockwise, of each point moved `ROUND_STEPS`
+/// ways round a circle that much wider (see `Keep::round`).
+fn grown(points: impl IntoIterator<Item = DVec2>, r: f64) -> Vec<(i64, i64)> {
+    thread_local! { static TURNS: std::cell::RefCell<Vec<DVec2>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    let n = round_steps();
+    let k = (r + std::f64::consts::FRAC_1_SQRT_2 / planar::GRID) / (std::f64::consts::PI / n as f64).cos();
+    let mut at: Vec<(i64, i64)> = TURNS.with(|turns| {
+        let mut turns = turns.borrow_mut();
+        if turns.len() != n {
+            *turns = (0..n).map(|j| DVec2::from_angle((j as f64 + 0.5) * std::f64::consts::TAU / n as f64)).collect();
         }
-    }
-    cross.sort_by(f64::total_cmp);
-    for w in cross.chunks_exact(2) {
-        let (u0, u1) = ((w[0] - pad).max(s0), (w[1] + pad).min(s1));
-        if u0 <= u1 {
-            spans.push((u0, u1));
-        }
-    }
-}
-
-
-/// Convex `hulls` (counter-clockwise) less those within another (of two
-/// alike, the first kept): what they cover together, the same. (A pillar's
-/// stacked slabs, many of one footprint, each a hull to take out: 16 a
-/// pillar's piece, most of its walking space's work.)
-fn outermost(hulls: Vec<Polygon<f64>>) -> Vec<Polygon<f64>> {
-    let pts: Vec<Vec<DVec2>> = hulls.iter().map(|h| ccw(h.exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
-    let within = |a: &[DVec2], b: &[DVec2]| a.iter().all(|&x| (0..b.len()).all(|k| (b[(k + 1) % b.len()] - b[k]).perp_dot(x - b[k]) >= -1e-9));
-    let keep: Vec<bool> = (0..pts.len()).map(|i| !(0..pts.len()).any(|j| j != i && within(&pts[i], &pts[j]) && (j < i || !within(&pts[j], &pts[i])))).collect();
-    hulls.into_iter().zip(keep).filter_map(|(h, k)| k.then_some(h)).collect()
-}
-
-/// Whether convex `a` (a closed ring, either way round) and convex `b`
-/// (counter-clockwise) meet or touch: no edge of either with the other all
-/// beyond it. (geo's `intersects`, a pillar's every hull against a piece,
-/// was a sixth of the walking space's work in the stacks.)
-fn convex_meet(a: &[geo::Coord<f64>], b: &[DVec2]) -> bool {
-    let a: Vec<DVec2> = ccw(a.iter().map(|c| DVec2::new(c.x, c.y)).collect());
-    let apart = |p: &[DVec2], q: &[DVec2]| (0..p.len()).any(|k| {
-        let (u, v) = (p[k], p[(k + 1) % p.len()]);
-        q.iter().all(|&x| (v - u).perp_dot(x - u) < 0.0)
+        points.into_iter().flat_map(|p| turns.iter().map(move |u| p + *u * k)).map(|q| ((q.x * planar::GRID).round() as i64, (q.y * planar::GRID).round() as i64)).collect()
     });
-    !apart(&a, b) && !apart(b, &a)
+    let hull = grid_hull(&mut at);
+    assert!(hull.len() >= 3, "a grown region of some area: {hull:?}");
+    hull
 }
 
-/// Convex `poly` (counter-clockwise) on the left of line `a`-`b` moved `r`
-/// to its left: the part of it further than `r` inside the line.
-pub(crate) fn keep_left(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
-    let Some(dir) = (b - a).try_normalize() else { return poly.to_vec() };
-    let side = |q: DVec2| dir.perp_dot(q - a) - r;
-    let mut out = Vec::with_capacity(poly.len() + 1);
-    for k in 0..poly.len() {
-        let (p, q) = (poly[k], poly[(k + 1) % poly.len()]);
-        let (sp, sq) = (side(p), side(q));
-        if sp >= 0.0 {
-            out.push(p);
-        }
-        if (sp >= 0.0) != (sq >= 0.0) {
-            out.push(p + (q - p) * (sp / (sp - sq)));
-        }
-    }
-    out
-}
+/// Where grid lines are: from what they are alone (a region's `Cut`s).
+struct GridOnly;
 
-/// How near a line a segment's ends lie for it to run along it (m).
-const ON_LINE: f64 = 1e-9;
-/// How near two ends of the boundary's parts are for one corner (m).
-const LINK: f64 = 1e-7;
+impl Geometry for GridOnly {
+    fn site(&self, _: usize, _: (i32, i32)) -> DVec2 {
+        unreachable!("grid lines only")
+    }
 
-/// The part of segment `p`-`q` (0 to 1 along it) inside a convex shape
-/// given by its edges' `lines` (each a point on it and its direction, of
-/// length 1, counter-clockwise), closed: none if none, or only a point. A
-/// part running along one of its edges is inside if `same` (the same way
-/// round as it) or `opposite`.
-fn inside_part(p: DVec2, q: DVec2, lines: &[(DVec2, DVec2)], same: bool, opposite: bool) -> Option<(f64, f64)> {
-    let d = q - p;
-    let (mut t0, mut t1) = (0.0f64, 1.0f64);
-    for &(a, dir) in lines {
-        let (s0, s1) = (dir.perp_dot(p - a), dir.perp_dot(q - a));
-        if s0.abs() <= ON_LINE && s1.abs() <= ON_LINE {
-            if !(if d.dot(dir) > 0.0 { same } else { opposite }) {
-                return None;
-            }
-            continue;
-        }
-        if s0 < 0.0 && s1 < 0.0 {
-            return None;
-        }
-        if s0 < 0.0 {
-            t0 = t0.max(s0 / (s0 - s1));
-        } else if s1 < 0.0 {
-            t1 = t1.min(s0 / (s0 - s1));
-        }
-        if t0 >= t1 {
-            return None;
+    fn line(&self, l: Line) -> (DVec2, DVec2) {
+        match l {
+            Line::Grid { a, b, c } => planar::grid_line(a, b, c),
+            _ => unreachable!("grid lines only"),
         }
     }
-    Some((t0, t1))
-}
-
-/// `convex_less`'s working space, kept from call to call on each thread.
-#[derive(Default)]
-struct LessScratch {
-    /// Every shape's edges (a point and a direction), `shape`'s first.
-    lines: Vec<(DVec2, DVec2)>,
-    /// Each shape's corners and edges in them, and its bounds.
-    of: Vec<(usize, usize, DVec2, DVec2)>,
-    into: Vec<u32>,
-    parts: Vec<(DVec2, DVec2)>,
-    covered: Vec<(f64, f64)>,
-    ends: Vec<(DVec2, u32)>,
-    corner: Vec<u32>,
-    corners: Vec<DVec2>,
-    edges: Vec<(u32, u32)>,
-    order: Vec<u32>,
-    first: Vec<u32>,
-    used: Vec<bool>,
-}
-
-/// `convex_less` says why its rings did not close (tests).
-#[cfg(test)]
-pub(crate) static LESS_DEBUG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-thread_local! {
-    static LESS: std::cell::RefCell<LessScratch> = std::cell::RefCell::new(LessScratch::default());
-}
-
-/// `shape` (convex, counter-clockwise) less the convex shapes `cut`
-/// (each counter-clockwise, its last corner not its first): the walking
-/// space's difference, by its boundary. What is left is bounded by the
-/// parts of `shape`'s edges no cutter covers and the parts of the cutters'
-/// edges inside `shape` that no other cutter covers, these run backwards
-/// (what is left on the left of every part); linked end to end into rings,
-/// outer ones counter-clockwise, holes clockwise, each hole in the least
-/// outer ring round it. Where two shapes run along one line: the same way
-/// round, the line is kept once (`shape`'s gives way, then the later
-/// cutter's); opposite ways, two cutters meeting there, neither. Exact:
-/// its corners where the edges cross (geo's boolean puts them on a grid of
-/// about half a millimetre). None if the rings do not close: the caller
-/// then makes it by geo's boolean. (geo's boolean, the general case, 20 to
-/// 40 µs a piece in the stacks and the broken, was most of the walking
-/// space's building; see `walking`.)
-pub(crate) fn convex_less(shape: &[DVec2], cut: &[Vec<DVec2>]) -> Option<Vec<Polygon<f64>>> {
-    LESS.with(|s| less(&mut s.borrow_mut(), shape, cut))
-}
-
-fn less(s: &mut LessScratch, shape: &[DVec2], cut: &[Vec<DVec2>]) -> Option<Vec<Polygon<f64>>> {
-    let LessScratch { lines, of, into, parts, covered, ends, corner, corners, edges, order, first, used } = s;
-    lines.clear();
-    of.clear();
-    parts.clear();
-    for poly in std::iter::once(shape).chain(cut.iter().map(|c| c.as_slice())) {
-        let start = lines.len();
-        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
-        let m = poly.len();
-        for k in 0..m {
-            let (a, b) = (poly[k], poly[(k + 1) % m]);
-            lo = lo.min(a);
-            hi = hi.max(a);
-            if let Some(dir) = (b - a).try_normalize() {
-                lines.push((a, dir));
-            }
-        }
-        of.push((start, lines.len(), lo, hi));
-    }
-    let meets = |a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2| a0.x <= b1.x + ON_LINE && a0.y <= b1.y + ON_LINE && b0.x <= a1.x + ON_LINE && b0.y <= a1.y + ON_LINE;
-    // (The parts of `p`-`q` from `t0` to `t1` not `covered`, kept, run
-    // backwards if `back`.)
-    let keep = |p: DVec2, q: DVec2, t0: f64, t1: f64, covered: &mut Vec<(f64, f64)>, back: bool, parts: &mut Vec<(DVec2, DVec2)>| {
-        covered.sort_unstable_by(|x, y| x.0.total_cmp(&y.0));
-        let len = p.distance(q);
-        let mut put = |u0: f64, u1: f64| {
-            if (u1 - u0) * len > LINK {
-                let (a, b) = (p.lerp(q, u0), p.lerp(q, u1));
-                parts.push(if back { (b, a) } else { (a, b) });
-            }
-        };
-        let mut at = t0;
-        for &(c0, c1) in covered.iter() {
-            if c0 > at {
-                put(at, c0.min(t1));
-            }
-            at = at.max(c1);
-            if at >= t1 {
-                break;
-            }
-        }
-        if at < t1 {
-            put(at, t1);
-        }
-    };
-    let (s0, s1, slo, shi) = of[0];
-    // `shape`'s edges, less what the cutters cover.
-    let n = s1 - s0;
-    for k in 0..n {
-        let (p, q) = (lines[s0 + k].0, lines[s0 + (k + 1) % n].0);
-        let (b0, b1) = (p.min(q), p.max(q));
-        covered.clear();
-        for &(c0, c1, lo, hi) in &of[1..] {
-            if meets(b0, b1, lo, hi)
-                && let Some(i) = inside_part(p, q, &lines[c0..c1], true, false)
-            {
-                covered.push(i);
-            }
-        }
-        keep(p, q, 0.0, 1.0, covered, false, parts);
-    }
-    // The cutters' edges inside `shape`, less what the others cover.
-    for j in 1..of.len() {
-        let (c0, c1, lo, hi) = of[j];
-        if !meets(lo, hi, slo, shi) {
-            continue;
-        }
-        let m = c1 - c0;
-        for k in 0..m {
-            let (p, q) = (lines[c0 + k].0, lines[c0 + (k + 1) % m].0);
-            let (b0, b1) = (p.min(q), p.max(q));
-            if !meets(b0, b1, slo, shi) {
-                continue;
-            }
-            let Some((t0, t1)) = inside_part(p, q, &lines[s0..s1], false, false) else { continue };
-            covered.clear();
-            for (i, &(o0, o1, olo, ohi)) in of.iter().enumerate().skip(1) {
-                if i != j
-                    && meets(b0, b1, olo, ohi)
-                    && let Some(u) = inside_part(p, q, &lines[o0..o1], j > i, true)
-                {
-                    covered.push(u);
-                }
-            }
-            keep(p, q, t0, t1, covered, true, parts);
-        }
-    }
-    if parts.is_empty() {
-        return Some(Vec::new());
-    }
-    // Their ends, each the corner it is one with (within `LINK`): by x,
-    // each against those before it within `LINK`.
-    ends.clear();
-    for (k, &(a, b)) in parts.iter().enumerate() {
-        ends.push((a, 2 * k as u32));
-        ends.push((b, 2 * k as u32 + 1));
-    }
-    ends.sort_unstable_by(|x, y| x.0.x.total_cmp(&y.0.x));
-    corner.clear();
-    corner.resize(ends.len(), u32::MAX);
-    corners.clear();
-    for e in 0..ends.len() {
-        let (p, id) = ends[e];
-        let mut c = u32::MAX;
-        for f in (0..e).rev() {
-            let (o, oid) = ends[f];
-            if p.x - o.x > LINK {
-                break;
-            }
-            if (p.y - o.y).abs() <= LINK {
-                c = corner[oid as usize];
-                break;
-            }
-        }
-        if c == u32::MAX {
-            corners.push(p);
-            c = corners.len() as u32 - 1;
-        }
-        corner[id as usize] = c;
-    }
-    edges.clear();
-    for k in 0..parts.len() {
-        let (a, b) = (corner[2 * k], corner[2 * k + 1]);
-        if a != b {
-            edges.push((a, b));
-        }
-    }
-    // (A part and one back along it: nothing between them.)
-    order.clear();
-    order.extend(0..edges.len() as u32);
-    order.sort_unstable_by_key(|&e| {
-        let (a, b) = edges[e as usize];
-        (a.min(b), a.max(b))
-    });
-    let mut gone = false;
-    for w in order.windows(2) {
-        let (x, y) = (edges[w[0] as usize], edges[w[1] as usize]);
-        if x.0 == y.1 && x.1 == y.0 && x.0 != u32::MAX {
-            edges[w[0] as usize] = (u32::MAX, u32::MAX);
-            edges[w[1] as usize] = (u32::MAX, u32::MAX);
-            gone = true;
-        }
-    }
-    if gone {
-        edges.retain(|e| e.0 != u32::MAX);
-    }
-    // Each corner's parts out (by corner), and as many in as out.
-    let n = corners.len();
-    first.clear();
-    first.resize(n + 1, 0);
-    into.clear();
-    into.resize(n, 0);
-    for &(a, b) in edges.iter() {
-        first[a as usize + 1] += 1;
-        into[b as usize] += 1;
-    }
-    for c in 0..n {
-        if first[c + 1] != into[c] {
-            #[cfg(test)]
-            if LESS_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
-                println!("corner {c} at {:?}: {} out, {} in", corners[c], first[c + 1], into[c]);
-                for (k, &(a, b)) in parts.iter().enumerate() {
-                    println!("  part {k}: {a:?} -> {b:?} ({:.3e} m), corners {} -> {}", a.distance(b), corner[2 * k], corner[2 * k + 1]);
-                }
-            }
-            return None;
-        }
-        first[c + 1] += first[c];
-    }
-    order.clear();
-    order.extend(0..edges.len() as u32);
-    order.sort_unstable_by_key(|&e| edges[e as usize].0);
-    // Rings: from each part, on to the one turning furthest left at its
-    // end (two pieces meeting at a corner kept apart).
-    used.clear();
-    used.resize(edges.len(), false);
-    let mut rings: Vec<(Vec<DVec2>, f64)> = Vec::new();
-    for e0 in 0..edges.len() {
-        if used[e0] {
-            continue;
-        }
-        let mut ring: Vec<DVec2> = Vec::new();
-        let mut e = e0;
-        loop {
-            used[e] = true;
-            let (a, b) = edges[e];
-            ring.push(corners[a as usize]);
-            let out = &order[first[b as usize] as usize..first[b as usize + 1] as usize];
-            let next = if out.len() == 1 {
-                out[0] as usize
-            } else {
-                let d_in = corners[b as usize] - corners[a as usize];
-                let turn = |o: u32| {
-                    let (x, y) = edges[o as usize];
-                    let d = corners[y as usize] - corners[x as usize];
-                    d_in.perp_dot(d).atan2(d_in.dot(d))
-                };
-                *out.iter().max_by(|&&x, &&y| turn(x).total_cmp(&turn(y)))? as usize
-            };
-            if next == e0 {
-                break;
-            }
-            if used[next] {
-                #[cfg(test)]
-                if LESS_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
-                    println!("ring from part {e0} met a used part {next}");
-                }
-                return None;
-            }
-            e = next;
-        }
-        // (From its first corner: from the origin, 15 km off, the products'
-        // rounding was as big as a speck's area, and turned it round.)
-        let o = ring[0];
-        let area = (1..ring.len().saturating_sub(1)).map(|k| (ring[k] - o).perp_dot(ring[k + 1] - o)).sum::<f64>() / 2.0;
-        if area.abs() > 1e-12 {
-            rings.push((ring, area));
-        }
-    }
-    // Holes into the least outer ring round them.
-    let line = |ring: &[DVec2]| LineString::from(ring.iter().chain(ring.first()).map(|p| (p.x, p.y)).collect::<Vec<_>>());
-    if rings.iter().all(|r| r.1 > 0.0) {
-        return Some(rings.iter().map(|r| Polygon::new(line(&r.0), Vec::new())).collect());
-    }
-    let inside = |q: DVec2, ring: &[DVec2]| {
-        let mut c = false;
-        for k in 0..ring.len() {
-            let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
-            if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (b.x - a.x) * (q.y - a.y) / (b.y - a.y) {
-                c = !c;
-            }
-        }
-        c
-    };
-    let outer: Vec<usize> = (0..rings.len()).filter(|&r| rings[r].1 > 0.0).collect();
-    let mut holes: Vec<Vec<usize>> = vec![Vec::new(); rings.len()];
-    for h in (0..rings.len()).filter(|&r| rings[r].1 < 0.0) {
-        let ring = &rings[h].0;
-        let k = (0..ring.len()).max_by(|&x, &y| ring[x].distance_squared(ring[(x + 1) % ring.len()]).total_cmp(&ring[y].distance_squared(ring[(y + 1) % ring.len()]))).unwrap();
-        let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
-        let q = (a + b) / 2.0 + (b - a).normalize().perp() * 1e-6;
-        let Some(o) = outer.iter().copied().filter(|&o| inside(q, &rings[o].0)).min_by(|&x, &y| rings[x].1.total_cmp(&rings[y].1)) else {
-            #[cfg(test)]
-            if LESS_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
-                println!("hole {h} ({:.3e} m², {} corners) in no outer ring; rings {:?}", rings[h].1, ring.len(), rings.iter().map(|r| (r.1, r.0.len())).collect::<Vec<_>>());
-                for (k, &(a, b)) in parts.iter().enumerate() {
-                    println!("  part {k}: {a:?} -> {b:?} ({:.3e} m)", a.distance(b));
-                }
-            }
-            return None;
-        };
-        holes[o].push(h);
-    }
-    Some(outer.iter().map(|&o| Polygon::new(line(&rings[o].0), holes[o].iter().map(|&h| line(&rings[h].0)).collect())).collect())
-}
-
-/// Whether segment `a`-`b` comes within `r` of convex `poly` (counter-
-/// clockwise): its band reaches into it.
-fn within(poly: &[DVec2], a: DVec2, b: DVec2, r: f64) -> bool {
-    let inside = |q: DVec2| (0..poly.len()).all(|k| (poly[(k + 1) % poly.len()] - poly[k]).perp_dot(q - poly[k]) >= 0.0);
-    if inside(a) || inside(b) {
-        return true;
-    }
-    let to = |q: DVec2, p0: DVec2, p1: DVec2| {
-        let d = p1 - p0;
-        let t = if d.length_squared() > 0.0 { ((q - p0).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-        q.distance(p0 + d * t)
-    };
-    (0..poly.len()).any(|k| {
-        let (p0, p1) = (poly[k], poly[(k + 1) % poly.len()]);
-        // (Crossing, or the nearest of the four ends to the other segment.)
-        let (d1, d2) = ((b - a).perp_dot(p0 - a), (b - a).perp_dot(p1 - a));
-        let (d3, d4) = ((p1 - p0).perp_dot(a - p0), (p1 - p0).perp_dot(b - p0));
-        (d1 * d2 < 0.0 && d3 * d4 < 0.0) || to(a, p0, p1) < r || to(b, p0, p1) < r || to(p0, a, b) < r || to(p1, a, b) < r
-    })
-}
-
-/// Steps in each half circle of a capsule's ends (`capsule`).
-pub(crate) const CAP_STEPS: usize = 6;
-
-/// Segment `a`-`b` grown by `r`, counter-clockwise, its last corner not
-/// its first: its sides, each end a half circle in `CAP_STEPS`, its corners
-/// just outside the circle (the polygon round it, not in it: never less
-/// than `r`). (Each turn round an end from a table: a sine and a cosine
-/// for each of its corners, 100 000 capsules in the stacks.)
-pub(crate) fn capsule(a: DVec2, b: DVec2, r: f64) -> Vec<DVec2> {
-    static TURNS: std::sync::LazyLock<[(f64, f64); CAP_STEPS + 1]> = std::sync::LazyLock::new(|| {
-        let k = 1.0 / (std::f64::consts::PI / (2.0 * CAP_STEPS as f64)).cos();
-        std::array::from_fn(|j| {
-            let t = std::f64::consts::PI * j as f64 / CAP_STEPS as f64;
-            let f = if j == 0 || j == CAP_STEPS { 1.0 } else { k };
-            (t.cos() * f, t.sin() * f)
-        })
-    });
-    let d = (b - a).normalize_or(DVec2::X) * r;
-    let n = d.perp();
-    let mut ring = Vec::with_capacity(2 * (CAP_STEPS + 1));
-    // (Round `b` from its right to its left, then `a` from its left to its
-    // right: counter-clockwise.)
-    for (c, from, to) in [(b, -n, d), (a, n, -d)] {
-        for &(cos, sin) in TURNS.iter() {
-            ring.push(c + from * cos + to * sin);
-        }
-    }
-    ring
-}
-
-/// `hull` (convex) grown by `r`, counter-clockwise: the hull of its corners
-/// moved eight ways, a little more than `r` (round the circle, not in it).
-fn grow(hull: &Polygon<f64>, r: f64) -> Polygon<f64> {
-    let k = r / (std::f64::consts::PI / 8.0).cos();
-    let points: Vec<Point<f64>> = hull.exterior().0.iter().flat_map(|c| (0..8).map(move |j| { let a = (j as f64 + 0.5) * std::f64::consts::FRAC_PI_4; Point::new(c.x + k * a.cos(), c.y + k * a.sin()) })).collect();
-    let mut poly = MultiPoint::new(points).convex_hull();
-    if poly.signed_area() < 0.0 {
-        poly.exterior_mut(|e| e.0.reverse());
-    }
-    poly
 }
 
 pub(crate) fn cells(a: DVec2, b: DVec2, pad: f64) -> impl Iterator<Item = (i32, i32)> {
@@ -740,30 +231,26 @@ pub(crate) fn cells(a: DVec2, b: DVec2, pad: f64) -> impl Iterator<Item = (i32, 
     (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| (x, z)))
 }
 
-/// A coordinate on the grid of 1/1024 m: exact in binary, and Detour's
-/// 1/64 m cells a whole number of steps. (The boolean library, i_overlay
-/// 4.0.7, broke on a pillar's near-degenerate slabs off it.)
-pub(crate) fn snap(v: f64) -> f64 {
-    (v * 1024.0).round() / 1024.0
-}
-
-pub(crate) fn polygon(points: &[DVec2]) -> Polygon<f64> {
-    Polygon::new(LineString::from(points.iter().map(|p| (snap(p.x), snap(p.y))).collect::<Vec<_>>()), vec![])
-}
-
-/// `points` as a polygon as they are (`polygon` rounds them).
-pub(crate) fn polygon_exact(points: &[DVec2]) -> Polygon<f64> {
-    Polygon::new(LineString::from(points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()), vec![])
-}
-
 fn bounds(poly: &[DVec2]) -> (DVec2, DVec2) {
     poly.iter().fold((poly[0], poly[0]), |(a, b), q| (a.min(*q), b.max(*q)))
 }
 
+/// How far up from a pillar's ground its prisms are kept (m): over the
+/// tallest body's height (a walker's 2.6 m), all a body on its ground
+/// meets. (All kept, 43 a pillar in the stacks, each made into outlines,
+/// for the two or three below a body's head.)
+pub(crate) const BODY_REACH: f64 = 4.0;
+
 /// The plate pieces from `lo` to `hi` (best on columns' edges, the same
 /// set the terrain's mesh has), as the generator outlines them: a pillar's
-/// prisms grown, its plate taken at its base.
+/// prisms grown, those starting within `BODY_REACH` of its ground kept, its
+/// plate taken at its base.
 pub(crate) fn pieces(world: &PlateWorld, lo: DVec2, hi: DVec2) -> Vec<Piece> {
+    pieces_up_to(world, lo, hi, BODY_REACH)
+}
+
+/// As `pieces`, a pillar's prisms starting within `reach` of its ground.
+pub(crate) fn pieces_up_to(world: &PlateWorld, lo: DVec2, hi: DVec2, reach: f64) -> Vec<Piece> {
     let grows = world.grows_pillars_at_full_detail();
     // (In strips, on the build's threads: each big plate is its site's
     // strip's, so the same pieces, in the same order. On one thread, a
@@ -777,108 +264,91 @@ pub(crate) fn pieces(world: &PlateWorld, lo: DVec2, hi: DVec2) -> Vec<Piece> {
         .collect();
     // (A pillar's form grown in its strip's thread too: after them, on one,
     // half the stacks' pieces in play.)
-    let piece = |(poly, plate, kept): (Vec<DVec2>, Plate, bool)| {
+    let piece = |(corners, plate, kept): (Vec<Corner>, Plate, bool)| {
+        let poly = planar::points(&corners);
         let pillar = grows && plate.pillar > 0.0;
         let o = poly.iter().fold(DVec2::ZERO, |s, q| s + *q) / poly.len() as f64;
         let at = |v: &bevy::math::Vec2| o + DVec2::new(v.x as f64, v.y as f64);
-        let prisms = if pillar { world.pillar_prisms(&poly, &plate, o).into_iter().map(|p| (p.points.iter().map(at).collect(), p.top().iter().map(at).collect(), p.y0 as f64, p.y1 as f64)).collect() } else { Vec::new() };
+        let floor = plate.height - plate.pillar;
+        let prisms = if pillar { world.pillar_prisms(&poly, &plate, o).into_iter().filter(|p| (p.y0 as f64) < floor + reach).map(|p| (p.points.iter().map(at).collect(), p.top().iter().map(at).collect(), p.y0 as f64, p.y1 as f64)).collect() } else { Vec::new() };
         let plate = if pillar { Plate { height: plate.height - plate.pillar, pillar: 0.0, sloped: false, tilt: DVec2::ZERO, ..plate } } else { plate };
-        Piece { pillar, hole: !kept, poly, plate, prisms }
+        Piece { pillar, hole: !kept, corners, poly, plate, prisms }
     };
-    par_chunks(&strips, |c| c.iter().flat_map(|&(a, b)| world.plate_pieces(a, b)).map(piece).collect::<Vec<_>>()).into_iter().flatten().collect()
+    let mut pieces: Vec<Piece> = par_chunks(&strips, |c| c.iter().flat_map(|&(a, b)| world.plate_pieces(a, b)).map(piece).collect::<Vec<_>>()).into_iter().flatten().collect();
+    // (Stitched all together: a piece's neighbour may be in another strip.)
+    let mut corners: Vec<Vec<Corner>> = pieces.iter_mut().map(|p| std::mem::take(&mut p.corners)).collect();
+    planar::stitch(&mut corners, world);
+    for (p, c) in pieces.iter_mut().zip(corners) {
+        p.poly = planar::points(&c);
+        p.corners = c;
+    }
+    pieces
 }
 
-/// Every piece's edges cut where the piece across changes, each stretch
-/// open or not for a body climbing `climb`.
-pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64) -> Vec<Stretch> {
-    let mut grid: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+/// Every piece's edges, each with the piece across it (none: a canal's cut,
+/// a hole, the edge of what was built), cut where the step across passes a
+/// body's `climb`, each stretch open or not. By the planar map (see
+/// `worldgen::planar`): an edge's piece across is its twin's, the same two
+/// corners the other way round, found by what they are, never by how near.
+/// `solid`: pieces nothing crosses onto (`Space::build`'s pillars), their
+/// edges walls, as a hole's are.
+pub(crate) fn stretches(world: &PlateWorld, pieces: &[Piece], climb: f64, solid: &[bool]) -> Vec<Stretch> {
+    let mut twin: HashMap<(Key, Key), usize> = HashMap::new();
     for (i, p) in pieces.iter().enumerate() {
-        for k in 0..p.poly.len() {
-            let (a, b) = (p.poly[k], p.poly[(k + 1) % p.poly.len()]);
-            for c in cells(a, b, ON) {
-                grid.entry(c).or_default().push((i, k));
-            }
+        for k in 0..p.corners.len() {
+            twin.insert((p.corners[k].key, p.corners[(k + 1) % p.corners.len()].key), i);
         }
     }
     let top = |i: usize, q: DVec2| world.plate_top(&pieces[i].plate, q);
     let mut out = Vec::new();
-    let mut near: Vec<(usize, usize)> = Vec::new();
-    let mut across: Vec<(f64, f64, usize)> = Vec::new();
     for (i, p) in pieces.iter().enumerate() {
-        for k in 0..p.poly.len() {
-            let (a, b) = (p.poly[k], p.poly[(k + 1) % p.poly.len()]);
-            let d = b - a;
-            let len = d.length();
-            if len < 1e-9 {
+        let n = p.corners.len();
+        for k in 0..n {
+            let (u, w) = (p.corners[k], p.corners[(k + 1) % n]);
+            let (a, b) = (u.at, w.at);
+            let other = twin.get(&(w.key, u.key)).copied().filter(|&j| j != i);
+            let Some(j) = other.filter(|&j| !pieces[j].hole && !p.hole && !solid[i] && !solid[j]) else {
+                out.push(Stretch { a, b, line: u.next, piece: i, other: None, open: false });
                 continue;
-            }
-            let dir = d / len;
-            // Who lies across it, and along which part (0..1).
-            across.clear();
-            near.clear();
-            near.extend(cells(a, b, ON).flat_map(|c| grid.get(&c).into_iter().flatten().copied()).filter(|&(j, _)| j != i));
-            near.sort_unstable();
-            near.dedup();
-            for &(j, m) in &near {
-                let q = &pieces[j].poly;
-                let (c0, c1) = (q[m], q[(m + 1) % q.len()]);
-                let off = |x: DVec2| (x - a).perp_dot(dir).abs();
-                if off(c0) > ON || off(c1) > ON {
-                    continue;
-                }
-                let (t0, t1) = ((c0 - a).dot(dir) / len, (c1 - a).dot(dir) / len);
-                let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(1.0));
-                if hi - lo > ON / len {
-                    across.push((lo, hi, j));
-                }
-            }
-            across.sort_by(|x, y| x.0.total_cmp(&y.0));
-            // The edge in parts: each with whoever is across, or none.
-            let mut parts: Vec<(f64, f64, Option<usize>)> = Vec::new();
-            let mut t = 0.0;
-            for &(lo, hi, j) in &across {
-                if lo > t + ON / len {
-                    parts.push((t, lo, None));
-                }
-                let lo = lo.max(t);
-                if hi > lo {
-                    parts.push((lo, hi, Some(j)));
-                    t = hi;
-                }
-            }
-            if t < 1.0 - ON / len {
-                parts.push((t, 1.0, None));
-            }
-            for (t0, t1, j) in parts {
-                let Some(j) = j.filter(|&j| !pieces[j].hole && !p.hole) else {
-                    out.push(Stretch { a: a + d * t0, b: a + d * t1, piece: i, other: j, open: false });
-                    continue;
-                };
-                // The step along it, open where within the climb: exact for
-                // flat and tilted plates (it changes linearly); sampled every
-                // 25 cm on an earthwork.
-                let n = if p.plate.sloped || pieces[j].plate.sloped { ((t1 - t0) * len / 0.25).ceil().max(1.0) as usize } else { 1 };
-                let mut cuts = vec![t0];
-                for s in 0..n {
-                    let (u0, u1) = (t0 + (t1 - t0) * s as f64 / n as f64, t0 + (t1 - t0) * (s + 1) as f64 / n as f64);
-                    let step = |u: f64| top(i, a + d * u) - top(j, a + d * u);
-                    let (s0, s1) = (step(u0), step(u1));
-                    for c in [climb, -climb] {
-                        if (s0 - c) * (s1 - c) < 0.0 {
-                            cuts.push(u0 + (u1 - u0) * (c - s0) / (s1 - s0));
-                        }
+            };
+            // The step along it, open where within the climb: exact for
+            // flat and tilted plates (it changes linearly); sampled every
+            // 25 cm on an earthwork. (From the lesser piece's side, the
+            // greater's the same cuts the other way round: each wall the
+            // same from either side.)
+            let (lo, hi, from) = if i < j { (a, b, i) } else { (b, a, j) };
+            let d = hi - lo;
+            let len = d.length();
+            let m = if p.plate.sloped || pieces[j].plate.sloped { (len / 0.25).ceil().max(1.0) as usize } else { 1 };
+            let to = if from == i { j } else { i };
+            let step = |u: f64| top(from, lo + d * u) - top(to, lo + d * u);
+            let mut cuts = vec![0.0];
+            for s in 0..m {
+                let (u0, u1) = (s as f64 / m as f64, (s + 1) as f64 / m as f64);
+                let (s0, s1) = (step(u0), step(u1));
+                for c in [climb, -climb] {
+                    if (s0 - c) * (s1 - c) < 0.0 {
+                        cuts.push(u0 + (u1 - u0) * (c - s0) / (s1 - s0));
                     }
                 }
-                cuts.push(t1);
-                cuts.sort_by(f64::total_cmp);
-                for w in cuts.windows(2) {
-                    if w[1] - w[0] <= 1e-12 {
-                        continue;
-                    }
-                    let m = a + d * ((w[0] + w[1]) / 2.0);
-                    out.push(Stretch { a: a + d * w[0], b: a + d * w[1], piece: i, other: Some(j), open: (top(i, m) - top(j, m)).abs() <= climb });
+            }
+            cuts.push(1.0);
+            cuts.sort_by(f64::total_cmp);
+            let mut parts: Vec<Stretch> = cuts
+                .windows(2)
+                .filter(|w| w[1] - w[0] > 1e-12)
+                .map(|w| {
+                    let (x, y) = (if w[0] == 0.0 { lo } else { lo + d * w[0] }, if w[1] == 1.0 { hi } else { lo + d * w[1] });
+                    Stretch { a: x, b: y, line: u.next, piece: i, other: Some(j), open: step((w[0] + w[1]) / 2.0).abs() <= climb }
+                })
+                .collect();
+            if from != i {
+                parts.reverse();
+                for s in &mut parts {
+                    std::mem::swap(&mut s.a, &mut s.b);
                 }
             }
+            out.extend(parts);
         }
     }
     out
@@ -918,76 +388,694 @@ pub(crate) struct Link {
     pub(crate) by: f64,
 }
 
-/// How far off an edge a point on it may be found (m): half a step of the
-/// grid of 1/1024 m, and more. (A fragment's corners, out of the boolean
-/// library on snapped outlines, lie up to 0.6 mm outside their piece; a
-/// teleport landing there was found on no piece.)
+/// How far off a node a point may be found on it (m): a point on its edge,
+/// computed, lands a hair either side.
 pub(crate) const ROUNDING: f64 = 1e-3;
 
 /// How far apart a node pair's hops are kept, along the edge they leave
 /// from (m): the nearest in each cell of this side.
 pub(crate) const HOP_CELL: f64 = 8.0;
 
+/// The ways round a keep-out region's round edges are made (`Keep::round`):
+/// 6, or `--set round_steps=N` in play. (The user, 2026-11-16: 6 for 12,
+/// a wall's round end up to 0.404 m from it for 0.362, 4 cm walkers would
+/// not show; each step a cut where a piece goes on past a wall's end, the
+/// bulk of the walking space's work: walking 58-66 ms for 76-84 a big
+/// square, a quarter fewer parts.)
+pub(crate) static ROUND_STEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(6);
+
+fn round_steps() -> usize {
+    ROUND_STEPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A region a body's centre keeps out of: a closed wall's band. Convex, counter-clockwise, its corners on the grid
+/// (`planar::GRID`), no three in a line; each edge's line by what it is
+/// (`Line::Grid`: two regions' edges on one line are on one line), and
+/// whether the region is on its normal's side, with its `Cut`, and its
+/// normal turned inwards with where the line is along it (`clear`); and
+/// its edges, longest first (`less`).
+pub(crate) struct Keep {
+    pub(crate) ring: Vec<DVec2>,
+    lines: Vec<(Line, bool)>,
+    cuts: Vec<planar::Cut>,
+    facing: Vec<(DVec2, f64, f64)>,
+    order: Vec<usize>,
+    lo: DVec2,
+    hi: DVec2,
+}
+
+impl Keep {
+    /// Every point within `r` of the hull of `points`, and no more than
+    /// the grid's rounding beyond (half its diagonal): the hull, on the
+    /// grid, of each point moved `ROUND_STEPS` ways round a circle that
+    /// much wider, each edge touching it. (A corner moved onto the grid
+    /// moves its edges no more than half the grid's diagonal: round the
+    /// circle of `r`, never in it.) A wall's band from its two ends.
+    pub(crate) fn round(points: impl IntoIterator<Item = DVec2>, r: f64) -> Keep {
+        let hull = grown(points, r);
+        let n = hull.len();
+        let ring: Vec<DVec2> = hull.iter().map(|&(x, y)| DVec2::new(x as f64, y as f64) / planar::GRID).collect();
+        let lines: Vec<(Line, bool)> = (0..n).map(|i| Line::grid(hull[i], hull[(i + 1) % n])).collect();
+        let cuts = lines.iter().map(|&(l, _)| planar::Cut::new(l, &GridOnly)).collect();
+        let facing = lines
+            .iter()
+            .map(|&(l, inside)| {
+                let (p, n) = GridOnly.line(l);
+                let n = if inside { n } else { -n };
+                (n, n.dot(p), 1e-6 * n.length())
+            })
+            .collect();
+        let (lo, hi) = bounds(&ring);
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&i, &j| ring[(j + 1) % n].distance_squared(ring[j]).total_cmp(&ring[(i + 1) % n].distance_squared(ring[i])).then(i.cmp(&j)));
+        Keep { ring, lines, cuts, facing, order, lo, hi }
+    }
+
+    /// Turned so that above 0 is inside, below outside: `s`, a side of
+    /// edge `k`'s line by its `Cut`.
+    fn inward(&self, k: usize, s: f64) -> f64 {
+        if self.lines[k].1 { s } else { -s }
+    }
+
+    /// Whether all of the box `lo`..`hi` is on one side of edge `k`'s line,
+    /// by more than a micrometre: inside (`Some(true)`), outside
+    /// (`Some(false)`); else `None`, its corners to be tried one by one.
+    /// (Its corners' rounding, far within a micrometre, the same each
+    /// corner's side says; two products where they lie far from the line,
+    /// most of them. Every corner against every line: a third of the
+    /// walking space's work.)
+    fn clear(&self, k: usize, lo: DVec2, hi: DVec2) -> Option<bool> {
+        let (n, o, margin) = self.facing[k];
+        let far = DVec2::new(if n.x > 0.0 { hi.x } else { lo.x }, if n.y > 0.0 { hi.y } else { lo.y });
+        let near = DVec2::new(if n.x > 0.0 { lo.x } else { hi.x }, if n.y > 0.0 { lo.y } else { hi.y });
+        if n.dot(near) - o > margin {
+            Some(true)
+        } else if n.dot(far) - o < -margin {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+/// A corner while a piece's walking space is made (`Walk`): where, and its
+/// point and the line of its edge on, by the piece's own numbers
+/// (`Walk::keys`, `Walk::lines`): 24 bytes. (As a `Corner`, 112, its key
+/// 64: copied in every cut, hashed and compared in every merge, the cost
+/// of a cut 33 times a plain clip's.)
+#[derive(Clone, Copy, Debug)]
+struct Spot {
+    at: DVec2,
+    point: u32,
+    line: u32,
+}
+
+/// An edge by its points' numbers, from and to; or two lines'.
+fn pair(a: u32, b: u32) -> u64 {
+    (a as u64) << 32 | b as u64
+}
+
+fn spot_bounds(p: &[Spot]) -> (DVec2, DVec2) {
+    p.iter().fold((p[0].at, p[0].at), |(a, b), s| (a.min(s.at), b.max(s.at)))
+}
+
+/// A piece's walking space as regions are taken from it (`walking`), kept
+/// from piece to piece for its buffers. Its points by what they are (`keys`,
+/// one number a point: `names`; where two lines cross, by their numbers:
+/// `crossings`, each pair named once) and their places; its lines (one
+/// number a line). Its parts (convex, counter-clockwise), their bounds,
+/// whether still one; and every edge of theirs, by its points' numbers, to
+/// its part.
+#[derive(Default)]
+pub(crate) struct Walk {
+    keys: Vec<Key>,
+    ats: Vec<DVec2>,
+    names: HashMap<Key, u32>,
+    crossings: HashMap<u64, u32>,
+    lines: Vec<Line>,
+    line_ids: HashMap<Line, u32>,
+    parts: Vec<Vec<Spot>>,
+    bounds: Vec<(DVec2, DVec2)>,
+    alive: Vec<bool>,
+    edges: HashMap<u64, u32>,
+    pool: Vec<Vec<Spot>>,
+    sides: Vec<f64>,
+}
+
+impl Walk {
+    fn reset(&mut self) {
+        self.keys.clear();
+        self.ats.clear();
+        self.names.clear();
+        self.crossings.clear();
+        self.lines.clear();
+        self.line_ids.clear();
+        for p in self.parts.drain(..) {
+            self.pool.push(p);
+        }
+        self.bounds.clear();
+        self.alive.clear();
+        self.edges.clear();
+    }
+
+    fn point(&mut self, key: Key, at: DVec2) -> u32 {
+        let next = self.keys.len() as u32;
+        let p = *self.names.entry(key).or_insert(next);
+        if p == next {
+            self.keys.push(key);
+            self.ats.push(at);
+        }
+        p
+    }
+
+    fn line(&mut self, l: Line) -> u32 {
+        let next = self.lines.len() as u32;
+        let i = *self.line_ids.entry(l).or_insert(next);
+        if i == next {
+            self.lines.push(l);
+        }
+        i
+    }
+
+    /// Where lines `a` and `b` cross: named by what it is the first time,
+    /// by the two numbers after.
+    fn crossing<G: Geometry + ?Sized>(&mut self, a: u32, b: u32, geometry: &G) -> (u32, DVec2) {
+        let k = if a < b { pair(a, b) } else { pair(b, a) };
+        if let Some(&p) = self.crossings.get(&k) {
+            return (p, self.ats[p as usize]);
+        }
+        let key = Key::of(self.lines[a as usize], self.lines[b as usize]);
+        let p = self.point(key, geometry.corner(key));
+        self.crossings.insert(k, p);
+        (p, self.ats[p as usize])
+    }
+
+    fn side(&self, cut: &planar::Cut, s: &Spot) -> f64 {
+        cut.side_at(s.at, &self.keys[s.point as usize])
+    }
+
+    fn add(&mut self, p: Vec<Spot>) -> u32 {
+        let i = self.parts.len() as u32;
+        let n = p.len();
+        for k in 0..n {
+            self.edges.insert(pair(p[k].point, p[(k + 1) % n].point), i);
+        }
+        self.bounds.push(spot_bounds(&p));
+        self.alive.push(true);
+        self.parts.push(p);
+        i
+    }
+
+    fn remove(&mut self, i: u32) {
+        let p = std::mem::take(&mut self.parts[i as usize]);
+        let n = p.len();
+        // (Those a part made from it has taken over, left.)
+        for k in 0..n {
+            let e = pair(p[k].point, p[(k + 1) % n].point);
+            if self.edges.get(&e) == Some(&i) {
+                self.edges.remove(&e);
+            }
+        }
+        self.alive[i as usize] = false;
+        self.pool.push(p);
+    }
+
+    /// Whether `keep` and `part` (its bounds `lo`..`hi`) are apart: the
+    /// part outside one of the region's edges, or the region outside one of
+    /// the part's. (An edge of no length has no line: passed over.)
+    fn apart(&self, keep: &Keep, part: &[Spot], (lo, hi): (DVec2, DVec2)) -> bool {
+        let m = keep.ring.len();
+        if (0..m).any(|k| match keep.clear(k, lo, hi) {
+            Some(inside) => !inside,
+            None => part.iter().all(|s| keep.inward(k, self.side(&keep.cuts[k], s)) <= 0.0),
+        }) {
+            return true;
+        }
+        let n = part.len();
+        (0..n).any(|i| {
+            let (a, e) = (part[i].at, part[(i + 1) % n].at - part[i].at);
+            e != DVec2::ZERO && keep.ring.iter().all(|v| e.perp_dot(*v - a) <= 0.0)
+        })
+    }
+
+    /// Part `i` less region `keep`: what of it lies outside, in convex
+    /// pieces, into `out`. Untouched (`apart`), nothing. Else cut along each
+    /// of the region's edges' lines in turn, the longest first: the piece
+    /// outside each kept, the rest carried on; what is left at the end is
+    /// inside, gone. (Longest first, a band's sides: the rest no wider than
+    /// the band, the cuts after them, round its ends, stay near it. In the
+    /// ring's order, its ends' cuts went across the whole part: 14 parts a
+    /// piece in the tiers.) Whether it was cut.
+    fn less<G: Geometry + ?Sized>(&mut self, keep: &Keep, i: u32, geometry: &G, out: &mut Vec<Vec<Spot>>) -> bool {
+        let (lo, hi) = self.bounds[i as usize];
+        if self.apart(keep, &self.parts[i as usize], (lo, hi)) {
+            return false;
+        }
+        let mut rest = self.pool.pop().unwrap_or_default();
+        rest.clear();
+        rest.extend_from_slice(&self.parts[i as usize]);
+        let mut spare = self.pool.pop().unwrap_or_default();
+        let mut sides = std::mem::take(&mut self.sides);
+        let (mut lo, mut hi) = (lo, hi);
+        for &k in &keep.order {
+            match keep.clear(k, lo, hi) {
+                Some(true) => continue,
+                Some(false) => {
+                    out.push(rest);
+                    self.pool.push(spare);
+                    self.sides = sides;
+                    return true;
+                }
+                None => {}
+            }
+            let (mut inside, mut outside) = (false, false);
+            sides.clear();
+            for s in &rest {
+                let side = self.side(&keep.cuts[k], s);
+                sides.push(side);
+                let s = keep.inward(k, side);
+                inside |= s > 0.0;
+                outside |= s < 0.0;
+            }
+            if !outside {
+                continue;
+            }
+            if !inside {
+                out.push(rest);
+                self.pool.push(spare);
+                self.sides = sides;
+                return true;
+            }
+            // Outside, kept; inside, on to the next line.
+            let l = self.line(keep.lines[k].0);
+            let mut piece = self.pool.pop().unwrap_or_default();
+            if keep.lines[k].1 {
+                self.split(&rest, l, &sides, geometry, &mut piece, &mut spare);
+            } else {
+                self.split(&rest, l, &sides, geometry, &mut spare, &mut piece);
+            }
+            out.push(piece);
+            std::mem::swap(&mut rest, &mut spare);
+            (lo, hi) = spot_bounds(&rest);
+        }
+        self.pool.push(rest);
+        self.pool.push(spare);
+        self.sides = sides;
+        true
+    }
+
+    /// `poly` cut by line `l` both ways at once, `sides` its corners' (by
+    /// the line's `Cut`): below it into `below`, above into `above`, as
+    /// `planar::split` makes them.
+    fn split<G: Geometry + ?Sized>(&mut self, poly: &[Spot], l: u32, sides: &[f64], geometry: &G, below: &mut Vec<Spot>, above: &mut Vec<Spot>) {
+        below.clear();
+        above.clear();
+        let m = poly.len();
+        for i in 0..m {
+            let (a, j) = (poly[i], (i + 1) % m);
+            let (sa, sb) = (sides[i], sides[j]);
+            if sa < 0.0 {
+                below.push(a);
+                if sb > 0.0 {
+                    let (point, at) = self.crossing(a.line, l, geometry);
+                    below.push(Spot { at, point, line: l });
+                    above.push(Spot { at, point, line: a.line });
+                }
+            } else if sa > 0.0 {
+                above.push(a);
+                if sb < 0.0 {
+                    let (point, at) = self.crossing(a.line, l, geometry);
+                    above.push(Spot { at, point, line: l });
+                    below.push(Spot { at, point, line: a.line });
+                }
+            } else {
+                // On the line: a corner of both, going on along it from
+                // whichever leaves it.
+                below.push(Spot { line: if sb > 0.0 { l } else { a.line }, ..a });
+                above.push(Spot { line: if sb < 0.0 { l } else { a.line }, ..a });
+            }
+        }
+    }
+
+    /// Parts beside one another across whole edges (the same two points,
+    /// each way round) joined where their union is convex, till no two are
+    /// (Hertel and Mehlhorn's): as few parts as the walking space's own
+    /// corners call for, however the cuts made them. (Each region's cuts
+    /// split every part the regions before it left near it: where regions
+    /// overlap, a pillar's slabs, bands round one corner, parts multiplied,
+    /// 52 GB in the stacks.) Only `fresh` parts, and what they are joined
+    /// into, are tried: no two others could be joined after the merge
+    /// before. Two parts beside one another along part of an edge alone
+    /// never make one convex part: whole edges are all it looks for.
+    fn merge(&mut self, fresh: &mut Vec<u32>) {
+        while let Some(i) = fresh.pop() {
+            if !self.alive[i as usize] {
+                continue;
+            }
+            let a = &self.parts[i as usize];
+            let n = a.len();
+            let joined = (0..n).find_map(|k| {
+                let j = *self.edges.get(&pair(a[(k + 1) % n].point, a[k].point))?;
+                (j != i).then(|| union(a, k, &self.parts[j as usize])).flatten().map(|u| (j, u))
+            });
+            if let Some((j, u)) = joined {
+                let made = self.add(u);
+                self.remove(i);
+                self.remove(j);
+                fresh.push(made);
+            }
+        }
+    }
+}
+
+/// `a` and `b` (convex, counter-clockwise), `a`'s edge `k` the other way
+/// round one of `b`'s, as one, if convex: the run of edges they share left
+/// out, the turns where it ends no more than straight (straight by what
+/// their lines are, going on the same way, or turning left).
+fn union(a: &[Spot], k: usize, b: &[Spot]) -> Option<Vec<Spot>> {
+    let (na, nb) = (a.len() as isize, b.len() as isize);
+    let at = |p: &[Spot], i: isize| p[i.rem_euclid(p.len() as isize) as usize];
+    // `a`'s edges k0..=k1 shared with `b`'s u1..=u0 (going down).
+    let u = (0..nb).find(|&u| at(b, u).point == at(a, k as isize + 1).point && at(b, u + 1).point == at(a, k as isize).point)?;
+    let (mut k0, mut k1, mut u0, mut u1) = (k as isize, k as isize, u, u);
+    while k1 - k0 + 2 < na.min(nb) && at(a, k1 + 2).point == at(b, u1 - 1).point {
+        k1 += 1;
+        u1 -= 1;
+    }
+    while k1 - k0 + 2 < na.min(nb) && at(a, k0 - 1).point == at(b, u0 + 2).point {
+        k0 -= 1;
+        u0 += 1;
+    }
+    // Where it starts (`s`: `a`'s k0, `b`'s u0 + 1) and ends (`e`: `a`'s
+    // k1 + 1, `b`'s u1), each turn from one's edge onto the other's.
+    // (On one line, straight only going on the same way: back along it,
+    // the two lie side by side further, their corners there not the same.)
+    let turn = |from: Spot, here: Spot, to: Spot| {
+        let (u, v) = (here.at - from.at, to.at - here.at);
+        if from.line == here.line { u.dot(v) > 0.0 } else { u.perp_dot(v) > 0.0 }
+    };
+    if !turn(at(a, k0 - 1), at(b, u0 + 1), at(b, u0 + 2)) || !turn(at(b, u1 - 1), at(a, k1 + 1), at(a, k1 + 2)) {
+        return None;
+    }
+    // `a` from `e` round to before `s`, then `b` from `s` round to before
+    // `e`.
+    let mut out = Vec::with_capacity((na + nb) as usize);
+    let mut i = k1 + 1;
+    while (i - k0).rem_euclid(na) != 0 {
+        out.push(at(a, i));
+        i += 1;
+    }
+    let mut j = u0 + 1;
+    while (j - u1).rem_euclid(nb) != 0 {
+        out.push(at(b, j));
+        j += 1;
+    }
+    Some(out)
+}
+
+/// How far a wall's band's sides lie from it, at most, by the radius: the
+/// round ends' steps circumscribe it (1 / cos(180° / steps): 6, 1.155),
+/// and the grid's rounding, with room.
+fn band_reach() -> f64 {
+    1.0 / (std::f64::consts::PI / round_steps() as f64).cos() + 0.015
+}
+
+/// The wall on `line` from `a` to `b` or past them, if any.
+fn wall_along(line: Line, a: DVec2, b: DVec2, on_line: &HashMap<Line, Vec<(f64, f64, u32)>>, dirs: &HashMap<Line, (DVec2, DVec2)>, walls: &[(DVec2, DVec2)]) -> Option<u32> {
+    let (o, d) = *dirs.get(&line)?;
+    let (ta, tb) = ((a - o).dot(d), (b - o).dot(d));
+    let (lo, hi) = (ta.min(tb), ta.max(tb));
+    // (The wall's span by its ends, as the side's: the same points, the
+    // same arithmetic.)
+    on_line.get(&line)?.iter().find(|&&(_, _, w)| {
+        let (a, b) = walls[w as usize];
+        let (u, v) = ((a - o).dot(d), (b - o).dot(d));
+        u.min(v) <= lo && hi <= u.max(v)
+    }).map(|&(_, _, w)| w)
+}
+
+/// A piece (`corners`, convex, counter-clockwise) less the regions `keeps`
+/// (those that may touch it, in order), in convex parts: each region not
+/// apart from the piece taken from the parts the regions before it left,
+/// those it cut merged again (`Walk::merge`). And how many regions touched
+/// it (their bounds met). `walk` its buffers.
+///
+/// First, `straight`: walls along whole edges of the piece, each a band's
+/// side facing it (its edge `k`), the piece cut by it alone, its band not
+/// in `keeps`. Exact where the wall goes on past each end of the edge, or
+/// the piece's other edge there is a wall too: within a convex piece, a
+/// point's nearest point of such a wall is across from it, never its end.
+/// (Its band's round ends cut there anyway, slivers of their steps' poke
+/// past its sides, up to 1.2 cm at 12: 13% of the tiers' cuts, 35% of the
+/// broken's.)
+pub(crate) fn walking<'a, G: Geometry + ?Sized>(walk: &mut Walk, corners: &[Corner], straight: &[(&Keep, usize)], keeps: impl Iterator<Item = &'a Keep>, geometry: &G) -> (Vec<Vec<Corner>>, usize) {
+    walk.reset();
+    let mut piece = walk.pool.pop().unwrap_or_default();
+    piece.clear();
+    for c in corners {
+        let (point, line) = (walk.point(c.key, c.at), walk.line(c.next));
+        piece.push(Spot { at: c.at, point, line });
+    }
+    let mut sides = std::mem::take(&mut walk.sides);
+    for &(keep, k) in straight {
+        let (mut inside, mut outside) = (false, false);
+        sides.clear();
+        for s in &piece {
+            let side = walk.side(&keep.cuts[k], s);
+            sides.push(side);
+            let v = keep.inward(k, side);
+            inside |= v > 0.0;
+            outside |= v < 0.0;
+        }
+        if !inside {
+            continue;
+        }
+        if !outside {
+            piece.clear();
+            break;
+        }
+        let l = walk.line(keep.lines[k].0);
+        let (mut below, mut above) = (walk.pool.pop().unwrap_or_default(), walk.pool.pop().unwrap_or_default());
+        walk.split(&piece, l, &sides, geometry, &mut below, &mut above);
+        // (Outside: below its line where the region is above.)
+        let (kept, other) = if keep.lines[k].1 { (below, above) } else { (above, below) };
+        walk.pool.push(std::mem::replace(&mut piece, kept));
+        walk.pool.push(other);
+    }
+    walk.sides = sides;
+    if piece.len() < 3 {
+        walk.pool.push(piece);
+        return (Vec::new(), straight.len());
+    }
+    let whole = spot_bounds(&piece);
+    let (lo, hi) = whole;
+    let mut live = vec![walk.add(piece)];
+    let first_part = live[0];
+    let (mut cut, mut fresh): (Vec<Vec<Spot>>, Vec<u32>) = Default::default();
+    let mut outline: Vec<Spot> = Vec::new();
+    outline.extend_from_slice(&walk.parts[first_part as usize]);
+    let mut touches = straight.len();
+    for keep in keeps {
+        if !(keep.lo.cmple(hi).all() && keep.hi.cmpge(lo).all()) {
+            continue;
+        }
+        touches += 1;
+        // (Apart from the piece, from every part of it: 42 700 of the
+        // stacks' 93 000 regions did nothing, each tried on every part.)
+        if walk.apart(keep, &outline, whole) {
+            continue;
+        }
+        let mut changed = false;
+        for &i in &live {
+            let (a, b) = walk.bounds[i as usize];
+            if keep.lo.cmple(b).all() && keep.hi.cmpge(a).all() && walk.less(keep, i, geometry, &mut cut) {
+                for p in cut.drain(..) {
+                    fresh.push(walk.add(p));
+                }
+                walk.remove(i);
+                changed = true;
+            }
+        }
+        // (A part wholly inside it: gone, nothing made.)
+        if !changed {
+            continue;
+        }
+        let first = walk.alive.len() as u32 - fresh.len() as u32;
+        walk.merge(&mut fresh);
+        // (Those left, and those made since.)
+        live.retain(|&i| walk.alive[i as usize]);
+        live.extend((first..walk.alive.len() as u32).filter(|&i| walk.alive[i as usize]));
+        if live.is_empty() {
+            break;
+        }
+    }
+    let out = live
+        .iter()
+        .map(|&i| walk.parts[i as usize].iter().map(|s| Corner { at: s.at, key: walk.keys[s.point as usize], next: walk.lines[s.line as usize], number: s.point }).collect())
+        .collect();
+    (out, touches)
+}
+
+/// A part's edge along its line (`Space::build`'s nodes): the line's
+/// number, whether the edge goes the line's way (its part on its left
+/// going that way, so on one side of it), its span along it (`t0` < `t1`),
+/// its ends there, and its part.
+#[derive(Clone, Copy)]
+struct Along {
+    line: u32,
+    up: bool,
+    t0: f64,
+    t1: f64,
+    p0: DVec2,
+    p1: DVec2,
+    part: u32,
+}
+
+/// One line's edges on one side (`these`) against those on the other
+/// (`others`), each side in order along it, none over another: for each
+/// overlap, `meet` (the two edges, and the overlap's ends, in order along
+/// the line, each a corner of one of them); each stretch of these with
+/// none across it, a rim (in its part's order round).
+fn along_line(these: &[Along], others: &[Along], meet: &mut dyn FnMut(&Along, &Along, DVec2, DVec2), rims: &mut Vec<Rim>) {
+    let mut rim = |e: &Along, x: DVec2, y: DVec2| rims.push(if e.up { Rim { a: x, b: y, part: e.part } } else { Rim { a: y, b: x, part: e.part } });
+    for e in these {
+        let (mut at, mut at_p) = (e.t0, e.p0);
+        let first = others.partition_point(|o| o.t1 <= e.t0);
+        for o in others[first..].iter().take_while(|o| o.t0 < e.t1) {
+            if o.t0 > at {
+                rim(e, at_p, o.p0);
+            }
+            let (x, y) = (if e.t0 >= o.t0 { e.p0 } else { o.p0 }, if e.t1 <= o.t1 { e.p1 } else { o.p1 });
+            meet(e, o, x, y);
+            if o.t1 >= e.t1 {
+                (at, at_p) = (e.t1, e.p1);
+                break;
+            }
+            (at, at_p) = (o.t1, o.p1);
+        }
+        if at < e.t1 {
+            rim(e, at_p, e.p1);
+        }
+    }
+}
+
+/// The convex hull of `points` (whole numbers), counter-clockwise, no three
+/// corners in a line: exact.
+fn grid_hull(points: &mut Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    points.sort_unstable();
+    points.dedup();
+    let turn = |o: (i64, i64), a: (i64, i64), b: (i64, i64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let mut hull: Vec<(i64, i64)> = Vec::with_capacity(points.len() + 1);
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &(i64, i64)>> = if pass == 0 { Box::new(points.iter()) } else { Box::new(points.iter().rev()) };
+        for &q in iter {
+            while hull.len() >= start + 2 && turn(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0 {
+                hull.pop();
+            }
+            hull.push(q);
+        }
+        hull.pop();
+    }
+    hull
+}
+
+/// A convex part of the walking space: its corners (counter-clockwise),
+/// bounds, piece, node, and the parts beside it: each with the edge between
+/// (from this part's side, in its order: the other's on its right going
+/// across).
+pub(crate) struct Part {
+    pub(crate) poly: Vec<DVec2>,
+    pub(crate) lo: DVec2,
+    pub(crate) hi: DVec2,
+    pub(crate) piece: u32,
+    pub(crate) node: u32,
+    pub(crate) portals: Vec<(u32, DVec2, DVec2)>,
+}
+
+/// A stretch of a node's edge (`Space::rims`): from `a` to `b`, the node on
+/// its left, on `part`.
+#[derive(Clone, Copy)]
+pub(crate) struct Rim {
+    pub(crate) a: DVec2,
+    pub(crate) b: DVec2,
+    pub(crate) part: u32,
+}
+
 /// A body's walking space over a set of pieces, and its nodes.
+///
+/// By the generator's structure (the user, 2026-11-16: the essential work,
+/// by construction): every piece is a convex cell of the plates' planar map
+/// (`worldgen::planar`), its corners and lines known by what they are. A
+/// body keeps out of convex regions: a band of its radius round every edge
+/// it can't cross (each wall once, those along one line one; a solid
+/// pillar's plate's edges walls, see the module's), `Keep`.
+/// Each piece's walking space is the piece less the regions touching it,
+/// cut into convex parts along their edges' lines; every corner of a part
+/// is known by what it is too, so parts beside one another share their
+/// edges corner for corner (stitched, `planar::stitch`). A node is parts
+/// joined edge to edge (an edge's twin, by its corners' keys): nothing
+/// joins across a wall, its band between. The parts are the node's mesh as
+/// they are: ways across it are found on them (`way`), exact, no rounding.
+/// (Before: one overlay of every piece and band on an integer grid, its
+/// shapes triangulated, a mesh in f32 for each node: general machinery for
+/// work the plates' structure makes unnecessary.)
 pub(crate) struct Space {
     pub(crate) fit: Fit,
     pub(crate) pieces: Vec<Piece>,
+    /// The stretches (for its checks: `district::tests::as_defined`).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) edges: Vec<Stretch>,
-    /// Each piece's walking space, in fragments.
-    pub(crate) space: Vec<Vec<Polygon<f64>>>,
-    /// Each fragment's node (as `space`).
-    pub(crate) node_of: Vec<Vec<u32>>,
-    /// Each fragment's bounds (as `space`).
-    pub(crate) frag_boxes: Vec<Vec<(DVec2, DVec2)>>,
-    /// Each node's area (m²).
+    pub(crate) parts: Vec<Part>,
+    /// Each node's area (m²), parts, and edge.
     pub(crate) node_area: Vec<f64>,
-    /// How many times two fragments were joined into one node.
-    pub(crate) joins: usize,
-    /// The pillars' obstacles (their prisms within a body's height of their
-    /// ground, grown by the radius), and by cell.
-    pub(crate) blocks: Vec<MultiPolygon<f64>>,
+    pub(crate) members: Vec<Vec<u32>>,
+    pub(crate) rims: Vec<Vec<Rim>>,
+    /// The parts by cell, and the rims (node, rim).
+    part_cells: HashMap<(i32, i32), Vec<u32>>,
+    rim_cells: HashMap<(i32, i32), Vec<(u32, u32)>>,
+    /// The solid pillars (see the module's), each its plate grown by the
+    /// radius (one hull: its corners, counter-clockwise, last not first), by
+    /// cell: what a falling body keeps clear of (`district::fall_clear`).
     pub(crate) blocked: HashMap<(i32, i32), Vec<usize>>,
-    /// Each block's hulls' corners, counter-clockwise, last not first.
     pub(crate) block_rings: Vec<Vec<Vec<DVec2>>>,
     /// Each piece's bounds.
     pub(crate) boxes: Vec<(DVec2, DVec2)>,
-    /// The closed stretches by cell (padded by the radius).
-    closed: HashMap<(i32, i32), Vec<usize>>,
     /// The pieces by cell.
     grid: HashMap<(i32, i32), Vec<usize>>,
-    /// Each piece as a polygon, made once (found where a point is, every
-    /// lookup: made anew each time, most of a lookup's cost).
-    shapes: Vec<Polygon<f64>>,
     /// How long each stage of its building took (s), in order.
     pub(crate) times: Vec<(&'static str, f32)>,
-    /// Each piece's convex hull, counter-clockwise (itself, convex as most
-    /// are; one a canal cuts, round it): what a fall's path crosses (see
-    /// `district::fall_clear`).
+    /// Each piece's convex hull, counter-clockwise: what a fall's path
+    /// crosses (see `district::fall_clear`).
     pub(crate) hulls: Vec<Vec<DVec2>>,
-    /// How many shapes were taken out of the pieces, all told (the walking
-    /// space's unit of work: `seed_sweep`).
-    pub(crate) cutters: std::sync::atomic::AtomicUsize,
-    /// Pieces whose walking space `convex_less` could not make (made by
-    /// geo's boolean instead): none, `seed_sweep` checks.
-    pub(crate) fallbacks: std::sync::atomic::AtomicUsize,
+    /// The keep-out regions made: walls' bands, and all.
+    pub(crate) walls: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) keeps: usize,
+    /// Pieces and regions touching, each region tried against the piece's
+    /// parts.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) touches: usize,
+    /// Edges found twice the same way round (two parts over one another):
+    /// none, by construction (`district::tests::node_reach` checks).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) overlaps: usize,
 }
 
 impl Space {
-    /// Over `pieces`, for a body of `fit`, on every core.
+    /// Over `pieces`, for a body of `fit`, on the build's threads.
     pub(crate) fn build(world: &PlateWorld, pieces: Vec<Piece>, fit: Fit) -> Space {
         let mut times = Vec::new();
         let clock = std::time::Instant::now();
-        let lap = |name: &'static str, times: &mut Vec<(&'static str, f32)>| times.push((name, clock.elapsed().as_secs_f32() - times.iter().map(|t: &(&str, f32)| t.1).sum::<f32>()));
-        let edges = stretches(world, &pieces, fit.climb);
+        let lap = |name: &'static str, times: &mut Vec<(&'static str, f32)>| {
+            times.push((name, clock.elapsed().as_secs_f32() - times.iter().map(|t: &(&str, f32)| t.1).sum::<f32>()));
+        };
+        // A pillar a body would walk into (a slab of it within its height
+        // of the ground, over its climb: a lower one is stepped onto):
+        // solid, its whole plate.
+        let solid: Vec<bool> = pieces.iter().map(|p| p.pillar && p.prisms.iter().any(|q| q.3 - p.plate.height > fit.climb && q.2 < p.plate.height + fit.height)).collect();
+        let edges = stretches(world, &pieces, fit.climb, &solid);
         lap("edges", &mut times);
-        let mut closed: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-        for (k, e) in edges.iter().enumerate() {
-            if !e.open {
-                for c in cells(e.a, e.b, fit.radius) {
-                    closed.entry(c).or_default().push(k);
-                }
-            }
-        }
         let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (i, p) in pieces.iter().enumerate() {
             let (a, b) = bounds(&p.poly);
@@ -995,304 +1083,337 @@ impl Space {
                 grid.entry(c).or_default().push(i);
             }
         }
-        // The pillars' prisms within a body's height of their ground, each
-        // with the radius round it: obstacles, to whatever ground they reach.
-        let pillars: Vec<&Piece> = pieces.iter().filter(|p| p.pillar).collect();
-        let made: Vec<MultiPolygon<f64>> = par_chunks(&pillars, |c| {
-                        c.iter()
-                            .filter_map(|p| {
-                                let floor = p.plate.height;
-                                // (A slab whose top is within a climb of the
-                                // ground is stepped onto, not walked round: no
-                                // obstacle. Taken for one, Detour walked over
-                                // ground the plates said was blocked.)
-                                let hulls: Vec<Polygon<f64>> = p.prisms.iter().filter(|q| q.3 - floor > fit.climb).filter_map(|q| section(q, floor, floor + fit.height)).collect();
-                                // (Each hull grown by the radius by hand, its
-                                // own convex hull: geo's growing, 0.5 ms a
-                                // pillar. Overlapping, as they may: they are
-                                // taken out at once, see `walking`.)
-                                (!hulls.is_empty()).then(|| MultiPolygon::new(outermost(hulls.iter().map(|h| grow(h, fit.radius)).collect())))
-                            })
-                            .collect::<Vec<_>>()
-        })
-        .into_iter()
-        .flatten()
-        .collect();
-        let mut blocks: Vec<MultiPolygon<f64>> = Vec::new();
-        let mut blocked: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-        for block in made {
-            if let Some(r) = block.bounding_rect() {
-                for c in cells(DVec2::new(r.min().x, r.min().y), DVec2::new(r.max().x, r.max().y), 0.0) {
-                    blocked.entry(c).or_default().push(blocks.len());
+        let hulls: Vec<Vec<DVec2>> = pieces.iter().map(|p| ccw(MultiPoint::new(p.poly.iter().map(|q| Point::new(q.x, q.y)).collect()).convex_hull().exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
+        let boxes = hulls.iter().map(|h| bounds(h)).collect();
+        // The keep-out regions. The walls: each once (the same stretches
+        // from either side), and those that go on from one another along
+        // one line, by what it is, one.
+        let mut along: Vec<(Line, f64, f64, DVec2, DVec2)> = Vec::new();
+        let mut dirs: HashMap<Line, (DVec2, DVec2)> = HashMap::new();
+        for e in edges.iter().filter(|e| !e.open && e.other.is_none_or(|j| e.piece < j)) {
+            let (p, d) = *dirs.entry(e.line).or_insert_with(|| {
+                let (p, n) = world.line(e.line);
+                (p, n.perp())
+            });
+            let (ta, tb) = ((e.a - p).dot(d), (e.b - p).dot(d));
+            along.push(if ta <= tb { (e.line, ta, tb, e.a, e.b) } else { (e.line, tb, ta, e.b, e.a) });
+        }
+        along.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
+        let mut walls: Vec<(DVec2, DVec2)> = Vec::new();
+        let mut on_line: HashMap<Line, Vec<(f64, f64, u32)>> = HashMap::new();
+        let mut k = 0;
+        while k < along.len() {
+            let (line, t0, mut t1, a, mut b) = along[k];
+            k += 1;
+            while k < along.len() && along[k].0 == line && along[k].1 <= t1 {
+                if along[k].2 > t1 {
+                    (t1, b) = (along[k].2, along[k].4);
                 }
-                blocks.push(block);
+                k += 1;
+            }
+            on_line.entry(line).or_default().push((t0, t1, walls.len() as u32));
+            walls.push((a, b));
+        }
+        let keeps: Vec<Keep> = par_chunks(&walls, |c| c.iter().map(|&(a, b)| Keep::round([a, b], fit.radius)).collect::<Vec<_>>()).into_iter().flatten().collect();
+        let wall_count = keeps.len();
+        let pillars: Vec<usize> = (0..pieces.len()).filter(|&i| solid[i]).collect();
+        let block_rings: Vec<Vec<Vec<DVec2>>> = par_chunks(&pillars, |c| c.iter().map(|&i| vec![grown(pieces[i].poly.iter().copied(), fit.radius).into_iter().map(|(x, y)| DVec2::new(x as f64, y as f64) / planar::GRID).collect()]).collect::<Vec<_>>()).into_iter().flatten().collect();
+        let mut blocked: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (k, rings) in block_rings.iter().enumerate() {
+            let (lo, hi) = bounds(&rings[0]);
+            for c in cells(lo, hi, 0.0) {
+                blocked.entry(c).or_default().push(k);
             }
         }
-        let shapes: Vec<Polygon<f64>> = pieces.iter().map(|p| polygon(&p.poly)).collect();
-        let hulls: Vec<Vec<DVec2>> = shapes.iter().map(|s| ccw(s.convex_hull().exterior().0.iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect();
-        let boxes = hulls.iter().map(|h| bounds(h)).collect();
-        let block_rings = blocks.iter().map(|b| b.0.iter().map(|p| ccw(p.exterior().0[..p.exterior().0.len() - 1].iter().map(|c| DVec2::new(c.x, c.y)).collect())).collect()).collect();
+        let mut keep_cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+        for (i, k) in keeps.iter().enumerate() {
+            for c in cells(k.lo, k.hi, 0.0) {
+                keep_cells.entry(c).or_default().push(i as u32);
+            }
+        }
         lap("obstacles", &mut times);
-        let mut space = Space { fit, pieces, edges, space: Vec::new(), node_of: Vec::new(), frag_boxes: Vec::new(), node_area: Vec::new(), joins: 0, blocks, blocked, block_rings, boxes, closed, grid, shapes, times: Vec::new(), hulls, cutters: Default::default(), fallbacks: Default::default() };
-        // Each piece's walking space: itself, less the radius round every
-        // closed stretch near it, less the pillars' obstacles.
-        let all: Vec<usize> = (0..space.pieces.len()).collect();
-        let walking: Vec<Vec<Polygon<f64>>> = par_chunks(&all, |c| c.iter().map(|&i| if space.pieces[i].hole { Vec::new() } else { space.walking(i) }).collect::<Vec<_>>()).into_iter().flatten().collect();
-        space.frag_boxes = walking.iter().map(|frags| frags.iter().map(|f| f.bounding_rect().map_or((DVec2::ZERO, DVec2::ZERO), |r| (DVec2::new(r.min().x, r.min().y), DVec2::new(r.max().x, r.max().y)))).collect()).collect();
-        space.space = walking;
+        // Each piece walked on less the regions touching it, in convex
+        // parts (in order: the same parts whatever the threads).
+        let walked: Vec<usize> = (0..pieces.len()).filter(|&i| !pieces[i].hole && !solid[i]).collect();
+        // Each piece's stretches (in its order round, from `stretches`).
+        let mut first = vec![0usize; pieces.len() + 1];
+        for e in &edges {
+            first[e.piece + 1] += 1;
+        }
+        for i in 0..pieces.len() {
+            first[i + 1] += first[i];
+        }
+        let made: Vec<(Vec<(u32, Vec<Corner>)>, usize)> = par_chunks(&walked, |c| {
+            let mut near: Vec<u32> = Vec::new();
+            let mut straight: Vec<(&Keep, usize)> = Vec::new();
+            let mut walk = Walk::default();
+            let (mut out, mut touches) = (Vec::new(), 0);
+            for &i in c {
+                let p = &pieces[i];
+                let (lo, hi) = bounds(&p.poly);
+                near.clear();
+                near.extend(cells(lo, hi, 0.0).flat_map(|c| keep_cells.get(&c).into_iter().flatten().copied()));
+                near.sort_unstable();
+                near.dedup();
+                // A wall along a whole side of its (every stretch on one
+                // line, stitched into many edges or not), by a straight cut
+                // where that is exact (see `walking`), its band left out.
+                straight.clear();
+                let own = &edges[first[i]..first[i + 1]];
+                let m = own.len();
+                let o = p.poly.iter().fold(DVec2::ZERO, |s, q| s + *q) / p.poly.len() as f64;
+                if let Some(start) = (0..m).find(|&j| own[j].line != own[(j + m - 1) % m].line) {
+                    let mut j = start;
+                    loop {
+                        let mut end = j;
+                        while own[(end + 1) % m].line == own[j].line && (end + 1) % m != start {
+                            end = (end + 1) % m;
+                        }
+                        let next = (end + 1) % m;
+                        let side = if j <= end { &own[j..=end] } else { &[] };
+                        let (before, after) = (&own[(j + m - 1) % m], &own[next]);
+                        if !side.is_empty()
+                            && side.iter().all(|e| !e.open)
+                            && let Some(w) = wall_along(own[j].line, own[j].a, own[end].b, &on_line, &dirs, &walls)
+                        {
+                            let (wa, wb) = walls[w as usize];
+                            // At each end of the side, exact if the piece's
+                            // edge there (on another line) is a wall too:
+                            // within the convex piece a point's nearest
+                            // wall is across from it. Or if the wall goes
+                            // on past the end as far as the piece reaches
+                            // past it within the band: at a corner of more
+                            // than a right angle, the band's width by its
+                            // cotangent.
+                            let fine = |q: DVec2, from: DVec2, next: &Stretch, far: DVec2| {
+                                if !next.open {
+                                    return true;
+                                }
+                                let u = (q - from).normalize();
+                                let past = [wa, wb].iter().map(|x| (*x - q).dot(u)).fold(f64::NEG_INFINITY, f64::max);
+                                let v = (far - q).normalize();
+                                let (c, s) = (v.dot(u), v.perp_dot(u).abs());
+                                c <= 0.0 || past * s >= band_reach() * fit.radius * c
+                            };
+                            let (sa, sb) = (own[j].a, own[end].b);
+                            if fine(sa, sb, before, before.a) && fine(sb, sa, after, after.b) {
+                                // Its band's side facing the piece, along
+                                // the wall.
+                                let keep = &keeps[w as usize];
+                                let along = (wb - wa).normalize_or_zero();
+                                let r = keep.ring.len();
+                                if let Some(k) = (0..r).find(|&k| {
+                                    let d = (keep.ring[(k + 1) % r] - keep.ring[k]).normalize_or_zero();
+                                    d.perp_dot(along).abs() < 1e-3 && keep.facing[k].0.dot(o) - keep.facing[k].1 < 0.0
+                                }) {
+                                    straight.push((keep, k));
+                                    near.retain(|&x| x != w);
+                                }
+                            }
+                        }
+                        j = next;
+                        if j == start {
+                            break;
+                        }
+                    }
+                }
+                let (parts, touched) = walking(&mut walk, &p.corners, &straight, near.iter().map(|&k| &keeps[k as usize]), world);
+                touches += touched;
+                out.extend(parts.into_iter().map(|part| (i as u32, part)));
+            }
+            (out, touches)
+        });
+        let touches = made.iter().map(|m| m.1).sum();
+        let (mut piece_of, corners): (Vec<u32>, Vec<Vec<Corner>>) = made.into_iter().flat_map(|m| m.0).unzip();
         lap("walking", &mut times);
-        space.join();
-        lap("join", &mut times);
+        // Nodes: parts beside one another, joined. Two parts are beside one
+        // another where edges of theirs lie on one line, by what it is, on
+        // its two sides, their spans along it overlapping: every edge, by
+        // its line and how far along it, sorted once, and each line's two
+        // sides walked together (`along_line`). Where they overlap, a
+        // portal; where an edge has none across it, the node's rim. (Each
+        // part stitched with the corners of those beside it and its edges'
+        // twins found by their corners' keys: a hash of every corner, 0.5 s
+        // in the stacks, for what one sort says.)
+        let mut ids: HashMap<Line, u32> = HashMap::new();
+        let mut places: Vec<(DVec2, DVec2)> = Vec::new();
+        let mut along: Vec<Along> = Vec::with_capacity(corners.iter().map(|c| c.len()).sum());
+        for (i, c) in corners.iter().enumerate() {
+            let n = c.len();
+            for k in 0..n {
+                let (a, b) = (c[k].at, c[(k + 1) % n].at);
+                let id = *ids.entry(c[k].next).or_insert_with(|| {
+                    let (p, m) = world.line(c[k].next);
+                    places.push((p, m.perp()));
+                    places.len() as u32 - 1
+                });
+                let (p, d) = places[id as usize];
+                let (ta, tb) = ((a - p).dot(d), (b - p).dot(d));
+                if ta != tb {
+                    let up = ta < tb;
+                    along.push(if up { Along { line: id, up, t0: ta, t1: tb, p0: a, p1: b, part: i as u32 } } else { Along { line: id, up, t0: tb, t1: ta, p0: b, p1: a, part: i as u32 } });
+                }
+            }
+        }
+        along.sort_unstable_by(|x, y| x.line.cmp(&y.line).then(x.up.cmp(&y.up)).then(x.t0.total_cmp(&y.t0)));
+        let mut parent: Vec<u32> = (0..corners.len() as u32).collect();
+        fn find(p: &mut [u32], mut i: u32) -> u32 {
+            while p[i as usize] != i {
+                p[i as usize] = p[p[i as usize] as usize];
+                i = p[i as usize];
+            }
+            i
+        }
+        let mut portals: Vec<Vec<(u32, DVec2, DVec2)>> = vec![Vec::new(); corners.len()];
+        let mut rims_of: Vec<Rim> = Vec::new();
+        let mut overlaps = 0;
+        let mut start = 0;
+        while start < along.len() {
+            let mut end = start + 1;
+            while end < along.len() && along[end].line == along[start].line {
+                end += 1;
+            }
+            let run = &along[start..end];
+            let split = run.partition_point(|e| !e.up);
+            let (down, up) = run.split_at(split);
+            for side in [down, up] {
+                overlaps += side.windows(2).filter(|w| w[0].t1 > w[1].t0 + 1e-9).count();
+            }
+            along_line(down, up, &mut |e, o, x, y| {
+                let (a, b) = (find(&mut parent, e.part), find(&mut parent, o.part));
+                parent[a as usize] = b;
+                // (Each part's way across, in its own order round.)
+                portals[e.part as usize].push((o.part, if e.up { x } else { y }, if e.up { y } else { x }));
+                portals[o.part as usize].push((e.part, if o.up { x } else { y }, if o.up { y } else { x }));
+            }, &mut rims_of);
+            along_line(up, down, &mut |_, _, _, _| {}, &mut rims_of);
+            start = end;
+        }
+        let mut parts: Vec<Part> = corners
+            .iter()
+            .zip(portals)
+            .enumerate()
+            .map(|(i, (c, mut portals))| {
+                // (Beside one part along two edges in a line, its corner
+                // between them straight: one way across, end to end.)
+                portals.sort_by_key(|p| p.0);
+                let mut joined: Vec<(u32, DVec2, DVec2)> = Vec::with_capacity(portals.len());
+                for p in portals {
+                    match joined.last_mut() {
+                        Some(last) if last.0 == p.0 => {
+                            let d = last.2 - last.1;
+                            let ends = [last.1, last.2, p.1, p.2];
+                            let lo = ends.iter().copied().min_by(|x, y| x.dot(d).total_cmp(&y.dot(d))).unwrap();
+                            let hi = ends.iter().copied().max_by(|x, y| x.dot(d).total_cmp(&y.dot(d))).unwrap();
+                            (last.1, last.2) = (lo, hi);
+                        }
+                        _ => joined.push(p),
+                    }
+                }
+                let poly = planar::points(c);
+                let (lo, hi) = bounds(&poly);
+                Part { poly, lo, hi, piece: piece_of[i], node: 0, portals: joined }
+            })
+            .collect();
+        piece_of.clear();
+        let mut number: HashMap<u32, u32> = HashMap::new();
+        for i in 0..parts.len() {
+            let root = find(&mut parent, i as u32);
+            let next = number.len() as u32;
+            parts[i].node = *number.entry(root).or_insert(next);
+        }
+        let mut rims: Vec<Vec<Rim>> = vec![Vec::new(); number.len()];
+        for r in rims_of {
+            rims[parts[r.part as usize].node as usize].push(r);
+        }
+        let mut space = Space {
+            fit,
+            pieces,
+            edges,
+            parts,
+            node_area: Vec::new(),
+            members: Vec::new(),
+            rims,
+            part_cells: HashMap::new(),
+            rim_cells: HashMap::new(),
+            blocked,
+            block_rings,
+            boxes,
+            grid,
+            times: Vec::new(),
+            hulls,
+            walls: wall_count,
+            keeps: keeps.len(),
+            touches,
+            overlaps,
+        };
+        space.index();
+        lap("nodes", &mut times);
         space.times = times;
         space
     }
 
-    /// Nodes: fragments joined where an open stretch, less the radius
-    /// round closed ones, still has length; numbered, with their areas.
-    fn join(&mut self) {
-        let mut id: Vec<Vec<usize>> = Vec::new();
-        let mut n = 0;
-        for s in &self.space {
-            id.push((n..n + s.len()).collect());
-            n += s.len();
-        }
-        let mut parent: Vec<usize> = (0..n).collect();
-        fn find(p: &mut [usize], mut i: usize) -> usize {
-            while p[i] != i {
-                p[i] = p[p[i]];
-                i = p[i];
+    /// Each node's parts and area, and the parts and rims by cell.
+    fn index(&mut self) {
+        let n = self.rims.len();
+        self.members = vec![Vec::new(); n];
+        self.node_area = vec![0.0; n];
+        self.part_cells.clear();
+        for (i, p) in self.parts.iter().enumerate() {
+            self.members[p.node as usize].push(i as u32);
+            self.node_area[p.node as usize] += poly_area(&p.poly);
+            for c in cells(p.lo, p.hi, ROUNDING) {
+                self.part_cells.entry(c).or_default().push(i as u32);
             }
-            i
         }
-        let mut joins = 0;
-        let (mut cross, mut sides): (Vec<f64>, Vec<Vec<(f64, f64)>>) = (Vec::new(), Vec::new());
-        for e in self.edges.iter().filter(|e| e.open && e.other.is_some_and(|j| j > e.piece)) {
-            let j = e.other.unwrap();
-            let dir = (e.b - e.a).normalize();
-            for (p0, p1) in clear_of(e.a, e.b, &self.closed_near(&[e.a, e.b]), self.fit.radius) {
-                if p0.distance(p1) < 1e-3 {
-                    continue;
-                }
-                // (All along it: either side's walking space may be in
-                // several fragments along one stretch, and each joins each
-                // one across that it meets for `MEET` or more. At its
-                // midpoint only, fragments were left apart that a way
-                // crossed, found against Detour; every 10 cm, each point
-                // looked up in every fragment, it was the join's work.)
-                // (Just off it either way: a piece's own side, whichever.)
-                let n = dir.perp() * 1e-3;
-                let (s0, s1) = ((p0 - e.a).dot(dir), (p1 - e.a).dot(dir));
-                let mut side = |i: usize, sides: &mut Vec<Vec<(f64, f64)>>| {
-                    sides.clear();
-                    for f in &self.space[i] {
-                        let mut spans = Vec::new();
-                        spans_in(f, e.a + n, dir, s0, s1, 0.0, &mut cross, &mut spans);
-                        spans_in(f, e.a - n, dir, s0, s1, 0.0, &mut cross, &mut spans);
-                        sides.push(spans);
-                    }
-                };
-                side(e.piece, &mut sides);
-                let mine = std::mem::take(&mut sides);
-                side(j, &mut sides);
-                for (fi, a) in mine.iter().enumerate() {
-                    for (fj, b) in sides.iter().enumerate() {
-                        if a.iter().any(|x| b.iter().any(|y| x.1.min(y.1) - x.0.max(y.0) >= MEET)) {
-                            let (x, y) = (find(&mut parent, id[e.piece][fi]), find(&mut parent, id[j][fj]));
-                            if x != y {
-                                parent[x] = y;
-                                joins += 1;
-                            }
-                        }
-                    }
+        self.rim_cells.clear();
+        for (node, rim) in self.rims.iter().enumerate() {
+            for (k, r) in rim.iter().enumerate() {
+                for cell in cells(r.a, r.b, ROUNDING) {
+                    self.rim_cells.entry(cell).or_default().push((node as u32, k as u32));
                 }
             }
         }
-        let mut number: HashMap<usize, u32> = HashMap::new();
-        let mut node_area: Vec<f64> = Vec::new();
-        let mut node_of: Vec<Vec<u32>> = Vec::new();
-        for (i, s) in self.space.iter().enumerate() {
-            let mut of = Vec::new();
-            for (k, f) in s.iter().enumerate() {
-                let root = find(&mut parent, id[i][k]);
-                let n = *number.entry(root).or_insert_with(|| {
-                    node_area.push(0.0);
-                    node_area.len() as u32 - 1
-                });
-                node_area[n as usize] += f.unsigned_area();
-                of.push(n);
-            }
-            node_of.push(of);
-        }
-        self.node_of = node_of;
-        self.node_area = node_area;
-        self.joins = joins;
     }
 
     /// Nodes under `least` m² left out of the walking space, the rest
     /// numbered anew.
     pub(crate) fn prune(&mut self, least: f64) {
         let mut number: Vec<Option<u32>> = vec![None; self.node_area.len()];
-        let mut area = Vec::new();
-        for (n, &a) in self.node_area.iter().enumerate() {
+        let mut n = 0u32;
+        for (k, &a) in self.node_area.iter().enumerate() {
             if a >= least {
-                number[n] = Some(area.len() as u32);
-                area.push(a);
+                number[k] = Some(n);
+                n += 1;
             }
         }
-        for ((frags, of), boxes) in self.space.iter_mut().zip(self.node_of.iter_mut()).zip(self.frag_boxes.iter_mut()) {
-            let kept: Vec<(Polygon<f64>, u32, (DVec2, DVec2))> = frags.drain(..).zip(of.drain(..)).zip(boxes.drain(..)).filter_map(|((f, n), b)| number[n as usize].map(|m| (f, m, b))).collect();
-            for (f, m, b) in kept {
-                frags.push(f);
-                of.push(m);
-                boxes.push(b);
+        let mut renumber: Vec<u32> = vec![u32::MAX; self.parts.len()];
+        let mut m = 0u32;
+        for (i, p) in self.parts.iter().enumerate() {
+            if number[p.node as usize].is_some() {
+                renumber[i] = m;
+                m += 1;
             }
         }
-        self.node_area = area;
-    }
-
-    /// Piece `i`'s walking space: itself less a band the radius wide round
-    /// each closed stretch near it and the pillars' obstacles near it. A
-    /// convex piece (most) is first cut by a straight line along each of its
-    /// own edges closed all along (the band along such an edge, its round
-    /// ends too, is all on that line's side within a convex piece): no
-    /// boolean. What is left, the stretches whose band reaches into it and
-    /// the pillars' hulls that meet it, made by hand (a capsule each) and
-    /// taken out in one boolean, as one shape (the non-zero rule: their
-    /// overlaps are not holes in it). (geo's buffer round the stretches cost
-    /// 0.2 ms a piece, 3.8 s in the stacks; every stretch and hull near a
-    /// piece a boolean, 1.3 s.)
-    fn walking(&self, i: usize) -> Vec<Polygon<f64>> {
-        let Some((shape, cut, convex)) = self.cutting(i) else {
-            return Vec::new();
-        };
-        self.cutters.fetch_add(cut.len(), std::sync::atomic::Ordering::Relaxed);
-        if cut.is_empty() {
-            return vec![polygon(&shape)];
-        }
-        if convex {
-            if let Some(made) = convex_less(&shape, &cut) {
-                return made;
-            }
-            self.fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        polygon(&shape).boolean_op_with_fill_rule(&MultiPolygon::new(cut.iter().map(|c| polygon_exact(c)).collect()), geo::algorithm::bool_ops::OpType::Difference, geo::algorithm::bool_ops::FillRule::NonZero).0
-    }
-
-    /// Piece `i` as `walking` cuts it: itself, cut along its own edges
-    /// closed all along where that is exact (counter-clockwise), the shapes
-    /// to take out of what is left (each convex, counter-clockwise, its
-    /// last corner not its first), and whether it is convex; none if
-    /// nothing is left.
-    pub(crate) fn cutting(&self, i: usize) -> Option<(Vec<DVec2>, Vec<Vec<DVec2>>, bool)> {
-        let p = &self.pieces[i];
-        let r = self.fit.radius;
-        let (lo, hi) = bounds(&p.poly);
-        let (lo, hi) = (lo - r, hi + r);
-        let mut near: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.closed.get(&c).into_iter().flatten().copied()).collect();
-        near.sort();
-        near.dedup();
-        near.retain(|&k| {
-            let e = &self.edges[k];
-            e.a.min(e.b).cmple(hi).all() && e.a.max(e.b).cmpge(lo).all()
-        });
-        let poly = ccw(p.poly.clone());
-        let n = poly.len();
-        let convex = n >= 3 && (0..n).all(|k| (poly[(k + 1) % n] - poly[k]).perp_dot(poly[(k + 2) % n] - poly[(k + 1) % n]) >= -1e-9);
-        let mut shape = poly.clone();
-        if convex {
-            // Its own edges closed all along: their stretches, merged.
-            let mut whole = vec![false; n];
-            for k in 0..n {
-                let (a, b) = (poly[k], poly[(k + 1) % n]);
-                let len = a.distance(b);
-                if len < 1e-9 {
-                    continue;
+        let parts = std::mem::take(&mut self.parts);
+        self.parts = parts
+            .into_iter()
+            .filter_map(|mut p| {
+                p.node = number[p.node as usize]?;
+                for x in &mut p.portals {
+                    x.0 = renumber[x.0 as usize];
                 }
-                let dir = (b - a) / len;
-                let on = |x: DVec2| (x - a).perp_dot(dir).abs() <= ON;
-                let mut parts: Vec<(f64, f64)> = near
-                    .iter()
-                    .map(|&s| &self.edges[s])
-                    .filter(|e| e.piece == i && on(e.a) && on(e.b))
-                    .map(|e| {
-                        let (t0, t1) = ((e.a - a).dot(dir), (e.b - a).dot(dir));
-                        (t0.min(t1), t0.max(t1))
-                    })
-                    .collect();
-                parts.sort_by(|x, y| x.0.total_cmp(&y.0));
-                let mut t = 0.0;
-                for (t0, t1) in parts {
-                    if t0 > t + ON {
-                        break;
-                    }
-                    t = t.max(t1);
-                }
-                whole[k] = t >= len - ON;
-            }
-            // Cut by its line those whose band, cut by the line, takes no
-            // more: past each end, at a corner wider than square, the line's
-            // band reaches beyond the edge's (further than the radius from
-            // its end) unless the edge on from it is closed all along too,
-            // long enough to take that much in its own band.
-            let at = |k: usize| poly[k % n];
-            let end_ok = |k: usize, here: DVec2, there: DVec2, next: Option<usize>, beyond: DVec2| {
-                let len = here.distance(there);
-                (beyond - here).dot(there - here) >= 0.0 || next.is_some_and(|m| whole[m] && (beyond - here).perp_dot(there - here).abs() / len >= r) && whole[k]
-            };
-            let lines: Vec<bool> = (0..n).map(|k| whole[k] && end_ok(k, at(k), at(k + 1), Some((k + n - 1) % n), at(k + n - 1)) && end_ok(k, at(k + 1), at(k), Some((k + 1) % n), at(k + 2))).collect();
-            let edge_of = |e: &Stretch| {
-                (0..n).find(|&k| {
-                    let (a, b) = (at(k), at(k + 1));
-                    let len = a.distance(b);
-                    len >= 1e-9 && {
-                        let dir = (b - a) / len;
-                        let on = |x: DVec2| (x - a).perp_dot(dir).abs() <= ON && (-ON..=len + ON).contains(&(x - a).dot(dir));
-                        on(e.a) && on(e.b)
-                    }
-                })
-            };
-            for k in (0..n).filter(|&k| lines[k]) {
-                shape = keep_left(&shape, at(k), at(k + 1), r);
-                if shape.len() < 3 {
-                    return None;
-                }
-            }
-            // (A stretch along an edge cut by its line: its band within the
-            // piece already gone; along an edge closed all along, another's
-            // within its own.)
-            near.retain(|&s| {
-                let e = &self.edges[s];
-                match edge_of(e) {
-                    Some(k) if lines[k] => false,
-                    Some(k) if whole[k] => e.piece == i,
-                    _ => true,
-                }
-            });
-            // (Only bands that reach into what is left.)
-            near.retain(|&s| within(&shape, self.edges[s].a, self.edges[s].b, r));
-        }
-        let mut cut: Vec<Vec<DVec2>> = near.iter().map(|&s| capsule(self.edges[s].a, self.edges[s].b, r)).collect();
-        let mut ks: Vec<usize> = cells(lo, hi, 0.0).flat_map(|c| self.blocked.get(&c).into_iter().flatten().copied()).collect();
-        ks.sort();
-        ks.dedup();
-        // (Only the pillars' hulls that meet it: a pillar's every hull came
-        // with any cell it shares, 60 cutters a piece in the stacks.)
-        cut.extend(ks.into_iter().flat_map(|k| self.blocks[k].0.iter()).filter(|b| {
-            b.bounding_rect().is_some_and(|q| q.min().x <= hi.x && q.min().y <= hi.y && q.max().x >= lo.x && q.max().y >= lo.y) && (!convex || convex_meet(&b.exterior().0, &shape))
-        }).map(|b| {
-            let ring = &b.exterior().0;
-            ring[..ring.len() - 1].iter().map(|c| DVec2::new(c.x, c.y)).collect()
-        }));
-        Some((shape, cut, convex))
-    }
-
-    /// The closed stretches near `poly` (within the radius of its bounds).
-    pub(crate) fn closed_near(&self, poly: &[DVec2]) -> MultiLineString<f64> {
-        let (a, b) = bounds(poly);
-        let mut ks: Vec<usize> = cells(a, b, self.fit.radius).flat_map(|c| self.closed.get(&c).into_iter().flatten().copied()).collect();
-        ks.sort();
-        ks.dedup();
-        MultiLineString::new(ks.into_iter().map(|k| LineString::from(vec![(self.edges[k].a.x, self.edges[k].a.y), (self.edges[k].b.x, self.edges[k].b.y)])).collect())
+                Some(p)
+            })
+            .collect();
+        let rims = std::mem::take(&mut self.rims);
+        self.rims = rims
+            .into_iter()
+            .enumerate()
+            .filter(|(k, _)| number[*k].is_some())
+            .map(|(_, r)| r.into_iter().map(|x| Rim { part: renumber[x.part as usize], ..x }).collect())
+            .collect();
+        self.index();
     }
 
     /// How many nodes.
@@ -1302,41 +1423,135 @@ impl Space {
 
     /// The piece under `q` (or within `ROUNDING` of it).
     pub(crate) fn under(&self, q: DVec2) -> Option<usize> {
-        let pt = Point::new(q.x, q.y);
-        let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
-        self.grid.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32))?.iter().copied().find(|&i| near(&self.shapes[i]))
+        self.grid.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32))?.iter().copied().find(|&i| in_or_near(&self.pieces[i].poly, q))
     }
 
-    /// The pieces whose bounds lie within `pad` of `q`.
-    pub(crate) fn pieces_near(&self, q: DVec2, pad: f64) -> Vec<usize> {
-        let mut out: Vec<usize> = cells(q, q, pad).flat_map(|c| self.grid.get(&c).into_iter().flatten().copied()).collect();
-        out.sort();
-        out.dedup();
-        out
+    /// How far `q` is from part `i` (0 in it).
+    fn off_part(&self, i: u32, q: DVec2) -> f64 {
+        let poly = &self.parts[i as usize].poly;
+        let n = poly.len();
+        if (0..n).all(|k| (poly[(k + 1) % n] - poly[k]).perp_dot(q - poly[k]) >= 0.0) {
+            return 0.0;
+        }
+        (0..n).map(|k| segment_distance(q, poly[k], poly[(k + 1) % n])).fold(f64::INFINITY, f64::min)
     }
 
-    /// The node whose walking space `q` is in (or on the edge of, within
-    /// `ROUNDING`: a teleport lands on the edge of a fragment, and where two
-    /// fragments of a node meet, that is a piece's edge too), and which
-    /// piece and fragment.
+    /// The parts listed in `q`'s cell.
+    fn parts_at(&self, q: DVec2) -> &[u32] {
+        self.part_cells.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32)).map_or(&[], |v| v.as_slice())
+    }
+
+    /// The node whose walking space `q` is on (or within `ROUNDING` of).
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn node_at(&self, q: DVec2) -> Option<(u32, usize, usize)> {
+    pub(crate) fn node_at(&self, q: DVec2) -> Option<u32> {
         self.node_at_preferring(q, None)
     }
 
     /// As `node_at`, and where `q` is on the edge of two nodes, `prefer`, if
     /// it is one. (A walker just landed on the edge of a node was taken for
     /// on the other, and could go nowhere from there.)
-    pub(crate) fn node_at_preferring(&self, q: DVec2, prefer: Option<u32>) -> Option<(u32, usize, usize)> {
-        let pt = Point::new(q.x, q.y);
-        let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
-        let pieces = self.grid.get(&((q.x / BIN).floor() as i32, (q.y / BIN).floor() as i32))?;
-        let mut found = pieces.iter().copied().filter(|&i| near(&self.shapes[i])).flat_map(|i| self.space[i].iter().enumerate().filter(|(_, f)| near(f)).map(move |(k, _)| (self.node_of[i][k], i, k)));
+    pub(crate) fn node_at_preferring(&self, q: DVec2, prefer: Option<u32>) -> Option<u32> {
+        let mut found = self.parts_at(q).iter().copied().filter(|&i| self.off_part(i, q) <= ROUNDING).map(|i| self.parts[i as usize].node);
         let first = found.next()?;
-        if prefer.is_none_or(|n| n == first.0) {
+        if prefer.is_none_or(|n| n == first) {
             return Some(first);
         }
-        Some(found.find(|f| Some(f.0) == prefer).unwrap_or(first))
+        Some(found.find(|&n| Some(n) == prefer).unwrap_or(first))
+    }
+
+    /// Whether `q` is on node `n` (within `ROUNDING`).
+    pub(crate) fn on_node(&self, q: DVec2, n: u32) -> bool {
+        self.parts_at(q).iter().any(|&i| self.parts[i as usize].node == n && self.off_part(i, q) <= ROUNDING)
+    }
+
+    /// The part of node `n` `q` is on (within `ROUNDING`), and `q`; else
+    /// the nearest point of the node within `reach`, and its part.
+    fn sample(&self, n: u32, q: DVec2, reach: f64) -> Option<(u32, DVec2)> {
+        if let Some(&i) = self.parts_at(q).iter().find(|&&i| self.parts[i as usize].node == n && self.off_part(i, q) <= ROUNDING) {
+            return Some((i, q));
+        }
+        let mut best: Option<(f64, u32, DVec2)> = None;
+        for c in cells(q, q, reach) {
+            for &(node, k) in self.rim_cells.get(&c).into_iter().flatten() {
+                if node != n {
+                    continue;
+                }
+                let r = self.rims[n as usize][k as usize];
+                let p = segment_nearest(q, r.a, r.b);
+                let d = p.distance(q);
+                if d <= reach && best.is_none_or(|x| (d, r.part) < (x.0, x.1)) {
+                    best = Some((d, r.part, p));
+                }
+            }
+        }
+        best.map(|(_, i, p)| (i, p))
+    }
+
+    /// The nearest point of node `n` to `q`, if within `reach`, and how far.
+    pub(crate) fn nearest_on(&self, n: u32, q: DVec2, reach: f64) -> Option<(f64, DVec2)> {
+        self.sample(n, q, reach).map(|(_, p)| (p.distance(q), p))
+    }
+
+    /// Each node within `reach` of `q`, its nearest point to it and how
+    /// far, nearest first.
+    pub(crate) fn near_nodes(&self, q: DVec2, reach: f64) -> Vec<(u32, f64, DVec2)> {
+        let mut best: HashMap<u32, (f64, DVec2)> = HashMap::new();
+        for &i in self.parts_at(q) {
+            if self.off_part(i, q) == 0.0 {
+                best.insert(self.parts[i as usize].node, (0.0, q));
+            }
+        }
+        for c in cells(q, q, reach) {
+            for &(node, k) in self.rim_cells.get(&c).into_iter().flatten() {
+                let r = self.rims[node as usize][k as usize];
+                let p = segment_nearest(q, r.a, r.b);
+                let d = p.distance(q);
+                if d <= reach && best.get(&node).is_none_or(|x| d < x.0) {
+                    best.insert(node, (d, p));
+                }
+            }
+        }
+        let mut out: Vec<(u32, f64, DVec2)> = best.into_iter().map(|(n, (d, p))| (n, d, p)).collect();
+        out.sort_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)));
+        out
+    }
+
+    /// The parts whose cells meet the box `lo`..`hi`, each once, with their
+    /// nodes and middles.
+    pub(crate) fn parts_in(&self, lo: DVec2, hi: DVec2) -> Vec<(u32, DVec2)> {
+        let mut ps: Vec<u32> = cells(lo, hi, 0.0).flat_map(|c| self.part_cells.get(&c).into_iter().flatten().copied()).collect();
+        ps.sort_unstable();
+        ps.dedup();
+        ps.into_iter()
+            .map(|i| {
+                let p = &self.parts[i as usize];
+                (p.node, p.poly.iter().copied().sum::<DVec2>() / p.poly.len() as f64)
+            })
+            .collect()
+    }
+
+    /// How many parts node `n`'s parts are in, joined across their shared
+    /// edges: one, by construction (`node_reach` checks).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn node_pieces(&self, n: u32) -> usize {
+        let members = &self.members[n as usize];
+        let mut seen: HashMap<u32, ()> = HashMap::new();
+        let mut count = 0;
+        for &start in members {
+            if seen.insert(start, ()).is_some() {
+                continue;
+            }
+            count += 1;
+            let mut stack = vec![start];
+            while let Some(i) = stack.pop() {
+                for &(j, _, _) in &self.parts[i as usize].portals {
+                    if self.parts[j as usize].node == n && seen.insert(j, ()).is_none() {
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        count
     }
 
     /// What lies within `pad` of the box `lo`..`hi`: the pieces and the
@@ -1357,49 +1572,57 @@ impl Space {
 
     /// The piece under `q` (as `under`), among `about`'s.
     pub(crate) fn under_in(&self, about: &About, q: DVec2) -> Option<usize> {
-        let pt = Point::new(q.x, q.y);
-        let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
-        about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(q + ROUNDING).all() && self.boxes[i].1.cmpge(q - ROUNDING).all()).find(|&i| near(&self.shapes[i]))
+        about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(q + ROUNDING).all() && self.boxes[i].1.cmpge(q - ROUNDING).all()).find(|&i| in_or_near(&self.pieces[i].poly, q))
     }
 
-    /// Whether `q` is on node `n`'s walking space (within `ROUNDING`, as
-    /// `node_at_preferring` with `n` preferred finds it), among `about`'s
-    /// pieces.
-    pub(crate) fn on_node_in(&self, about: &About, q: DVec2, n: u32) -> bool {
-        let pt = Point::new(q.x, q.y);
-        let near = |p: &Polygon<f64>| p.intersects(&pt) || geo::Euclidean.distance(p, &pt) <= ROUNDING;
-        about.pieces.iter().copied().filter(|&i| self.boxes[i].0.cmple(q + ROUNDING).all() && self.boxes[i].1.cmpge(q - ROUNDING).all()).any(|i| {
-            self.space[i].iter().enumerate().any(|(k, f)| self.node_of[i][k] == n && near(f)) && near(&self.shapes[i])
-        })
-    }
-
-    /// Node `n`'s fragments among `about`'s pieces whose bounds meet the
-    /// box `lo`..`hi`: each its piece and its place among the piece's.
-    pub(crate) fn node_fragments(&self, about: &About, n: u32, lo: DVec2, hi: DVec2, out: &mut Vec<(usize, usize)>) {
+    /// Node `n`'s parts whose bounds meet the box `lo`..`hi`, each once.
+    pub(crate) fn node_parts_in(&self, n: u32, lo: DVec2, hi: DVec2, out: &mut Vec<u32>) {
         out.clear();
-        let meets = |b: &(DVec2, DVec2)| b.0.cmple(hi).all() && b.1.cmpge(lo).all();
-        for &i in about.pieces.iter().filter(|&&i| meets(&self.boxes[i])) {
-            out.extend((0..self.space[i].len()).filter(|&k| self.node_of[i][k] == n && meets(&self.frag_boxes[i][k])).map(|k| (i, k)));
-        }
+        out.extend(cells(lo, hi, 0.0).flat_map(|c| self.part_cells.get(&c).into_iter().flatten().copied()).filter(|&i| {
+            let p = &self.parts[i as usize];
+            p.node == n && p.lo.cmple(hi).all() && p.hi.cmpge(lo).all()
+        }));
+        out.sort_unstable();
+        out.dedup();
     }
 
     /// Where along `a` + `dir` s (`dir` of length 1), s from `s0` to `s1`,
-    /// the fragments `frags` (one node's, as `node_fragments` finds them)
-    /// are (within `ROUNDING` of them, as `node_at_preferring` finds): their
-    /// spans, merged, in order, into `out` (`cross` a buffer). The path's
-    /// line crossing each fragment's rings, the inside between each pair.
-    /// (Found point by point, nine about each of a drop's landing spots,
-    /// the stacks' landings were 0.9 s of work; then each of the nine paths
-    /// looked through all about it, three lists made each: 2.3 µs a lip.)
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn spans_along(&self, frags: &[(usize, usize)], a: DVec2, dir: DVec2, s0: f64, s1: f64, cross: &mut Vec<f64>, out: &mut Vec<(f64, f64)>) {
-        let (p0, p1) = (a + dir * s0, a + dir * s1);
-        let (lo, hi) = (p0.min(p1) - ROUNDING, p0.max(p1) + ROUNDING);
+    /// the parts `parts` (one node's, as `node_parts_in` finds them) are,
+    /// each grown by `ROUNDING` at its ends (as a point within it of a node
+    /// is on it): their spans, merged, in order, into `out`.
+    pub(crate) fn spans_along(&self, parts: &[u32], a: DVec2, dir: DVec2, s0: f64, s1: f64, out: &mut Vec<(f64, f64)>) {
         out.clear();
-        for &(i, k) in frags {
-            let b = self.frag_boxes[i][k];
-            if b.0.cmple(hi).all() && b.1.cmpge(lo).all() {
-                spans_in(&self.space[i][k], a, dir, s0, s1, ROUNDING, cross, out);
+        let (e0, e1) = (a + dir * s0, a + dir * s1);
+        let (lo, hi) = (e0.min(e1) - ROUNDING, e0.max(e1) + ROUNDING);
+        for &i in parts {
+            let p = &self.parts[i as usize];
+            if !(p.lo.cmple(hi).all() && p.hi.cmpge(lo).all()) {
+                continue;
+            }
+            // The line's part inside it (each edge's half-plane).
+            let (mut u0, mut u1) = (s0, s1);
+            let mut empty = false;
+            let n = p.poly.len();
+            for k in 0..n {
+                let (x, y) = (p.poly[k], p.poly[(k + 1) % n]);
+                let m = (y - x).perp();
+                let (c, v) = ((a - x).dot(m), dir.dot(m));
+                if v.abs() < 1e-15 {
+                    if c < 0.0 {
+                        empty = true;
+                        break;
+                    }
+                    continue;
+                }
+                let s = -c / v;
+                if v > 0.0 {
+                    u0 = u0.max(s);
+                } else {
+                    u1 = u1.min(s);
+                }
+            }
+            if !empty && u0 <= u1 {
+                out.push(((u0 - ROUNDING).max(s0), (u1 + ROUNDING).min(s1)));
             }
         }
         out.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -1415,10 +1638,63 @@ impl Space {
         out.truncate(m);
     }
 
+    /// The way across node `n`'s walking space from `from` to `to`: its
+    /// corners, `from` first and `to` last (each, if off the node, its
+    /// nearest point within `WAY_REACH`). On the parts as they are: the
+    /// fewest metres from part to part across their shared edges (A*, by
+    /// the edges' middles), then the shortest line through those edges (the
+    /// funnel), its corners the parts' own. Exact: nothing rounded.
+    pub(crate) fn way(&self, n: u32, from: DVec2, to: DVec2) -> Result<Vec<DVec2>, String> {
+        let (pa, a) = self.sample(n, from, WAY_REACH).ok_or_else(|| format!("from {from:.2} off node {n}"))?;
+        let (pb, b) = self.sample(n, to, WAY_REACH).ok_or_else(|| format!("to {to:.2} off node {n}"))?;
+        if pa == pb {
+            return Ok(vec![a, b]);
+        }
+        // (Each part's best cost, the part it came from, and where it was
+        // entered.)
+        let mut came: HashMap<u32, (f64, u32, DVec2)> = HashMap::new();
+        came.insert(pa, (0.0, pa, a));
+        let mut open = std::collections::BinaryHeap::new();
+        let key = |f: f64| std::cmp::Reverse(f.to_bits());
+        open.push((key(a.distance(b)), pa));
+        let mut done = false;
+        while let Some((_, i)) = open.pop() {
+            if i == pb {
+                done = true;
+                break;
+            }
+            let (g, _, at) = came[&i];
+            for &(j, x, y) in &self.parts[i as usize].portals {
+                let enter = (x + y) / 2.0;
+                let gj = g + at.distance(enter);
+                if came.get(&j).is_none_or(|c| gj < c.0) {
+                    came.insert(j, (gj, i, enter));
+                    open.push((key(gj + enter.distance(b)), j));
+                }
+            }
+        }
+        if !done {
+            return Err(format!("no way across node {n} from part {pa} to {pb}"));
+        }
+        let mut chain = vec![pb];
+        while *chain.last().unwrap() != pa {
+            chain.push(came[chain.last().unwrap()].1);
+        }
+        chain.reverse();
+        // Each edge crossed, its left and right as one goes across.
+        let mut gates: Vec<(DVec2, DVec2)> = vec![(a, a)];
+        for w in chain.windows(2) {
+            let &(_, x, y) = self.parts[w[0] as usize].portals.iter().find(|p| p.0 == w[1]).expect("a portal between parts on the way");
+            gates.push((y, x));
+        }
+        gates.push((b, b));
+        Ok(funnel(&gates))
+    }
+
     /// The hops between nodes no more than `far` apart (3D): points every
-    /// metre round each fragment's edges, each pair of nodes' nearest in
-    /// each `HOP_CELL` of the lower-numbered node's side; keyed by the pair,
-    /// the lower first, each hop from it.
+    /// metre round each node's edges, each pair of nodes' nearest in each
+    /// `HOP_CELL` of the lower-numbered node's side; keyed by the pair, the
+    /// lower first, each hop from it.
     pub(crate) fn hops(&self, world: &PlateWorld, far: f64) -> HashMap<(u32, u32), Vec<Hop>> {
         let points = self.edge_points(world);
         // (Each cell's points in it, side by side, and its neighbours found
@@ -1493,22 +1769,17 @@ impl Space {
         out
     }
 
-    /// Points every metre round each fragment's edges: where, how high,
-    /// and its node.
+    /// Points every metre round each node's edge: where, how high (on the
+    /// piece of the part it bounds), and its node.
     pub(crate) fn edge_points(&self, world: &PlateWorld) -> Vec<(DVec2, f64, u32)> {
         let mut points: Vec<(DVec2, f64, u32)> = Vec::new();
-        for (i, s) in self.space.iter().enumerate() {
-            for (k, f) in s.iter().enumerate() {
-                let n = self.node_of[i][k];
-                for ring in std::iter::once(f.exterior()).chain(f.interiors()) {
-                    for w in ring.0.windows(2) {
-                        let (a, b) = (DVec2::new(w[0].x, w[0].y), DVec2::new(w[1].x, w[1].y));
-                        let m = (a.distance(b) / 1.0).ceil().max(1.0) as usize;
-                        for j in 0..m {
-                            let q = a.lerp(b, j as f64 / m as f64);
-                            points.push((q, world.plate_top(&self.pieces[i].plate, q), n));
-                        }
-                    }
+        for (n, rim) in self.rims.iter().enumerate() {
+            for r in rim {
+                let m = r.a.distance(r.b).ceil().max(1.0) as usize;
+                let plate = &self.pieces[self.parts[r.part as usize].piece as usize].plate;
+                for j in 0..m {
+                    let q = r.a.lerp(r.b, j as f64 / m as f64);
+                    points.push((q, world.plate_top(plate, q), n as u32));
                 }
             }
         }
@@ -1651,18 +1922,219 @@ impl Space {
     }
 }
 
+/// How far off its node a way's ends are brought onto it (m).
+const WAY_REACH: f64 = 0.5;
+
+/// The shortest line through `gates` (each its left and right as one goes
+/// through, the first and last a point: where from and to): its corners,
+/// the first and last those points (the funnel: its apex, and the left and
+/// right sides of what it sees, narrowed gate by gate; a side crossing the
+/// other is a corner, from which it looks on).
+fn funnel(gates: &[(DVec2, DVec2)]) -> Vec<DVec2> {
+    let start = gates[0].0;
+    let mut path = vec![start];
+    let (mut apex, mut left, mut right) = (start, start, start);
+    let (mut li, mut ri) = (0, 0);
+    let mut ai;
+    let mut i = 1;
+    while i < gates.len() {
+        let (pl, pr) = gates[i];
+        // The right side, narrowed to `pr` if it is no further right.
+        if (right - apex).perp_dot(pr - apex) >= 0.0 {
+            if apex == right || (left - apex).perp_dot(pr - apex) < 0.0 {
+                right = pr;
+                ri = i;
+            } else {
+                // Over the left side: its end a corner, looked on from.
+                if path.last() != Some(&left) {
+                    path.push(left);
+                }
+                (apex, ai) = (left, li);
+                (right, ri, left, li) = (apex, ai, apex, ai);
+                i = ai + 1;
+                continue;
+            }
+        }
+        if (left - apex).perp_dot(pl - apex) <= 0.0 {
+            if apex == left || (right - apex).perp_dot(pl - apex) > 0.0 {
+                left = pl;
+                li = i;
+            } else {
+                if path.last() != Some(&right) {
+                    path.push(right);
+                }
+                (apex, ai) = (right, ri);
+                (right, ri, left, li) = (apex, ai, apex, ai);
+                i = ai + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let end = gates[gates.len() - 1].0;
+    if path.last() != Some(&end) {
+        path.push(end);
+    }
+    path
+}
+
+/// A polygon's area (counter-clockwise, positive).
+fn poly_area(poly: &[DVec2]) -> f64 {
+    let o = poly[0];
+    (1..poly.len().saturating_sub(1)).map(|k| (poly[k] - o).perp_dot(poly[k + 1] - o)).sum::<f64>() / 2.0
+}
+
+/// The nearest point of segment `a`-`b` to `q`.
+fn segment_nearest(q: DVec2, a: DVec2, b: DVec2) -> DVec2 {
+    let d = b - a;
+    let t = if d.length_squared() > 0.0 { ((q - a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+    a + d * t
+}
+
+/// How far `q` is from segment `a`-`b`.
+fn segment_distance(q: DVec2, a: DVec2, b: DVec2) -> f64 {
+    segment_nearest(q, a, b).distance(q)
+}
+
+/// Whether `q` is in polygon `poly` (either way round) or within
+/// `ROUNDING` of it.
+fn in_or_near(poly: &[DVec2], q: DVec2) -> bool {
+    let n = poly.len();
+    let mut odd = false;
+    for k in 0..n {
+        let (a, b) = (poly[k], poly[(k + 1) % n]);
+        if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (b.x - a.x) * (q.y - a.y) / (b.y - a.y) {
+            odd = !odd;
+        }
+    }
+    odd || (0..n).any(|k| segment_distance(q, poly[k], poly[(k + 1) % n]) <= ROUNDING)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `convex_less` on pieces it once could not make (seed 3's stacks).
+    /// A free-standing polygon's corners, each edge its own line (a grid
+    /// line through its corners on the grid), placed by `GridOnly`.
+    fn free(points: &[(i64, i64)]) -> Vec<Corner> {
+        let n = points.len();
+        let line = |k: usize| Line::grid(points[k % n], points[(k + 1) % n]).0;
+        (0..n).map(|k| Corner::new(DVec2::new(points[k].0 as f64, points[k].1 as f64) / planar::GRID, Key::of(line(k + n - 1), line(k)), line(k))).collect()
+    }
+
+    /// A cell less many keep-out regions overlapping one another and its
+    /// edges (bands of walls along it and across it, round feet), by the
+    /// definition: every part convex and counter-clockwise; no two over one
+    /// another (each edge once each way round); each part's edges met
+    /// corner for corner by the parts beside it or on the cell's edge or a
+    /// region's; and a point is in a part exactly when it is in the cell and
+    /// in no region (sampled, away from every edge by a micrometre).
     #[test]
-    fn convex_less_hard_cases() {
-        LESS_DEBUG.store(true, std::sync::atomic::Ordering::Relaxed);
-        let v = |p: &[(f64, f64)]| p.iter().map(|&(x, y)| DVec2::new(x, y)).collect::<Vec<_>>();
-        let shape = v(&[(15716.541114303176, 14026.09497634145), (15717.22669393342, 14021.787170677344), (15718.690557827851, 14020.279662931578), (15719.166234969935, 14025.416179117788), (15718.267110427825, 14026.385118840128)]);
-        let cut = vec![ccw(v(&[(15718.60600181567, 14020.2876953125), (15719.07670494067, 14020.24375), (15719.36665443433, 14020.24375), (15719.5716796875, 14020.44877525317), (15719.7494140625, 14022.36869712817), (15719.7494140625, 14022.65864662183), (15719.54438880933, 14022.863671875), (15719.07368568433, 14022.9076171875), (15718.78373619067, 14022.9076171875), (15718.5787109375, 14022.70259193433), (15718.4009765625, 14020.78267005933), (15718.4009765625, 14020.49272056567)]))];
-        let made = convex_less(&shape, &cut);
-        assert!(made.is_some(), "not made");
+    fn parts_as_defined() {
+        let g = planar::GRID as i64;
+        let cell = free(&[(0, 0), (40 * g, 3 * g), (37 * g, 30 * g), (2 * g, 33 * g)]);
+        let mut keeps = Vec::new();
+        let mut seed = 7u64;
+        let mut rand = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for _ in 0..40 {
+            let a = DVec2::new(rand() * 44.0 - 2.0, rand() * 36.0 - 2.0);
+            let b = a + DVec2::from_angle(rand() * 6.3) * rand() * 12.0;
+            keeps.push(Keep::round([a, b], 0.35));
+        }
+        for _ in 0..10 {
+            let c = DVec2::new(rand() * 40.0, rand() * 32.0);
+            keeps.push(Keep::round((0..5).map(|k| c + DVec2::from_angle(k as f64 * 1.3) * (0.5 + rand())), 0.35));
+        }
+        // Two along one line, and two round one end (their edges on one
+        // line each, by what they are).
+        keeps.push(Keep::round([DVec2::new(5.0, 10.0), DVec2::new(15.0, 10.0)], 0.35));
+        keeps.push(Keep::round([DVec2::new(18.0, 10.0), DVec2::new(25.0, 10.0)], 0.35));
+        keeps.push(Keep::round([DVec2::new(30.0, 20.0), DVec2::new(30.0, 28.0)], 0.35));
+        keeps.push(Keep::round([DVec2::new(30.0, 20.0), DVec2::new(36.0, 20.0)], 0.35));
+        let (mut parts, _) = walking(&mut Walk::default(), &cell, &[], keeps.iter(), &GridOnly);
+        planar::stitch(&mut parts, &GridOnly);
+        let mut edges: HashMap<(Key, Key), (usize, Line)> = HashMap::new();
+        for p in &parts {
+            let n = p.len();
+            for k in 0..n {
+                let (a, b, c) = (p[k].at, p[(k + 1) % n].at, p[(k + 2) % n].at);
+                assert!((b - a).perp_dot(c - b) >= -1e-9, "convex, counter-clockwise: {a} {b} {c}");
+                edges.entry((p[k].key, p[(k + 1) % n].key)).or_insert((0, p[k].next)).0 += 1;
+            }
+        }
+        assert!(edges.values().all(|c| c.0 == 1), "no two parts over one another");
+        for ((a, b), (_, line)) in &edges {
+            if !edges.contains_key(&(*b, *a)) {
+                assert!(cell.iter().any(|c| c.next == *line) || keeps.iter().any(|kp| kp.lines.iter().any(|x| x.0 == *line)), "an edge with no part beside it on the cell's edge or a region's: {a:?} {b:?} on {line:?}");
+            }
+        }
+        println!("{} parts", parts.len());
+        let inside = |poly: &[DVec2], q: DVec2, by: f64| (0..poly.len()).all(|k| {
+            let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+            (b - a).perp_dot(q - a) / (b - a).length() > by
+        });
+        let cell_at = planar::points(&cell);
+        let mut checked = 0;
+        for _ in 0..100_000 {
+            let q = DVec2::new(rand() * 42.0 - 1.0, rand() * 35.0 - 1.0);
+            let near_edge = |poly: &[DVec2]| (0..poly.len()).any(|k| segment_distance(q, poly[k], poly[(k + 1) % poly.len()]) < 1e-6);
+            if near_edge(&cell_at) || keeps.iter().any(|k| near_edge(&k.ring)) {
+                continue;
+            }
+            let want = inside(&cell_at, q, 0.0) && keeps.iter().all(|k| !inside(&k.ring, q, 0.0));
+            let got = parts.iter().filter(|p| inside(&planar::points(p), q, -1e-9)).count();
+            assert_eq!(got, want as usize, "{q}: in {got} parts");
+            checked += 1;
+        }
+        assert!(checked > 90_000);
+    }
+
+    /// A keep-out region round a wall: every point within the radius of it
+    /// inside, every point further than its round polygon's corners and the
+    /// grid's rounding outside; corners on the grid, convex, no three in a
+    /// line.
+    #[test]
+    fn keep_round_as_defined() {
+        let (a, b, r) = (DVec2::new(3.1234, -7.77), DVec2::new(9.5, -2.25), 0.35);
+        let k = Keep::round([a, b], r);
+        let n = k.ring.len();
+        for i in 0..n {
+            let (p, q, s) = (k.ring[i], k.ring[(i + 1) % n], k.ring[(i + 2) % n]);
+            assert!((q - p).perp_dot(s - q) > 0.0, "convex, no three in a line");
+            assert_eq!(p * planar::GRID, (p * planar::GRID).round(), "on the grid");
+        }
+        let inside = |q: DVec2| (0..n).all(|i| (k.ring[(i + 1) % n] - k.ring[i]).perp_dot(q - k.ring[i]) >= 0.0);
+        let h = std::f64::consts::FRAC_1_SQRT_2 / planar::GRID;
+        let beyond = (r + h) / (std::f64::consts::PI / round_steps() as f64).cos() + h;
+        let mut seed = 3u64;
+        let (mut ins, mut outs) = (0, 0);
+        for _ in 0..200_000 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let (x, y) = ((seed >> 40) as f64 / (1u64 << 24) as f64, ((seed >> 16) & 0xff_ffff) as f64 / (1u64 << 24) as f64);
+            let q = DVec2::new(a.x.min(b.x) - 1.0 + x * ((a.x - b.x).abs() + 2.0), a.y.min(b.y) - 1.0 + y * ((a.y - b.y).abs() + 2.0));
+            let d = segment_distance(q, a, b);
+            if d <= r {
+                assert!(inside(q), "{q} {d} m off: inside");
+                ins += 1;
+            } else if d > beyond {
+                assert!(!inside(q), "{q} {d} m off: outside");
+                outs += 1;
+            }
+        }
+        assert!(ins > 1000 && outs > 1000);
+    }
+
+    /// Ways across parts: through a bend, round its inner corner, the
+    /// corners the parts' own.
+    #[test]
+    fn funnel_round_a_corner() {
+        // An L of three squares: (0..1, 0..1), (1..2, 0..1), (1..2, 1..2).
+        let gates = vec![(DVec2::new(0.2, 0.5), DVec2::new(0.2, 0.5)), (DVec2::new(1.0, 1.0), DVec2::new(1.0, 0.0)), (DVec2::new(1.0, 1.0), DVec2::new(2.0, 1.0)), (DVec2::new(1.5, 1.8), DVec2::new(1.5, 1.8))];
+        assert_eq!(funnel(&gates), vec![DVec2::new(0.2, 0.5), DVec2::new(1.0, 1.0), DVec2::new(1.5, 1.8)]);
+        let straight = vec![(DVec2::new(0.5, 0.5), DVec2::new(0.5, 0.5)), (DVec2::new(1.0, 1.0), DVec2::new(1.0, 0.0)), (DVec2::new(1.5, 0.5), DVec2::new(1.5, 0.5))];
+        assert_eq!(funnel(&straight), vec![DVec2::new(0.5, 0.5), DVec2::new(1.5, 0.5)]);
     }
 }

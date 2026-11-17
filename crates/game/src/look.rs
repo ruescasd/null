@@ -184,6 +184,11 @@ const SUNS: [SunOrbit; 2] = [
     },
 ];
 
+/// Unit vector towards the sun `i` at time `t` (see `SUNS`).
+pub fn sun_direction(i: usize, t: f32) -> Vec3 {
+    SUNS[i].direction(t)
+}
+
 impl SunOrbit {
     /// Unit vector towards the sun at time `t`.
     fn direction(&self, t: f32) -> Vec3 {

@@ -13,19 +13,39 @@ Each item is marked by what it waits on:
 | **Agreed** | agreed, not yet scheduled |
 | **Parked** | set aside on purpose, to come back to |
 | **Idea** | exploratory, not decided |
+| **Built** | a first stage in the game, seen by you; its follow-ups listed under it |
 
-Last updated 2026-11-14.
+Last updated 2026-11-17.
 
 ## Current focus
 
-**Combat, creatures and navigation, together.** Combat was the original
-focus; working on it revealed how much it depends on the creatures and on
-navigation, so the three are now one line of work.
+**The world.** You, 2026-11-17: combat, creatures and navigation are
+explored enough that the limit on proving combat fun is now the world. The
+outdoors is samey; orientation fails most ("I never know where I am");
+large-scale form is missing (hills, not mountains). Your idea: ocean gaps,
+ichor lakes with fumes and haze, and voids where you fall off the world, as
+large-scale structures. Mind the Mistlands slabs, a failed attempt at large
+scale (world-identity note).
 
-- Navigation questions such as the Detour export are decided within this
-  line, as combat and creatures need them.
-- The gladiator's weirdness pass is creature work, but a tangent from the
-  main line.
+- **Built** The far view first (far-view note): pop-in and far districts
+  as boxes. See Rendering.
+- **Built** Voids, a region type (the first stage) (`--set voids 0.2`, off by default): no
+  ground, stars below, the world a shell 600 m thick (`void_depth`), only
+  the voids' outlines warped (`coast`); falling 400 m below the world
+  kills, back where you stood 2 s before; canals over a void as bridges,
+  stations in one as platforms (the basics). Voids note.
+- **Next** Voids on by default: check places.txt for places falling into
+  one first.
+- **Idea** Bridges made more interesting (you, 2026-11-17): what holds a
+  1-3 km span over nothing (hanging piers, cables to the rims), what rides
+  on it; the rims' infrastructure.
+- **Idea** Void rivers: long narrow rifts, a generator of their own; the
+  chasm belongs in one (you, 2026-11-17). Structure first, regions filling
+  the land left (world-identity note).
+- **Idea** Voids reading from afar at low height: haze, or something
+  rising out of them.
+- Combat, creatures and navigation wait on the world. Their open items
+  stay below.
 
 ## Waiting on you
 
@@ -685,6 +705,174 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   both versions showed them alike.) Next: pillars grown once for the
   mesher and the nodes both (each grows them now), outlines, edges by a
   hash of their lines.
+  Then (you, 2026-11-16: whack-a-mole with seeds; no case by case fixes,
+  correct by construction; memory/no-case-fixes): the outline work after
+  066138d discarded (a speck rule, a geo fallback for split nodes, a 2 mm
+  margin I wrongly said closed necks; kept in the scratchpad's
+  discarded_round5.patch). The cause: no one resolution through the
+  stages. Rebuilt by construction, three stages:
+  1. The plates one planar map (`worldgen::planar`): every corner known by
+     what it is (three sites' cells meeting, or two lines crossing, each
+     line by what it is: a bisector, a canal's side, a stair's cut), its
+     place from that alone, the same to the bit in every piece; edges
+     stitched with every corner on their line by identity. Tests:
+     `plates_one_planar_map` (42 514 edges inside 20 squares, each with its
+     twin on a 1/1024 m grid; fails without stitching),
+     `tests/plates_reference.rs` (the same 16 695 pieces, areas and
+     centres within 1e-9).
+  2. The walking space one exact overlay (i_overlay, integer) on that
+     grid: pieces less every closed wall's band (each wall once, the
+     stretches' twins by corner keys) and the pillars' obstacles; its
+     shapes triangulated as they are (no snapping, no slivers to leave
+     out), nodes its triangles joined side to side. Gone: per-piece
+     cutting, `convex_less`, the join and `MEET`, geo's union, the 1 mm
+     snap, the f32 turn filter. `as_defined` checks it against its
+     definition by points (on a piece walked on, further than the radius
+     from every closed stretch: on a node; nearer: on none): it found the
+     capsule's ends cut 7 mm inside their circle (an old error; now
+     corners at half steps, every edge touching the circle).
+  3. Drops, portals, lookups, navmeshes on the triangles and rims.
+  All 48 sweep squares pass every check; node_reach as before (broken's
+  139 unreached nodes, 26 834 m², the same at 066138d); no traps; walkers
+  300 of 300 in four districts, hops 228 in the stacks. `zz_plates.rs`
+  (the step 2c probe, all on fragments) removed (you approved, 2026-11-17).
+  Cost (big squares, one thread): 569 to 714 ms. Pieces 95 to 210
+  (stitching, labelled clipping), drops 116 to 172 (rims' heights, triangle
+  spans), walking + nodes + prune 247 (walking + join + outlines + prune
+  261 before), edges 29 to 12. In play stacks 0.9 s (0.4): the overlay one
+  call, on one thread (442 ms). Next: the overlay's time (one call, in
+  play), stitching and labelled clipping, drops' new lookups.
+  **Superseded (2026-11-16, the user: the plates' structure, not general
+  machinery):** each piece (a convex cell) less the convex regions a body
+  keeps out of (walls' bands, pillars' grown feet; `Keep`, corners on the
+  1/1024 m grid, edges `Line::Grid`, points where grid lines cross named
+  and sided exactly in whole numbers), in convex parts, merged where their
+  union is convex (Hertel-Mehlhorn, after each region: overlapping regions
+  otherwise multiply parts, 52 GB in the stacks); nodes by each line's two
+  sides walked together (no stitching, no hash of corners); the parts are
+  the nodes' meshes, ways found on them in f64 (A* + funnel; landmass's f32
+  convexity check can't be met by rounding exact parts). Overlay,
+  triangulation, landmass navmeshes and i_overlay gone. Seed 2, all six
+  districts pass (as_defined, no parts over one another, no node in
+  pieces). One thread: tiers 609 ms, stacks 1438, broken 1257 (659 the
+  average at 066138d). **Walking misses its estimate** (stacks 742 ms vs
+  20-60): merging rebuilds a hash of all a piece's parts after every
+  region (336 ms), and the exact keys' arithmetic (i128 division and gcd
+  naming points, exact sides for every corner) makes a clip ~400 ns, not
+  25 (385 ms). Done (the user's go-ahead): merging new parts only, one
+  table of edges a piece kept as parts come and go; points named without
+  division (on the grid, the grid point; between, as their two lines give
+  it); sides filtered (f64 within a proven bound, else exact; `sides_exact`:
+  2 million, error at most 0.185 of the bound); a region's line against a
+  part's box first; both halves of a cut at once (`planar::split`); edges
+  by corners' numbers (`Corner::number`, kept through cuts) not 128-byte
+  keys. The same parts, every check passing; node_reach, blink_walks as
+  before. Walking: tiers 199 to 106 ms, stacks 739 to 289, broken 488 to
+  246; all 609/1438/1257 to 494/959/969 (659 the average at 066138d: still
+  worse). Stacks' walking now ~1 µs a region tried on a part (279 000
+  tries, 343 000 cuts, 437 000 parts made for 104 000 kept): the edge
+  table a third, cuts a third, separation a fifth. The model's walking
+  line (a clip a touch) leaves out a region's ~16 edges and ~3 parts a
+  touch: ~30-50 ms the technique's own. Next proposed: small corners (24
+  bytes: place, number, line's number; keys and lines in the piece's
+  tables, crossings named by their two lines' numbers) for 112-byte ones
+  copied and compared everywhere. Then pieces (~250 ms). Superseded by
+  the first-principles page (the user, 2026-11-16: define what the build
+  needs, compare with what the code does): docs/node-build-first-principles.md.
+  ~1 s against ~0.1 s; walking's shape (own walls as bands, every region
+  against every part, 437 000 parts made for 104 000) and pieces built
+  twice (the mesher's own `visit_split`) the main departures. The user
+  chose to finish ours, with the reason found if the target is missed.
+  Compact walking built (`Walk`, `Spot`: 24-byte corners, crossings by
+  line pairs, regions against the whole piece first): the same parts,
+  checks pass, stacks 289 to 233 ms, target ~20 missed. Why (cycle
+  counters, see the page): 3.7 cuts a region and 1.8 new exact corners a
+  cut (16-edge regions from 12 round steps; a pillar's ~11 feet one by
+  one, half the cuts), each step costing its own arithmetic (~120 ns a
+  region against a part, ~85 ns an exact crossing). Ideal steps at these
+  counts: ~70-80 ms. Below needs fewer steps: round steps, pillar feet
+  together, or another decomposition. Pillars decided (the user,
+  2026-11-16, after walking both): panels inlaid (`Facade` `inlay`, on for
+  `pillar_band`; `inlay: false` the old look), and a pillar a walker
+  would walk into solid, its whole plate, its edges walls like a hole's
+  (no feet regions; `outermost`, `section`, `snap` removed). Measured:
+  stacks walking 233 to 116 ms, parts 103 896 to 42 763, build 915 to
+  588 ms; all checks, node_reach, blink_walks pass. Walls now: 57% of
+  cuts along bands' round ends, needed only at free wall ends (convex
+  plate corners between two walls are exact by the straight cuts alone).
+  Straight cuts built (per plate side, exact by construction, see the
+  page): walking seed 2 tiers 76, stacks 84, broken 78 ms; 48 of 48 sweep
+  squares pass. Round steps settable in play (`--set round_steps=N`, with
+  `--opt blink --opt nodedraw` to see the nodes); 6 steps measured: walking
+  58/65/66 ms, ends 0.404 m from walls (0.362 at 12). 6 the default (the
+  user: 4 cm on walkers won't show): 48 of 48 sweep squares pass, median
+  builds tiers 329, stacks 511, broken 446 ms (one thread). Not yet run in
+  play. Open (raised to the user): district nodes are built for the
+  biped's body alone (r 0.35, 0.7 m across); beasts walk them too. From
+  the plans, the harrow stands ~1.5 m across its feet and ~2.5 m from rump
+  to head (the biped ~0.76 m across): twice the nodes' width. Recast's
+  beast body (r 0.45) is under it too.
+  In play (2026-11-16): the build is no frame-time problem. Flying the
+  stacks, 98 rebuilds and none in a slow frame; fly benches with and
+  without nodes and harrows alike. Old approach (066138d) against now,
+  same 8 seeds: tiers 429 to 317 ms, stacks 886 to 478, broken 437 to 348;
+  plates doubled since the planar rebuild (now the largest stage).
+  Parked: tiled, incremental node building (only new tiles as you move,
+  joined across tile edges, cached). Take it up if more body sizes
+  (a harrow-sized set), a bigger square, or background CPU get tight.
+- Flying hitches (the user, 2026-11-16): a terrain column arriving cost
+  50-90 ms, avian computing its triangle mesh's mass on insertion and
+  again on its first step, for a static body (trace: profile build,
+  flybench). Fixed: avian vendored (vendor/avian3d, "null" patch: zero
+  density, zero mass, nothing computed), terrain colliders
+  `ColliderDensity(0.0)`: worst bench frame 67-74 to 21-22 ms, none over
+  33 ms. A third vendored crate (you approved, 2026-11-17). Left: frames of 18-44 ms with
+  nothing arriving (two fixed spots on the bench route, ~1.8 and 2.2 km);
+  `hitches` now says what arrived in each slow frame (a mesh's upload
+  lands a frame after it is counted). Traced: one spot GPU-bound
+  (present waiting), the other the renderer taking a new mesh (extract,
+  place, upload ~20 ms). Mesh buffers grow only while loading (to ~870 MB
+  of meshes, 9 buffers), not in flight: not the cause. Terrain and
+  structure meshes now render-world only (moved, not copied, no second
+  copy in RAM): bench worst 22 to 18 ms. Awaiting the user's free flight.
+  Free flight traced (18 GB): of 40 frames over 30 ms, 13 were
+  `structures::receive` (a structure taken in: meshes converted, bounds
+  walked, on the main thread, up to 143 ms) and 13 the renderer preparing
+  those meshes the frame after; materials 5. In free flight mesh buffers
+  do churn (a 9th grown to 1.18 GB, freed, grown again). Done: structures'
+  and columns' meshes made ready (converted, bounded) in their background
+  tasks; structure colliders zero density; new meshes uploaded at most
+  `--set upload_mb=16` a frame (0 for no limit). Capture checked against
+  the old build. The user's flight after (101 s, another route): 3 frames
+  over 30 ms (7 in 150 s before), worst 64 (74); 13 of 16 slow frames
+  20-27 ms with nothing arriving. The two of 63-64 ms came as mesh buffers
+  grew (+104 to +156 MB), but not shown the cause: the same growth on the
+  bench gave no slow frame, VRAM peaks ~4.1 of 8 GB. Buffers made whole
+  at once (64 MB each, no growth): no gain on the bench, removed. Hitch
+  lines now end with where you were (`--cam ...`) to fly the spot again on
+  the bench (the bench's straight lines meet one structure; the user's
+  route met many). Seen: `nvidia-smi` polled every 250 ms during a bench
+  gave a 747 ms frame (not in 4 runs without): don't sample VRAM so.
+  Standing: over stacks_view 18% of frames over 10 ms (95th 10.8 ms),
+  nothing arriving: the view's own cost, under 100 fps.
+  The user's next flight (~360 m/s, across the world): worst 59 and 63 ms,
+  no buffer growth near either. The 63 ms spot flown again on the bench
+  (from 1 km back along the user's path): 63-64 ms every run, traced: a
+  structure's meshes (~30 MB) packed and written in one frame by Bevy's
+  `allocate_and_free_meshes` (29 ms, ~1 ms a MB) and the instance buffer
+  written (19 ms). Bevy's own per-frame limit applies after that copy, not
+  to it (useless for meshes; removed). Fixed: `terrain::MeshBudget`, new
+  meshes handed over at most `--set upload_mb=4` a frame; terrain counted
+  but never waits, a structure's parts handed over a few a frame and shown
+  together once all are. That spot: worst 64 to 10.5 ms. Capture of the
+  spire the same either way. The 59 ms spot not reproduced by the bench's
+  straight line. Probes removed.
+- Idea (the user, 2026-11-16): demos for reproducing. Not inputs (the game
+  isn't deterministic: background builds, frame-timed steps); record the
+  camera's path a frame and console commands, replay them on the bench:
+  the same loading and drawing as the user's run. Creatures and fights
+  would need their states recorded (as Quake's demos record the server's
+  messages, not inputs).
 - **Agreed** Structures: move from the patched Rust crates to C++ Detour
   (through bindings, staying on Bevy); the crates fail the worst-case frame
   cost (17 ms a long search, 122 ms a burst), Detour passes (0.6 ms).
@@ -761,6 +949,29 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
   rises.
 
 ## Rendering, performance and tech
+
+- **You** The far view (2026-11-17), the game's default now; judge it in
+  motion:
+  - the coarser levels of detail drawn as planes fitted to the finest
+    within 3 pixels (`--set far_px`; 0, the old blocks);
+  - their shadows from cached maps (`far_shadow.rs`; `--opt nofarcache`
+    to compare): the main sun's to 1.8 and 5 km, the second sun's to
+    2.2 km, redrawn as the sun moves, the camera travels or columns
+    change, one map a frame;
+  - a level's switch dithered over 0.4 s (`--set lod_fade`; 0, at once).
+  - Measured: stacks from above 9.0 ms (8.5 before, 12.1 with the fitted
+    planes and live shadows); flight 99th percentile 12.9 ms; start-up 6 s
+    (4 before).
+- **Agreed** An input latency pass, its own space, later (you, 2026-11-17:
+  very important to you). Vsync stays off meanwhile (`--opt vsync` to
+  sync): uncapped, a frame of 20-30 ms now and then from outside the game
+  (the driver or the system), not felt; the hitch log labels those
+  "hitch outside the game" (main and render schedules normal, nothing
+  arriving). Options noted: vsync with one frame queued, a frame cap just
+  under the refresh (with G-Sync/FreeSync), mailbox.
+- **Idea** Far-view gaps: creatures and props get no shadow from terrain
+  beyond 450 m; about 2 s of start-up is the far levels' finest outlines;
+  144 MB of video memory for the maps; haze waits for the ichor lakes.
 
 - **Agreed** Engine decision, what's open (`docs/engine-decision.md`):
   - spike B, streaming dense places and far detail (you, 2026-11-14: run

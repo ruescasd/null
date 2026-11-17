@@ -48,3 +48,4 @@ rustflags = ["-Clto=off"]
 [patch.crates-io]
 rerecast = { path = "vendor/rerecast" }
 landmass = { path = "vendor/landmass" }
+avian3d = { path = "vendor/avian3d" }

@@ -22,6 +22,10 @@
     pbr_functions::alpha_discard,
 }
 
+#ifdef VISIBILITY_RANGE_DITHER
+#import bevy_pbr::pbr_functions::visibility_range_dither
+#endif
+
 #ifdef PREPASS_PIPELINE
 #import bevy_pbr::{
     prepass_io::{VertexOutput, FragmentOutput},
@@ -31,6 +35,7 @@
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    shadows::set_far,
 }
 #endif
 
@@ -51,8 +56,8 @@
 // as each other size), z the chance one of the biggest cuts is stepped.
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var<uniform> layers: vec4<f32>;
 // The panels' cuts (see `panels`): x the chance one is left open, y the
-// chance one is a curve; z how far each coarser level of detail is lowered
-// (m), so a wall's pattern is laid out where it stands.
+// chance one is a curve; z and w how far the middle and far levels of detail
+// are lowered (m), so a wall's pattern is laid out where it stands.
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var<uniform> marks: vec4<f32>;
 // Walls round a middle (the arena's): xy the middle (x, z), w on. A wall
 // facing it or away is panelled along its curve (see the walls' branch).
@@ -64,6 +69,113 @@
 // x: pattern (0 none, 1 checkerboard, 2 fractal), y: tile size (m), z:
 // contrast, w: share of the ground paved.
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> paving: vec4<f32>;
+// The far terrain's cached shadow maps (see far_shadow.rs, `MAPS`): the
+// main sun's inner and outer, the second sun's; and what each was drawn
+// with (`MapFrame::data`, eight texels a map).
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var far_inner: texture_depth_2d;
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var far_data: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(111) var far_outer: texture_depth_2d;
+@group(#{MATERIAL_BIND_GROUP}) @binding(112) var far_second: texture_depth_2d;
+
+fn far_texel(map: i32, i: i32) -> vec4<f32> {
+    return textureLoad(far_data, vec2<i32>(map * 8 + i, 0), 0);
+}
+
+fn far_depth(map: i32, at: vec2<i32>) -> f32 {
+    if map == 0 {
+        return textureLoad(far_inner, at, 0);
+    } else if map == 1 {
+        return textureLoad(far_outer, at, 0);
+    }
+    return textureLoad(far_second, at, 0);
+}
+
+fn far_size(map: i32) -> vec2<i32> {
+    if map == 0 {
+        return vec2<i32>(textureDimensions(far_inner));
+    } else if map == 1 {
+        return vec2<i32>(textureDimensions(far_outer));
+    }
+    return vec2<i32>(textureDimensions(far_second));
+}
+
+// Lit (1) or in shadow (0) by one far map at a point seen bent round the
+// camera, with its normal; x -1 where the map is off or does not reach, y
+// how near its edge (1 at it). Bent as the map was drawn, round where the
+// camera was then. Four texels, weighed by where it falls among them, each
+// against the receiver's own plane carried to the texel (its depth's change
+// along the map's axes), so a flat receiver needs little bias and the
+// steps' shadows are kept.
+fn far_map(map: i32, world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    let bend = far_texel(map, 4);
+    if bend.w < 0.5 {
+        return vec2<f32>(-1.0, 0.0);
+    }
+    let sun = far_texel(map, 5).xyz;
+    let facing = dot(normal, sun);
+    if facing <= 0.0 {
+        return vec2<f32>(1.0, 0.0);
+    }
+    let now = world.xz - params.zw;
+    let then = world.xz - bend.xy;
+    var p = world;
+    p.y += dot(now, now) * params.y - dot(then, then) * bend.z;
+    let right = far_texel(map, 6).xyz;
+    let up = cross(right, -sun);
+    // (Grazing ones held to 20 m a metre.)
+    let slope = clamp(vec2<f32>(dot(normal, right), dot(normal, up)) / facing, vec2<f32>(-20.0), vec2<f32>(20.0));
+    let clip_from_world = mat4x4<f32>(far_texel(map, 0), far_texel(map, 1), far_texel(map, 2), far_texel(map, 3));
+    let c = clip_from_world * vec4<f32>(p, 1.0);
+    let uv = c.xy * vec2<f32>(0.5, -0.5) + 0.5;
+    if any(uv <= vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || c.z < 0.0 || c.z > 1.0 {
+        return vec2<f32>(-1.0, 0.0);
+    }
+    let texel = far_texel(map, 7);
+    let size = far_size(map);
+    let at = uv * vec2<f32>(size);
+    let t = at - 0.5;
+    let i = vec2<i32>(floor(t));
+    let f = t - floor(t);
+    var lit = vec4<f32>(0.0);
+    let offsets = array<vec2<i32>, 4>(vec2<i32>(0, 0), vec2<i32>(1, 0), vec2<i32>(0, 1), vec2<i32>(1, 1));
+    for (var k = 0; k < 4; k++) {
+        let tap = clamp(i + offsets[k], vec2<i32>(0), size - 1);
+        // (The map's texel rows run down its y.)
+        let d = (vec2<f32>(tap) + 0.5 - at) * vec2<f32>(1.0, -1.0) * texel.xy;
+        let z = c.z + (dot(slope, d) - texel.w) / texel.z;
+        lit[k] = select(0.0, 1.0, z <= far_depth(map, tap));
+    }
+    let edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0;
+    return vec2<f32>(mix(mix(lit.x, lit.y, f.x), mix(lit.z, lit.w, f.x), f.y), edge);
+}
+
+// Lit (1) or in the far terrain's shadow (0) from each sun (x the main, y
+// the second) at a point seen bent round the camera, with its normal. The
+// main sun's from its inner map where it reaches, blending into the outer
+// at its edge; the second's fading out at its map's edge (its live shadows
+// end nearer still).
+fn far_shadow(world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    var main = 1.0;
+    let inner = far_map(0, world, normal);
+    if inner.x >= 0.0 && inner.y < 0.9 {
+        main = inner.x;
+    } else {
+        let outer = far_map(1, world, normal);
+        if outer.x >= 0.0 && inner.x >= 0.0 {
+            main = mix(inner.x, outer.x, (inner.y - 0.9) / 0.1);
+        } else if outer.x >= 0.0 {
+            main = outer.x;
+        } else if inner.x >= 0.0 {
+            main = inner.x;
+        }
+    }
+    var second = 1.0;
+    let s = far_map(2, world, normal);
+    if s.x >= 0.0 {
+        second = mix(s.x, 1.0, clamp((s.y - 0.9) / 0.1, 0.0, 1.0));
+    }
+    return vec2<f32>(main, second);
+}
 
 fn hash(cell: vec2<i32>, period: i32) -> f32 {
     // Wrap the lattice so the pattern tiles with the world.
@@ -539,6 +651,10 @@ fn pave(p: vec2<f32>, height: f32, pixel: f32) -> Paving {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    // A column fading in or out (see terrain.rs, `Fading`).
+#ifdef VISIBILITY_RANGE_DITHER
+    visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     var lit = 0.0;
@@ -598,7 +714,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         // was approached, the user, at the edge). Only a wall across the
         // edge itself changes there.)
         let home = p.xz - floor(p.xz / wrap.x) * wrap.x;
-        let at = vec3<f32>(home.x, p.y + f32(lod) * marks.z, home.y);
+        let at = vec3<f32>(home.x, p.y + select(0.0, select(marks.z, marks.w, lod == 2), lod > 0), home.y);
         // (Its line's number: see `wall_code`.)
         var along = dot(at.xz, t);
         // (A wall round a middle, facing it or away, a ring of facets: along
@@ -638,7 +754,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let out = deferred_output(in, pbr_input);
 #else
     var out: FragmentOutput;
+    set_far(far_shadow(in.world_position.xyz, normalize(in.world_normal)), far_texel(0, 5).xyz, far_texel(2, 5).xyz);
     out.color = apply_pbr_lighting(pbr_input);
+    // A void's walls sink into the dark below the world (see worldgen's
+    // `VOID_DEPTH`): the hole reads as one, not as more ground (its far
+    // wall, lit, did). By the height unbent, 60 m under the world's level
+    // on (the ground's lowest is about -20 m).)
+    let flat = in.world_position.xyz + vec3<f32>(0.0, dot(in.world_position.xz - params.zw, in.world_position.xz - params.zw) * params.y, 0.0);
+    out.color = vec4<f32>(out.color.rgb * exp(min(flat.y + 60.0, 0.0) / 120.0), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
 #endif
     return out;

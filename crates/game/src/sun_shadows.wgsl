@@ -1,6 +1,7 @@
 // Bevy 0.19.1's shadows.wgsl (bevy_pbr/src/render), loaded in its place by
-// the game (see `look::sun_shadows`), changed in one thing: a sun's soft
-// shadows are the game's own (`sun_soft`, below). Bevy's for a sun used the
+// the game (see `look::sun_shadows`), changed in two things: a sun's soft
+// shadows are the game's own (`sun_soft`, below); and the far terrain's
+// shadow from its cached map is taken with the live one (`set_far`). Bevy's for a sun used the
 // formula for a lamp, in the depth of a cascade fitted to the view, and
 // searched for what casts them a distance set by the light's size alone:
 // they came and went as the camera turned (the user, in the arena). The rest
@@ -26,6 +27,31 @@
 }
 
 const flip_z: vec3<f32> = vec3<f32>(1.0, 1.0, -1.0);
+
+// (The game's.) The far terrain's shadow on what is being lit from each
+// sun, from the cached far maps (see far_shadow.rs), and towards the suns
+// they were drawn for: set by the terrain's shader (terrain.wgsl) before
+// lighting, lit elsewhere.
+var<private> far_lit: vec2<f32> = vec2<f32>(1.0);
+var<private> far_sun: array<vec3<f32>, 2> = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+
+fn set_far(lit: vec2<f32>, main: vec3<f32>, second: vec3<f32>) {
+    far_lit = lit;
+    far_sun[0] = main;
+    far_sun[1] = second;
+}
+
+// The far maps' shadow for this light: its own sun's (within a few
+// degrees: a map is drawn again as its sun moves on).
+fn far_for(direction_to_light: vec3<f32>) -> f32 {
+    if dot(direction_to_light, far_sun[0]) > 0.999 {
+        return far_lit.x;
+    }
+    if dot(direction_to_light, far_sun[1]) > 0.999 {
+        return far_lit.y;
+    }
+    return 1.0;
+}
 
 fn fetch_point_shadow(
     light_id: u32,
@@ -319,9 +345,10 @@ fn fetch_directional_shadow(
 ) -> f32 {
     let light = &view_bindings::lights.directional_lights[light_id];
     let cascade_index = get_cascade_index(light_id, view_z);
+    let far = far_for((*light).direction_to_light.xyz);
 
     if (cascade_index >= (*light).num_cascades) {
-        return 1.0;
+        return far;
     }
 
     var shadow = sample_directional_cascade(
@@ -348,7 +375,7 @@ fn fetch_directional_shadow(
             shadow = mix(shadow, next_shadow, (-view_z - next_near_bound) / (this_far_bound - next_near_bound));
         }
     }
-    return shadow;
+    return min(shadow, far);
 }
 
 fn cascade_debug_visualization(

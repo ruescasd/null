@@ -266,10 +266,14 @@
         // Terrain pillars (the stacks' ground): the mesher grows this on each
         // pillar plate and scales it to the pillar's height. Banded shafts,
         // sometimes split by a slot, with grooves, setbacks and small crowns.
+        // Their panels inlaid, sunk into faces flush with the plate (the
+        // user, 2026-11-16: better looking; and nothing of a pillar's plate
+        // is walked on, so walkers' navigation takes it whole). `inlay:
+        // false` for the panels standing out as they were.
         "pillar": Choose([(3, "pillar_band"), (2, "pillar_split"), (1, "pillar_cells")]),
         "pillar_split": Split(depth: 1, gap: 0.6, min_width: 2.5, then: "pillar_band"),
         "pillar_cells": Cells(size: 2.5, gap: 0.3, then: "pillar_band"),
-        "pillar_band": Facade(height: (2, 5), panel: 1.7, storey: 1.9, depth: (0.1, 0.5), fill: 0.45,
+        "pillar_band": Facade(height: (2, 5), panel: 1.7, storey: 1.9, depth: (0.1, 0.5), fill: 0.45, inlay: true,
             then: "pillar_next"),
         "pillar_next": Choose([(6, "pillar_neck"), (2, "pillar_setback"), (1, "pillar_crown")]),
         "pillar_neck": Neck(by: (0.2, 0.5), height: (0.4, 1), then: "pillar_band"),

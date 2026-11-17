@@ -134,7 +134,10 @@ impl World {
 /// from under its decks), and never below the world's terrain; else the
 /// world's terrain.
 pub fn ground(world: Option<&crate::terrain::WorldGen>, lab: Option<&crate::groundlab::LabGround>, camfloor: bool, x: f32, z: f32) -> f32 {
-    let terrain = world.map_or(0.0, |w| w.ground_height(x, z));
+    // (Over a void, the world's level: its walls' foot is the shell's
+    // thickness, a setting; measured from it, a place there moved with it,
+    // the user's "blink", 2026-11-17.)
+    let terrain = world.map_or(0.0, |w| if w.0.is_void(x, z) { 0.0 } else { w.ground_height(x, z) });
     match lab {
         Some(lab) if !camfloor => lab.height(x, z).max(terrain),
         _ => terrain,

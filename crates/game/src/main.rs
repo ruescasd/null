@@ -7,6 +7,7 @@ mod check;
 mod console;
 mod combat;
 mod ground;
+mod far_shadow;
 mod figure;
 mod beams;
 mod canal_light;
@@ -16,6 +17,8 @@ mod loading;
 mod navmesh;
 mod places;
 mod show;
+#[cfg(feature = "slowspans")]
+mod slowspans;
 /// Every option name the game reads, gathered from its source by `build.rs`.
 mod options {
     include!(concat!(env!("OUT_DIR"), "/options.rs"));
@@ -217,6 +220,10 @@ fn main() {
         focused_mode: bevy::winit::UpdateMode::Continuous,
         unfocused_mode: bevy::winit::UpdateMode::Continuous,
     });
+    // New meshes handed to the renderer at most this many MB a frame, see
+    // `terrain::MeshBudget` (`--set upload_mb=N`, 0 for no limit).
+    let upload = args.num("upload_mb", 4.0);
+    app.insert_resource(terrain::MeshBudget { per_frame: if upload > 0.0 { (upload * 1048576.0) as isize } else { isize::MAX }, left: 0 });
     app
         // (The creatures with authored bodies, models and their clips, read
         // from `creatures/` as they are, not built in: see `clip.rs`.)
@@ -237,6 +244,11 @@ fn main() {
                 },
                 ..default()
             },
+        }).set(bevy::log::LogPlugin {
+            // (`--features slowspans`: spans that ran long, see slowspans.rs.)
+            #[cfg(feature = "slowspans")]
+            custom_layer: slowspans::layer,
+            ..default()
         }).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "terrain".into(),
@@ -244,7 +256,15 @@ fn main() {
                 // 1080p.)
                 resolution: (args.num("width", 1600.0) as u32, args.num("height", 900.0) as u32).into(),
                 position: bevy::window::WindowPosition::Centered(bevy::window::MonitorSelection::Primary),
-                present_mode: PresentMode::AutoNoVsync,
+                // (Uncapped; `--opt vsync`, frames to the display's refresh.
+                // Uncapped, a stall outside the game, the driver's or the
+                // system's, backs up into the frames' handover now and then,
+                // a frame of 20-30 ms (the user, 2026-11-17: 9 in 3 min
+                // uncapped, none in 2 synced), not felt; synced, a frame or
+                // two more of input latency, which matters more (a pass of
+                // its own later). The hitch log tells those apart, see
+                // `hitches`.)
+                present_mode: if args.opt("vsync") { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync },
                 // (Shown only once the view has settled (see `loading.rs`);
                 // unattended, never, so whoever is at the desk can work on:
                 // captures read what it renders, shown or not.)
@@ -286,6 +306,18 @@ fn main() {
     if !args.opt("gpubatch") {
         app.add_plugins(CpuBatching);
     }
+    // (The render thread's own time, for the hitch log: see `RenderClock`.)
+    let render_clock = RenderClock::default();
+    app.insert_resource(render_clock.clone());
+    if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render.insert_resource(render_clock).init_resource::<RenderStart>().add_systems(
+            bevy::render::Render,
+            (
+                render_clock_start.in_set(bevy::render::RenderSystems::ExtractCommands),
+                render_clock_end.in_set(bevy::render::RenderSystems::PostCleanup),
+            ),
+        );
+    }
     // (Timings of the render passes only to measure (`--opt diag`, and the
     // benches): they cost themselves, a millisecond, a query round each
     // pass.)
@@ -294,7 +326,7 @@ fn main() {
     }
     app.insert_resource(args)
         .add_plugins((
-            terrain::TerrainPlugin,
+            (terrain::TerrainPlugin, far_shadow::FarShadowPlugin),
             camera::FlyCameraPlugin,
             look::LookPlugin,
             (beams::BeamsPlugin, canal_light::CanalLightPlugin, streetlights::StreetlightsPlugin, show::plugin),
@@ -310,8 +342,60 @@ fn main() {
             loading::LoadingPlugin,
             navmesh::NavmeshPlugin,
         ))
+        .init_resource::<FrameClock>()
+        .add_systems(First, clock_start)
+        .add_systems(Last, clock_end)
         .add_systems(Update, (startlog, hitches))
         .run();
+}
+
+/// When this frame's main schedule began, and when the last one's ended:
+/// a slow frame's time split into the main schedule's and the time outside
+/// it (handing the frame to the render thread and waiting on it, the
+/// window's events, the system not running the game). (The user's hitches,
+/// 2026-11-17: no system and no schedule ran long in them.)
+#[derive(Resource, Default)]
+struct FrameClock {
+    start: Option<std::time::Instant>,
+    end: Option<std::time::Instant>,
+    /// The last frame's main schedule, and the time from its end to this
+    /// frame's start (ms).
+    main: f32,
+    outside: f32,
+}
+
+fn clock_start(mut clock: ResMut<FrameClock>) {
+    let now = std::time::Instant::now();
+    if let (Some(start), Some(end)) = (clock.start, clock.end) {
+        clock.main = end.saturating_duration_since(start).as_secs_f32() * 1000.0;
+        clock.outside = now.saturating_duration_since(end).as_secs_f32() * 1000.0;
+    }
+    clock.start = Some(now);
+}
+
+fn clock_end(mut clock: ResMut<FrameClock>) {
+    clock.end = Some(std::time::Instant::now());
+}
+
+/// The longest the render thread's schedule has run since the hitch log
+/// last looked (us), written from the render world: with the main
+/// schedule's, whether a slow frame was the game's work or the time lost
+/// outside it, handing frames over and presenting them (see `hitches`).
+#[derive(Resource, Clone, Default)]
+struct RenderClock(std::sync::Arc<std::sync::atomic::AtomicU32>);
+
+/// When this frame's render schedule began (the render world's).
+#[derive(Resource, Default)]
+struct RenderStart(Option<std::time::Instant>);
+
+fn render_clock_start(mut start: ResMut<RenderStart>) {
+    start.0 = Some(std::time::Instant::now());
+}
+
+fn render_clock_end(start: Res<RenderStart>, clock: Res<RenderClock>) {
+    if let Some(at) = start.0 {
+        clock.0.fetch_max(at.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// A frame longer than `--set hitch=MS` (20 unless given) said in the
@@ -319,12 +403,37 @@ fn main() {
 /// keeping creatures round you; and the target is 100 fps and more, no
 /// slop: two frames' worth is a stutter). The first `SETTLE` s of play,
 /// terrain still coming in, told as one line, how many and the worst.
-/// Always on: one comparison a frame; a line only for a slow one.
-fn hitches(time: Res<Time<Real>>, playing: Res<loading::Playing>, args: Res<Args>, mut settle: Local<(Option<f32>, u32, f32, bool)>) {
+/// Each slow frame with what arrived in it (the user, 2026-11-16: hitches
+/// flying, none walking; a straight flight's bench, with or without nodes
+/// or creatures, did not make them): terrain columns, meshes, physics
+/// bodies, creatures, node builds begun and ready. Always on: a few counts
+/// a frame; a line only for a slow one.
+#[allow(clippy::too_many_arguments)]
+fn hitches(
+    time: Res<Time<Real>>,
+    clock: Res<FrameClock>,
+    render_clock: Res<RenderClock>,
+    playing: Res<loading::Playing>,
+    args: Res<Args>,
+    mut settle: Local<(Option<f32>, u32, f32, bool)>,
+    columns: Query<(), Added<terrain::TerrainColumn>>,
+    bodies: Query<(), Added<avian3d::prelude::RigidBody>>,
+    creatures: Query<(), Added<navmesh::district::Blink>>,
+    mut meshes: MessageReader<AssetEvent<Mesh>>,
+    mut builds: Local<[u32; 2]>,
+    camera: Option<Single<(&Transform, &camera::FlyCam)>>,
+    world: Option<Res<terrain::WorldGen>>,
+    lab: Option<Res<groundlab::LabGround>>,
+) {
+    let added = meshes.read().filter(|e| matches!(e, AssetEvent::Added { .. })).count();
+    let counts = navmesh::district::BUILDS.each_ref().map(|b| b.load(std::sync::atomic::Ordering::Relaxed));
+    let (started, ready) = (counts[0] - builds[0], counts[1] - builds[1]);
+    *builds = counts;
     if !playing.0 {
         return;
     }
     let (dt, now) = (time.delta_secs(), time.elapsed_secs());
+    let render = render_clock.0.swap(0, std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
     let begun = *settle.0.get_or_insert(now);
     let slow = dt * 1000.0 > args.num("hitch", 20.0);
     if now - begun < SETTLE {
@@ -339,7 +448,37 @@ fn hitches(time: Res<Time<Real>>, playing: Res<loading::Playing>, args: Res<Args
         info!("hitch: settling, the first {SETTLE:.0} s of play: {} slow frames, the worst {:.0} ms", settle.1, settle.2 * 1000.0);
     }
     if slow {
-        warn!("hitch: a frame of {:.0} ms at {now:.1} s", dt * 1000.0);
+        // The game's own (its main or render schedule ran half the
+        // threshold or more), or outside it, the frame's handover and its
+        // presenting: told apart, the latter quietly (uncapped, they come
+        // now and then from the driver or the system, not felt).
+        // (Something arriving makes it ours too: its extraction to the
+        // render world runs on the main thread between the schedules.)
+        let arrived = !columns.is_empty() || added > 0 || !bodies.is_empty() || !creatures.is_empty() || started + ready > 0;
+        let ours = arrived || clock.main.max(render) >= args.num("hitch", 20.0) * 0.5;
+        let line = format!(
+            "a frame of {:.0} ms at {now:.1} s (main schedule {:.1} ms, render {:.1} ms, outside them {:.1} ms); in it: {} terrain columns, {added} meshes, {} physics bodies, {} creatures, node builds {started} begun and {ready} ready; at {}",
+            dt * 1000.0,
+            clock.main,
+            render,
+            clock.outside,
+            columns.iter().count(),
+            bodies.iter().count(),
+            creatures.iter().count(),
+            // (Where, as `--cam` takes it: the spot flown to again on the
+            // bench, `--opt flybench`.)
+            camera.map_or("?".into(), |c| {
+                let (t, fly) = *c;
+                let p = t.translation;
+                let above = p.y - places::ground(world.as_deref(), lab.as_deref(), args.opt("camfloor"), p.x, p.z);
+                format!("--cam {:.0},{:.0},{:.0},{:.0},{:.0}", p.x, above, p.z, fly.yaw.to_degrees(), fly.pitch.to_degrees())
+            })
+        );
+        if ours {
+            warn!("hitch: {line}");
+        } else {
+            info!("hitch outside the game: {line}");
+        }
     }
 }
 
@@ -369,3 +508,4 @@ fn cpu_batching(support: Option<ResMut<bevy::render::batching::gpu_preprocessing
         support.max_supported_mode = GpuPreprocessingMode::None;
     }
 }
+

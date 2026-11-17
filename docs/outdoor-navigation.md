@@ -446,7 +446,8 @@ chases of 20 to 150 m, at a 5 and a 10 m range:
 Built to feel teleporting in the game (`--opt blink`), after the measure.
 
 - **Nodes at runtime.** The construction moved out of the test into
-  `crates/game/src/navmesh/nodes.rs`; `zz_plates` now calls it and reproduces
+  `crates/game/src/navmesh/nodes.rs`; `zz_plates` (removed 2026-11-17, its
+  checks now the node build's own tests) now calls it and reproduces
   the recorded tiers numbers exactly. `--opt blink` builds the nodes over a
   600 m square round where you start, in the background (tiers 3.5 s, broken
   1 s, stacks 13 s); `--opt nodedraw` draws them, a colour each, slivers

@@ -40,7 +40,7 @@ impl Plugin for PlayerPlugin {
             .insert_resource(avian3d::collider_tree::ColliderTreeOptimization { use_async_tasks: tree_async, ..default() })
             .init_resource::<MoveInput>().init_resource::<Bodies>()
             .add_systems(Startup, setup_hud)
-            .add_systems(Update, update_hud)
+            .add_systems(Update, (update_hud, void_fall))
             .add_systems(PostStartup, add_player)
             .add_systems(Startup, tether::setup)
             .add_systems(
@@ -175,6 +175,54 @@ pub struct Player {
     view_offset: f32,
     /// The view's yaw last frame, for how fast you turn (see `pipe_move`).
     last_yaw: Option<f32>,
+}
+
+/// How far below the world a fall ends in death (m): into a void, falling
+/// for ever (the user, 2026-11-17), about 6 s.
+const FALL_DEATH: f32 = -400.0;
+
+/// Where you last stood: a place each half second on the ground, the last
+/// few seconds' (see `void_fall`).
+#[derive(Default)]
+struct Footing {
+    places: std::collections::VecDeque<(f32, Vec3)>,
+}
+
+/// Fallen far below the world (into a void), you die, and start again where
+/// you stood two seconds before the fall (not on the rim's edge you fell
+/// from).
+fn void_fall(time: Res<Time>, world: Res<WorldGen>, mut footing: Local<Footing>, player: Single<(&mut Transform, &mut Player, &FlyCam)>) {
+    let (mut transform, mut player, fly) = player.into_inner();
+    if fly.noclip || !player.ready {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if player.grounded && footing.places.back().is_none_or(|(t, _)| now - t >= 0.5) {
+        footing.places.push_back((now, transform.translation));
+        if footing.places.len() > 12 {
+            footing.places.pop_front();
+        }
+    }
+    if transform.translation.y > FALL_DEATH {
+        return;
+    }
+    // (Not yet stood anywhere, put over a void by a place or `--cam`: the
+    // nearest ground instead, in rings 50 m apart.)
+    let nearest = || {
+        let (x, z) = (transform.translation.x, transform.translation.z);
+        (1..=80).flat_map(|r| (0..24).map(move |k| (r as f32 * 50.0, k as f32 / 24.0 * std::f32::consts::TAU))).find_map(|(r, a)| {
+            let (px, pz) = (x + r * a.cos(), z + r * a.sin());
+            (!world.0.is_void(px, pz)).then(|| Vec3::new(px, world.ground_height(px, pz) + EYE + 0.5, pz))
+        })
+    };
+    let last = footing.places.back().map_or(now, |(t, _)| *t);
+    let back = footing.places.iter().rev().find(|(t, _)| last - t >= 2.0).or(footing.places.front()).map(|(_, p)| *p).or_else(nearest);
+    if let Some(p) = back {
+        transform.translation = p;
+    }
+    player.velocity = Vec3::ZERO;
+    player.health = 0.0;
+    info!("fell into a void: starting again at {:.0},{:.0},{:.0}", transform.translation.x, transform.translation.y, transform.translation.z);
 }
 
 fn add_player(mut commands: Commands, camera: Single<Entity, With<FlyCam>>) {
@@ -1103,8 +1151,9 @@ pub fn walk(
     player.view_offset = (player.view_offset * (-total / VIEW_SMOOTH).exp()).clamp(-1.0, 1.0);
     transform.translation = center + Vec3::Y * (EYE - HEIGHT * 0.5 + player.view_offset);
 
-    // Never fall out of the world.
-    if transform.translation.y < ground_height - 30.0 {
+    // Never fall out of the world (but into a void, for ever: see
+    // `void_fall`; caught at its walls' foot, the user stood on nothing).
+    if transform.translation.y < ground_height - 30.0 && !world.0.is_void(p.x, p.z) {
         player.view_offset = 0.0;
         transform.translation.y = ground_height + EYE + 0.5;
         player.velocity = Vec3::ZERO;

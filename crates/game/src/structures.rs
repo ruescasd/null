@@ -12,14 +12,13 @@ use std::{
     time::SystemTime,
 };
 
-use avian3d::prelude::{Collider, Position, RigidBody, Rotation};
+use avian3d::prelude::{Collider, ColliderDensity, Position, RigidBody, Rotation};
 use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
 use worldgen::{
     ColumnMesh,
-    plates::PlateWorld,
     forms::{self, Prism},
     lab,
     sites::{self, Layer},
@@ -30,7 +29,7 @@ use crate::{
     Args,
     camera::FlyCam,
     landmarks::Landmark,
-    terrain::{StreamSet, Streamer, StructureMaterialHandle, WorldGen, bounds, to_bevy_mesh},
+    terrain::{MeshBudget, StreamSet, Streamer, StructureMaterialHandle, WorldGen, bounds, to_bevy_mesh},
 };
 use bevy::camera::visibility::NoAutoAabb;
 
@@ -42,7 +41,7 @@ impl Plugin for StructuresPlugin {
             .add_systems(Startup, setup_notice)
             .add_systems(
                 Update,
-                (watch, stream_sites.after(watch), receive, choose_levels.after(StreamSet), fade_notice),
+                (watch, stream_sites.after(watch), receive.after(StreamSet), choose_levels.after(StreamSet), fade_notice),
             );
     }
 }
@@ -72,9 +71,20 @@ const LEVEL_MIN_WIDTH: [f32; 2] = [3.0, 8.0];
 const LEVEL_DISTANCE: [f32; 2] = [350.0, 900.0];
 
 /// A structure built in the background: the meshes of its solids by tile,
-/// its plate pieces' meshes from fine to coarse, the collider and the
-/// structure's radius.
-type Levels = (Vec<TileMeshes>, Vec<ColumnMesh>, Option<Collider>, f32, f32);
+/// its plate pieces' meshes from fine to coarse (none where empty), the
+/// collider and the structure's radius and height. Its meshes made ready
+/// to draw there, with their bounds: taken in, a structure's were made so
+/// in the frame it came, tens of ms (the user's free flight, 2026-11-16,
+/// up to 143 ms in a traced frame).
+type Levels = (Vec<TileMeshes>, Vec<Option<Shown>>, Option<Collider>, f32, f32);
+
+/// A mesh ready to draw and its bounds.
+type Shown = (Mesh, bevy::camera::primitives::Aabb);
+
+/// `mesh` ready to draw, with its bounds; none if empty.
+fn shown(mesh: ColumnMesh) -> Option<Shown> {
+    (!mesh.is_empty()).then(|| (bounds(&mesh), mesh)).map(|(aabb, mesh)| (to_bevy_mesh(mesh, 0), aabb))
+}
 
 /// Solids are meshed in tiles this many metres across, each culled and
 /// drawn at its own detail.
@@ -85,10 +95,14 @@ const TILE_COARSE: f32 = 2.5;
 /// edge).
 const TILE_DISTANCE: f32 = 400.0;
 
-/// A tile of a structure's solids: near and (if it differs) far meshes.
+/// A tile of a structure's solids: near and (if it differs) far meshes,
+/// and its centre and radius (the structure's frame).
 struct TileMeshes {
-    near: ColumnMesh,
-    far: Option<ColumnMesh>,
+    near: Option<Shown>,
+    far: Option<Shown>,
+    switched: bool,
+    center: Vec3,
+    radius: f32,
 }
 
 /// A tile's version: its centre and radius (the structure's frame) and
@@ -231,15 +245,7 @@ fn watch(
         && !args.opt("chasm")
         && args.ground.is_none()
     {
-        let mut new = PlateWorld::new(old.size(), args.seed);
-        new.canals.stones = old.canals.stones;
-        new.canals.rise = old.canals.rise;
-        new.canals.relief = old.canals.relief;
-        new.districts.force = old.districts.force;
-        new.slabs = old.slabs;
-        new.kerbs = old.kerbs;
-        new.wall_least = old.wall_least;
-        let new = new.with_sites(&library);
+        let new = crate::terrain::plates(&args).with_sites(&library);
         if !old.same_ground(&new) {
             info!("sites changed: regenerating the terrain");
             commands.insert_resource(WorldGen(Arc::new(new)));
@@ -300,8 +306,7 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
     let mut far: std::collections::HashMap<(i32, i32), ColumnMesh> =
         if coarse.len() < solids.len() { structure::mesh_tiles(&coarse, TILE).into_iter().collect() } else { Default::default() };
     let detailed = coarse.len() < solids.len();
-    let tiles: Vec<TileMeshes> =
-        near.into_iter().map(|(k, near)| TileMeshes { near, far: detailed.then(|| far.remove(&k).unwrap_or_default()) }).collect();
+    let tiles: Vec<(ColumnMesh, Option<ColumnMesh>)> = near.into_iter().map(|(k, near)| (near, detailed.then(|| far.remove(&k).unwrap_or_default()))).collect();
     let mut levels = vec![ColumnMesh::default()];
     forms::mesh_into(&mut levels[0], &prisms);
     for min_width in LEVEL_MIN_WIDTH {
@@ -309,7 +314,7 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
         forms::mesh_into(&mut mesh, &sites::wide_prisms(&prisms, min_width));
         levels.push(mesh);
     }
-    let positions = || tiles.iter().flat_map(|t| &t.near.positions).chain(&levels[0].positions);
+    let positions = || tiles.iter().flat_map(|t| &t.0.positions).chain(&levels[0].positions);
     let radius = positions().map(|p| Vec2::new(p[0], p[2]).length()).fold(0.0, f32::max);
     let height = positions().map(|p| p[1]).fold(0.0, f32::max);
     let hulls = prisms
@@ -331,63 +336,94 @@ fn finish(solids: Vec<Solid>, prisms: Vec<Prism>) -> Levels {
         .chain(hulls)
         .collect();
     let collider = (!shapes.is_empty()).then(|| Collider::compound(shapes));
-    (tiles, levels, collider, radius, height)
+    let tiles = tiles
+        .into_iter()
+        .map(|(near, far)| {
+            let aabb = bounds(&near);
+            let (center, radius) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents).xz().length());
+            // A tile with no far version is always shown.
+            TileMeshes { switched: far.is_some(), near: shown(near), far: far.and_then(shown), center, radius }
+        })
+        .collect();
+    (tiles, levels.into_iter().map(shown).collect(), collider, radius, height)
 }
 
 /// Puts finished structures in the world: one child mesh per version.
+/// A structure's meshes being handed to the renderer, a few a frame (see
+/// `MeshBudget`); its parts shown together once all are.
+#[derive(Component)]
+struct Arriving(Vec<Part>);
+
+/// A part of a structure: its mesh (until handed over) or handle, bounds,
+/// which tile or level it is and whether it starts hidden.
+struct Part {
+    mesh: Option<Mesh>,
+    handle: Option<Handle<Mesh>>,
+    aabb: bevy::camera::primitives::Aabb,
+    tile: Option<Tile>,
+    level: Option<usize>,
+    hidden: bool,
+}
+
 fn receive(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut Building)>,
+    mut arriving: Query<(Entity, &mut Arriving)>,
     material: Res<StructureMaterialHandle>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut budget: ResMut<MeshBudget>,
 ) {
     for (entity, mut task) in &mut tasks {
         let Some((tiles, levels, collider, radius, height)) = check_ready(&mut task.0) else { continue };
+        let mut parts = Vec::new();
+        for TileMeshes { near, far, switched, center, radius } in tiles {
+            for (shown, far) in [(near, false), (far, true)] {
+                let Some((mesh, aabb)) = shown else { continue };
+                // (A tile with no far version is always shown.)
+                let tile = switched.then_some(Tile { center, radius, far });
+                parts.push(Part { mesh: Some(mesh), handle: None, aabb, tile, level: None, hidden: far });
+            }
+        }
+        for (i, shown) in levels.into_iter().enumerate() {
+            let Some((mesh, aabb)) = shown else { continue };
+            parts.push(Part { mesh: Some(mesh), handle: None, aabb, tile: None, level: Some(i), hidden: i != 0 });
+        }
         let mut e = commands.entity(entity);
-        e.remove::<Building>().insert((Detail { radius, height }, Visibility::default()));
+        e.remove::<Building>().insert((Detail { radius, height }, Visibility::default(), Arriving(parts)));
         if let Some(collider) = collider {
             e.insert(Solidity { collider, active: false });
         }
-        for tile in tiles {
-            let aabb = bounds(&tile.near);
-            let (center, radius) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents).xz().length());
-            // A tile with no far version is always shown.
-            let switched = tile.far.is_some();
-            let versions = [(tile.near, false)].into_iter().chain(tile.far.map(|m| (m, true)));
-            for (mesh, far) in versions {
-                if mesh.is_empty() {
-                    continue;
-                }
-                let bundle = (
-                    bounds(&mesh),
+    }
+    for (entity, mut arriving) in &mut arriving {
+        for part in arriving.0.iter_mut().filter(|p| p.handle.is_none()) {
+            if budget.left <= 0 {
+                return;
+            }
+            let mesh = part.mesh.take().expect("a part not handed over has its mesh");
+            budget.spend(&mesh);
+            part.handle = Some(meshes.add(mesh));
+        }
+        let parts = std::mem::take(&mut arriving.0);
+        let mut e = commands.entity(entity);
+        e.remove::<Arriving>();
+        e.with_children(|p| {
+            for part in parts {
+                let mut child = p.spawn((
+                    part.aabb,
                     NoAutoAabb,
-                    Mesh3d(meshes.add(to_bevy_mesh(mesh, 0))),
+                    Mesh3d(part.handle.expect("every part handed over")),
                     MeshMaterial3d(material.0.clone()),
                     Transform::default(),
-                    if far { Visibility::Hidden } else { Visibility::Inherited },
-                );
-                e.with_children(|p| {
-                    let mut child = p.spawn(bundle);
-                    if switched {
-                        child.insert(Tile { center, radius, far });
-                    }
-                });
+                    if part.hidden { Visibility::Hidden } else { Visibility::Inherited },
+                ));
+                if let Some(tile) = part.tile {
+                    child.insert(tile);
+                }
+                if let Some(level) = part.level {
+                    child.insert(Level(level));
+                }
             }
-        }
-        for (i, mesh) in levels.into_iter().enumerate() {
-            if mesh.is_empty() {
-                continue;
-            }
-            e.with_child((
-                Level(i),
-                bounds(&mesh),
-                NoAutoAabb,
-                Mesh3d(meshes.add(to_bevy_mesh(mesh, 0))),
-                MeshMaterial3d(material.0.clone()),
-                Transform::default(),
-                if i == 0 { Visibility::Inherited } else { Visibility::Hidden },
-            ));
-        }
+        });
     }
 }
 
@@ -407,7 +443,9 @@ fn choose_levels(
         if let Some(mut solid) = solidity {
             if !solid.active && distance < COLLIDE_DISTANCE[0] {
                 solid.active = true;
-                commands.entity(entity).insert((RigidBody::Static, solid.collider.clone()));
+                // (Of no density: a static body's mass unused, found from
+                // every piece on insertion; see vendor/avian3d.)
+                commands.entity(entity).insert((RigidBody::Static, solid.collider.clone(), ColliderDensity(0.0)));
             } else if solid.active && distance > COLLIDE_DISTANCE[1] {
                 solid.active = false;
                 commands.entity(entity).remove::<(RigidBody, Collider)>();

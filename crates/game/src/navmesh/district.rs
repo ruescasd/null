@@ -7,7 +7,7 @@
 //! round where you start, in the background, and anew round you when you
 //! come near its edge (`NEAR_EDGE`); `--opt nodedraw` draws them,
 //! a colour each (the small ones dark red). A hunter on them (`Blink`)
-//! walks its node by landmass's ways across a 2D mesh of it; you on
+//! walks its node by the ways across its convex parts (`Space::way`); you on
 //! another node, it plans the fewest teleports there (between the nearest
 //! points of nodes' edges), walks toward where the first leaves from (going
 //! from where it is as soon as that does as well: `Nodes::sooner`), stands
@@ -30,13 +30,6 @@ use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
 };
-use geo::{
-    Buffer, Simplify,
-    algorithm::buffer::{BufferStyle, LineJoin},
-};
-use geo::{BoundingRect, ClosestPoint, Distance, Euclidean, MultiPolygon, Point, Polygon};
-use bevy_landmass::coords::TwoD as XY;
-use landmass::{ArchipelagoOptions, FromAgentRadius, PathStep, PermittedAnimationLinks};
 use worldgen::plates::PlateWorld;
 
 use super::nodes::{self, Fit, Hop, Space};
@@ -187,7 +180,7 @@ fn fall_clear(space: &Space, world: &PlateWorld, about: &nodes::About, a: DVec2,
         return false;
     }
     // Down, at the longest frame (soonest), on `onto`; at the shortest, `q`.
-    space.on_node_in(about, a + span * end, onto)
+    space.on_node(a + span * end, onto)
 }
 
 /// The frames a fall is checked at (s): a long one loses height, so every
@@ -222,7 +215,7 @@ fn drops(space: &Space, world: &PlateWorld) -> (Vec<(u32, u32, Hop)>, DropWork) 
     let links_s = clock.elapsed().as_secs_f32();
     let (spots_ns, falls_ns, falls_n, hops_n) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
     let found = nodes::par_chunks(&candidates, |c| {
-                    let (mut frags, mut cross): (Vec<(usize, usize)>, Vec<f64>) = (Vec::new(), Vec::new());
+                    let mut parts: Vec<u32> = Vec::new();
                     let mut rays: [Vec<(f64, f64)>; 9] = Default::default();
                     c.iter()
                         .filter_map(|&(a, b, l)| {
@@ -249,15 +242,15 @@ fn drops(space: &Space, world: &PlateWorld) -> (Vec<(u32, u32, Hop)>, DropWork) 
                             // nine paths along it cross the node, its own and
                             // eight about it.)
                             let (s0, s1) = (gap, gap + DROP_ON);
-                            // (Node `b`'s fragments the nine paths may cross,
+                            // (Node `b`'s parts the nine paths may cross,
                             // found once for them all.)
                             let (p0, p1) = (l.a + dir * s0, l.a + dir * s1);
-                            space.node_fragments(&about, b, p0.min(p1) - INSET - nodes::ROUNDING, p0.max(p1) + INSET + nodes::ROUNDING, &mut frags);
-                            space.spans_along(&frags, l.a, dir, s0, s1, &mut cross, &mut rays[0]);
+                            space.node_parts_in(b, p0.min(p1) - INSET - nodes::ROUNDING, p0.max(p1) + INSET + nodes::ROUNDING, &mut parts);
+                            space.spans_along(&parts, l.a, dir, s0, s1, &mut rays[0]);
                             let some = !rays[0].is_empty();
                             if some {
                                 for k in 0..8 {
-                                    space.spans_along(&frags, l.a + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET, dir, s0, s1, &mut cross, &mut rays[k + 1]);
+                                    space.spans_along(&parts, l.a + DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_4) * INSET, dir, s0, s1, &mut rays[k + 1]);
                                 }
                             }
                             let rays: &[Vec<(f64, f64)>] = if some { &rays } else { &[] };
@@ -269,7 +262,7 @@ fn drops(space: &Space, world: &PlateWorld) -> (Vec<(u32, u32, Hop)>, DropWork) 
                                 .map(|s| l.a + dir * s)
                                 .filter_map(|q| space.under_in(&about, q).map(|i| (q, world.plate_top(&space.pieces[i].plate, q))))
                                 .collect();
-                            let froms: Vec<DVec2> = backs.iter().map(|&back| l.a - dir * back).filter(|&from| from == l.a || space.on_node_in(&about, from, a)).collect();
+                            let froms: Vec<DVec2> = backs.iter().map(|&back| l.a - dir * back).filter(|&from| from == l.a || space.on_node(from, a)).collect();
                             let falling = Instant::now();
                             spots_ns.fetch_add((falling - started).as_nanos() as u64, Relaxed);
                             hops_n.fetch_add(hop as u64, Relaxed);
@@ -336,9 +329,6 @@ struct Teleports {
     portals: Portals,
 }
 
-/// A district's nodes, ready to walk: the walking space, the hops between
-/// nodes, and a 2D navmesh of each (landmass's, in this square's own frame,
-/// from `origin`: f32 is fine there, not 8 km out).
 /// A build's stages' times (s, in order) and the counts of what they
 /// worked on that the space itself does not keep: for the cost per unit of
 /// work, against its essential cost (`seed_sweep`).
@@ -349,17 +339,19 @@ pub(crate) struct Census {
     /// Lips a drop was looked for from (links that make it).
     pub(crate) drop_candidates: usize,
     pub(crate) drop_work: DropWork,
-    /// Corners of the outlines triangulated.
-    pub(crate) outline_corners: usize,
-    pub(crate) triangles: usize,
+    /// The walking space's convex parts, and their corners.
+    pub(crate) corners: usize,
+    pub(crate) parts: usize,
     pub(crate) portals: usize,
 }
 
+/// A district's nodes, ready to walk: the walking space (each node's convex
+/// parts its mesh), and the drops, hops and teleports between nodes.
 pub(crate) struct Nodes {
     world: Arc<PlateWorld>,
     pub(crate) space: Space,
-    /// Nodes whose navmesh, its triangles as kept, is in parts (a way
-    /// across it not found): none, `node_reach` checks.
+    /// Nodes whose parts are not all joined edge to edge (a way across it
+    /// not found): none, by construction (`node_reach` checks).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) cut: usize,
     /// The teleports: made the first time a walker that teleports plans (a
@@ -373,11 +365,6 @@ pub(crate) struct Nodes {
     /// Where drops and hops leave from and land, to plan by, for walkers
     /// that do not teleport (most).
     walks: Portals,
-    /// Each node's navmesh, its own (one for all, a way begun on the edge
-    /// of a node was begun on the one beside it, a few millimetres off, and
-    /// not found).
-    archipelagos: Vec<Option<landmass::Archipelago<XY>>>,
-    origin: DVec2,
     pub(crate) lo: DVec2,
     pub(crate) hi: DVec2,
     /// What was built, said once.
@@ -385,206 +372,9 @@ pub(crate) struct Nodes {
     /// Each stage's time and what it worked on (`seed_sweep`).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) census: Census,
-    /// The nodes drawn (`--opt nodedraw`): triangles' corners and colours.
+    /// The nodes drawn (`--opt nodedraw`): their parts' triangles' corners
+    /// and colours.
     drawn: Option<(Vec<[f32; 3]>, Vec<[f32; 4]>)>,
-}
-
-/// `poly`'s triangles, by constrained Delaunay triangulation (well shaped:
-/// earcut's slivers along an edge's corners in a row were of no area in
-/// f32, and left holes in the mesh, ways not found): its corners and each
-/// triangle's, counter-clockwise; how many came out of no area, and were
-/// left out; none if it could not be triangulated.
-///
-/// (By spade directly, in about n log n. geo's `constrained_triangulation`
-/// tests every pair of edges for crossings, again after each it splits, and
-/// every triangle against the whole outline: a node of 8125 fragments in the
-/// stacks, an outline of 134 615 points, never finished, hours of it. The
-/// triangles inside are found by crossing the outline: from outside, each
-/// edge of it crossed turns in to out or back, which holds for holes by
-/// construction.)
-///
-/// (Snapped first, as geo did, within `SNAP`: corners that near one another
-/// one corner, and an edge that near a corner split there. Unsnapped, a
-/// hole all but touching another left a hair of a triangle between them, of
-/// no area, left out, and the triangles either side of it no longer met:
-/// nodes cut in two, ways in them not found, in the tiers.)
-fn triangles(poly: &Polygon<f64>) -> Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)> {
-    const SNAP: f64 = TRIANGLE_SNAP;
-    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation, handles::FixedVertexHandle};
-    const CELL: f64 = 1.0;
-    let key = |p: DVec2| ((p.x / CELL).floor() as i64, (p.y / CELL).floor() as i64);
-    let mut points: Vec<DVec2> = Vec::new();
-    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    let mut rings: Vec<Vec<usize>> = Vec::new();
-    for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
-        // (Closed: its last point its first.)
-        let n = ring.0.len().saturating_sub(1);
-        let mut ids: Vec<usize> = Vec::new();
-        for c in &ring.0[..n] {
-            let p = DVec2::new(c.x, c.y);
-            let (kx, kz) = key(p);
-            let near = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (kx + dx, kz + dz))).flat_map(|k| grid.get(&k).into_iter().flatten().copied()).find(|&i| points[i].distance(p) < SNAP);
-            let id = near.unwrap_or_else(|| {
-                points.push(p);
-                grid.entry((kx, kz)).or_default().push(points.len() - 1);
-                points.len() - 1
-            });
-            if ids.last() != Some(&id) {
-                ids.push(id);
-            }
-        }
-        while ids.len() > 1 && ids.first() == ids.last() {
-            ids.pop();
-        }
-        if ids.len() >= 3 {
-            rings.push(ids);
-        }
-    }
-    if points.len() < 3 || rings.is_empty() {
-        return None;
-    }
-    // Each edge split at the corners within `SNAP` of it; an edge twice
-    // over (where two rings meet along it) is no edge: in and out on either
-    // side alike.
-    let mut count: HashMap<(usize, usize), usize> = HashMap::new();
-    let mut cells: Vec<(i64, i64)> = Vec::new();
-    for ids in &rings {
-        for k in 0..ids.len() {
-            let (a, b) = (ids[k], ids[(k + 1) % ids.len()]);
-            let (pa, pb) = (points[a], points[b]);
-            let d = pb - pa;
-            let len2 = d.length_squared();
-            let mut on: Vec<(f64, usize)> = Vec::new();
-            // (The cells along it, each once: a step's nine looked up again
-            // at the next, most of a triangulation's work.)
-            let steps = (d.length() / CELL).ceil() as usize + 1;
-            cells.clear();
-            for s in 0..=steps {
-                let (kx, kz) = key(pa + d * (s as f64 / steps as f64));
-                cells.extend((-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (kx + dx, kz + dz))));
-            }
-            cells.sort_unstable();
-            cells.dedup();
-            for i in cells.iter().flat_map(|k| grid.get(k).into_iter().flatten().copied()) {
-                if i == a || i == b || len2 == 0.0 {
-                    continue;
-                }
-                let t = (points[i] - pa).dot(d) / len2;
-                if t > 0.0 && t < 1.0 && (pa + d * t).distance(points[i]) < SNAP {
-                    on.push((t, i));
-                }
-            }
-            on.sort_by(|x, y| x.0.total_cmp(&y.0));
-            on.dedup_by_key(|x| x.1);
-            let chain: Vec<usize> = std::iter::once(a).chain(on.into_iter().map(|x| x.1)).chain(std::iter::once(b)).collect();
-            for w in chain.windows(2) {
-                if w[0] != w[1] {
-                    *count.entry((w[0].min(w[1]), w[0].max(w[1]))).or_default() += 1;
-                }
-            }
-        }
-    }
-    let mut edges: Vec<[usize; 2]> = count.into_iter().filter(|(_, n)| n % 2 == 1).map(|((a, b), _)| [a, b]).collect();
-    edges.sort();
-    let vertices: Vec<Point2<f64>> = points.iter().map(|p| Point2::new(p.x, p.y)).collect();
-    // (Edges crossing others, or one already there, left out by the bulk
-    // load and added after, split where they cross.)
-    let mut crossing = Vec::new();
-    let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::try_bulk_load_cdt(vertices, edges, |e| crossing.push(e)).ok()?;
-    for [a, b] in crossing {
-        if a != b {
-            cdt.add_constraint_and_split(FixedVertexHandle::from_index(a), FixedVertexHandle::from_index(b), |p| p);
-        }
-    }
-    // Inside or out: from the faces on the hull (out), across each edge,
-    // turned by the outline's.
-    let mut inside: Vec<Option<bool>> = vec![None; cdt.num_all_faces()];
-    let mut queue = std::collections::VecDeque::new();
-    for e in cdt.convex_hull() {
-        let face = e.rev().face();
-        let Some(f) = face.as_inner() else { continue };
-        let i = f.fix().index();
-        if inside[i].is_none() {
-            inside[i] = Some(cdt.is_constraint_edge(e.as_undirected().fix()));
-            queue.push_back(f.fix());
-        }
-    }
-    while let Some(f) = queue.pop_front() {
-        let here = inside[f.index()].unwrap();
-        for e in cdt.face(f).adjacent_edges() {
-            let Some(g) = e.rev().face().as_inner() else { continue };
-            let j = g.fix().index();
-            if inside[j].is_none() {
-                inside[j] = Some(here ^ cdt.is_constraint_edge(e.as_undirected().fix()));
-                queue.push_back(g.fix());
-            }
-        }
-    }
-    let corners: Vec<DVec2> = cdt.vertices().map(|v| DVec2::new(v.position().x, v.position().y)).collect();
-    let (mut out, mut flat) = (Vec::new(), 0);
-    for face in cdt.inner_faces() {
-        if inside[face.fix().index()] != Some(true) {
-            continue;
-        }
-        let [i, j, k] = face.vertices().map(|v| v.fix().index());
-        let (a, b, c) = (corners[i], corners[j], corners[k]);
-        let area = (b - a).perp_dot(c - a) / 2.0;
-        if area.abs() < 1e-6 {
-            flat += 1;
-        } else if area > 0.0 {
-            out.push([i, j, k]);
-        } else {
-            out.push([i, k, j]);
-        }
-    }
-    Some((corners, out, flat))
-}
-
-/// How near two corners of an outline are taken for one, and an edge split
-/// at a corner, in `triangles` (m). (1 mm, half what an outline is made
-/// simpler by: at 0.1 mm, two corners half a millimetre apart either side of
-/// a neck a few centimetres wide were kept apart, and the triangles either
-/// side met at a corner, not an edge, the node cut in two: four in the
-/// broken.)
-const TRIANGLE_SNAP: f64 = 1e-3;
-
-/// A node's outline: its fragments as one (they meet along the stretches
-/// they were joined across). (Each grown 2 mm first: on the grid of 1/1024
-/// m, two fragments' edges along one stretch are off each other by up to
-/// half a millimetre, and left apart by the union, the node in pieces. Then
-/// made simpler, within 2 mm: corners in a row but for that rounding made
-/// slivers, of no area in f32, and many more triangles.)
-pub(crate) fn outline(fragments: &[&Polygon<f64>]) -> MultiPolygon<f64> {
-    let grown: Vec<MultiPolygon<f64>> = fragments.iter().map(|f| f.buffer_with_style(BufferStyle::new(0.002).line_join(LineJoin::Bevel))).collect();
-    geo::unary_union(grown.iter()).simplify(0.002)
-}
-
-/// How many parts `tris` make, joined edge to edge.
-fn parts(tris: &[[usize; 3]]) -> usize {
-    let mut parent: Vec<usize> = (0..tris.len()).collect();
-    fn find(p: &mut [usize], mut i: usize) -> usize {
-        while p[i] != i {
-            p[i] = p[p[i]];
-            i = p[i];
-        }
-        i
-    }
-    let mut by_edge: HashMap<(usize, usize), usize> = HashMap::new();
-    for (t, tri) in tris.iter().enumerate() {
-        for k in 0..3 {
-            let e = (tri[k].min(tri[(k + 1) % 3]), tri[k].max(tri[(k + 1) % 3]));
-            match by_edge.get(&e) {
-                Some(&u) => {
-                    let (x, y) = (find(&mut parent, u), find(&mut parent, t));
-                    parent[x] = y;
-                }
-                None => {
-                    by_edge.insert(e, t);
-                }
-            }
-        }
-    }
-    (0..tris.len()).map(|t| find(&mut parent, t)).collect::<std::collections::HashSet<_>>().len()
 }
 
 impl Nodes {
@@ -627,93 +417,20 @@ impl Nodes {
         lap("drops", &mut times);
         let hops_up: Vec<f32> = drops.iter().filter(|d| d.2.by > d.2.ay).map(|d| d.2.by - d.2.ay).collect();
         let high = hops_up.iter().filter(|r| **r >= 1.5).count();
-        // Each node's outline: its fragments as one (they meet along the
-        // stretches they were joined across), triangulated.
-        let mut of: Vec<Vec<&Polygon<f64>>> = vec![Vec::new(); space.nodes()];
-        for (i, s) in space.space.iter().enumerate() {
-            for (k, f) in s.iter().enumerate() {
-                of[space.node_of[i][k] as usize].push(f);
-            }
-        }
-        let origin = (lo + hi) / 2.0;
-        let (mut flat, mut split, mut untriangulated, mut cut, mut triangles_n, mut outline_corners) = (0, 0, 0, 0, 0, 0);
-        let mut archipelagos = Vec::new();
-        // (Each node's on its own: on every core, in chunks.)
-        type Made = Vec<Option<(Vec<DVec2>, Vec<[usize; 3]>, usize)>>;
-        let made: Vec<Made> = nodes::par_chunks(&of, |c| c.iter().map(|list| outline(list).0.iter().map(triangles).collect::<Made>()).collect::<Vec<_>>()).into_iter().flatten().collect();
-        lap("outlines", &mut times);
-        for (n, outline) in made.into_iter().enumerate() {
-            let (mut vertices, mut polygons): (Vec<Vec2>, Vec<Vec<usize>>) = (Vec::new(), Vec::new());
-            if outline.len() > 1 {
-                split += 1;
-            }
-            for poly in outline {
-                let Some((corners, tris, f)) = poly else {
-                    untriangulated += 1;
-                    continue;
-                };
-                flat += f;
-                outline_corners += corners.len();
-                let base = vertices.len();
-                vertices.extend(corners.iter().map(|q| (*q - origin).as_vec2()));
-                // (A sliver whose corners, in f32, lie in a row or turn the
-                // wrong way: left out, and counted, as landmass refuses it;
-                // by landmass's own test, no stricter: stricter, 39 were
-                // left out that it takes, and two nodes cut in two.)
-                let mut kept: Vec<[usize; 3]> = Vec::new();
-                for t in &tris {
-                    let v = t.map(|i| vertices[base + i]);
-                    let turns = (0..3).all(|k| {
-                        let (l, c, r) = (v[(k + 2) % 3], v[k], v[(k + 1) % 3]);
-                        let (le, re) = (l - c, r - c);
-                        let cross = re.perp_dot(le);
-                        cross > 0.0 || (cross.abs() <= 1e-5 * re.length() * le.length() && re.dot(le) < 0.0)
-                    });
-                    if turns {
-                        polygons.push(t.iter().map(|i| base + i).collect());
-                        kept.push(*t);
-                    } else {
-                        flat += 1;
-                    }
-                }
-                // (Its triangles, as kept, one part, joined edge to edge,
-                // as the outline is: else a way across it is not found.)
-                if parts(&kept) > 1 {
-                    cut += 1;
-                }
-            }
-            triangles_n += polygons.len();
-            if polygons.is_empty() {
-                archipelagos.push(None);
-                continue;
-            }
-            let mesh = landmass::NavigationMesh::<XY> { vertices, polygon_type_indices: vec![0; polygons.len()], polygons, height_mesh: None };
-            let mesh = mesh.validate().map_err(|e| format!("node {n}'s navmesh: {e}"))?;
-            let mut archipelago = landmass::Archipelago::<XY>::new(ArchipelagoOptions::from_agent_radius(Fit::WALKER.radius as f32));
-            archipelago.add_island(landmass::Island::new(landmass::Transform { translation: Vec2::ZERO, rotation: 0.0 }, Arc::new(mesh)));
-            archipelago.update(0.0);
-            archipelagos.push(Some(archipelago));
-        }
-        lap("navmeshes", &mut times);
+        #[cfg(test)]
+        let cut = (0..space.nodes() as u32).filter(|&n| space.node_pieces(n) > 1).count();
+        #[cfg(not(test))]
+        let cut = 0;
         let drawn = draw.then(|| {
             let (mut corners, mut colours) = (Vec::new(), Vec::new());
-            for (i, s) in space.space.iter().enumerate() {
-                for (k, f) in s.iter().enumerate() {
-                    let n = space.node_of[i][k];
-                    let colour = if space.node_area[n as usize] < LAND_LEAST {
-                        [0.35, 0.0, 0.0, 1.0]
-                    } else {
-                        let h = (n as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-                        let c = |s: u32| 0.25 + 0.75 * ((h >> s) & 0xff) as f32 / 255.0;
-                        [c(8), c(24), c(40), 1.0]
-                    };
-                    let Some((pts, tris, _)) = triangles(f) else { continue };
-                    for t in tris {
-                        for i_ in t {
-                            let q = pts[i_];
-                            corners.push([q.x as f32, world.plate_top(&space.pieces[i].plate, q) as f32 + 0.04, q.y as f32]);
-                            colours.push(colour);
-                        }
+            for part in &space.parts {
+                let h = (part.node as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                let c = |s: u32| 0.25 + 0.75 * ((h >> s) & 0xff) as f32 / 255.0;
+                let plate = &space.pieces[part.piece as usize].plate;
+                for k in 1..part.poly.len().saturating_sub(1) {
+                    for q in [part.poly[0], part.poly[k], part.poly[k + 1]] {
+                        corners.push([q.x as f32, world.plate_top(plate, q) as f32 + 0.04, q.y as f32]);
+                        colours.push([c(8), c(24), c(40), 1.0]);
                     }
                 }
             }
@@ -723,12 +440,13 @@ impl Nodes {
         let walks = Portals::new(&HashMap::new(), &drops, space.nodes());
         lap("portals", &mut times);
         let report = format!(
-            "district nodes over {:.0} by {:.0} m round {:.0}, {:.0}: {} pieces, {} nodes ({} of {LAND_LEAST} m² or more), {} drops, between {} node pairs, and {} hops up ({} of 1.5 m or more) ({:.1} s); {} portals, {} walking links between them ({:.1} s); navmesh {} triangles ({} of no area left out, {} outlines not triangulated, {} cut in parts by those left out), {} nodes not one outline; built in {:.1} s ({built:.1} s the walking space); stages {}",
+            "district nodes over {:.0} by {:.0} m round {:.0}, {:.0}: {} pieces, {} walls, {} nodes ({} of {LAND_LEAST} m² or more), {} drops, between {} node pairs, and {} hops up ({} of 1.5 m or more) ({:.1} s); {} portals, {} walking links between them ({:.1} s); {} parts, {} corners; built in {:.1} s ({built:.1} s the walking space); stages {}",
             hi.x - lo.x,
             hi.y - lo.y,
             centre.x,
             centre.y,
             space.pieces.len(),
+            space.walls,
             space.nodes(),
             space.node_area.iter().filter(|a| **a >= LAND_LEAST).count(),
             dropped.0 - hops_up.len(),
@@ -739,16 +457,13 @@ impl Nodes {
             walks.at.len(),
             walks.links.iter().map(|l| l.len()).sum::<usize>() / 2,
             t_portals.elapsed().as_secs_f32(),
-            triangles_n,
-            flat,
-            untriangulated,
-            cut,
-            split,
+            space.parts.len(),
+            space.parts.iter().map(|p| p.poly.len()).sum::<usize>(),
             t.elapsed().as_secs_f32(),
             times.iter().map(|(n, t)| format!("{n} {:.0} ms", t * 1000.0)).collect::<Vec<_>>().join(", ")
         );
-        let census = Census { times, drop_candidates: drop_work.candidates, drop_work, outline_corners, triangles: triangles_n, portals: walks.at.len() };
-        Ok(Nodes { world, space, cut, teleports: Default::default(), leaps: drops, leaps_to, walks, archipelagos, origin, lo, hi, report, census, drawn })
+        let census = Census { times, drop_candidates: drop_work.candidates, drop_work, corners: space.parts.iter().map(|p| p.poly.len()).sum(), parts: space.parts.len(), portals: walks.at.len() };
+        Ok(Nodes { world, space, cut, teleports: Default::default(), leaps: drops, leaps_to, walks, lo, hi, report, census, drawn })
     }
 
     /// The teleports (see `Teleports`): made now, the first time asked.
@@ -773,33 +488,20 @@ impl Nodes {
     pub(crate) fn locate(&self, p: Vec3, above: f32, prefer: Option<u32>) -> Option<(u32, Vec2)> {
         let q = DVec2::new(p.x as f64, p.z as f64);
         let feet = (p.y - above) as f64;
-        if let Some((n, i, _)) = self.space.node_at_preferring(q, prefer)
-            && (self.world.plate_top(&self.space.pieces[i].plate, q) - feet).abs() < 1.5
+        let off = |at: DVec2| self.space.under(at).map(|i| (self.world.plate_top(&self.space.pieces[i].plate, at) - feet).abs());
+        if let Some(n) = self.space.node_at_preferring(q, prefer)
+            && off(q).is_some_and(|o| o < 1.5)
         {
             return Some((n, p.xz_()));
         }
-        let pt = Point::new(q.x, q.y);
-        let mut best: Option<(f64, u32, DVec2)> = None;
-        for i in self.space.pieces_near(q, 2.0) {
-            let off = (self.world.plate_top(&self.space.pieces[i].plate, q) - feet).abs();
-            if off > 1.5 {
-                continue;
-            }
-            for (k, f) in self.space.space[i].iter().enumerate() {
-                if f.bounding_rect().is_none_or(|r| r.min().x - 2.0 > q.x || r.max().x + 2.0 < q.x || r.min().y - 2.0 > q.y || r.max().y + 2.0 < q.y) {
-                    continue;
-                }
-                let d = Euclidean.distance(f, &pt);
-                if d <= 2.0 && best.is_none_or(|b| d + off < b.0) {
-                    let near = match f.closest_point(&pt) {
-                        geo::Closest::Intersection(c) | geo::Closest::SinglePoint(c) => DVec2::new(c.x(), c.y()),
-                        geo::Closest::Indeterminate => continue,
-                    };
-                    best = Some((d + off, self.space.node_of[i][k], near));
-                }
-            }
-        }
-        best.map(|(_, n, near)| (n, near.as_vec2()))
+        // (The nearest point of each node within 2 m, its ground near the
+        // feet.)
+        self.space
+            .near_nodes(q, 2.0)
+            .into_iter()
+            .filter_map(|(n, d, near)| off(near).filter(|&o| o <= 1.5).map(|o| (d + o, n, near)))
+            .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)))
+            .map(|(_, n, near)| (n, near.as_vec2()))
     }
 
     /// The way across the walking space from `from` to `to` (both on one
@@ -810,20 +512,8 @@ impl Nodes {
 
     /// As `way`, or why there is none.
     pub(crate) fn way_or_why(&self, node: u32, from: Vec2, to: Vec2) -> Result<Vec<Vec2>, String> {
-        let archipelago = self.archipelagos.get(node as usize).and_then(|a| a.as_ref()).ok_or_else(|| format!("node {node} has no navmesh"))?;
-        let local = |p: Vec2| (DVec2::new(p.x as f64, p.y as f64) - self.origin).as_vec2();
-        let reach = 0.5f32;
-        let a = archipelago.sample_point(local(from), &reach).map_err(|e| format!("from {from:.2} off the mesh: {e:?}"))?;
-        let b = archipelago.sample_point(local(to), &reach).map_err(|e| format!("to {to:.2} off the mesh: {e:?}"))?;
-        let steps = archipelago.find_path(&a, &b, &std::collections::HashMap::new(), PermittedAnimationLinks::All).map_err(|e| format!("no way: {e:?}"))?;
-        let back = |p: Vec2| (DVec2::new(p.x as f64, p.y as f64) + self.origin).as_vec2();
-        Ok(steps
-            .into_iter()
-            .map(|s| match s {
-                PathStep::Waypoint(p) => back(p),
-                PathStep::AnimationLink { end_point, .. } => back(end_point),
-            })
-            .collect())
+        let at = |p: Vec2| DVec2::new(p.x as f64, p.y as f64);
+        Ok(self.space.way(node, at(from), at(to))?.into_iter().map(|p| p.as_vec2()).collect())
     }
 
     /// Whether node `to` is reached from `from`: by teleports of no more
@@ -875,25 +565,9 @@ impl Nodes {
         let reach = self.reach_from(me, range, climb, None, false);
         let ok = |n: u32| reach[n as usize] && self.space.node_area[n as usize] >= LAND_LEAST;
         let y = DVec2::new(you.x as f64, you.y as f64);
-        let pt = Point::new(y.x, y.y);
         let mut watch: Option<(f64, u32, DVec2)> = None;
         for r in [24.0, 48.0, 96.0, 192.0] {
-            for i in self.space.pieces_near(y, r) {
-                for (k, f) in self.space.space[i].iter().enumerate() {
-                    let n = self.space.node_of[i][k];
-                    if !ok(n) {
-                        continue;
-                    }
-                    let c = match f.closest_point(&pt) {
-                        geo::Closest::Intersection(c) | geo::Closest::SinglePoint(c) => DVec2::new(c.x(), c.y()),
-                        geo::Closest::Indeterminate => continue,
-                    };
-                    let d = c.distance(y);
-                    if d <= r && watch.is_none_or(|w| d < w.0) {
-                        watch = Some((d, n, c));
-                    }
-                }
-            }
+            watch = self.space.near_nodes(y, r).into_iter().find(|x| ok(x.0)).map(|(n, d, c)| (d, n, c));
             if watch.is_some() {
                 break;
             }
@@ -901,15 +575,11 @@ impl Nodes {
         let (_, n, c) = watch?;
         let here = mine.distance(you) as f64;
         let mut away: Option<(f64, u32, DVec2)> = None;
-        for i in self.space.pieces_near(y, AWAY + 40.0) {
-            for (k, f) in self.space.space[i].iter().enumerate() {
-                let m = self.space.node_of[i][k];
+        {
+            for (m, q) in self.space.parts_in(y - (AWAY + 40.0), y + (AWAY + 40.0)) {
                 if !ok(m) {
                     continue;
                 }
-                use geo::InteriorPoint;
-                let Some(q) = f.interior_point() else { continue };
-                let q = DVec2::new(q.x(), q.y());
                 let d = q.distance(y);
                 if d < AWAY * 0.7 || d <= here + 10.0 {
                     continue;
@@ -993,12 +663,15 @@ impl Nodes {
             }
         }
         spots.sort_by(|x, y| x.0.total_cmp(&y.0));
-        let on = |q: DVec2| self.space.node_at_preferring(q, Some(onto)).filter(|f| f.0 == onto);
+        let on = |q: DVec2| self.space.on_node(q, onto);
         spots.into_iter().find_map(|(_, q)| {
-            let (_, i, _) = on(q)?;
+            if !on(q) {
+                return None;
+            }
+            let i = self.space.under(q)?;
             let y = self.world.plate_top(&self.space.pieces[i].plate, q);
             let d = (q.distance_squared(from) + (y - fy as f64).powi(2)).sqrt();
-            (d <= range && (0..8).all(|k| on(q + DVec2::from_angle(k as f64 * std::f64::consts::TAU / 8.0) * INSET).is_some())).then_some((q, y as f32, d as f32))
+            (d <= range && (0..8).all(|k| on(q + DVec2::from_angle(k as f64 * std::f64::consts::TAU / 8.0) * INSET))).then_some((q, y as f32, d as f32))
         })
     }
 
@@ -1031,27 +704,10 @@ impl Nodes {
     /// into one as it stood telling, the user, 2026-11-04.)
     pub(crate) fn keep_on(&self, node: u32, p: Vec2) -> Option<Vec2> {
         let q = DVec2::new(p.x as f64, p.y as f64);
-        let pt = Point::new(q.x, q.y);
-        let mut best: Option<(f64, DVec2)> = None;
-        for i in self.space.pieces_near(q, KEEP) {
-            for (k, f) in self.space.space[i].iter().enumerate() {
-                if self.space.node_of[i][k] != node || f.bounding_rect().is_none_or(|r| r.min().x - KEEP > q.x || r.max().x + KEEP < q.x || r.min().y - KEEP > q.y || r.max().y + KEEP < q.y) {
-                    continue;
-                }
-                let d = Euclidean.distance(f, &pt);
-                if d <= nodes::ROUNDING {
-                    return Some(p);
-                }
-                if d <= KEEP && best.is_none_or(|b| d < b.0) {
-                    let near = match f.closest_point(&pt) {
-                        geo::Closest::Intersection(c) | geo::Closest::SinglePoint(c) => DVec2::new(c.x(), c.y()),
-                        geo::Closest::Indeterminate => continue,
-                    };
-                    best = Some((d, near));
-                }
-            }
+        match self.space.nearest_on(node, q, KEEP)? {
+            (d, _) if d <= nodes::ROUNDING => Some(p),
+            (_, near) => Some(near.as_vec2()),
         }
-        best.map(|(_, near)| near.as_vec2())
     }
 }
 
@@ -1343,6 +999,10 @@ pub(crate) struct Districts {
     pub(crate) nodes: Option<Arc<Nodes>>,
 }
 
+/// Node builds begun and ready so far (for `main::hitches`: what a slow
+/// frame had in it).
+pub(crate) static BUILDS: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
+
 /// How near the edge of the square built you may come before it is built
 /// anew round you (m): a hunter you meet there should have its nodes.
 const NEAR_EDGE: f64 = 150.0;
@@ -1366,7 +1026,9 @@ pub(crate) fn ask(mut commands: Commands, args: Res<Args>, world: Option<Res<cra
     }
     let world = world.0.clone();
     let draw = args.opt("nodedraw");
+    nodes::ROUND_STEPS.store(args.num("round_steps", 6.0).max(3.0) as usize, std::sync::atomic::Ordering::Relaxed);
     info!("district nodes: building over {SIDE:.0} m round {:.0}, {:.0}", at.x, at.y);
+    BUILDS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let building = Some(AsyncComputeTaskPool::get().spawn(async move { Nodes::build(world, at, SIDE, draw) }));
     match districts {
         Some(mut districts) => districts.building = building,
@@ -1385,6 +1047,7 @@ pub(crate) fn ready(mut commands: Commands, districts: Option<ResMut<Districts>>
     let Some(task) = districts.building.as_mut() else { return };
     let Some(built) = block_on(poll_once(task)) else { return };
     districts.building = None;
+    BUILDS[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut nodes = built.unwrap_or_else(|e| panic!("district nodes not built: {e}"));
     info!("{}", nodes.report);
     for e in &drawn {
@@ -1813,7 +1476,7 @@ impl Blink {
     /// back and forth for ever, its way found anew from either side.)
     fn follow(&mut self, node: u32, at: Vec3, from: Vec2, to: Vec2) -> Steer {
         // (Found anew only when its goal moves, or it is off it: found anew
-        // every half second, landmass's ways from two points a metre apart
+        // every half second, ways from two points a metre apart
         // went round a pillar on either side, and it went back and forth
         // between them for ever.)
         let off = self.way.get(self.way_at..self.way_at + 2).is_none_or(|w| {
@@ -2034,7 +1697,6 @@ impl Blink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{Area, Contains, LineString};
 
     /// A walker blinking after a target on tiers (the most broken-up
     /// ground but stacks), moved as its steering says, its feet on the
@@ -2057,8 +1719,7 @@ mod tests {
         let on = |q: Vec2| -> Option<(f32, f64)> {
             let d = DVec2::new(q.x as f64, q.y as f64);
             let i = nodes.space.under(d)?;
-            let pt = Point::new(d.x, d.y);
-            let off = nodes.space.pieces_near(d, 0.1).into_iter().flat_map(|j| nodes.space.space[j].iter()).map(|f| if f.contains(&pt) { 0.0 } else { Euclidean.distance(f, &pt) }).fold(f64::INFINITY, f64::min);
+            let off = nodes.space.near_nodes(d, 1.0).first().map_or(f64::INFINITY, |x| x.1);
             Some((world.plate_top(&nodes.space.pieces[i].plate, d) as f32, off))
         };
         // Chases: spots on the walking space at least 100 m inside the
@@ -2073,7 +1734,7 @@ mod tests {
         let mut anywhere: Vec<Vec2> = Vec::new();
         while spots.len() < 2000 || anywhere.len() < 2000 {
             let q = DVec2::new(lo.x + (hi.x - lo.x) * rng.next() as f64, lo.y + (hi.y - lo.y) * rng.next() as f64);
-            if let Some((n, ..)) = nodes.space.node_at(q) {
+            if let Some(n) = nodes.space.node_at(q) {
                 if nodes.space.node_area[n as usize] >= LAND_LEAST && spots.len() < 2000 {
                     spots.push(q.as_vec2());
                 }
@@ -2082,7 +1743,7 @@ mod tests {
                 }
             }
         }
-        let small = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).is_some_and(|(n, ..)| nodes.space.node_area[n as usize] < LAND_LEAST);
+        let small = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).is_some_and(|n| nodes.space.node_area[n as usize] < LAND_LEAST);
         println!("where you stand: {} of {} spots on small nodes (under {LAND_LEAST} m²)", anywhere.iter().filter(|q| small(**q)).count(), anywhere.len());
         // (Ways within a node first: pairs of spots on one node.)
         let mut why: HashMap<String, usize> = HashMap::new();
@@ -2092,7 +1753,7 @@ mod tests {
                 break;
             }
             let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], spots[(rng.next() * spots.len() as f32) as usize % spots.len()]);
-            let node = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).map(|n| n.0);
+            let node = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64));
             if node(a) != node(b) || a.distance(b) < 5.0 {
                 continue;
             }
@@ -2184,8 +1845,7 @@ mod tests {
                         let (leave, land) = blink.made.take().unwrap();
                         let Some((y, off)) = on(Vec2::new(to.x, to.z)) else {
                             let d = DVec2::new(to.x as f64, to.z as f64);
-                            let pt = Point::new(d.x, d.y);
-                            let near: Vec<String> = nodes.space.pieces_near(d, 3.0).into_iter().map(|i| format!("piece {i} (hole {}, pillar {}) {:.4} m off, fragments {:?}", nodes.space.pieces[i].hole, nodes.space.pieces[i].pillar, Euclidean.distance(&nodes::polygon(&nodes.space.pieces[i].poly), &pt), nodes.space.space[i].iter().map(|f| format!("{:.4}", Euclidean.distance(f, &pt))).collect::<Vec<_>>())).filter(|l| !l.contains("fragments []")).collect();
+                            let near: Vec<String> = nodes.space.near_nodes(d, 3.0).into_iter().map(|(n, off, _)| format!("node {n} {off:.4} m off")).collect();
                             why = format!("teleported off the pieces, to {to:.3} (from {leave:.3}); near: {near:?}");
                             break;
                         };
@@ -2309,7 +1969,7 @@ mod tests {
                 break;
             }
             let (a, b) = (spots[(rng.next() * spots.len() as f32) as usize % spots.len()], anywhere[(rng.next() * anywhere.len() as f32) as usize % anywhere.len()]);
-            let node = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).map(|n| n.0).unwrap();
+            let node = |q: Vec2| nodes.space.node_at(DVec2::new(q.x as f64, q.y as f64)).unwrap();
             if !(20.0..=150.0).contains(&a.distance(b)) || node(a) == node(b) {
                 continue;
             }
@@ -2335,84 +1995,84 @@ mod tests {
         assert!(unplanned.is_empty(), "plans not found");
     }
 
-    /// A square with a grid of round holes (the stacks' pillars, in small):
-    /// its triangles cover it exactly, holes left out, and quickly.
-    #[test]
-    fn triangles_cover_holes() {
-        let square = |o: DVec2, r: f64, n: usize| -> LineString<f64> { LineString::from((0..=n).map(|k| { let a = k as f64 / n as f64 * std::f64::consts::TAU; (o.x + r * a.cos(), o.y + r * a.sin()) }).collect::<Vec<_>>()) };
-        let outer = LineString::from(vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]);
-        let holes: Vec<LineString<f64>> = (0..30).flat_map(|i| (0..30).map(move |j| (i, j))).map(|(i, j)| square(DVec2::new(2.0 + i as f64 * 3.2, 2.0 + j as f64 * 3.2), 1.0, 48).into_iter().rev().collect()).collect();
-        let poly = Polygon::new(outer, holes);
-        let t = Instant::now();
-        let (pts, tris, flat) = triangles(&poly).expect("triangulated");
-        let took = t.elapsed().as_secs_f32();
-        let covered: f64 = tris.iter().map(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) / 2.0).sum();
-        assert!(tris.iter().all(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) > 0.0), "counter-clockwise");
-        assert!((covered - poly.unsigned_area()).abs() < 1e-6 * poly.unsigned_area(), "covered {covered}, the polygon {}", poly.unsigned_area());
-        // (Slivers between holes' points in a row, of no area: left out,
-        // counted, as from geo; the cover above holds without them.)
-        assert!(flat < tris.len() / 100, "{flat} slivers");
-        assert!(took < 1.0, "{took} s for {} points", pts.len());
+    /// Whether `points` (a node's corners) lie at the edge of what was
+    /// built (its big plates, `built`): one within 0.6 m of a big plate not
+    /// built, where a way on may lie. (By the square asked for, a slot open
+    /// onto a big plate not built, its centre outside it, was taken for a
+    /// trap.)
+    fn at_built_edge(world: &PlateWorld, built: &std::collections::HashSet<(i32, i32)>, mut points: impl Iterator<Item = DVec2>) -> bool {
+        points.any(|c| [(0.6, 0.0), (-0.6, 0.0), (0.0, 0.6), (0.0, -0.6)].iter().any(|(dx, dz)| !built.contains(&world.big_site(c.x + dx, c.y + dz))))
     }
 
-    /// Whether `poly` lies at the edge of what was built (its big plates,
-    /// `built`): a corner of it within 0.6 m of a big plate not built,
-    /// where a way on may lie. (By the square asked for, a slot open onto a
-    /// big plate not built, its centre outside it, was taken for a trap.)
-    fn at_built_edge(world: &PlateWorld, built: &std::collections::HashSet<(i32, i32)>, poly: &Polygon<f64>) -> bool {
-        poly.exterior().0.iter().any(|c| [(0.6, 0.0), (-0.6, 0.0), (0.0, 0.6), (0.0, -0.6)].iter().any(|(dx, dz)| !built.contains(&world.big_site(c.x + dx, c.y + dz))))
+    /// Each node's place: a point in it (its first part's middle), how
+    /// high there, whether it is at the edge of what was built (see
+    /// `at_built_edge`), and its bounds.
+    fn places(space: &Space, world: &PlateWorld, built: &std::collections::HashSet<(i32, i32)>) -> Vec<(DVec2, f64, bool, (DVec2, DVec2))> {
+        (0..space.nodes())
+            .map(|n| {
+                let first = &space.parts[space.members[n][0] as usize];
+                let c = first.poly.iter().copied().sum::<DVec2>() / first.poly.len() as f64;
+                let plate = &space.pieces[first.piece as usize].plate;
+                let bounds = space.members[n].iter().map(|&i| &space.parts[i as usize]).fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(p.lo), hi.max(p.hi)));
+                let edge = at_built_edge(world, built, space.rims[n].iter().map(|r| r.a));
+                (c, world.plate_top(plate, c), edge, bounds)
+            })
+            .collect()
     }
 
-    /// Whether every node's triangles cover its outline exactly (no more,
-    /// no less, holes and all; slivers of no area apart): how many are off
-    /// by more than their corners moved, snapped, how many were not
-    /// triangulated, and the worst (relative, its node).
-    fn cover(nodes: &Nodes) -> (usize, usize, (f64, usize)) {
-        let area = &nodes.space.node_area;
-        let mut of: Vec<Vec<&Polygon<f64>>> = vec![Vec::new(); area.len()];
-        for (i, frags) in nodes.space.space.iter().enumerate() {
-            for (k, f) in frags.iter().enumerate() {
-                of[nodes.space.node_of[i][k] as usize].push(f);
+    /// The walking space against its definition, by points over the square
+    /// (unpruned: `space` as built): a point on a piece walked on (not a
+    /// hole) further than the radius from every closed stretch and outside
+    /// every pillar's obstacle, by 2 cm (a band's polygon round its circle
+    /// and the grid), is on a node; one on none, or nearer a closed stretch
+    /// than the radius by 2 mm (the grid), is on none. Checked apart from
+    /// how the walking space is made: distances to the stretches
+    /// themselves, the pieces' own corners. How many points of each, and
+    /// how many wrong.
+    fn as_defined(space: &Space) -> (usize, usize, Vec<String>) {
+        let r = space.fit.radius;
+        // (Walkable for certain beyond the widest a wall's round end lies:
+        // its steps circumscribe the radius, and the grid's rounding.)
+        let reach = (r + 0.001) / (std::f64::consts::PI / nodes::ROUND_STEPS.load(std::sync::atomic::Ordering::Relaxed) as f64).cos();
+        let mut walls: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (k, e) in space.edges.iter().enumerate().filter(|(_, e)| !e.open) {
+            for c in nodes::cells(e.a, e.b, r + 0.05) {
+                walls.entry(c).or_default().push(k);
             }
         }
-        let (mut worst, mut off, mut none) = ((0.0f64, 0usize), 0, 0);
-        for (n, list) in of.iter().enumerate() {
-            for poly in outline(list).0 {
-                let round: f64 = std::iter::once(poly.exterior()).chain(poly.interiors()).map(|r| r.lines().map(|l| (l.end - l.start).x.hypot((l.end - l.start).y)).sum::<f64>()).sum();
-                let Some((pts, tris, _)) = triangles(&poly) else {
-                    // (A speck the snapping takes to nothing, a millimetre
-                    // across, left over where fragments were joined: off by
-                    // no more than the covered, below; seed 4's stacks.)
-                    if poly.unsigned_area() <= round * TRIANGLE_SNAP {
-                        continue;
-                    }
-                    let r = poly.bounding_rect();
-                    println!(
-                        "  node {n}: an outline not triangulated, {:.4} m², {} corners ({} holes), over {:?}",
-                        poly.unsigned_area(),
-                        poly.exterior().0.len(),
-                        poly.interiors().len(),
-                        r.map(|r| (r.min().x, r.min().y, r.max().x, r.max().y))
-                    );
-                    none += 1;
-                    continue;
-                };
-                let covered: f64 = tris.iter().map(|t| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]) / 2.0).sum();
-                let want = poly.unsigned_area();
-                let e = (covered - want).abs() / want.max(1e-9);
-                // (Off by no more than its corners moved, snapped: its
-                // edges' length by `TRIANGLE_SNAP`. By a millionth and a
-                // square centimetre, fixed, at 0.1 mm snapping: one in
-                // the stacks at 1 mm, two parts in 10⁶ of 133 m round.)
-                if (covered - want).abs() > round * TRIANGLE_SNAP {
-                    off += 1;
-                }
-                if e > worst.0 {
-                    worst = (e, n);
+        let (lo, hi) = space.parts.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(p.lo), hi.max(p.hi)));
+        let mut rng = super::super::zz_world::Rng(0x0a5d_ef1e_d000_0001);
+        let (mut checked, mut wrong) = (0, Vec::new());
+        let mut points = 0;
+        while points < 20_000 {
+            let q = DVec2::new(lo.x + (hi.x - lo.x) * rng.next() as f64, lo.y + (hi.y - lo.y) * rng.next() as f64);
+            points += 1;
+            let piece = space.under(q).filter(|&i| !space.pieces[i].hole);
+            let near = walls.get(&((q.x / nodes::BIN).floor() as i32, (q.y / nodes::BIN).floor() as i32)).into_iter().flatten().map(|&k| {
+                let e = &space.edges[k];
+                let d = e.b - e.a;
+                let t = if d.length_squared() > 0.0 { ((q - e.a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+                (e.a + d * t).distance(q)
+            }).fold(f64::INFINITY, f64::min);
+            let blocked = space.block_rings.iter().flatten().map(|h| {
+                let inside = (0..h.len()).all(|k| (h[(k + 1) % h.len()] - h[k]).perp_dot(q - h[k]) >= 0.0);
+                let d = (0..h.len()).map(|k| { let (a, b) = (h[k], h[(k + 1) % h.len()]); let ab = b - a; (a + ab * ((q - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)).distance(q) }).fold(f64::INFINITY, f64::min);
+                if inside { -d } else { d }
+            }).fold(f64::INFINITY, f64::min);
+            let on = space.node_at(q).is_some();
+            let (must, mustnt) = (piece.is_some() && near > reach && blocked > 0.02, piece.is_none() && space.under(q).is_none() || near < r - 0.002 || blocked < -0.002);
+            if must || mustnt {
+                checked += 1;
+                if (must && !on) || (mustnt && on) {
+                    let wall = walls.get(&((q.x / nodes::BIN).floor() as i32, (q.y / nodes::BIN).floor() as i32)).into_iter().flatten().min_by(|&&x, &&y| {
+                        let d = |k: usize| { let e = &space.edges[k]; let ab = e.b - e.a; (e.a + ab * ((q - e.a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)).distance(q) };
+                        d(x).total_cmp(&d(y))
+                    }).map(|&k| { let e = &space.edges[k]; format!("wall {k}: {:.4?}-{:.4?}, piece {} other {:?}, {:.3} m long", e.a, e.b, e.piece, e.other, e.a.distance(e.b)) });
+                    wrong.push(format!("{q:.3}: {} but {}; {near:.3} m from a wall, {blocked:.3} from a block; {wall:?}", if must { "walkable" } else { "not walkable" }, if on { "on a node" } else { "on none" }));
                 }
             }
         }
-        (off, none, worst)
+        (points, checked, wrong)
     }
 
     /// Every node of every district, not a sample (chases drawn by area
@@ -2441,9 +2101,16 @@ mod tests {
             let area = &nodes.space.node_area;
             let total: f64 = area.iter().sum();
             let built: std::collections::HashSet<(i32, i32)> = nodes.space.pieces.iter().map(|p| p.plate.sites[0]).collect();
-            let (off, none, worst) = cover(&nodes);
-            println!("{name}: triangles against outlines: {off} off by more than their corners moved, snapped, {none} not triangulated; worst {:.2e} (node {})", worst.0, worst.1);
-            assert_eq!((off, none), (0, 0), "{name}: nodes' triangles not covering their outlines");
+            {
+                let column = worldgen::column_size(0) as f64;
+                let c = DVec2::from(centre);
+                let (lo, hi) = (((c - SIDE / 2.0) / column).floor() * column, ((c + SIDE / 2.0) / column).ceil() * column);
+                let space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
+                let (points, checked, wrong) = as_defined(&space);
+                println!("{name}: the walking space as defined: {checked} of {points} points told, {} wrong {:?}", wrong.len(), &wrong[..wrong.len().min(4)]);
+                assert!(wrong.is_empty(), "{name}: the walking space not as defined");
+            }
+            let place = places(&nodes.space, &world, &built);
             let biggest = (0..area.len()).max_by(|a, b| area[*a].total_cmp(&area[*b])).unwrap();
             for range in [10.0f32, 20.0] {
                 let mut main = vec![false; area.len()];
@@ -2467,23 +2134,9 @@ mod tests {
                 // (Where each node not reached lies, how high, and whether it
                 // touches the edge of the square built: there it may be
                 // reached from outside it.)
-                let mut place: HashMap<usize, (DVec2, f64, bool)> = HashMap::new();
-                for (i, frags) in nodes.space.space.iter().enumerate() {
-                    for (f, poly) in frags.iter().enumerate() {
-                        let n = nodes.space.node_of[i][f] as usize;
-                        if reached[n] || place.contains_key(&n) {
-                            continue;
-                        }
-                        use geo::Centroid;
-                        let Some(c) = poly.centroid() else { continue };
-                        let c = DVec2::new(c.x(), c.y());
-                        let edge = at_built_edge(&world, &built, poly);
-                        place.insert(n, (c, world.plate_top(&nodes.space.pieces[i].plate, c), edge));
-                    }
-                }
-                let inner: Vec<usize> = cut.iter().copied().filter(|n| !place.get(n).is_some_and(|p| p.2)).collect();
+                let inner: Vec<usize> = cut.iter().copied().filter(|n| !place[*n].2).collect();
                 let inner_area: f64 = inner.iter().map(|n| area[*n]).sum();
-                println!("  of them inside the square (not touching its edge): {}, {:.0} m², {:.2}% of the ground; the biggest: {:?}", inner.len(), inner_area, 100.0 * inner_area / total, inner.iter().take(6).map(|n| { let p = place[n]; format!("{:.0} m² at {:.0},{:.0} y {:.1}", area[*n], p.0.x, p.0.y, p.1) }).collect::<Vec<_>>());
+                println!("  of them inside the square (not touching its edge): {}, {:.0} m², {:.2}% of the ground; the biggest: {:?}", inner.len(), inner_area, 100.0 * inner_area / total, inner.iter().take(6).map(|n| { let p = place[*n]; format!("{:.0} m² at {:.0},{:.0} y {:.1}", area[*n], p.0.x, p.0.y, p.1) }).collect::<Vec<_>>());
                 println!(
                     "{name} at {range} m: {} nodes, {:.0} m²; {} not reached ({} of {LAND_LEAST} m² or more), {:.0} m², {:.2}% of the ground; the biggest of them {:?} m²",
                     area.len(),
@@ -2542,22 +2195,8 @@ mod tests {
         let (got_to, back) = (flood(biggest, &out), flood(biggest, &into));
         // Each node's place: a point in it, how high, whether it touches
         // the edge of the square (where a way out may lie beyond it).
-        let mut place: Vec<Option<(DVec2, f64, bool)>> = vec![None; n];
-        for (i, frags) in space.space.iter().enumerate() {
-            for (f, poly) in frags.iter().enumerate() {
-                let k = space.node_of[i][f] as usize;
-                let r = poly.bounding_rect().unwrap();
-                let edge = at_built_edge(world, &built, poly);
-                let was = place[k];
-                use geo::InteriorPoint;
-                let c = poly.interior_point().map_or(DVec2::new(r.min().x, r.min().y), |p| DVec2::new(p.x(), p.y()));
-                let y = world.plate_top(&space.pieces[i].plate, c);
-                place[k] = Some(match was {
-                    Some((c0, y0, e0)) => (c0, y0, e0 || edge),
-                    None => (c, y, edge),
-                });
-            }
-        }
+        let place: Vec<Option<(DVec2, f64, bool)>> = places(&space, world, &built).into_iter().map(|p| Some((p.0, p.1, p.2))).collect();
+        let node_bounds: Vec<(DVec2, DVec2)> = places(&space, world, &built).into_iter().map(|p| p.3).collect();
         let trapped: Vec<bool> = (0..n).map(|k| got_to[k] && !back[k]).collect();
         // Groups: trapped nodes one move apart, either way.
         let mut group = vec![usize::MAX; n];
@@ -2595,16 +2234,10 @@ mod tests {
         }
         // Each group's bounds.
         let mut bounds = vec![(DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)); groups.len()];
-        for (i, frags) in space.space.iter().enumerate() {
-            for (f, poly) in frags.iter().enumerate() {
-                let k = space.node_of[i][f] as usize;
-                if trapped[k] {
-                    let r = poly.bounding_rect().unwrap();
-                    let b = &mut bounds[group[k]];
-                    b.0 = b.0.min(DVec2::new(r.min().x, r.min().y));
-                    b.1 = b.1.max(DVec2::new(r.max().x, r.max().y));
-                }
-            }
+        for k in (0..n).filter(|&k| trapped[k]) {
+            let b = &mut bounds[group[k]];
+            b.0 = b.0.min(node_bounds[k].0);
+            b.1 = b.1.max(node_bounds[k].1);
         }
         let total: f64 = area.iter().sum();
         let unentered: f64 = (0..n).filter(|k| !got_to[*k]).map(|k| area[k]).sum();
@@ -2700,12 +2333,16 @@ mod tests {
     /// (`MODEL`), priced by primitives timed on this machine in the same run:
     /// the least work the stage's technique must do on what it was given.
     /// (`cargo test -p game --profile fast seed_sweep -- --ignored --nocapture`;
-    /// SWEEP_SEEDS=1,2,.. (1 to 8), SWEEP_TRAPS=0 to leave traps unchecked.)
+    /// SWEEP_SEEDS=1,2,.. (1 to 8), SWEEP_TRAPS=0 to leave traps unchecked,
+    /// SWEEP_ROUND=N for round ends of N steps, `nodes::ROUND_STEPS`.)
     #[test]
     #[ignore]
     fn seed_sweep() {
         use crate::navmesh::nodes::{self, Fit};
-        use spade::{ConstrainedDelaunayTriangulation, DelaunayTriangulation, Point2, Triangulation};
+        if let Some(n) = std::env::var("SWEEP_ROUND").ok().and_then(|v| v.parse().ok()) {
+            nodes::ROUND_STEPS.store(n, std::sync::atomic::Ordering::Relaxed);
+        }
+        use spade::{DelaunayTriangulation, Point2, Triangulation};
         use std::hint::black_box;
         use worldgen::district::District;
         let seeds: Vec<u32> = std::env::var("SWEEP_SEEDS").ok().filter(|v| !v.is_empty()).map_or((1..=8).collect(), |v| v.split(',').map(|x| x.trim().parse().unwrap()).collect());
@@ -2728,37 +2365,56 @@ mod tests {
         // piece), a ring of 32 corners, 16 points' hull, 4000 corners and
         // points triangulated.
         let hex: Vec<DVec2> = (0..6).map(|k| DVec2::from_angle(k as f64 * std::f64::consts::FRAC_PI_3) * 4.0).collect();
+        // (A half-plane's clip: Sutherland-Hodgman, a corner kept or a
+        // crossing made per edge.)
+        let half = |poly: &[DVec2], p: DVec2, n: DVec2| -> Vec<DVec2> {
+            let mut out = Vec::with_capacity(poly.len() + 1);
+            for k in 0..poly.len() {
+                let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+                let (sa, sb) = ((a - p).dot(n), (b - p).dot(n));
+                if sa <= 0.0 {
+                    out.push(a);
+                }
+                if (sa <= 0.0) != (sb <= 0.0) {
+                    out.push(a + (b - a) * (sa / (sa - sb)));
+                }
+            }
+            out
+        };
         let clip = per_call(200_000, |k| {
             let y = (k % 97) as f64 / 97.0 * 4.0 - 2.0;
-            black_box(nodes::keep_left(black_box(&hex), DVec2::new(-5.0, y), DVec2::new(5.0, y + 0.3), 0.35));
+            black_box(half(black_box(&hex), DVec2::new(0.0, y), DVec2::new(0.03, 1.0)));
         });
         let along = per_call(200_000, |k| {
             let y = (k % 97) as f64 / 97.0 * 4.0 - 2.0;
             black_box(nodes::along(black_box(&hex), DVec2::new(-6.0, y), DVec2::new(12.0, 0.5), 0.0));
         });
-        let ring32 = nodes::polygon(&(0..32).map(|k| DVec2::from_angle(k as f64 * std::f64::consts::TAU / 32.0) * 10.0).collect::<Vec<_>>());
-        let (mut cross, mut spans) = (Vec::new(), Vec::new());
+        // (A line against a ring's edge: where it crosses it, if it does.)
+        let ring32: Vec<DVec2> = (0..32).map(|k| DVec2::from_angle(k as f64 * std::f64::consts::TAU / 32.0) * 10.0).collect();
         let ring = per_call(100_000, |k| {
-            spans.clear();
             let dir = DVec2::from_angle(k as f64 * 0.1);
-            nodes::spans_in(black_box(&ring32), DVec2::ZERO - dir * 12.0, dir, 0.0, 24.0, 0.0, &mut cross, &mut spans);
-            black_box(&spans);
+            let a = DVec2::ZERO - dir * 12.0;
+            let mut n = 0.0;
+            for j in 0..32 {
+                let (p, q) = (ring32[j], ring32[(j + 1) % 32]);
+                let (sp, sq) = (dir.perp_dot(p - a), dir.perp_dot(q - a));
+                if (sp > 0.0) != (sq > 0.0) {
+                    n += (p + (q - p) * (sp / (sp - sq)) - a).dot(dir);
+                }
+            }
+            black_box(n);
         }) / 32.0;
-        let cloud: Vec<Point<f64>> = (0..16).map(|k| Point::new(((k * 37) % 11) as f64, ((k * 53) % 13) as f64)).collect();
+        // (A sort, per number sorted, of 100 000: an overlay's sweep.)
+        let numbers: Vec<f64> = (0..100_000u64).map(|k| (k.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 11) as f64).collect();
+        let sort = per_call(5, |_| {
+            let mut v = numbers.clone();
+            v.sort_unstable_by(f64::total_cmp);
+            black_box(v);
+        }) / 100_000.0;
+        let cloud: Vec<geo::Point<f64>> = (0..16).map(|k| geo::Point::new(((k * 37) % 11) as f64, ((k * 53) % 13) as f64)).collect();
         let hull = per_call(100_000, |_| {
             black_box(geo::ConvexHull::convex_hull(&geo::MultiPoint::new(black_box(cloud.clone()))));
         });
-        let star: Vec<Point2<f64>> = (0..4000)
-            .map(|k| {
-                let t = k as f64 * std::f64::consts::TAU / 4000.0;
-                let r = 100.0 + if k % 2 == 0 { 3.0 } else { 0.0 };
-                Point2::new(r * t.cos(), r * t.sin())
-            })
-            .collect();
-        let star_edges: Vec<[usize; 2]> = (0..4000).map(|k| [k, (k + 1) % 4000]).collect();
-        let cdt = per_call(20, |_| {
-            black_box(ConstrainedDelaunayTriangulation::<Point2<f64>>::bulk_load_cdt(star.clone(), star_edges.clone()).unwrap());
-        }) / 4000.0;
         let scatter: Vec<Point2<f64>> = (0..4000u64)
             .map(|k| {
                 let h = k.wrapping_mul(0x9e37_79b9_7f4a_7c15);
@@ -2787,20 +2443,19 @@ mod tests {
             black_box(n);
         }) / 1000.0;
         println!(
-            "primitives (ns): clip a hexagon by a line {clip:.0}, a path along a hexagon {along:.0}, a ring's edge crossed {ring:.1}, 16 points' hull {hull:.0}, constrained triangulation a corner {cdt:.0}, Delaunay a point {dt:.0}, a hashed insert {hash:.1}, a pair of edge points weighed {pair:.1}"
+            "primitives (ns): clip a hexagon by a line {clip:.0}, a path along a hexagon {along:.0}, a ring's edge crossed {ring:.1}, a number sorted (of 100 000) {sort:.1}, 16 points' hull {hull:.0}, Delaunay a point {dt:.0}, a hashed insert {hash:.1}, a pair of edge points weighed {pair:.1}"
         );
         // The model: each stage's least work, by what it worked on (the
         // per-build primitives `top`, a plate's height at a point, and
         // `plate`, a plate found at a point, timed on its own pieces).
         const MODEL: &str = "pieces: each piece its Voronoi cell, clipped by its ~6 neighbours, and its plate found once (6 clip + plate)
-edges: each piece edge, its piece across found by hash (an insert and a lookup), heights compared at its ends and middle (2 hash + 3 top)
-obstacles: each pillar prism within a body's height, its hull grown (hull)
-walking: each piece copied, each shape taken out of it two clips ((piece + 2 cutters) clip)
-join: each open stretch, both sides' fragments' rings near it crossed (16 ring)
-prune: each fragment hashed (hash)
-drops: each edge point (every metre round each fragment) its height (top); each pair of them within 3 m on two nodes weighed (pair); each lip, a ray through the node it drops to and a fall over the pieces under it (16 ring + 4 (along + 2 top))
-outlines: each outline corner triangulated (cdt); fragments joined into outlines, nothing (cut alike on both sides)
-navmeshes: each triangle's three edges hashed (3 hash)
+edges: each piece edge, its twin found by hash (an insert and a lookup), heights compared at its ends and middle (2 hash + 3 top)
+obstacles: each wall's band and solid pillar's grown plate, a hull (hull)
+walking: each keep-out region touching a piece tried against it (clip), each convex part made by two clips (2 clip)
+nodes: each part edge's line looked up and the edges sorted along their lines, then walked (sort + hash)
+prune: each part kept or not (hash)
+drops: each edge point (every metre round each node) its height (top); each pair of them within 3 m on two nodes weighed (pair); each lip, a ray through the node it drops to and a fall over the pieces under it (16 ring + 4 (along + 2 top))
+navmeshes: none (the parts are the nodes' meshes)
 portals: each portal a Delaunay point (dt)";
         println!("the essential cost, as modelled:\n{MODEL}");
         struct Row {
@@ -2824,15 +2479,19 @@ portals: each portal a Delaunay point (dt)";
                 let census = &nodes.census;
                 let mut failures = Vec::new();
                 if nodes.cut > 0 {
-                    failures.push(format!("{} navmeshes in parts", nodes.cut));
+                    failures.push(format!("{} nodes in pieces", nodes.cut));
                 }
-                let fallbacks = space.fallbacks.load(std::sync::atomic::Ordering::Relaxed);
-                if fallbacks > 0 {
-                    failures.push(format!("{fallbacks} pieces' walking space by geo's boolean"));
-                }
-                let (off, none, _) = cover(&nodes);
-                if off + none > 0 {
-                    failures.push(format!("{off} outlines not covered, {none} not triangulated"));
+                {
+                    let column = worldgen::column_size(0) as f64;
+                    let (lo, hi) = (((centre - SIDE / 2.0) / column).floor() * column, ((centre + SIDE / 2.0) / column).ceil() * column);
+                    let unpruned = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
+                    let (_, checked, wrong) = as_defined(&unpruned);
+                    if unpruned.overlaps > 0 {
+                        failures.push(format!("{} edges of parts over one another", unpruned.overlaps));
+                    }
+                    if !wrong.is_empty() {
+                        failures.push(format!("the walking space not as defined at {} of {checked} points, as {:?}", wrong.len(), &wrong[..wrong.len().min(2)]));
+                    }
                 }
                 if traps {
                     let found = traps_at(&world, kind.name(), centre);
@@ -2844,10 +2503,8 @@ portals: each portal a Delaunay point (dt)";
                 let pieces = space.pieces.len();
                 let walked = space.pieces.iter().filter(|p| !p.hole).count();
                 let piece_corners: usize = space.pieces.iter().map(|p| p.poly.len()).sum();
-                let prisms: usize = space.pieces.iter().filter(|p| p.pillar).map(|p| p.prisms.iter().filter(|q| q.3 - p.plate.height > Fit::WALKER.climb).count()).sum();
-                let open = space.edges.iter().filter(|e| e.open && e.other.is_some_and(|j| j > e.piece)).count();
-                let fragments: usize = space.space.iter().map(|s| s.len()).sum();
-                let cutters = space.cutters.load(std::sync::atomic::Ordering::Relaxed);
+                let pillars: usize = space.block_rings.len();
+                let keeps = space.keeps;
                 let points = space.edge_points(&world);
                 let mut cell: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
                 for (k, p) in points.iter().enumerate() {
@@ -2881,17 +2538,20 @@ portals: each portal a Delaunay point (dt)";
                     }
                     t.elapsed().as_secs_f64() * 1e9 / sample.len() as f64
                 };
-                let model: [(&'static str, f64, f64); 10] = [
+                let _ = walked;
+                // (Walking: each region touching a piece tried against it,
+                // and each part made by two clips. Nodes: each part edge's
+                // line looked up, and sorted along it.)
+                let model: [(&'static str, f64, f64); 9] = [
                     ("pieces", pieces as f64, 6.0 * clip + plate),
                     ("edges", piece_corners as f64, 2.0 * hash + 3.0 * top),
-                    ("obstacles", prisms as f64, hull),
-                    ("walking", (walked + 2 * cutters) as f64, clip),
-                    ("join", open as f64, 16.0 * ring),
-                    ("prune", fragments as f64, hash),
+                    ("obstacles", (space.walls + pillars) as f64, hull),
+                    ("walking", 1.0, space.touches as f64 * clip + census.parts as f64 * 2.0 * clip),
+                    ("nodes", census.corners as f64, sort + hash),
+                    ("prune", census.parts as f64, hash),
                     ("drops", 1.0, points.len() as f64 * top + pairs as f64 * pair + census.drop_candidates as f64 * (16.0 * ring + 4.0 * (along + 2.0 * top))),
-                    ("outlines", census.outline_corners as f64, cdt),
-                    ("navmeshes", census.triangles as f64, 3.0 * hash),
                     ("portals", census.portals as f64, dt),
+                    ("navmeshes", 0.0, 0.0),
                 ];
                 let stages: Vec<(&'static str, f64, f64, f64)> = model
                     .iter()
@@ -2902,12 +2562,14 @@ portals: each portal a Delaunay point (dt)";
                     .collect();
                 let (ours, least): (f64, f64) = stages.iter().fold((0.0, 0.0), |s, x| (s.0 + x.2, s.1 + x.3));
                 println!(
-                    "seed {seed} {:<9} at {:.0},{:.0}: {pieces} pieces, {cutters} cutters, {} lips, {pairs} edge point pairs, {} outline corners; {ours:.0} ms against {least:.0} ({:.1}x){}",
+                    "seed {seed} {:<9} at {:.0},{:.0}: {pieces} pieces, {} walls, {keeps} keep-out regions, {} parts, {} lips, {pairs} edge point pairs, {} corners; {ours:.0} ms against {least:.0} ({:.1}x){}",
                     kind.name(),
                     centre.x,
                     centre.y,
+                    space.walls,
+                    census.parts,
                     census.drop_candidates,
-                    census.outline_corners,
+                    census.corners,
                     ours / least,
                     if failures.is_empty() { String::new() } else { format!("; FAILED: {}", failures.join(", ")) }
                 );
@@ -2944,172 +2606,6 @@ portals: each portal a Delaunay point (dt)";
             println!("  {f}");
         }
         assert!(failed.is_empty(), "squares failing a check");
-    }
-
-    /// The walking space's difference, a piece less its cutters, by
-    /// `convex_less` against geo's boolean on every convex piece of a
-    /// square of each district (SWEEP_SEEDS's first seed, 1 if none): the
-    /// same ground (each piece's area within a millimetre along its
-    /// outline, geo's rounding; valid polygons), and the time of each.
-    /// (`cargo test -p game --profile fast walking_difference -- --ignored --nocapture`)
-    #[test]
-    #[ignore]
-    fn walking_difference() {
-        use crate::navmesh::nodes::{self, Fit, Space};
-        use geo::BooleanOps;
-        use worldgen::district::District;
-        nodes::THREADS.store(1, std::sync::atomic::Ordering::Relaxed);
-        let seed: u32 = std::env::var("SWEEP_SEEDS").ok().and_then(|v| v.split(',').next().and_then(|x| x.trim().parse().ok())).unwrap_or(1);
-        let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, seed).with_sites(&crate::structures::load_library().expect("the structure library")));
-        let (mut apart, mut failed) = (0, 0);
-        for kind in District::ALL {
-            let Some(centre) = square_of(&world, kind, seed) else { continue };
-            let column = worldgen::column_size(0) as f64;
-            let (lo, hi) = (((centre - SIDE / 2.0) / column).floor() * column, ((centre + SIDE / 2.0) / column).ceil() * column);
-            let space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
-            let t = Instant::now();
-            let inputs: Vec<(Vec<DVec2>, Vec<Vec<DVec2>>)> = (0..space.pieces.len()).filter(|&i| !space.pieces[i].hole).filter_map(|i| space.cutting(i)).filter(|x| x.2 && !x.1.is_empty()).map(|x| (x.0, x.1)).collect();
-            let finding_ms = t.elapsed().as_secs_f64() * 1e3;
-            let t = Instant::now();
-            let by_geo: Vec<Vec<Polygon<f64>>> = inputs.iter().map(|(shape, c)| nodes::polygon(shape).boolean_op_with_fill_rule(&MultiPolygon::new(c.iter().map(|q| nodes::polygon_exact(q)).collect()), geo::algorithm::bool_ops::OpType::Difference, geo::algorithm::bool_ops::FillRule::NonZero).0).collect();
-            let geo_ms = t.elapsed().as_secs_f64() * 1e3;
-            let t = Instant::now();
-            let ours: Vec<Option<Vec<Polygon<f64>>>> = inputs.iter().map(|(shape, c)| nodes::convex_less(shape, c)).collect();
-            let ours_ms = t.elapsed().as_secs_f64() * 1e3;
-            let (mut worst, mut here) = ((0.0f64, 0usize), (0, 0, 0, 0));
-            for (k, (g, o)) in by_geo.iter().zip(&ours).enumerate() {
-                let Some(o) = o else {
-                    here.2 += 1;
-                    if std::env::var("SHOW_FAILED").is_ok() {
-                        let (shape, c) = &inputs[k];
-                        println!("  not made {k}: shape {:?}
-  cut {:?}", shape, c.iter().map(|q| q.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()).collect::<Vec<_>>());
-                    }
-                    continue;
-                };
-                // (Each a valid polygon: no ring crossing itself or another.)
-                {
-                    use geo::Validation;
-                    if let Some(bad) = o.iter().find(|p| !p.is_valid()) {
-                        here.3 += 1;
-                        if std::env::var("SHOW_INVALID").is_ok() {
-                            println!("  invalid {k}: {:?}", bad.validation_errors());
-                        }
-                    }
-                }
-                // (geo's boolean puts its corners on a grid of about half a
-                // millimetre: apart by no more than that along the outline.)
-                let area = |f: &[Polygon<f64>]| f.iter().map(|p| p.unsigned_area()).sum::<f64>();
-                let round: f64 = o.iter().flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors())).map(|r| r.lines().map(|l| (l.end - l.start).x.hypot((l.end - l.start).y)).sum::<f64>()).sum();
-                let d = (area(g) - area(o)).abs() / round.max(1e-9);
-                if d > worst.0 {
-                    worst = (d, k);
-                }
-                if d > 1e-3 {
-                    here.0 += 1;
-                }
-                // (Fragments of some size: specks geo snaps to nothing.)
-                let many = |f: &[Polygon<f64>]| f.iter().filter(|p| p.unsigned_area() > 1e-5).count();
-                if many(g) != many(o) {
-                    here.1 += 1;
-                    if std::env::var("SHOW_SPLIT").is_ok() {
-                        let (shape, c) = &inputs[k];
-                        let say = |f: &[Polygon<f64>]| f.iter().map(|p| format!("{:.6} m² ({} holes, {} corners)", p.unsigned_area(), p.interiors().len(), p.exterior().0.len())).collect::<Vec<_>>();
-                        println!("  split {k}: {} cutters; geo {:?}; ours {:?}", c.len(), say(g), say(o));
-                        if std::env::var("SHOW_SPLIT").is_ok_and(|v| v == "all") {
-                            println!("  shape {:?}
-  cut {:?}
-  geo {:?}
-  ours {:?}", shape, c.iter().map(|q| q.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()).collect::<Vec<_>>(), g, o);
-                        }
-                    }
-                }
-            }
-            println!(
-                "{}: {} pieces cut; finding their cutters {finding_ms:.0} ms; geo's {geo_ms:.0} ms ({:.1} µs a piece), ours {ours_ms:.0} ms ({:.1} µs); {} apart by more than a millimetre along their outline, {} in a different number of fragments, {} not made, {} not valid; the worst {:.2e} m (piece {})",
-                kind.name(),
-                inputs.len(),
-                geo_ms * 1e3 / inputs.len().max(1) as f64,
-                ours_ms * 1e3 / inputs.len().max(1) as f64,
-                here.0,
-                here.1,
-                here.2,
-                here.3,
-                worst.0,
-                worst.1
-            );
-            if std::env::var("SHOW_PIECE").is_ok_and(|v| v.parse() == Ok(worst.1)) || (worst.0 > 1e-6 && std::env::var("SHOW_WORST").is_ok()) {
-                let (shape, c) = &inputs[worst.1];
-                println!("  shape {:?}\n  cut {:?}\n  geo {:?}\n  ours {:?}", shape, c.iter().map(|q| q.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()).collect::<Vec<_>>(), by_geo[worst.1], ours[worst.1]);
-            }
-            apart += here.0;
-            failed += here.2 + here.3;
-        }
-        // (Fragments told apart differently are geo's rounding: a neck
-        // under half a millimetre wide cut or kept, specks snapped to
-        // nothing; the areas agree, and ours are exact. Said, not failed.)
-        assert_eq!((apart, failed), (0, 0), "convex_less not as geo's boolean");
-    }
-
-    /// The lookups among what lies about (`Space::about`, `under_in`,
-    /// `on_node_in`) against the grid's own (`under`, `node_at_preferring`)
-    /// at points over a square, near its walking space's edges most: where
-    /// they differ, and how near a grid cell's edge.
-    /// (`cargo test -p game --profile fast lookups_agree -- --ignored --nocapture`)
-    #[test]
-    #[ignore]
-    fn lookups_agree() {
-        use crate::navmesh::nodes::{self, Fit, Space};
-        let seed: u32 = std::env::var("SWEEP_SEEDS").ok().and_then(|v| v.split(',').next().and_then(|x| x.trim().parse().ok())).unwrap_or(2);
-        let world = Arc::new(PlateWorld::new(worldgen::WORLD_SIZE, seed).with_sites(&crate::structures::load_library().expect("the structure library")));
-        let centre = square_of(&world, worldgen::district::District::Broken, seed).unwrap();
-        let column = worldgen::column_size(0) as f64;
-        let (lo, hi) = (((centre - SIDE / 2.0) / column).floor() * column, ((centre + SIDE / 2.0) / column).ceil() * column);
-        let mut space = Space::build(&world, nodes::pieces(&world, lo, hi), Fit::WALKER);
-        space.prune(LAND_LEAST);
-        // Points on and just off every fragment's corners and edges.
-        let mut points: Vec<DVec2> = Vec::new();
-        for frags in &space.space {
-            for f in frags {
-                for w in f.exterior().0.windows(2) {
-                    let (a, b) = (DVec2::new(w[0].x, w[0].y), DVec2::new(w[1].x, w[1].y));
-                    let n = (b - a).normalize_or_zero().perp();
-                    for t in [0.0, 0.5] {
-                        let q = a.lerp(b, t);
-                        points.extend([q, q + n * 5e-4, q - n * 5e-4, q + n * 2e-3]);
-                    }
-                }
-            }
-        }
-        let (mut under, mut on, mut tried) = (0, 0, 0);
-        let edge = |q: DVec2| {
-            let f = |v: f64| {
-                let r = v.rem_euclid(nodes::BIN);
-                r.min(nodes::BIN - r)
-            };
-            f(q.x).min(f(q.y))
-        };
-        for &q in &points {
-            let about = space.about(q, q, 2.0);
-            let (u0, u1) = (space.under(q), space.under_in(&about, q));
-            if u0 != u1 {
-                under += 1;
-                if under <= 5 {
-                    println!("under at {q:?}: grid {u0:?}, about {u1:?}; {:.2e} m from a cell's edge", edge(q));
-                }
-            }
-            for n in space.node_at_preferring(q, None).map(|f| f.0).into_iter() {
-                tried += 1;
-                let (o0, o1) = (space.node_at_preferring(q, Some(n)).is_some_and(|f| f.0 == n), space.on_node_in(&about, q, n));
-                if o0 != o1 {
-                    on += 1;
-                    if on <= 5 {
-                        println!("on node {n} at {q:?}: grid {o0}, about {o1}; {:.2e} m from a cell's edge", edge(q));
-                    }
-                }
-            }
-        }
-        println!("{} points: under differs at {under}, on a node at {on} of {tried}", points.len());
     }
 
     /// Finding the drops' lips (`Space::links`) taken apart: its edge

@@ -18,6 +18,7 @@ pub mod lab;
 pub mod lattice;
 pub mod mega;
 pub mod network;
+pub mod planar;
 pub mod plates;
 pub mod reactor;
 pub mod sites;

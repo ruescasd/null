@@ -10,7 +10,7 @@
 
 use glam::DVec2;
 
-use crate::noise::hash01;
+use crate::noise::{Fbm, hash01};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Deserialize)]
 pub enum District {
@@ -34,9 +34,14 @@ pub enum District {
     /// in strata, a lunar ridge. (The experiment's version 1, best for
     /// reliefs of 3 and up, the user.)
     Highlands,
+    /// No ground: a hole in the world, falling for ever (the user's voids,
+    /// 2026-11-17: large-scale form by absence; neighbouring ones merge
+    /// into seas). Not in `ALL`, the regions with ground.
+    Void,
 }
 
 impl District {
+    /// The regions with ground (`Void` apart).
     pub const ALL: [District; 6] =
         [District::Floor, District::Tiers, District::Stacks, District::Broken, District::Uplands, District::Highlands];
 
@@ -48,12 +53,15 @@ impl District {
             District::Broken => "broken",
             District::Uplands => "uplands",
             District::Highlands => "highlands",
+            District::Void => "void",
         }
     }
 
     pub fn rules(self) -> Rules {
         match self {
-            District::Floor => Rules {
+            // (Its ground's rules only blend into its neighbours'; it has
+            // none of its own.)
+            District::Floor | District::Void => Rules {
                 relief: 0.04,
                 albedo: 0.24,
                 albedo_spread: 0.03,
@@ -237,11 +245,31 @@ pub struct DistrictMap {
     seed: u32,
     /// One district everywhere, if set (`--set district=N`, see `ALL`).
     pub force: Option<District>,
+    /// The share of the map's cells that are voids (drawn apart, so the
+    /// rest of the map stays as it was).
+    pub voids: f64,
+    /// How far (m) the voids' outlines are warped, into an irregular
+    /// coast; 0, straight (the cells' Voronoi edges, 1 to 3 km). The other
+    /// regions' borders are not (the user leaned to warped, 2026-11-17;
+    /// warping all moved every region and the places kept in them).
+    pub coast: f64,
+    warp: [Fbm; 2],
 }
 
 impl DistrictMap {
     pub fn new(size: f64, seed: u32) -> Self {
-        Self { size, seed: seed ^ 0xd157_71c7, force: None }
+        let seed = seed ^ 0xd157_71c7;
+        let warp = [Fbm::new(1500.0, 3, 0.5, seed ^ 11), Fbm::new(1500.0, 3, 0.5, seed ^ 12)];
+        Self { size, seed, force: None, voids: 0.0, coast: 0.0, warp }
+    }
+
+    /// Where a point falls on the map: warped by `coast`.
+    fn warped(&self, x: f64, z: f64) -> DVec2 {
+        if self.coast <= 0.0 {
+            return DVec2::new(x, z);
+        }
+        let (w, xf, zf) = (self.size as f32, x as f32, z as f32);
+        DVec2::new(x + self.warp[0].sample2(xf, zf, w) as f64 * self.coast, z + self.warp[1].sample2(xf, zf, w) as f64 * self.coast)
     }
 
     fn cells(&self) -> i32 {
@@ -259,6 +287,9 @@ impl DistrictMap {
     }
 
     fn kind(&self, g: (i32, i32)) -> District {
+        if self.rand(g, 5) < self.voids {
+            return District::Void;
+        }
         // Weighted pick: floor 28%, tiers 24%, stacks 20%, broken 28%; then
         // two fifths of the tiers become highlands and of the broken
         // uplands (drawn apart, so the rest of the map stays as it was).
@@ -288,9 +319,22 @@ impl DistrictMap {
         if let Some(d) = self.force {
             return d;
         }
-        let near = self.nearby(DVec2::new(x, z));
-        let (g, _) = near.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
-        self.kind(*g)
+        let nearest = |p: DVec2| {
+            let near = self.nearby(p);
+            let (g, _) = near.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+            self.kind(*g)
+        };
+        let own = nearest(DVec2::new(x, z));
+        if self.voids <= 0.0 {
+            return own;
+        }
+        // A void's outline warped (`coast`): a void where the warped point
+        // falls in one; where it falls out of one, the region it falls in.
+        match (own, nearest(self.warped(x, z))) {
+            (_, District::Void) => District::Void,
+            (District::Void, other) => other,
+            _ => own,
+        }
     }
 
     /// Relief, base albedo and ridges, blended smoothly across district

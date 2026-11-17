@@ -176,7 +176,8 @@ pub enum Form {
     /// face a grid of cells `panel` wide and `storey` high, each holding
     /// (with chance `fill`) a slab standing out `depth` from the face, with
     /// a tone of its own. The panels stay within the polygon. `then` grows
-    /// on top, on the whole polygon.
+    /// on top, on the whole polygon. `inlay`: the panels the other way,
+    /// sunk into a face flush with the polygon (`Grower::inlaid`).
     Facade {
         height: (f32, f32),
         #[serde(default = "default_panel")]
@@ -189,6 +190,8 @@ pub enum Form {
         fill: f32,
         #[serde(default)]
         tone: f32,
+        #[serde(default)]
+        inlay: bool,
         #[serde(default)]
         then: Option<String>,
     },
@@ -396,6 +399,80 @@ impl Prism {
             out.extend(self.top().iter().map(|p| Vec3::new(p.x, self.y1, p.y)));
         }
         out
+    }
+}
+
+impl Grower<'_> {
+    /// A `Facade` band with its panels the other way (`inlay`): the
+    /// polygon `h` high, its panels sunk `sunk` into its faces, in the
+    /// cells a facade's panels stand in (the same cells, `fill` of them).
+    /// Made of prisms alone (no booleans): a core sunk all round, and on
+    /// each face, flush with the polygon, the face less its panels: a strip
+    /// along each row's top and bottom, and between the panels of a row
+    /// the runs of face between them. Each face's pieces kept within its
+    /// own corner wedges (the bisectors at its ends), so faces meeting at
+    /// a corner do not overlap.
+    #[allow(clippy::too_many_arguments)]
+    fn inlaid(&mut self, poly: &[Vec2], floor: f32, h: f32, (panel, storey): (f32, f32), sunk: f32, fill: f32, tone: f32, seed: u32, depth: u32) {
+        let core = Some(inset(poly, sunk)).filter(|c| c.len() >= 3).unwrap_or_else(|| poly.to_vec());
+        let push = |grower: &mut Self, points: Vec<Vec2>, y0: f32, y1: f32, albedo: f32| {
+            if points.len() < 3 || y1 <= y0 || grower.budget == 0 {
+                return;
+            }
+            grower.budget -= 1;
+            grower.out.prisms.push(Prism { points, y0, y1, top_scale: 1.0, lean: Vec2::ZERO, albedo: albedo.clamp(0.03, 0.4) });
+        };
+        let r = |k: i32| hash01(seed as i32, k, depth as i32, 0xf0f0);
+        push(self, core, floor, floor + h, tone + (r(5) - 0.5) * 0.02 - 0.03);
+        let rows = (h / storey.max(0.5)).round().max(1.0) as usize;
+        let row_h = h / rows as f32;
+        let inward = inward_normals(poly);
+        let n = poly.len();
+        for i in 0..n {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            let length = (b - a).length();
+            if length < 0.5 {
+                continue;
+            }
+            let along = (b - a) / length;
+            let (prev, next) = ((i + n - 1) % n, (i + 1) % n);
+            // A stretch of the face, from `t0` to `t1` along it, `sunk`
+            // deep, within its corner wedges.
+            let quad = |t0: f32, t1: f32| {
+                let (p0, p1) = (a + along * t0, a + along * t1);
+                let q = vec![p0 + inward[i] * sunk, p1 + inward[i] * sunk, p1, p0];
+                let q = clip(&q, inward[prev] - inward[i], inward[prev].dot(poly[prev]) - inward[i].dot(poly[i]));
+                let q = if q.len() >= 3 { clip(&q, inward[next] - inward[i], inward[next].dot(poly[next]) - inward[i].dot(poly[i])) } else { q };
+                q
+            };
+            let columns = (length / panel.max(0.5)).floor().max(1.0) as usize;
+            let w = length / columns as f32;
+            let face = |k: i32| tone + (hash01(seed as i32 ^ i as i32, k, depth as i32, 0x1a7e) - 0.5) * 0.02;
+            // The strips along the rows' tops and bottoms, the whole face.
+            for row in 0..=rows {
+                let y = row as f32 * row_h;
+                push(self, quad(0.0, length), floor + (y - row_h * 0.06).max(0.0), floor + (y + row_h * 0.06).min(h), face(row as i32));
+            }
+            // Between them, the face less the panels' cells.
+            for row in 0..rows {
+                let (y0, y1) = (floor + row as f32 * row_h + row_h * 0.06, floor + (row + 1) as f32 * row_h - row_h * 0.06);
+                let mut start = 0.0;
+                for c in 0..columns {
+                    let k = (i * 7919 + c * 131 + row) as i32;
+                    if hash01(seed as i32 ^ k, 0, depth as i32, 0xfa5e) >= fill {
+                        continue;
+                    }
+                    let (t0, t1) = (c as f32 * w + w * 0.06, (c + 1) as f32 * w - w * 0.06);
+                    if t0 > start {
+                        push(self, quad(start, t0), y0, y1, face(100 + row as i32));
+                    }
+                    start = t1;
+                }
+                if start < length {
+                    push(self, quad(start, length), y0, y1, face(100 + row as i32));
+                }
+            }
+        }
     }
 }
 
@@ -619,7 +696,18 @@ impl Grower<'_> {
                     self.grow(then, &top, y1, tone, child(1), depth + 1);
                 }
             }
-            Form::Facade { height, panel, storey, depth: (d0, d1), fill, tone: t, then } => {
+            Form::Facade { inlay: true, height, panel, storey, depth: (d0, d1), fill, tone: t, then } => {
+                let tone = tone + t;
+                let h = pick(*height, 1);
+                if self.budget == 0 {
+                    return;
+                }
+                self.inlaid(poly, floor, h, (*panel, *storey), pick((*d0, *d1), 2), *fill, tone, seed, depth);
+                if let Some(then) = then {
+                    self.grow(then, poly, floor + h, tone, child(1), depth + 1);
+                }
+            }
+            Form::Facade { height, panel, storey, depth: (d0, d1), fill, tone: t, then, .. } => {
                 let tone = tone + t;
                 let core = Some(inset(poly, *d1)).filter(|c| c.len() >= 3).unwrap_or_else(|| poly.to_vec());
                 let h = pick(*height, 1);

@@ -500,8 +500,6 @@ mod zz_bench;
 #[cfg(test)]
 mod zz_nodes;
 #[cfg(test)]
-mod zz_plates;
-#[cfg(test)]
 mod zz_world;
 
 #[cfg(test)]

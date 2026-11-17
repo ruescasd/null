@@ -5,6 +5,10 @@
 //! in orange.
 //!
 //! `cargo run -p worldgen --release --example map -- [out.png] [metres per pixel] [seed] [network cells per side] [chance of a station]`
+//!
+//! Voids (no ground) in black: `VOIDS` the share of the region map's cells
+//! that are voids, `COAST` how far (m) region borders are warped (both
+//! environment variables, 0 unless set).
 
 use std::thread;
 
@@ -20,7 +24,11 @@ fn main() {
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/structures.ron");
     let library = Library::parse(&std::fs::read_to_string(path).expect("read structures.ron")).expect("parse");
-    let world = PlateWorld::new(16384.0, seed).with_sites(&library);
+    let mut world = PlateWorld::new(16384.0, seed);
+    let env = |name: &str| std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    world.districts.voids = env("VOIDS");
+    world.districts.coast = env("COAST");
+    let world = world.with_sites(&library);
     let size = world.size();
     let px = (size / scale) as u32;
 
@@ -67,6 +75,7 @@ fn main() {
                 District::Broken => [0.75, 0.82, 0.9],
                 District::Uplands => [0.9, 0.95, 0.65],
                 District::Highlands => [0.95, 0.78, 0.72],
+                District::Void => [0.0, 0.0, 0.0],
             };
             let c = |t: f32| (((shade + lift) * t).clamp(0.0, 1.0) * 255.0) as u8;
             let mut pixel = [c(tint[0]), c(tint[1]), c(tint[2])];
@@ -241,11 +250,12 @@ fn main() {
         );
     }
 
-    let mut counts = [0usize; District::ALL.len()];
+    let every: Vec<District> = District::ALL.into_iter().chain([District::Void]).collect();
+    let mut counts = vec![0usize; every.len()];
     for k in &kinds {
-        counts[District::ALL.iter().position(|d| d == k).unwrap()] += 1;
+        counts[every.iter().position(|d| d == k).unwrap()] += 1;
     }
-    for (d, c) in District::ALL.iter().zip(counts) {
+    for (d, c) in every.iter().zip(counts) {
         println!("{:>8}: {:4.1}%", d.name(), c as f32 / kinds.len() as f32 * 100.0);
     }
     img.save(&out).expect("write map");

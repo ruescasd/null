@@ -52,8 +52,10 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.instance_index = vertex.instance_index;
 #endif
 #ifdef VISIBILITY_RANGE_DITHER
-    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
-        vertex.instance_index, world_from_local[3]);
+    // (The game's: a terrain column fading in or out, from its tag, see
+    // terrain.rs, `Fading`; 0, not fading.)
+    let tag = mesh_functions::get_tag(vertex.instance_index);
+    out.visibility_range_dither = select(0, i32(tag) - 64, tag != 0u);
 #endif
     return out;
 }

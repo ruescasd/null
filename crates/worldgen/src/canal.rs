@@ -16,6 +16,7 @@ use glam::{DVec2, Vec3};
 
 use crate::mesh::ColumnMesh;
 use crate::network::Network;
+use crate::planar::{self, Corner, Geometry, Line};
 use crate::noise::hash01;
 
 /// Radius of the half-pipe, in metres.
@@ -26,6 +27,11 @@ pub const PIPE_RADIUS: f64 = 7.0;
 pub const HALF_WIDTH: f64 = PIPE_RADIUS;
 /// How far the canal's outer walls reach below its rim.
 const OUTER_DEPTH: f64 = 70.0;
+/// Over a void, a canal is a bridge: its outer walls reach this far below
+/// its rim, the pipe's depth and a girder's, closed underneath (the 70 m
+/// skirt hung in the open, the user, 2026-11-17). A station in a void, a
+/// platform as deep under its court.
+const BRIDGE_DEPTH: f64 = PIPE_RADIUS + 3.0;
 /// Facets across the half-pipe.
 const FACETS: usize = 24;
 /// Target length of a mesh segment at the finest level of detail.
@@ -120,10 +126,10 @@ pub struct Canal {
     pub a: usize,
     pub b: usize,
     /// Station `a`, and the direction to `b`.
-    start: DVec2,
-    dir: DVec2,
+    pub(crate) start: DVec2,
+    pub(crate) dir: DVec2,
     perp: DVec2,
-    length: f64,
+    pub(crate) length: f64,
     /// +1 or -1: which way the flow runs along `dir`.
     pub flow: f64,
 }
@@ -281,20 +287,6 @@ impl Canals {
         })
     }
 
-    /// The edges of station `s`'s court in `near`'s copy of the world: each
-    /// how far outside it a point is (positive outside).
-    fn station_planes(&self, s: usize, near: DVec2) -> Vec<Box<dyn Fn(DVec2) -> f64>> {
-        let center = near - self.wrap(near - self.stations[s]);
-        let apothem = STATION_RADIUS * (std::f64::consts::PI / STATION_SIDES as f64).cos();
-        (0..STATION_SIDES)
-            .map(|k| {
-                let a = k as f64 / STATION_SIDES as f64 * std::f64::consts::TAU;
-                let n = DVec2::new(a.cos(), a.sin());
-                Box::new(move |v: DVec2| (v - center).dot(n) - apothem) as Box<dyn Fn(DVec2) -> f64>
-            })
-            .collect()
-    }
-
     /// The canal whose pipe corridor (plus `margin` across it) contains
     /// `p`, if any.
     pub fn hit(&self, p: DVec2, margin: f64, field: &impl Fn(DVec2) -> f64) -> Option<CanalHit> {
@@ -346,68 +338,101 @@ impl Canals {
         self.hit(p, 0.0, field).map(|h| Self::profile_height(h.offset, h.floor))
     }
 
-    /// The parts of a convex polygon outside every canal corridor and
-    /// station court.
-    pub fn cut(&self, poly: Vec<DVec2>) -> Vec<Vec<DVec2>> {
+    /// The parts of a convex polygon (by its corners, see `planar`) outside
+    /// every canal corridor and station court, its lines' places by
+    /// `geometry` (which knows the canals' by `line`).
+    pub fn cut<G: Geometry + ?Sized>(&self, poly: Vec<Corner>, geometry: &G) -> Vec<Vec<Corner>> {
         // (Only the stations and canals that may reach it, in order: the
         // rest leave it whole. Every piece tried against all the world's,
         // most of the plates' outlining.)
-        let near = centroid(&poly);
-        let reach = poly.iter().map(|v| v.distance(near)).fold(0.0, f64::max);
+        let at = planar::points(&poly);
+        let near = centroid(&at);
+        let reach = at.iter().map(|v| v.distance(near)).fold(0.0, f64::max);
         let index = self.index.get_or_init(|| Index::new(self));
         let (stations, lines): (&[u32], &[u32]) = match index.at(near, reach) {
             Some((s, l)) => (s, l),
             None => (&index.all.0, &index.all.1),
         };
-        self.cut_by(poly, stations, lines)
+        self.cut_by(poly, stations, lines, geometry)
     }
 
     /// As `cut`, by `stations` and `lines` alone.
-    fn cut_by(&self, poly: Vec<DVec2>, stations: &[u32], lines: &[u32]) -> Vec<Vec<DVec2>> {
+    fn cut_by<G: Geometry + ?Sized>(&self, poly: Vec<Corner>, stations: &[u32], lines: &[u32], geometry: &G) -> Vec<Vec<Corner>> {
         let mut pieces = vec![poly];
-        let end = self.end();
         for s in stations.iter().map(|&s| s as usize) {
             pieces = pieces
                 .into_iter()
                 .flat_map(|piece| {
-                    let near = centroid(&piece);
+                    let at = planar::points(&piece);
+                    let near = centroid(&at);
                     // (Only pieces that reach the court: the rest whole.)
-                    let reach = piece.iter().map(|v| v.distance(near)).fold(0.0, f64::max);
+                    let reach = at.iter().map(|v| v.distance(near)).fold(0.0, f64::max);
                     if self.wrap(near - self.stations[s]).length() > STATION_RADIUS + reach {
                         return vec![piece];
                     }
-                    subtract(piece, &self.station_planes(s, near))
+                    let copy = self.copy(near - self.stations[s]);
+                    let planes: Vec<Line> = (0..STATION_SIDES).map(|k| Line::Station { s: s as u32, side: k as u8, copy }).collect();
+                    subtract(piece, &planes, geometry)
                 })
                 .collect();
         }
         for i in lines.iter().map(|&i| i as usize) {
-            let c = self.lines[i];
             pieces = pieces
                 .into_iter()
                 .flat_map(|piece| {
-                    // Each vertex in the frame of the copy nearest the
-                    // piece (pieces are far smaller than the world).
-                    let near = centroid(&piece);
-                    let l = self.local(i, near);
-                    let offset = move |v: DVec2| l.offset + (v - near).dot(c.perp);
-                    let along = move |v: DVec2| l.along + (v - near).dot(c.dir);
-                    let planes: [Box<dyn Fn(DVec2) -> f64>; 4] = [
-                        Box::new(move |v| offset(v) - HALF_WIDTH),
-                        Box::new(move |v| -offset(v) - HALF_WIDTH),
-                        Box::new(move |v| along(v) - (c.length - end)),
-                        Box::new(move |v| end - along(v)),
-                    ];
-                    subtract(piece, &planes)
+                    // (The copy of it nearest the piece: pieces are far
+                    // smaller than the world.)
+                    let c = &self.lines[i];
+                    let copy = self.copy(centroid(&planar::points(&piece)) - (c.start + c.dir * (c.length * 0.5)));
+                    let planes: Vec<Line> = (0..4).map(|part| Line::Canal { i: i as u32, part, copy }).collect();
+                    subtract(piece, &planes, geometry)
                 })
                 .collect();
         }
         pieces
     }
 
+    /// Which copy round the wrap `d` (from a canal's or station's own) is in.
+    fn copy(&self, d: DVec2) -> (i32, i32) {
+        let k = (d / self.size).round();
+        (k.x as i32, k.y as i32)
+    }
+
+    /// A canal's or station's line (`planar::Line::Canal`, `Station`): a
+    /// point on it and its normal, the corridor or court below it.
+    pub fn line(&self, l: Line) -> (DVec2, DVec2) {
+        let shift = |copy: (i32, i32)| DVec2::new(copy.0 as f64, copy.1 as f64) * self.size;
+        match l {
+            Line::Canal { i, part, copy } => {
+                let c = &self.lines[i as usize];
+                let (half, end) = (c.length * 0.5, self.end());
+                let m = c.start + c.dir * half + shift(copy);
+                match part {
+                    0 => (m + c.perp * HALF_WIDTH, c.perp),
+                    1 => (m - c.perp * HALF_WIDTH, -c.perp),
+                    2 => (m + c.dir * (half - end), c.dir),
+                    _ => (m + c.dir * (end - half), -c.dir),
+                }
+            }
+            Line::Station { s, side, copy } => {
+                let center = self.stations[s as usize] + shift(copy);
+                let apothem = STATION_RADIUS * (std::f64::consts::PI / STATION_SIDES as f64).cos();
+                let a = side as f64 / STATION_SIDES as f64 * std::f64::consts::TAU;
+                let n = DVec2::new(a.cos(), a.sin());
+                (center + n * apothem, n)
+            }
+            _ => panic!("not a canal's line: {l:?}"),
+        }
+    }
+
     /// Meshes the canal segments and station courts whose midpoint lies in
     /// the square `[x0, x0 + size) x [z0, z0 + size)`, with segments `scale`
     /// times the finest length. Positions are relative to `(x0, z0)`.
-    pub fn mesh_square(&self, mesh: &mut ColumnMesh, (x0, z0): (f64, f64), size: f64, scale: f64, field: &impl Fn(DVec2) -> f64) {
+    /// The canals and stations in the square at `(x0, z0)`, `size` across,
+    /// segments `scale` times as long as the finest; over a void (`void`)
+    /// as bridges and platforms.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mesh_square(&self, mesh: &mut ColumnMesh, (x0, z0): (f64, f64), size: f64, scale: f64, field: &impl Fn(DVec2) -> f64, void: &impl Fn(DVec2) -> bool) {
         let inside = |p: DVec2| p.x >= x0 && p.x < x0 + size && p.y >= z0 && p.y < z0 + size;
         let center = DVec2::new(x0 + size * 0.5, z0 + size * 0.5);
         let reach = size * 0.75 + HALF_WIDTH;
@@ -431,12 +456,24 @@ impl Canals {
                 }
                 let (a, b) = (l.start + c.dir * s0, l.start + c.dir * s1);
                 let (fa, fb) = (self.floor(i, s0, a, field), self.floor(i, s1, b, field));
+                // Over a void (by its middle), a bridge; where it meets one
+                // on land, the land's deeper walls closed across at the
+                // meeting, facing the bridge.
+                let bridge = void(l.start + c.dir * ((s0 + s1) * 0.5));
+                let depth = if bridge { BRIDGE_DEPTH } else { OUTER_DEPTH };
+                if k > 0 {
+                    let before = void(l.start + c.dir * (s0 - seg * 0.5));
+                    if before != bridge {
+                        let toward = if bridge { c.dir } else { -c.dir };
+                        Self::mesh_closure(mesh, c.perp, a, fa, toward, (x0, z0));
+                    }
+                }
                 // A joint at its start (near enough to be seen): a ring
                 // sunk a little, stepping down into it and up out of it.
                 let (from, floor_from) = if scale <= 1.0 && k > 0 && k % JOINT_EVERY == 0 {
                     let j = l.start + c.dir * (s0 + JOINT_WIDTH);
                     let fj = self.floor(i, s0 + JOINT_WIDTH, j, field);
-                    Self::mesh_segment(mesh, c.perp, a, b, fa, fj, &sunk, (x0, z0), Some(j), None);
+                    Self::mesh_segment(mesh, c.perp, a, b, fa, fj, &sunk, (x0, z0), Some(j), None, depth);
                     Self::mesh_step(mesh, c.perp, a, fa, &surface, &sunk, c.dir, (x0, z0));
                     Self::mesh_step(mesh, c.perp, j, fj, &surface, &sunk, -c.dir, (x0, z0));
                     (j, fj)
@@ -445,7 +482,7 @@ impl Canals {
                 };
                 let start = s0 + (from - a).length();
                 let stones = (scale <= 1.0).then_some((self.stones, i, start, s1));
-                Self::mesh_segment(mesh, c.perp, from, b, floor_from, fb, &surface, (x0, z0), None, stones);
+                Self::mesh_segment(mesh, c.perp, from, b, floor_from, fb, &surface, (x0, z0), None, stones, depth);
                 // Its ends, where it opens onto a court: capped.
                 if k == 0 {
                     Self::mesh_cap(mesh, c.perp, a, fa, -c.dir, (x0, z0));
@@ -458,13 +495,14 @@ impl Canals {
         for s in 0..self.stations.len() {
             let at = center - self.wrap(center - self.stations[s]);
             if inside(at) {
-                Self::mesh_station(mesh, at, self.station_floor(s, field), (x0, z0));
+                Self::mesh_station(mesh, at, self.station_floor(s, field), (x0, z0), void(at));
             }
         }
     }
 
-    /// A station's court: its floor, and a skirt down past the ground.
-    fn mesh_station(mesh: &mut ColumnMesh, at: DVec2, floor: f64, origin: (f64, f64)) {
+    /// A station's court: its floor, and a skirt down past the ground; in a
+    /// void (`floating`), a platform, shallow and closed underneath.
+    fn mesh_station(mesh: &mut ColumnMesh, at: DVec2, floor: f64, origin: (f64, f64), floating: bool) {
         let local = |p: DVec2, y: f64| Vec3::new((p.x - origin.0) as f32, y as f32, (p.y - origin.1) as f32);
         // (Corners between the edges `station_planes` gives.)
         let corner = |k: usize| {
@@ -486,9 +524,35 @@ impl Canals {
             mesh.indices.extend_from_slice(&up);
             let out = (corner(k) + corner(k + 1)) * 0.5 - at;
             let normal = Vec3::new(out.x as f32, 0.0, out.y as f32).normalize();
-            let down = Vec3::Y * OUTER_DEPTH as f32;
+            let down = Vec3::Y * if floating { BRIDGE_DEPTH } else { OUTER_DEPTH } as f32;
             push_quad(mesh, [p, q, q - down, p - down], normal, WALL_ALBEDO, [1.0, 1.0, 0.0, 0.0]);
+            if floating {
+                // (Its underside, a fan.)
+                let base = mesh.positions.len() as u32;
+                for v in [middle - down, p - down, q - down] {
+                    mesh.positions.push(v.to_array());
+                    mesh.normals.push([0.0, -1.0, 0.0]);
+                    mesh.albedo.push(WALL_ALBEDO);
+                    mesh.ao.push(0.0);
+                }
+                let face = (p - middle).cross(q - middle);
+                let under = if face.y < 0.0 { [base, base + 1, base + 2] } else { [base, base + 2, base + 1] };
+                mesh.indices.extend_from_slice(&under);
+            }
         }
+    }
+
+    /// Where a canal leaves land for a void: the land's deeper outer walls
+    /// closed across the canal at `at`, from the bridge's underside down,
+    /// facing `toward` the bridge.
+    fn mesh_closure(mesh: &mut ColumnMesh, perp: DVec2, at: DVec2, floor: f64, toward: DVec2, origin: (f64, f64)) {
+        let point = |o: f64, h: f64| {
+            let p = at + perp * o;
+            Vec3::new((p.x - origin.0) as f32, (floor + PIPE_RADIUS - h) as f32, (p.y - origin.1) as f32)
+        };
+        let normal = Vec3::new(toward.x as f32, 0.0, toward.y as f32);
+        let quad = [point(-HALF_WIDTH, BRIDGE_DEPTH), point(HALF_WIDTH, BRIDGE_DEPTH), point(HALF_WIDTH, OUTER_DEPTH), point(-HALF_WIDTH, OUTER_DEPTH)];
+        push_quad(mesh, quad, normal, WALL_ALBEDO, [0.0; 4]);
     }
 
     /// The end of a pipe where it opens onto a court: closed from its
@@ -580,6 +644,7 @@ impl Canals {
         origin: (f64, f64),
         to: Option<DVec2>,
         stones: Option<(Stones, usize, f64, f64)>,
+        depth: f64,
     ) {
         let b = to.unwrap_or(b);
         let world = |center: DVec2, f: f64, o: f64, h: f64| {
@@ -630,13 +695,19 @@ impl Canals {
             }
         }
 
-        // Outer walls, down past the ground on both sides.
+        // Outer walls, `depth` below the rim on both sides: down past the
+        // ground; over a void, a bridge's, closed underneath.
+        let down = Vec3::Y * depth as f32;
         for side in [-1.0, 1.0] {
             let top_a = world(a, floor_a, side * HALF_WIDTH, PIPE_RADIUS);
             let top_b = world(b, floor_b, side * HALF_WIDTH, PIPE_RADIUS);
-            let down = Vec3::Y * OUTER_DEPTH as f32;
             let normal = Vec3::new((perp.x * side) as f32, 0.0, (perp.y * side) as f32);
             push_quad(mesh, [top_a, top_b, top_b - down, top_a - down], normal, WALL_ALBEDO, [1.0, 1.0, 0.0, 0.0]);
+        }
+        if depth < OUTER_DEPTH {
+            let under = |c: DVec2, f: f64, side: f64| world(c, f, side * HALF_WIDTH, PIPE_RADIUS) - down;
+            let quad = [under(a, floor_a, -1.0), under(a, floor_a, 1.0), under(b, floor_b, 1.0), under(b, floor_b, -1.0)];
+            push_quad(mesh, quad, Vec3::NEG_Y, WALL_ALBEDO, [0.0; 4]);
         }
     }
 
@@ -714,42 +785,33 @@ fn centroid(poly: &[DVec2]) -> DVec2 {
     poly.iter().copied().sum::<DVec2>() / poly.len() as f64
 }
 
-/// The parts of a convex polygon outside a convex region, the region given
-/// by its edges (each how far outside it a point is: positive outside).
-fn subtract(poly: Vec<DVec2>, planes: &[Box<dyn Fn(DVec2) -> f64>]) -> Vec<Vec<DVec2>> {
+/// The parts of a convex polygon (its corners, see `planar`) outside a
+/// convex region, the region given by its lines (`geometry`'s: below each
+/// is in).
+fn subtract<G: Geometry + ?Sized>(poly: Vec<Corner>, planes: &[Line], geometry: &G) -> Vec<Vec<Corner>> {
     if poly.len() < 3 {
         return Vec::new();
     }
     // Wholly outside one edge: untouched.
-    if planes.iter().any(|f| poly.iter().all(|&v| f(v) >= 0.0)) {
+    let outside = |l: Line| {
+        let (p, n) = geometry.line(l);
+        poly.iter().all(|c| c.key.on(l) || (c.at - p).dot(n) >= 0.0)
+    };
+    if planes.iter().any(|&l| outside(l)) {
         return vec![poly];
     }
     let mut out = Vec::new();
     let mut rest = poly;
-    for f in planes {
-        let outside = clip_half_plane(&rest, f);
-        if outside.len() >= 3 {
-            out.push(outside);
+    let (mut part, mut spare) = (Vec::new(), Vec::new());
+    for &l in planes {
+        planar::clip(&rest, l, false, geometry, &mut part);
+        if part.len() >= 3 {
+            out.push(part.clone());
         }
-        rest = clip_half_plane(&rest, |v| -f(v));
+        planar::clip(&rest, l, true, geometry, &mut spare);
+        std::mem::swap(&mut rest, &mut spare);
         if rest.len() < 3 {
             break;
-        }
-    }
-    out
-}
-
-/// Keeps the part of a convex polygon where `side(v) >= 0`.
-pub fn clip_half_plane(poly: &[DVec2], side: impl Fn(DVec2) -> f64) -> Vec<DVec2> {
-    let mut out = Vec::with_capacity(poly.len() + 1);
-    for k in 0..poly.len() {
-        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
-        let (sa, sb) = (side(a), side(b));
-        if sa >= 0.0 {
-            out.push(a);
-        }
-        if (sa >= 0.0) != (sb >= 0.0) {
-            out.push(a + (b - a) * (sa / (sa - sb)));
         }
     }
     out
@@ -800,6 +862,39 @@ fn push_quad(mesh: &mut ColumnMesh, quad: [Vec3; 4], normal: Vec3, albedo: f32, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planar::Key;
+
+    /// Where a test's polygon's edges (`Line::Bound`, level 0, site (0, 0),
+    /// its edge `k`) and the canals' lines are.
+    struct Free<'a> {
+        canals: &'a Canals,
+        points: Vec<DVec2>,
+    }
+
+    impl Geometry for Free<'_> {
+        fn site(&self, _: usize, _: (i32, i32)) -> DVec2 {
+            unreachable!("no sites in a test's polygon")
+        }
+
+        fn line(&self, l: Line) -> (DVec2, DVec2) {
+            match l {
+                Line::Bound { k, .. } => {
+                    let n = self.points.len();
+                    let (p, q) = (self.points[k as usize % n], self.points[(k as usize + 1) % n]);
+                    (p, (q - p).perp())
+                }
+                _ => self.canals.line(l),
+            }
+        }
+    }
+
+    /// `points` as corners (`Free`'s), and its geometry.
+    fn free(canals: &Canals, points: Vec<DVec2>) -> (Vec<Corner>, Free<'_>) {
+        let n = points.len();
+        let line = |k: usize| Line::Bound { level: 0, site: (0, 0), k: (k % n) as u8 };
+        let corners = (0..n).map(|k| Corner::new(points[k], Key::of(line(k + n - 1), line(k)), line(k))).collect();
+        (corners, Free { canals, points })
+    }
 
     /// `cut` by its index cuts every piece as by all the stations and
     /// canals: hexagons of every size up to the index's reach, round every
@@ -818,7 +913,8 @@ mod tests {
             for (k, &c) in centres.iter().enumerate() {
                 for r in [3.0, 20.0, 80.0, 250.0] {
                     let poly: Vec<DVec2> = (0..6).map(|j| c + DVec2::from_angle(j as f64 * std::f64::consts::FRAC_PI_3 + k as f64) * r).collect();
-                    assert_eq!(canals.cut(poly.clone()), canals.cut_by(poly, &all.0, &all.1), "seed {seed}, round {c:?}, {r} m");
+                    let (corners, geometry) = free(&canals, poly);
+                    assert_eq!(canals.cut(corners.clone(), &geometry), canals.cut_by(corners, &all.0, &all.1, &geometry), "seed {seed}, round {c:?}, {r} m");
                     tried += 1;
                 }
             }
@@ -861,7 +957,8 @@ mod tests {
         for along in [c.length * 0.5, 10.0, c.length - 25.0] {
             let at = c.start + c.dir * along;
             let square = vec![at + DVec2::new(-30.0, -30.0), at + DVec2::new(30.0, -30.0), at + DVec2::new(30.0, 30.0), at + DVec2::new(-30.0, 30.0)];
-            let pieces = canals.cut(square.clone());
+            let (corners, geometry) = free(&canals, square.clone());
+            let pieces: Vec<Vec<DVec2>> = canals.cut(corners, &geometry).iter().map(|p| planar::points(p)).collect();
             let kept: f64 = pieces.iter().map(|p| area(p)).sum();
             // The square's area outside, sampled a metre apart.
             let mut outside = 0;

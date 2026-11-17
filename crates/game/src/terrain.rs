@@ -9,7 +9,8 @@
 //! Each level covers a disc around the camera. A coarse column is drawn until
 //! every finer column covering it is ready, so there are never holes; where a
 //! coarse column still overlaps finer ones it sits slightly lower so the finer
-//! surface wins.
+//! surface wins. A column replacing another fades in as that one fades out,
+//! dithered (see `Fading`).
 
 use std::sync::Arc;
 
@@ -29,13 +30,19 @@ use worldgen::{
     plates::{CanalFlow, PlateWorld},
 };
 
-use bevy::camera::{primitives::Aabb, visibility::NoAutoAabb};
+use bevy::camera::{
+    primitives::Aabb,
+    visibility::{NoAutoAabb, VisibilityRange},
+};
+use bevy::mesh::MeshTag;
 
 use crate::Args;
 
 /// Radius of each detail level's disc, in metres.
 pub const LOD_RADIUS: [f32; LOD_LEVELS as usize] = [450.0, 1700.0, 4800.0];
-/// How far each coarser level of detail is lowered (m, see `WorldGen::sink`).
+
+/// How far each coarser level of detail is lowered (m, see `WorldGen::sink`)
+/// drawn at a fixed depth (`--set far_px 0`).
 const SINK: f32 = 3.0;
 /// How far round the camera the finest terrain must be in place to play
 /// (`Streamer::near`); the rest streams in while you do.
@@ -97,14 +104,47 @@ impl Plugin for TerrainPlugin {
             .add_systems(Startup, setup_material)
             .add_systems(
                 Update,
-                (receive_meshes, stream_columns, update_material).chain().in_set(StreamSet),
+                (receive_meshes, stream_columns, fade_columns, update_material).chain().in_set(StreamSet),
             );
     }
+}
+
+/// The coarser levels drawn as planes fitted to the finest within `--set
+/// far_px` pixels (3) seen from the level's nearest (65 degrees over 900 px;
+/// see worldgen's `PlateWorld::far_tol`): how far (m) at each level. (At a
+/// fixed depth, `far_px 0`, the far districts read as boxes and each level
+/// popped in, the user, 2026-11-17.)
+fn far_tol(args: &Args) -> [f64; 3] {
+    let px = args.num("far_px", 3.0) as f64;
+    let angle = 65f64.to_radians() / 900.0;
+    [0.0, LOD_RADIUS[0] as f64 * angle * px, LOD_RADIUS[1] as f64 * angle * px]
+}
+
+/// How far a level of detail is lowered (see `WorldGen::sink`), its
+/// tolerances `tol`.
+fn sink(tol: [f64; 3], lod: u32) -> f32 {
+    if tol[lod as usize] > 0.0 {
+        return tol[..=lod as usize].iter().sum::<f64>() as f32;
+    }
+    SINK * lod as f32
 }
 
 /// The main world, as `args` asks for it: the plates, their canals and
 /// districts, reshaped by the sites in the structure library.
 pub fn plate_world(args: &Args) -> WorldGen {
+    let world = plates(args);
+    match crate::structures::load_library() {
+        Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
+        _ => WorldGen(Arc::new(world)),
+    }
+}
+
+/// The plates as `args` asks for them, before the sites reshape them: every
+/// setting in one place, for the world at the start and for its rebuilding
+/// when the sites change (see `structures.rs`). (Copied there field by
+/// field, the voids and the far view's tolerances were left behind, and
+/// the rebuilt world had neither, 2026-11-17.)
+pub fn plates(args: &Args) -> PlateWorld {
     let mut world = PlateWorld::new(WORLD_SIZE, args.seed);
     world.canals.stones = stones(args);
     world.canals.rise = rise(args);
@@ -115,6 +155,15 @@ pub fn plate_world(args: &Args) -> WorldGen {
     // (`--opt kerbs`: the ground's brick along the flat plates'
     // edges; see worldgen's bricks.rs.)
     world.kerbs = args.opt("kerbs");
+    world.far_tol = far_tol(args);
+    // (`--set voids`: the share of the region map's cells that are voids,
+    // no ground, falling for ever (0 by default while they are judged; the
+    // user's, 20%, 2026-11-17); `coast`, how far their outlines are warped,
+    // m.)
+    world.districts.voids = args.num("voids", 0.0) as f64;
+    world.districts.coast = args.num("coast", 600.0) as f64;
+    // (`--set void_depth`: how far below the world their walls reach, m.)
+    world.void_depth = -(args.num("void_depth", -worldgen::plates::VOID_DEPTH as f32) as f64);
     // (`--set wall_least`: the lowest wall panelled, m; see worldgen.)
     world.wall_least = args.num("wall_least", 1.5) as f64;
     // (`--set district=N`: one district everywhere, in the order of
@@ -124,10 +173,7 @@ pub fn plate_world(args: &Args) -> WorldGen {
     if only >= 0.0 {
         world.districts.force = worldgen::district::District::ALL.get(only as usize).copied();
     }
-    match crate::structures::load_library() {
-        Ok(library) if !args.opt("nosites") => WorldGen(Arc::new(world.with_sites(&library))),
-        _ => WorldGen(Arc::new(world)),
-    }
+    world
 }
 
 /// Systems that move the stream anchor must run before this set.
@@ -167,9 +213,11 @@ impl WorldGen {
     }
 
     /// How far a coarse column is lowered so finer overlapping terrain wins:
-    /// finer plates step at most a few metres from their parent.
+    /// a fitted level (see `far_tol`) by its tolerance and the finer
+    /// levels', at most that far from the finest; at a fixed depth, finer
+    /// plates step at most a few metres from their parent.
     fn sink(&self, lod: u32) -> f32 {
-        SINK * lod as f32
+        sink(self.0.far_tol, lod)
     }
 
     pub fn columns_per_side(&self, lod: u32) -> i32 {
@@ -217,8 +265,8 @@ pub struct TerrainExtension {
     #[uniform(106)]
     pub layers: Vec4,
     /// The panels' cuts: x the chance one is left open, y the chance one is
-    /// a curve; z how far each coarser level of detail is lowered (m,
-    /// `SINK`), so a wall's pattern is laid out where it stands.
+    /// a curve; z and w how far the middle and far levels of detail are
+    /// lowered (m, `sink`), so a wall's pattern is laid out where it stands.
     #[uniform(107)]
     pub marks: Vec4,
     /// Walls round a middle (the arena's): xy the middle (x, z), w on (1).
@@ -226,6 +274,16 @@ pub struct TerrainExtension {
     /// its facets along itself.
     #[uniform(108)]
     pub round: Vec4,
+    /// The far terrain's cached shadow map, and what it was drawn with
+    /// (see far_shadow.rs).
+    #[texture(109, sample_type = "depth")]
+    pub far_inner: Handle<Image>,
+    #[texture(110, sample_type = "float", filterable = false)]
+    pub far_data: Handle<Image>,
+    #[texture(111, sample_type = "depth")]
+    pub far_outer: Handle<Image>,
+    #[texture(112, sample_type = "depth")]
+    pub far_second: Handle<Image>,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -243,7 +301,15 @@ impl MaterialExtension for TerrainExtension {
 }
 
 #[derive(Resource)]
-pub struct TerrainMaterialHandle(pub Handle<TerrainMaterial>);
+pub struct TerrainMaterialHandle(pub [Handle<TerrainMaterial>; LOD_LEVELS as usize]);
+
+/// How much further back each coarser level of detail is drawn, in the
+/// depth buffer's own units (a constant depth bias): where two levels
+/// overlap, as one takes over from the other, the finer wins every tie.
+/// (A void's walls, the same at every level, lay in one plane at both,
+/// hundreds of metres tall; the camera's jitter decided which was drawn,
+/// whole walls blinking, the user's "blink", 2026-11-17.)
+const LOD_DEPTH_BIAS: f32 = 2000.0;
 
 /// The same surface for structures, with its own panelling.
 #[derive(Resource)]
@@ -251,6 +317,80 @@ pub struct StructureMaterialHandle(pub Handle<TerrainMaterial>);
 
 #[derive(Component)]
 pub struct TerrainColumn;
+
+/// A column fading in, or out, over `--set lod_fade` s (0.4; 0, none):
+/// since when (real time). Where one level of detail takes over from
+/// another, the one leaving fades out as the one coming fades in, dithered,
+/// their patterns each other's complement, so there is never a hole (Bevy's
+/// visibility ranges' crossfade, timed here rather than by distance: a
+/// level's columns are ready one by one; the coarse one leaves only as the
+/// last of them comes). Told to the shaders in the column's tag (see
+/// `fade_tag`). (A level's switch at once popped, the user, 2026-11-17.)
+/// Meanwhile the finer of the two casts no shadow, live or in the far maps
+/// (`quiet`): the coarser under it, sunk, lay in its shadow, a dark flash.
+/// The coarser casts on: it lies under the finer, and the shadows go over
+/// from one to the other as they end.
+#[derive(Component)]
+pub struct Fading {
+    since: f32,
+    out: bool,
+    pub quiet: bool,
+}
+
+/// A fading column's tag: Bevy's dither level (-16, hidden, to 0, fading
+/// in; 0 to 16, hidden, fading out) plus 64; 0, not fading (read in
+/// terrain_vertex.wgsl and terrain_prepass.wgsl).
+fn fade_tag(level: i32) -> MeshTag {
+    MeshTag(if level == 0 { 0 } else { (level + 64) as u32 })
+}
+
+/// A range never reached, with a margin, so Bevy's pipelines dither a
+/// fading column (see `Fading`): only while it fades (every column so, the
+/// terrain's shader discarding, its depth tested late: the stacks from
+/// above 9.3 to 13.2 ms).
+fn dithered() -> VisibilityRange {
+    VisibilityRange { start_margin: 0.0..0.001, end_margin: 1.0e9..2.0e9, use_aabb: false }
+}
+
+/// Moves each fading column on, and lets one gone out go. (Its mesh told
+/// changed as it begins and ends: Bevy chooses an entity's pipelines again
+/// only for that, not for its visibility range; ended, the columns kept
+/// the dithered ones, 2.7 ms in the stacks.)
+fn fade_columns(
+    args: Res<Args>,
+    time: Res<Time<Real>>,
+    mut commands: Commands,
+    mut fading: Query<(Entity, &Fading, &mut MeshTag, &mut Mesh3d, Has<crate::far_shadow::FarCaster>)>,
+    begun: Query<(), Added<Fading>>,
+) {
+    let length = args.num("lod_fade", 0.4);
+    let now = time.elapsed_secs();
+    for (entity, fade, mut tag, mut mesh, far) in &mut fading {
+        if begun.contains(entity) {
+            mesh.set_changed();
+        }
+        let t = if length > 0.0 { ((now - fade.since) / length).clamp(0.0, 1.0) } else { 1.0 };
+        let step = (t * 16.0).round() as i32;
+        if t >= 1.0 {
+            if fade.out {
+                commands.entity(entity).despawn();
+            } else {
+                commands.entity(entity).remove::<(Fading, VisibilityRange)>();
+                // (The nearest level casting live again.)
+                if fade.quiet && !far {
+                    commands.entity(entity).remove::<bevy::light::NotShadowCaster>();
+                }
+                *tag = fade_tag(0);
+                mesh.set_changed();
+            }
+            continue;
+        }
+        let new = fade_tag(if fade.out { step } else { step - 16 });
+        if *tag != new {
+            *tag = new;
+        }
+    }
+}
 
 /// Marks the entity whose position drives streaming.
 #[derive(Component, Default)]
@@ -272,7 +412,7 @@ struct Built {
 pub struct Streamer {
     /// (lod, wrapped key) -> mesh (None when the column is empty).
     cache: HashMap<Key, Option<Built>>,
-    pending: HashMap<Key, Task<(ColumnMesh, Option<Collider>, [f32; 2])>>,
+    pending: HashMap<Key, Task<(Option<(Mesh, Aabb)>, Option<Collider>, [f32; 2])>>,
     /// (lod, unwrapped key) -> instance.
     spawned: HashMap<Key, Entity>,
     /// Instances of a world that has since changed, kept until their
@@ -315,7 +455,13 @@ fn setup_material(
     // The ground may be paved; `glow` is the brightness of lit geometry.
     let ground = surface(&args, world.size(), 0.0, args.num("paving", 0.0));
     let structures = surface(&args, world.size(), args.num("glow", 3000.0), 0.0);
-    commands.insert_resource(TerrainMaterialHandle(materials.add(ground)));
+    let mut level = |lod: u32| {
+        let mut m = ground.clone();
+        m.base.depth_bias = -LOD_DEPTH_BIAS * lod as f32;
+        materials.add(m)
+    };
+    let levels = [level(0), level(1), level(2)];
+    commands.insert_resource(TerrainMaterialHandle(levels));
     commands.insert_resource(StructureMaterialHandle(materials.add(structures)));
 }
 
@@ -366,8 +512,12 @@ pub fn surface(args: &Args, size: f32, glow: f32, paving: f32) -> TerrainMateria
                 args.num("wall_tone", 0.12),
             ),
             layers: Vec4::new(args.num("wall_stretch", 4.0), args.num("wall_split", 1.5), args.num("wall_key", 0.0), 0.0),
-            marks: Vec4::new(args.num("wall_open", glyphs * 0.25), args.num("wall_curve", glyphs * 0.2), SINK, 0.0),
+            marks: Vec4::new(args.num("wall_open", glyphs * 0.25), args.num("wall_curve", glyphs * 0.2), sink(far_tol(args), 1), sink(far_tol(args), 2)),
             round: Vec4::ZERO,
+            far_inner: crate::far_shadow::FAR_MAPS[0].clone(),
+            far_data: crate::far_shadow::FAR_DATA,
+            far_outer: crate::far_shadow::FAR_MAPS[1].clone(),
+            far_second: crate::far_shadow::FAR_MAPS[2].clone(),
         },
     }
 }
@@ -381,7 +531,7 @@ fn update_material(
 ) {
     let curvature = if args.opt("flat") { 0.0 } else { 0.5 / PLANET_RADIUS };
     let p = anchor.translation;
-    for handle in [&terrain.0, &structures.0] {
+    for handle in terrain.0.iter().chain([&structures.0]) {
         // (Written only when it changes: each change made Bevy check every
         // mesh drawn with it again, in every view (the main one, the
         // prepass, six shadow cascades with both suns up), every frame:
@@ -435,6 +585,8 @@ impl Coverage<'_> {
 }
 
 fn stream_columns(
+    args: Res<Args>,
+    time: Res<Time<Real>>,
     mut commands: Commands,
     mut streamer: ResMut<Streamer>,
     world: Res<WorldGen>,
@@ -518,20 +670,40 @@ fn stream_columns(
             let column = world.mesh(key.0, key.1.x, key.1.y);
             let meshed = start.elapsed().as_secs_f32();
             let collider = (key.0 == 0).then(|| column_collider(&column)).flatten();
-            (column, collider, [meshed, start.elapsed().as_secs_f32() - meshed])
+            let spent = [meshed, start.elapsed().as_secs_f32() - meshed];
+            // (Ready to draw here, with its bounds: made so as it was taken
+            // in, in the frame it came.)
+            let shown = (!column.is_empty()).then(|| (bounds(&column), column)).map(|(aabb, column)| (to_bevy_mesh(column, key.0), aabb));
+            (shown, collider, spent)
         });
         streamer.pending.insert(key, task);
     }
 
     // Despawn instances no longer drawn (including all of them right after the
-    // camera wraps around the world; they respawn from the cache this frame).
+    // camera wraps around the world; they respawn from the cache this frame):
+    // faded out where another level takes over (see `Fading`), else at once.
+    let now = time.elapsed_secs();
+    let fades = args.num("lod_fade", 0.4) > 0.0;
+    // (Whether a coarser level over a column, or a finer one under it.)
+    let coarser = |(lod, key): Key, among: &dyn Fn(&Key) -> bool| lod + 1 < LOD_LEVELS && among(&(lod + 1, key.div_euclid(IVec2::splat(LOD_FACTOR as i32))));
+    let finer = |(lod, key): Key, among: &dyn Fn(&Key) -> bool| lod > 0 && children(key).any(|c| among(&(lod - 1, c)));
     streamer.spawned.retain(|key, entity| {
         let keep = draw.contains(key);
         if !keep {
-            commands.entity(*entity).despawn();
+            let quiet = coarser(*key, &|k| draw.contains(k));
+            if fades && (quiet || finer(*key, &|k| draw.contains(k))) {
+                commands.entity(*entity).insert((Fading { since: now, out: true, quiet }, fade_tag(1), dithered()));
+                if quiet {
+                    commands.entity(*entity).insert(bevy::light::NotShadowCaster);
+                }
+            } else {
+                commands.entity(*entity).despawn();
+            }
         }
         keep
     });
+    let shown: HashSet<Key> = streamer.spawned.keys().copied().collect();
+    let far_cache = crate::far_shadow::enabled(&args);
     for &(lod, key) in &draw {
         if streamer.spawned.contains_key(&(lod, key)) {
             continue;
@@ -543,17 +715,35 @@ fn stream_columns(
         }
         let size = column_size(lod);
         let sink = world.sink(lod);
+        // (Fading in where it takes over from another level.)
+        let quiet = coarser((lod, key), &|k| shown.contains(k));
+        let fade_in = fades && (quiet || finer((lod, key), &|k| shown.contains(k)));
         let mut entity = commands.spawn((
             TerrainColumn,
             Mesh3d(built.mesh.clone()),
             built.aabb,
             NoAutoAabb,
-            MeshMaterial3d(material.0.clone()),
+            MeshMaterial3d(material.0[lod as usize].clone()),
             Transform::from_xyz(key.x as f32 * size, -sink, key.y as f32 * size),
+            fade_tag(if fade_in { -15 } else { 0 }),
         ));
+        if fade_in {
+            entity.insert((Fading { since: now, out: false, quiet }, dithered()));
+            if quiet {
+                entity.insert(bevy::light::NotShadowCaster);
+            }
+        }
+        // The coarser levels' shadows from the cached far map (see
+        // far_shadow.rs), not live.
+        if lod >= 1 && far_cache {
+            entity.insert((bevy::light::NotShadowCaster, crate::far_shadow::FarCaster));
+        }
         if let Some(collider) = &built.collider {
             // Character movement only collides with colliders on bodies.
-            entity.insert((RigidBody::Static, collider.clone()));
+            // (Of no density: a static body's mass unused, and a triangle
+            // mesh's found by its integrals, ~57 ms on the frame it came,
+            // again on the next; see vendor/avian3d's `mass_properties`.)
+            entity.insert((RigidBody::Static, collider.clone(), avian3d::prelude::ColliderDensity(0.0)));
         }
         let entity = entity.id();
         streamer.spawned.insert((lod, key), entity);
@@ -579,12 +769,42 @@ fn stream_columns(
     streamer.in_flight = streamer.pending.len();
 }
 
-fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh>>) {
+/// New meshes' bytes handed to the renderer a frame (`--set upload_mb`, 4).
+/// Bevy packs and writes every mesh added in a frame in that frame's render
+/// (`allocate_and_free_meshes`, about 1 ms a MB; its own per-frame limit
+/// applies only after that, not to it): flying, a structure's ~30 MB at
+/// once was a frame of 64 ms (the user's free flight, 2026-11-16).
+/// Refilled each frame as terrain is taken in; terrain columns are counted
+/// but never wait (the ground under you), structures wait for what is left
+/// (`structures::receive`).
+#[derive(Resource)]
+pub struct MeshBudget {
+    pub per_frame: isize,
+    pub left: isize,
+}
+
+impl MeshBudget {
+    /// `mesh` counted.
+    pub fn spend(&mut self, mesh: &Mesh) {
+        self.left = self.left.saturating_sub(mesh_bytes(mesh) as isize);
+    }
+}
+
+/// The bytes of `mesh`'s vertices and indices.
+pub fn mesh_bytes(mesh: &Mesh) -> usize {
+    let vertices: usize = mesh.try_attributes().map_or(0, |a| a.map(|(_, v)| v.get_bytes().len()).sum());
+    vertices + mesh.try_indices_option().ok().flatten().map_or(0, |i| i.len() * 4)
+}
+
+fn receive_meshes(mut streamer: ResMut<Streamer>, mut meshes: ResMut<Assets<Mesh>>, mut budget: ResMut<MeshBudget>) {
+    budget.left = budget.per_frame;
     let mut done = Vec::new();
     for (key, task) in streamer.pending.iter_mut() {
-        if let Some((column, collider, cost)) = check_ready(task) {
-            let built = (!column.is_empty())
-                .then(|| Built { aabb: bounds(&column), mesh: meshes.add(to_bevy_mesh(column, key.0)), collider });
+        if let Some((shown, collider, cost)) = check_ready(task) {
+            let built = shown.map(|(mesh, aabb)| {
+                budget.spend(&mesh);
+                Built { aabb, mesh: meshes.add(mesh), collider }
+            });
             done.push((*key, built, cost));
         }
     }
@@ -645,7 +865,11 @@ pub fn to_bevy_mesh(mut column: ColumnMesh, lod: u32) -> Mesh {
         .zip(column.plate.iter().zip(&column.glow))
         .map(|((&a, &v), (&f, &g))| [a, f, g, v])
         .collect();
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+    // (In the render world alone: never read back here, their bounds their
+    // own, see `bounds`. Kept in both, each was copied whole to the render
+    // world as it came, ~6 ms a column, and held twice: 892 MB of them on
+    // the GPU flying the stacks.)
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, column.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, column.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
