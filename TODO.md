@@ -15,7 +15,7 @@ Each item is marked by what it waits on:
 | **Idea** | exploratory, not decided |
 | **Built** | a first stage in the game, seen by you; its follow-ups listed under it |
 
-Last updated 2026-11-17.
+Last updated 2026-11-18.
 
 ## Current focus
 
@@ -27,6 +27,10 @@ ichor lakes with fumes and haze, and voids where you fall off the world, as
 large-scale structures. Mind the Mistlands slabs, a failed attempt at large
 scale (world-identity note).
 
+- The whole project reassessed from first principles (you and Claude,
+  2026-11-18): `docs/first-principles.md`, what is decided, leaning and
+  open, and what shadows and levels of detail must do. Its ideas are under
+  Ideas to explore.
 - **Built** The far view first (far-view note): pop-in and far districts
   as boxes. See Rendering.
 - **Built** Voids, a region type (the first stage) (`--set voids 0.2`, off by default): no
@@ -1055,12 +1059,67 @@ creatures and craft. Its mesh is `creatures/impaled.glb`, made by
 
 ## Ideas to explore
 
-Not scheduled; each has a memory note with more.
+Not scheduled; each has a memory note with more, or a place in
+`docs/first-principles.md` (marked FP).
+
+**From the first-principles review (2026-11-18, FP)**
+- **Drop the wrap** (you, leaning): a world with a border, for the
+  strangeness gradient and a sense of place; the border may hold something.
+  Costs: the canals are loops round the torus and would need ends;
+  streaming, landmarks and the plates' tiling assume the wrap.
+- **The border as the shell's end** (Claude): with the world the top of a
+  shell on vaults, the border is where the shell ends, a cliff into the
+  void with the vaults' flank in view: the world seen as an artefact. A
+  crack in the flank as the way into the stranger place (The crack, below).
+- **Locally flat, globally varied** (you, leaning): mountains, valleys and
+  canyons at grand scale give regions identity, the ground flat where you
+  run. The canyons experiment read as city streets.
+- **Ichor lakes** (you): a literal ocean of ichor, toxic, its fumes the
+  only haze, striking for being rare. Tension: the haze is global now and
+  makes distance read everywhere.
+- **The endless dungeon** (you, leaning): stranger and more menacing
+  without limit, a unique creature very far below; in the chasm, or
+  beyond the crack. Unreviewed generation must keep a floor of quality;
+  very deep needs a floating origin.
+- **The canal code** (you): a hidden room with a map marking canals by
+  symbols and a panel taking a number for each, read from the pattern of
+  lit and dark lamps along that canal; something important happens.
+- **The sky object** (you): a structure hanging high in view from the
+  start, reached by launching off a canal's upturned end at speeds only
+  mastery gives; up there, perhaps, where the world's designers lived.
+- **Colossal furniture** (Claude; you: the Serehfa Fastness): the
+  world's own objects at landscape scale, such as the canals' streetlight
+  800 m tall, dark until its canal is lit. Risk: whimsy; the world's own
+  vocabulary only, rare.
+- **A presence at landscape scale** (Claude): something alive glimpsed on
+  the horizon or among the colossi, too big to fight.
+- **Long nights** (Claude): full night is now ~156 s every ~8 min; try
+  rarer, longer nights (5-8 min in 20) when the surface turns hostile and
+  lit canals mean safety (Dying Light). The orbits are parameters.
+- **Starting in the dark beneath** (Claude): under the shell, climbing
+  into the light.
+- **Plates that read as built** (you: built, by an intelligence; Claude's
+  directions): less jitter (`JITTER`, 0.6), joints that differ by level,
+  plates aligned to canals and stations, heights by rule more than noise.
+  A lab comparison first.
+- **The movement envelope** (Claude): movement's numbers (mantle reach,
+  jump distance by speed, grapple range and pull, swing clearance) given
+  to every generator: headroom over decks, anchors within reach, gaps
+  sized to what can be crossed, and to upgrades, as gates.
+- **Self-similar furniture** (from the `Echo` lamp): each place's lamps,
+  railings, doors and markers made by its own rule at small scale.
+- **Speed made legible** (Claude): gaining speed audible and visible, so
+  newcomers find strafe jumping.
 
 - **Craters** (new): a short and medium-range indicator. First, investigate
   changing geometry at runtime, so meteors can fall and leave craters during
   play, not only at world generation: re-meshing, collision, navmesh tiles,
   100 fps.
+- **The crack** (you, 2026-11-18; with Portals below): a crack hidden
+  somewhere, perhaps at the world's border, into a stranger place; the
+  hole's hall of mirrors against the starfield was what made it
+  mysterious. That place could be the endless dungeon, utterly wrong and
+  free of the rest of the world's constraints.
 - **Portals** (new): the accidental holes in our geometry looked like
   portals into an alternate world. As a feature: a very rare secret, or a
   way into an even more warped version of the world.
